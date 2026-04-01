@@ -1,5 +1,4 @@
 import pytest
-from pydantic import ValidationError
 from sys import path as sys_path
 from os.path import dirname, abspath
 sys_path.insert(0, dirname(dirname(abspath(__file__))))
