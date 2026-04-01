@@ -67,20 +67,38 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [buyLogic, setBuyLogic] = useState<'AND' | 'OR'>('AND')
   const [sellLogic, setSellLogic] = useState<'AND' | 'OR'>('AND')
   const [capital, setCapital] = useState(10000)
-  const [posSize, setPosSize] = useState(1.0)
+  const [posSize, setPosSize] = useState(100)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  function validateRules(rules: Rule[], label: string): string | null {
+    for (const rule of rules) {
+      const needsValue = NEEDS_VALUE.includes(rule.condition) && !NEEDS_PARAM[rule.indicator]?.includes(rule.condition)
+      if (needsValue && (rule.value === undefined || rule.value === null || isNaN(rule.value as number))) {
+        return `${label} rule "${rule.indicator.toUpperCase()} ${CONDITION_LABELS[rule.condition]}" is missing a value`
+      }
+    }
+    return null
+  }
 
   async function runBacktest() {
     setLoading(true)
     setError('')
     onResult(null)
+
+    const validationError = validateRules(buyRules, 'BUY') || validateRules(sellRules, 'SELL')
+    if (validationError) {
+      setError(validationError)
+      setLoading(false)
+      return
+    }
+
     try {
       const req: StrategyRequest = {
         ticker, start, end, interval,
         buy_rules: buyRules, sell_rules: sellRules,
         buy_logic: buyLogic, sell_logic: sellLogic,
-        initial_capital: capital, position_size: posSize,
+        initial_capital: capital, position_size: posSize / 100,
       }
       const { data } = await axios.post('http://localhost:8000/api/backtest', req)
       onResult(data)
@@ -138,8 +156,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             <input type="number" value={capital} onChange={e => setCapital(+e.target.value)} style={styles.settingsInput} />
           </div>
           <div style={styles.settingsRow}>
-            <label style={styles.settingsLabel}>Position size</label>
-            <input type="number" value={posSize} step={0.1} min={0.1} max={1} onChange={e => setPosSize(+e.target.value)} style={styles.settingsInput} />
+            <label style={styles.settingsLabel}>% of Capital</label>
+            <input type="number" value={posSize} step={1} min={1} max={100} onChange={e => setPosSize(+e.target.value)} style={styles.settingsInput} />
           </div>
         </div>
       </div>
