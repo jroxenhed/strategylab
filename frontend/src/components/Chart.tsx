@@ -7,7 +7,7 @@ import {
   HistogramSeries,
   ColorType,
 } from 'lightweight-charts'
-import type { IChartApi } from 'lightweight-charts'
+import type { IChartApi, LogicalRange } from 'lightweight-charts'
 import type { OHLCVBar, IndicatorData, IndicatorKey, TimeValue } from '../types'
 
 interface ChartProps {
@@ -91,6 +91,17 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         const qqqSeries = chart.addSeries(LineSeries, { color: '#a371f7', lineWidth: 1, title: 'QQQ' })
         qqqSeries.setData(normalizedQqq)
       }
+
+      if (trades && trades.length > 0) {
+        const markers = trades.map(t => ({
+          time: t.date as any,
+          position: t.type === 'buy' ? 'belowBar' as const : 'aboveBar' as const,
+          color: t.type === 'buy' ? UP : DOWN,
+          shape: t.type === 'buy' ? 'arrowUp' as const : 'arrowDown' as const,
+          text: t.type === 'buy' ? `B $${t.price}` : `S $${t.price}`,
+        }))
+        createSeriesMarkers(mainSeries, markers)
+      }
     } else {
       const candleSeries = chart.addSeries(CandlestickSeries, {
         upColor: UP, downColor: DOWN, borderUpColor: UP, borderDownColor: DOWN,
@@ -129,12 +140,23 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
 
     chart.timeScale().fitContent()
 
+    const syncHandler = (range: LogicalRange | null) => {
+      if (!range) return
+      if (macdChartRef.current) macdChartRef.current.timeScale().setVisibleLogicalRange(range)
+      if (rsiChartRef.current) rsiChartRef.current.timeScale().setVisibleLogicalRange(range)
+    }
+    chart.timeScale().subscribeVisibleLogicalRangeChange(syncHandler)
+
     const ro = new ResizeObserver(() => {
       if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth })
     })
     ro.observe(containerRef.current)
 
-    return () => { chart.remove(); ro.disconnect() }
+    return () => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(syncHandler)
+      chart.remove()
+      ro.disconnect()
+    }
   }, [data, normalizedSpy, normalizedQqq, showSpy, showQqq, activeIndicators, indicatorData, trades])
 
   // MACD chart
@@ -161,7 +183,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       if (macdContainerRef.current) chart.applyOptions({ width: macdContainerRef.current.clientWidth })
     })
     ro.observe(macdContainerRef.current)
-    return () => { chart.remove(); ro.disconnect() }
+    return () => { chart.remove(); macdChartRef.current = null; ro.disconnect() }
   }, [showMacd, indicatorData.macd])
 
   // RSI chart
@@ -186,7 +208,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       if (rsiContainerRef.current) chart.applyOptions({ width: rsiContainerRef.current.clientWidth })
     })
     ro.observe(rsiContainerRef.current)
-    return () => { chart.remove(); ro.disconnect() }
+    return () => { chart.remove(); rsiChartRef.current = null; ro.disconnect() }
   }, [showRsi, indicatorData.rsi])
 
   const indicatorPaneCount = (showMacd ? 1 : 0) + (showRsi ? 1 : 0)
