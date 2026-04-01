@@ -149,7 +149,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       chart.remove()
       ro.disconnect()
     }
-  }, [data, normalizedSpy, normalizedQqq, showSpy, showQqq, activeIndicators, indicatorData, trades])
+  }, [data, normalizedMain, normalizedSpy, normalizedQqq, showSpy, showQqq, activeIndicators, indicatorData, trades])
 
   // MACD chart
   useEffect(() => {
