@@ -61,6 +61,16 @@ function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onChange: (r: Rule)
 
 const emptyRule = (): Rule => ({ indicator: 'macd', condition: 'crossover_up' })
 
+function validateRules(rules: Rule[], label: string): string | null {
+  for (const rule of rules) {
+    const needsValue = NEEDS_VALUE.includes(rule.condition) && !NEEDS_PARAM[rule.indicator]?.includes(rule.condition)
+    if (needsValue && (typeof rule.value !== 'number' || isNaN(rule.value))) {
+      return `${label} rule "${rule.indicator.toUpperCase()} ${CONDITION_LABELS[rule.condition]}" is missing a value`
+    }
+  }
+  return null
+}
+
 export default function StrategyBuilder({ ticker, start, end, interval, onResult }: Props) {
   const [buyRules, setBuyRules] = useState<Rule[]>([{ indicator: 'macd', condition: 'crossover_up' }])
   const [sellRules, setSellRules] = useState<Rule[]>([{ indicator: 'macd', condition: 'crossover_down' }])
@@ -70,16 +80,6 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [posSize, setPosSize] = useState(100)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-
-  function validateRules(rules: Rule[], label: string): string | null {
-    for (const rule of rules) {
-      const needsValue = NEEDS_VALUE.includes(rule.condition) && !NEEDS_PARAM[rule.indicator]?.includes(rule.condition)
-      if (needsValue && (rule.value === undefined || rule.value === null || isNaN(rule.value as number))) {
-        return `${label} rule "${rule.indicator.toUpperCase()} ${CONDITION_LABELS[rule.condition]}" is missing a value`
-      }
-    }
-    return null
-  }
 
   async function runBacktest() {
     setLoading(true)
