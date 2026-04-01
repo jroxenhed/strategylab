@@ -31,6 +31,16 @@ function toLineData(arr: TimeValue[]) {
   return arr.filter(d => d.value !== null).map(d => ({ time: d.time as any, value: d.value as number }))
 }
 
+function buildMarkers(trades: Array<{ type: 'buy' | 'sell'; date: string; price: number }>) {
+  return trades.map(t => ({
+    time: t.date as any,
+    position: t.type === 'buy' ? 'belowBar' as const : 'aboveBar' as const,
+    color: t.type === 'buy' ? UP : DOWN,
+    shape: t.type === 'buy' ? 'arrowUp' as const : 'arrowDown' as const,
+    text: t.type === 'buy' ? `B $${t.price}` : `S $${t.price}`,
+  }))
+}
+
 export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicatorData, activeIndicators, trades }: ChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -92,16 +102,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         qqqSeries.setData(normalizedQqq)
       }
 
-      if (trades && trades.length > 0) {
-        const markers = trades.map(t => ({
-          time: t.date as any,
-          position: t.type === 'buy' ? 'belowBar' as const : 'aboveBar' as const,
-          color: t.type === 'buy' ? UP : DOWN,
-          shape: t.type === 'buy' ? 'arrowUp' as const : 'arrowDown' as const,
-          text: t.type === 'buy' ? `B $${t.price}` : `S $${t.price}`,
-        }))
-        createSeriesMarkers(mainSeries, markers)
-      }
+      if (trades && trades.length > 0) createSeriesMarkers(mainSeries, buildMarkers(trades))
     } else {
       const candleSeries = chart.addSeries(CandlestickSeries, {
         upColor: UP, downColor: DOWN, borderUpColor: UP, borderDownColor: DOWN,
@@ -126,16 +127,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       }
 
       // Trade markers
-      if (trades && trades.length > 0) {
-        const markers = trades.map(t => ({
-          time: t.date as any,
-          position: t.type === 'buy' ? 'belowBar' as const : 'aboveBar' as const,
-          color: t.type === 'buy' ? UP : DOWN,
-          shape: t.type === 'buy' ? 'arrowUp' as const : 'arrowDown' as const,
-          text: t.type === 'buy' ? `B $${t.price}` : `S $${t.price}`,
-        }))
-        createSeriesMarkers(candleSeries, markers)
-      }
+      if (trades && trades.length > 0) createSeriesMarkers(candleSeries, buildMarkers(trades))
     }
 
     chart.timeScale().fitContent()
