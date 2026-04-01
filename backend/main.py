@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -155,7 +155,12 @@ class StrategyRequest(BaseModel):
     buy_logic: str = "AND"   # AND | OR
     sell_logic: str = "AND"
     initial_capital: float = 10000.0
-    position_size: float = 1.0   # fraction of capital per trade
+    position_size: float = 1.0   # fraction of capital per trade (0.01–1.0)
+
+    @field_validator('position_size')
+    @classmethod
+    def clamp_position_size(cls, v: float) -> float:
+        return max(0.01, min(1.0, v))
 
 
 @app.post("/api/backtest")
