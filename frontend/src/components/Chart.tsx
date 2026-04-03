@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo } from 'react'
+import { useEffect, useRef } from 'react'
 import {
   createChart,
   createSeriesMarkers,
@@ -52,25 +52,6 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   const showMacd = activeIndicators.includes('macd')
   const showRsi = activeIndicators.includes('rsi')
 
-  // Normalize comparison data to percentage change from start
-  const normalizedSpy = useMemo(() => {
-    if (!spyData || spyData.length === 0) return []
-    const base = spyData[0].close
-    return spyData.map(d => ({ time: d.time as any, value: ((d.close - base) / base) * 100 }))
-  }, [spyData])
-
-  const normalizedQqq = useMemo(() => {
-    if (!qqqData || qqqData.length === 0) return []
-    const base = qqqData[0].close
-    return qqqData.map(d => ({ time: d.time as any, value: ((d.close - base) / base) * 100 }))
-  }, [qqqData])
-
-  const normalizedMain = useMemo(() => {
-    if (!data || data.length === 0) return []
-    const base = data[0].close
-    return data.map(d => ({ time: d.time as any, value: ((d.close - base) / base) * 100 }))
-  }, [data])
-
   const chartOptions = {
     layout: { background: { type: ColorType.Solid, color: CHART_BG }, textColor: TEXT },
     grid: { vertLines: { color: GRID }, horzLines: { color: GRID } },
@@ -86,54 +67,60 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     const chart = createChart(containerRef.current, { ...chartOptions, height: containerRef.current.clientHeight })
     chartRef.current = chart
 
-    const showOverlay = (showSpy && normalizedSpy.length > 0) || (showQqq && normalizedQqq.length > 0)
+    // Always render candlesticks
+    const candleSeries = chart.addSeries(CandlestickSeries, {
+      upColor: UP, downColor: DOWN, borderUpColor: UP, borderDownColor: DOWN,
+      wickUpColor: UP, wickDownColor: DOWN,
+    })
+    candleSeries.setData(data.map(d => ({ ...d, time: d.time as any })))
 
-    if (showOverlay) {
-      // Show % change overlay mode
-      const mainSeries = chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 2, title: data[0]?.close ? '' : '' })
-      mainSeries.setData(normalizedMain)
-
-      if (showSpy && normalizedSpy.length > 0) {
-        const spySeries = chart.addSeries(LineSeries, { color: '#f0883e', lineWidth: 1, title: 'SPY' })
-        spySeries.setData(normalizedSpy)
-      }
-      if (showQqq && normalizedQqq.length > 0) {
-        const qqqSeries = chart.addSeries(LineSeries, { color: '#a371f7', lineWidth: 1, title: 'QQQ' })
-        qqqSeries.setData(normalizedQqq)
-      }
-
-      if (trades && trades.length > 0) createSeriesMarkers(mainSeries, buildMarkers(trades))
-    } else {
-      const candleSeries = chart.addSeries(CandlestickSeries, {
-        upColor: UP, downColor: DOWN, borderUpColor: UP, borderDownColor: DOWN,
-        wickUpColor: UP, wickDownColor: DOWN,
-      })
-      candleSeries.setData(data.map(d => ({ ...d, time: d.time as any })))
-
-      // EMA overlays on main chart
-      if (activeIndicators.includes('ema') && indicatorData.ema) {
-        const { ema20, ema50, ema200 } = indicatorData.ema
-        chart.addSeries(LineSeries, { color: '#f0883e', lineWidth: 1, title: 'EMA20' }).setData(toLineData(ema20))
-        chart.addSeries(LineSeries, { color: '#a371f7', lineWidth: 1, title: 'EMA50' }).setData(toLineData(ema50))
-        chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'EMA200' }).setData(toLineData(ema200))
-      }
-
-      // Bollinger Bands on main chart
-      if (activeIndicators.includes('bb') && indicatorData.bb) {
-        const { upper, middle, lower } = indicatorData.bb
-        chart.addSeries(LineSeries, { color: '#30363d', lineWidth: 1, title: 'BB Upper' }).setData(toLineData(upper))
-        chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'BB Mid' }).setData(toLineData(middle))
-        chart.addSeries(LineSeries, { color: '#30363d', lineWidth: 1, title: 'BB Lower' }).setData(toLineData(lower))
-      }
-
-      // Trade markers
-      if (trades && trades.length > 0) createSeriesMarkers(candleSeries, buildMarkers(trades))
+    // SPY/QQQ as overlay lines — hidden secondary scale so no second price axis clutters the chart
+    if (showSpy && spyData && spyData.length > 0) {
+      chart.addSeries(LineSeries, {
+        color: '#f0883e', lineWidth: 1, title: 'SPY', priceScaleId: 'overlay',
+      }).setData(spyData.map(d => ({ time: d.time as any, value: d.close })))
     }
+    if (showQqq && qqqData && qqqData.length > 0) {
+      chart.addSeries(LineSeries, {
+        color: '#a371f7', lineWidth: 1, title: 'QQQ', priceScaleId: 'overlay',
+      }).setData(qqqData.map(d => ({ time: d.time as any, value: d.close })))
+    }
+    if (showSpy || showQqq) {
+      chart.priceScale('overlay').applyOptions({ visible: false })
+    }
+
+    // EMA overlays on main chart
+    if (activeIndicators.includes('ema') && indicatorData.ema) {
+      const { ema20, ema50, ema200 } = indicatorData.ema
+      chart.addSeries(LineSeries, { color: '#f0883e', lineWidth: 1, title: 'EMA20' }).setData(toLineData(ema20))
+      chart.addSeries(LineSeries, { color: '#a371f7', lineWidth: 1, title: 'EMA50' }).setData(toLineData(ema50))
+      chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'EMA200' }).setData(toLineData(ema200))
+    }
+
+    // Bollinger Bands on main chart
+    if (activeIndicators.includes('bb') && indicatorData.bb) {
+      const { upper, middle, lower } = indicatorData.bb
+      chart.addSeries(LineSeries, { color: '#30363d', lineWidth: 1, title: 'BB Upper' }).setData(toLineData(upper))
+      chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'BB Mid' }).setData(toLineData(middle))
+      chart.addSeries(LineSeries, { color: '#30363d', lineWidth: 1, title: 'BB Lower' }).setData(toLineData(lower))
+    }
+
+    // Trade markers
+    if (trades && trades.length > 0) createSeriesMarkers(candleSeries, buildMarkers(trades))
 
     chart.timeScale().fitContent()
 
     const syncHandler = (range: LogicalRange | null) => {
       if (!range) return
+      const mainW = chart.priceScale('right').width()
+      const macdW = macdChartRef.current?.priceScale('right').width() ?? 0
+      const rsiW = rsiChartRef.current?.priceScale('right').width() ?? 0
+      const maxW = Math.max(mainW, macdW, rsiW)
+      if (maxW > 0) {
+        chart.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
+        macdChartRef.current?.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
+        rsiChartRef.current?.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
+      }
       if (macdChartRef.current) macdChartRef.current.timeScale().setVisibleLogicalRange(range)
       if (rsiChartRef.current) rsiChartRef.current.timeScale().setVisibleLogicalRange(range)
     }
@@ -149,7 +136,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       chart.remove()
       ro.disconnect()
     }
-  }, [data, normalizedMain, normalizedSpy, normalizedQqq, showSpy, showQqq, activeIndicators, indicatorData, trades])
+  }, [data, spyData, qqqData, showSpy, showQqq, activeIndicators, indicatorData, trades])
 
   // MACD chart
   useEffect(() => {
@@ -170,6 +157,17 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'MACD' }).setData(toLineData(macd))
     chart.addSeries(LineSeries, { color: '#f0883e', lineWidth: 1, title: 'Signal' }).setData(toLineData(signal))
     chart.timeScale().fitContent()
+
+    requestAnimationFrame(() => {
+      if (!chartRef.current) return
+      const mainW = chartRef.current.priceScale('right').width()
+      const macdW = chart.priceScale('right').width()
+      const rsiW = rsiChartRef.current?.priceScale('right').width() ?? 0
+      const maxW = Math.max(mainW, macdW, rsiW)
+      chartRef.current.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
+      chart.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
+      rsiChartRef.current?.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
+    })
 
     const ro = new ResizeObserver(() => {
       if (macdContainerRef.current) chart.applyOptions({ width: macdContainerRef.current.clientWidth })
@@ -195,6 +193,17 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       chart.addSeries(LineSeries, { color: '#26a641', lineWidth: 1, lineStyle: 2 }).setData([{ time: first as any, value: 30 }, { time: last as any, value: 30 }])
     }
     chart.timeScale().fitContent()
+
+    requestAnimationFrame(() => {
+      if (!chartRef.current) return
+      const mainW = chartRef.current.priceScale('right').width()
+      const macdW = macdChartRef.current?.priceScale('right').width() ?? 0
+      const rsiW = chart.priceScale('right').width()
+      const maxW = Math.max(mainW, macdW, rsiW)
+      chartRef.current.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
+      macdChartRef.current?.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
+      chart.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
+    })
 
     const ro = new ResizeObserver(() => {
       if (rsiContainerRef.current) chart.applyOptions({ width: rsiContainerRef.current.clientWidth })
