@@ -28,19 +28,19 @@ const ALL_INDICATORS: { key: IndicatorKey; label: string }[] = [
   { key: 'volume', label: 'Volume' },
 ]
 
+const INTERVAL_LIMITS: Record<string, number> = {
+  '1m': 7,
+  '5m': 60,
+  '15m': 60,
+  '30m': 60,
+  '1h': 730,
+}
+
 export default function Sidebar({
   ticker, start, end, interval, activeIndicators, showSpy, showQqq,
   onTickerChange, onStartChange, onEndChange, onIntervalChange,
   onToggleIndicator, onToggleSpy, onToggleQqq,
 }: SidebarProps) {
-  const INTERVAL_LIMITS: Record<string, number> = {
-    '1m': 7,
-    '5m': 60,
-    '15m': 60,
-    '30m': 60,
-    '1h': 730,
-  }
-
   const daysDiff = Math.round(
     (new Date(end).getTime() - new Date(start).getTime()) / (1000 * 60 * 60 * 24)
   )
