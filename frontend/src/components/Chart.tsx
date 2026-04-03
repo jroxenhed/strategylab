@@ -89,6 +89,20 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       chart.priceScale('overlay').applyOptions({ visible: false })
     }
 
+    // Volume overlay — semi-transparent bars at bottom 25% of chart
+    if (activeIndicators.includes('volume')) {
+      const volSeries = chart.addSeries(HistogramSeries, {
+        priceFormat: { type: 'volume' },
+        priceScaleId: 'volume',
+      })
+      volSeries.priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } })
+      volSeries.setData(data.map(d => ({
+        time: d.time as any,
+        value: d.volume,
+        color: d.close >= d.open ? '#26a64166' : '#f8514966',
+      })))
+    }
+
     // EMA overlays on main chart
     if (activeIndicators.includes('ema') && indicatorData.ema) {
       const { ema20, ema50, ema200 } = indicatorData.ema
