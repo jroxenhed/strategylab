@@ -149,22 +149,36 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
 
     chart.timeScale().fitContent()
 
+    function syncWidths() {
+      const mainRightW = chart.priceScale('right').width()
+      const macdRightW = macdChartRef.current?.priceScale('right').width() ?? 0
+      const rsiRightW = rsiChartRef.current?.priceScale('right').width() ?? 0
+      const maxRightW = Math.max(mainRightW, macdRightW, rsiRightW)
+      if (maxRightW > 0) {
+        chart.applyOptions({ rightPriceScale: { minimumWidth: maxRightW } })
+        macdChartRef.current?.applyOptions({ rightPriceScale: { minimumWidth: maxRightW } })
+        rsiChartRef.current?.applyOptions({ rightPriceScale: { minimumWidth: maxRightW } })
+      }
+      // Mirror the main chart's left axis width onto MACD/RSI (invisible) so
+      // all three chart areas start at the same x position
+      const mainLeftW = chart.priceScale('left').width()
+      if (mainLeftW > 0) {
+        macdChartRef.current?.applyOptions({ leftPriceScale: { minimumWidth: mainLeftW, visible: false } })
+        rsiChartRef.current?.applyOptions({ leftPriceScale: { minimumWidth: mainLeftW, visible: false } })
+      }
+    }
+
     // Pan/zoom sync + price scale width equalization
     const syncHandler = (range: LogicalRange | null) => {
       if (!range) return
-      const mainW = chart.priceScale('right').width()
-      const macdW = macdChartRef.current?.priceScale('right').width() ?? 0
-      const rsiW = rsiChartRef.current?.priceScale('right').width() ?? 0
-      const maxW = Math.max(mainW, macdW, rsiW)
-      if (maxW > 0) {
-        chart.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
-        macdChartRef.current?.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
-        rsiChartRef.current?.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
-      }
+      syncWidths()
       if (macdChartRef.current) macdChartRef.current.timeScale().setVisibleLogicalRange(range)
       if (rsiChartRef.current) rsiChartRef.current.timeScale().setVisibleLogicalRange(range)
     }
     chart.timeScale().subscribeVisibleLogicalRangeChange(syncHandler)
+
+    // Initial alignment: fire after MACD/RSI effects have had time to mount
+    const alignTimer = setTimeout(syncWidths, 100)
 
     // Crosshair sync: main → MACD + RSI
     const crosshairHandler = (param: any) => {
@@ -186,6 +200,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     ro.observe(containerRef.current)
 
     return () => {
+      clearTimeout(alignTimer)
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(syncHandler)
       chart.unsubscribeCrosshairMove(crosshairHandler)
       chart.remove()
@@ -230,18 +245,6 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         rsiChartRef.current.setCrosshairPosition(NaN, param.time, rsiSeriesRef.current)
     }
     chart.subscribeCrosshairMove(crosshairHandler)
-
-    // Double-RAF: wait two frames for layout to settle before measuring scale widths
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      if (!chartRef.current) return
-      const mainW = chartRef.current.priceScale('right').width()
-      const macdW = chart.priceScale('right').width()
-      const rsiW = rsiChartRef.current?.priceScale('right').width() ?? 0
-      const maxW = Math.max(mainW, macdW, rsiW)
-      chartRef.current.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
-      chart.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
-      rsiChartRef.current?.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
-    }))
 
     const ro = new ResizeObserver(() => {
       if (macdContainerRef.current) chart.applyOptions({ width: macdContainerRef.current.clientWidth })
@@ -289,18 +292,6 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         macdChartRef.current.setCrosshairPosition(NaN, param.time, macdSeriesRef.current)
     }
     chart.subscribeCrosshairMove(crosshairHandler)
-
-    // Double-RAF: wait two frames for layout to settle
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      if (!chartRef.current) return
-      const mainW = chartRef.current.priceScale('right').width()
-      const macdW = macdChartRef.current?.priceScale('right').width() ?? 0
-      const rsiW = chart.priceScale('right').width()
-      const maxW = Math.max(mainW, macdW, rsiW)
-      chartRef.current.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
-      macdChartRef.current?.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
-      chart.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
-    }))
 
     const ro = new ResizeObserver(() => {
       if (rsiContainerRef.current) chart.applyOptions({ width: rsiContainerRef.current.clientWidth })
