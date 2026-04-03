@@ -95,7 +95,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         priceFormat: { type: 'volume' },
         priceScaleId: 'volume',
       })
-      volSeries.priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } })
+      volSeries.priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 }, visible: false })
       volSeries.setData(data.map(d => ({
         time: d.time as any,
         value: d.volume,
