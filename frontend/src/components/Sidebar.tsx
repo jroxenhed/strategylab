@@ -33,6 +33,20 @@ export default function Sidebar({
   onTickerChange, onStartChange, onEndChange, onIntervalChange,
   onToggleIndicator, onToggleSpy, onToggleQqq,
 }: SidebarProps) {
+  const INTERVAL_LIMITS: Record<string, number> = {
+    '1m': 7,
+    '5m': 60,
+    '15m': 60,
+    '30m': 60,
+    '1h': 730,
+  }
+
+  const daysDiff = Math.round(
+    (new Date(end).getTime() - new Date(start).getTime()) / (1000 * 60 * 60 * 24)
+  )
+  const intervalLimit = INTERVAL_LIMITS[interval]
+  const showIntervalWarning = intervalLimit !== undefined && daysDiff > intervalLimit
+
   const [query, setQuery] = useState('')
   const [showDropdown, setShowDropdown] = useState(false)
   const { data: searchResults } = useSearch(query)
@@ -90,11 +104,20 @@ export default function Sidebar({
         <div style={styles.field}>
           <label style={styles.label}>Interval</label>
           <select value={interval} onChange={e => onIntervalChange(e.target.value)} style={styles.dateInput}>
+            <option value="1m">1 min</option>
+            <option value="5m">5 min</option>
+            <option value="15m">15 min</option>
+            <option value="30m">30 min</option>
+            <option value="1h">1 Hour</option>
             <option value="1d">Daily</option>
             <option value="1wk">Weekly</option>
             <option value="1mo">Monthly</option>
-            <option value="1h">1 Hour</option>
           </select>
+          {showIntervalWarning && (
+            <div style={{ fontSize: 11, color: '#f0883e', marginTop: 6, lineHeight: 1.4 }}>
+              {interval} data only supports {intervalLimit} days of history. Your range is {daysDiff} days — shorten the From date.
+            </div>
+          )}
         </div>
       </div>
 
