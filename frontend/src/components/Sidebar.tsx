@@ -147,7 +147,7 @@ export default function Sidebar({
           <span style={{ marginLeft: 8, color: '#a371f7' }}>QQQ</span>
         </label>
         {(showSpy || showQqq) && (
-          <div style={{ fontSize: 11, color: '#8b949e', marginTop: 4 }}>Overlaid on chart</div>
+          <div style={{ fontSize: 11, color: '#8b949e', marginTop: 4 }}>% change from start (left axis)</div>
         )}
       </div>
     </aside>

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useMemo } from 'react'
 import {
   createChart,
   createSeriesMarkers,
@@ -7,7 +7,7 @@ import {
   HistogramSeries,
   ColorType,
 } from 'lightweight-charts'
-import type { IChartApi, LogicalRange } from 'lightweight-charts'
+import type { IChartApi, ISeriesApi, LogicalRange } from 'lightweight-charts'
 import type { OHLCVBar, IndicatorData, IndicatorKey, TimeValue } from '../types'
 
 interface ChartProps {
@@ -48,9 +48,26 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   const rsiChartRef = useRef<IChartApi | null>(null)
   const macdContainerRef = useRef<HTMLDivElement>(null)
   const rsiContainerRef = useRef<HTMLDivElement>(null)
+  // Series refs for crosshair sync
+  const candleSeriesRef = useRef<ISeriesApi<any> | null>(null)
+  const macdSeriesRef = useRef<ISeriesApi<any> | null>(null)
+  const rsiSeriesRef = useRef<ISeriesApi<any> | null>(null)
 
   const showMacd = activeIndicators.includes('macd')
   const showRsi = activeIndicators.includes('rsi')
+
+  // % change from start — used for SPY/QQQ comparison on left axis
+  const normalizedSpy = useMemo(() => {
+    if (!spyData || spyData.length === 0) return []
+    const base = spyData[0].close
+    return spyData.map(d => ({ time: d.time as any, value: ((d.close - base) / base) * 100 }))
+  }, [spyData])
+
+  const normalizedQqq = useMemo(() => {
+    if (!qqqData || qqqData.length === 0) return []
+    const base = qqqData[0].close
+    return qqqData.map(d => ({ time: d.time as any, value: ((d.close - base) / base) * 100 }))
+  }, [qqqData])
 
   const chartOptions = {
     layout: { background: { type: ColorType.Solid, color: CHART_BG }, textColor: TEXT },
@@ -58,6 +75,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     crosshair: { mode: 1 },
     timeScale: { borderColor: GRID, timeVisible: true },
     rightPriceScale: { borderColor: GRID },
+    leftPriceScale: { visible: false, borderColor: GRID },
   }
 
   // Main chart
@@ -67,26 +85,33 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     const chart = createChart(containerRef.current, { ...chartOptions, height: containerRef.current.clientHeight })
     chartRef.current = chart
 
-    // Always render candlesticks
+    // Candlesticks always on right axis
     const candleSeries = chart.addSeries(CandlestickSeries, {
       upColor: UP, downColor: DOWN, borderUpColor: UP, borderDownColor: DOWN,
       wickUpColor: UP, wickDownColor: DOWN,
+      priceScaleId: 'right',
     })
     candleSeries.setData(data.map(d => ({ ...d, time: d.time as any })))
+    candleSeriesRef.current = candleSeries
 
-    // SPY/QQQ as overlay lines — hidden secondary scale so no second price axis clutters the chart
-    if (showSpy && spyData && spyData.length > 0) {
+    // SPY/QQQ as % change from start on visible left axis
+    // Each starts at 0% so you can directly compare performance
+    if (showSpy && normalizedSpy.length > 0) {
       chart.addSeries(LineSeries, {
-        color: '#f0883e', lineWidth: 1, title: 'SPY', priceScaleId: 'overlay',
-      }).setData(spyData.map(d => ({ time: d.time as any, value: d.close })))
+        color: '#f0883e', lineWidth: 1, title: 'SPY %',
+        priceScaleId: 'left',
+        priceFormat: { type: 'price', precision: 1 },
+      }).setData(normalizedSpy)
     }
-    if (showQqq && qqqData && qqqData.length > 0) {
+    if (showQqq && normalizedQqq.length > 0) {
       chart.addSeries(LineSeries, {
-        color: '#a371f7', lineWidth: 1, title: 'QQQ', priceScaleId: 'overlay',
-      }).setData(qqqData.map(d => ({ time: d.time as any, value: d.close })))
+        color: '#a371f7', lineWidth: 1, title: 'QQQ %',
+        priceScaleId: 'left',
+        priceFormat: { type: 'price', precision: 1 },
+      }).setData(normalizedQqq)
     }
     if (showSpy || showQqq) {
-      chart.priceScale('overlay').applyOptions({ visible: false })
+      chart.applyOptions({ leftPriceScale: { visible: true, borderColor: GRID } })
     }
 
     // Volume overlay — semi-transparent bars at bottom 25% of chart
@@ -103,20 +128,20 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       })))
     }
 
-    // EMA overlays on main chart
+    // EMA — explicit priceScaleId: 'right' so they overlay on the candlesticks
     if (activeIndicators.includes('ema') && indicatorData.ema) {
       const { ema20, ema50, ema200 } = indicatorData.ema
-      chart.addSeries(LineSeries, { color: '#f0883e', lineWidth: 1, title: 'EMA20' }).setData(toLineData(ema20))
-      chart.addSeries(LineSeries, { color: '#a371f7', lineWidth: 1, title: 'EMA50' }).setData(toLineData(ema50))
-      chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'EMA200' }).setData(toLineData(ema200))
+      chart.addSeries(LineSeries, { color: '#f0883e', lineWidth: 1, title: 'EMA20', priceScaleId: 'right' }).setData(toLineData(ema20))
+      chart.addSeries(LineSeries, { color: '#a371f7', lineWidth: 1, title: 'EMA50', priceScaleId: 'right' }).setData(toLineData(ema50))
+      chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'EMA200', priceScaleId: 'right' }).setData(toLineData(ema200))
     }
 
-    // Bollinger Bands on main chart
+    // Bollinger Bands — explicit priceScaleId: 'right'
     if (activeIndicators.includes('bb') && indicatorData.bb) {
       const { upper, middle, lower } = indicatorData.bb
-      chart.addSeries(LineSeries, { color: '#30363d', lineWidth: 1, title: 'BB Upper' }).setData(toLineData(upper))
-      chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'BB Mid' }).setData(toLineData(middle))
-      chart.addSeries(LineSeries, { color: '#30363d', lineWidth: 1, title: 'BB Lower' }).setData(toLineData(lower))
+      chart.addSeries(LineSeries, { color: '#30363d', lineWidth: 1, title: 'BB Upper', priceScaleId: 'right' }).setData(toLineData(upper))
+      chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'BB Mid', priceScaleId: 'right' }).setData(toLineData(middle))
+      chart.addSeries(LineSeries, { color: '#30363d', lineWidth: 1, title: 'BB Lower', priceScaleId: 'right' }).setData(toLineData(lower))
     }
 
     // Trade markers
@@ -124,6 +149,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
 
     chart.timeScale().fitContent()
 
+    // Pan/zoom sync + price scale width equalization
     const syncHandler = (range: LogicalRange | null) => {
       if (!range) return
       const mainW = chart.priceScale('right').width()
@@ -140,6 +166,20 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     }
     chart.timeScale().subscribeVisibleLogicalRangeChange(syncHandler)
 
+    // Crosshair sync: main → MACD + RSI
+    const crosshairHandler = (param: any) => {
+      if (!param.time) {
+        macdChartRef.current?.clearCrosshairPosition()
+        rsiChartRef.current?.clearCrosshairPosition()
+        return
+      }
+      if (macdChartRef.current && macdSeriesRef.current)
+        macdChartRef.current.setCrosshairPosition(NaN, param.time, macdSeriesRef.current)
+      if (rsiChartRef.current && rsiSeriesRef.current)
+        rsiChartRef.current.setCrosshairPosition(NaN, param.time, rsiSeriesRef.current)
+    }
+    chart.subscribeCrosshairMove(crosshairHandler)
+
     const ro = new ResizeObserver(() => {
       if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth })
     })
@@ -147,10 +187,12 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
 
     return () => {
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(syncHandler)
+      chart.unsubscribeCrosshairMove(crosshairHandler)
       chart.remove()
+      candleSeriesRef.current = null
       ro.disconnect()
     }
-  }, [data, spyData, qqqData, showSpy, showQqq, activeIndicators, indicatorData, trades])
+  }, [data, normalizedSpy, normalizedQqq, showSpy, showQqq, activeIndicators, indicatorData, trades])
 
   // MACD chart
   useEffect(() => {
@@ -160,19 +202,37 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     macdChartRef.current = chart
 
     const { macd, signal, histogram } = indicatorData.macd
-    chart.addSeries(HistogramSeries, {
+    const histSeries = chart.addSeries(HistogramSeries, {
       color: UP,
       priceFormat: { type: 'price', precision: 4 },
-    }).setData(histogram.filter(d => d.value !== null).map(d => ({
+    })
+    histSeries.setData(histogram.filter(d => d.value !== null).map(d => ({
       time: d.time as any,
       value: d.value as number,
       color: (d.value ?? 0) >= 0 ? UP : DOWN,
     })))
+    macdSeriesRef.current = histSeries
+
     chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'MACD' }).setData(toLineData(macd))
     chart.addSeries(LineSeries, { color: '#f0883e', lineWidth: 1, title: 'Signal' }).setData(toLineData(signal))
     chart.timeScale().fitContent()
 
-    requestAnimationFrame(() => {
+    // Crosshair sync: MACD → main + RSI
+    const crosshairHandler = (param: any) => {
+      if (!param.time) {
+        chartRef.current?.clearCrosshairPosition()
+        rsiChartRef.current?.clearCrosshairPosition()
+        return
+      }
+      if (chartRef.current && candleSeriesRef.current)
+        chartRef.current.setCrosshairPosition(NaN, param.time, candleSeriesRef.current)
+      if (rsiChartRef.current && rsiSeriesRef.current)
+        rsiChartRef.current.setCrosshairPosition(NaN, param.time, rsiSeriesRef.current)
+    }
+    chart.subscribeCrosshairMove(crosshairHandler)
+
+    // Double-RAF: wait two frames for layout to settle before measuring scale widths
+    requestAnimationFrame(() => requestAnimationFrame(() => {
       if (!chartRef.current) return
       const mainW = chartRef.current.priceScale('right').width()
       const macdW = chart.priceScale('right').width()
@@ -181,13 +241,19 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       chartRef.current.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
       chart.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
       rsiChartRef.current?.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
-    })
+    }))
 
     const ro = new ResizeObserver(() => {
       if (macdContainerRef.current) chart.applyOptions({ width: macdContainerRef.current.clientWidth })
     })
     ro.observe(macdContainerRef.current)
-    return () => { chart.remove(); macdChartRef.current = null; ro.disconnect() }
+    return () => {
+      chart.unsubscribeCrosshairMove(crosshairHandler)
+      chart.remove()
+      macdChartRef.current = null
+      macdSeriesRef.current = null
+      ro.disconnect()
+    }
   }, [showMacd, indicatorData.macd])
 
   // RSI chart
@@ -197,8 +263,10 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     const chart = createChart(rsiContainerRef.current, { ...chartOptions, height: rsiContainerRef.current.clientHeight })
     rsiChartRef.current = chart
 
-    chart.addSeries(LineSeries, { color: '#a371f7', lineWidth: 1, title: 'RSI' }).setData(toLineData(indicatorData.rsi))
-    // Overbought/oversold lines
+    const rsiLine = chart.addSeries(LineSeries, { color: '#a371f7', lineWidth: 1, title: 'RSI' })
+    rsiLine.setData(toLineData(indicatorData.rsi))
+    rsiSeriesRef.current = rsiLine
+
     const len = indicatorData.rsi.length
     if (len > 0) {
       const first = indicatorData.rsi[0].time
@@ -208,7 +276,22 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     }
     chart.timeScale().fitContent()
 
-    requestAnimationFrame(() => {
+    // Crosshair sync: RSI → main + MACD
+    const crosshairHandler = (param: any) => {
+      if (!param.time) {
+        chartRef.current?.clearCrosshairPosition()
+        macdChartRef.current?.clearCrosshairPosition()
+        return
+      }
+      if (chartRef.current && candleSeriesRef.current)
+        chartRef.current.setCrosshairPosition(NaN, param.time, candleSeriesRef.current)
+      if (macdChartRef.current && macdSeriesRef.current)
+        macdChartRef.current.setCrosshairPosition(NaN, param.time, macdSeriesRef.current)
+    }
+    chart.subscribeCrosshairMove(crosshairHandler)
+
+    // Double-RAF: wait two frames for layout to settle
+    requestAnimationFrame(() => requestAnimationFrame(() => {
       if (!chartRef.current) return
       const mainW = chartRef.current.priceScale('right').width()
       const macdW = macdChartRef.current?.priceScale('right').width() ?? 0
@@ -217,13 +300,19 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       chartRef.current.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
       macdChartRef.current?.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
       chart.applyOptions({ rightPriceScale: { minimumWidth: maxW } })
-    })
+    }))
 
     const ro = new ResizeObserver(() => {
       if (rsiContainerRef.current) chart.applyOptions({ width: rsiContainerRef.current.clientWidth })
     })
     ro.observe(rsiContainerRef.current)
-    return () => { chart.remove(); rsiChartRef.current = null; ro.disconnect() }
+    return () => {
+      chart.unsubscribeCrosshairMove(crosshairHandler)
+      chart.remove()
+      rsiChartRef.current = null
+      rsiSeriesRef.current = null
+      ro.disconnect()
+    }
   }, [showRsi, indicatorData.rsi])
 
   const indicatorPaneCount = (showMacd ? 1 : 0) + (showRsi ? 1 : 0)
