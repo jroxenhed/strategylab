@@ -7,7 +7,7 @@ import {
   HistogramSeries,
   ColorType,
 } from 'lightweight-charts'
-import type { IChartApi, ISeriesApi, LogicalRange } from 'lightweight-charts'
+import type { IChartApi, ISeriesApi } from 'lightweight-charts'
 import type { OHLCVBar, IndicatorData, IndicatorKey, TimeValue } from '../types'
 
 interface ChartProps {
@@ -100,14 +100,14 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       chart.addSeries(LineSeries, {
         color: '#f0883e', lineWidth: 1, title: 'SPY %',
         priceScaleId: 'left',
-        priceFormat: { type: 'price', precision: 1 },
+        priceFormat: { type: 'price', precision: 2 },
       }).setData(normalizedSpy)
     }
     if (showQqq && normalizedQqq.length > 0) {
       chart.addSeries(LineSeries, {
         color: '#a371f7', lineWidth: 1, title: 'QQQ %',
         priceScaleId: 'left',
-        priceFormat: { type: 'price', precision: 1 },
+        priceFormat: { type: 'price', precision: 2 },
       }).setData(normalizedQqq)
     }
     if (showSpy || showQqq) {
@@ -169,13 +169,15 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     }
 
     // Pan/zoom sync + price scale width equalization
-    const syncHandler = (range: LogicalRange | null) => {
+    // Use time-based range (not logical/bar-index) so RSI aligns even though
+    // its data starts 14 bars later (rolling(14) warmup)
+    const syncHandler = (range: any) => {
       if (!range) return
       syncWidths()
-      if (macdChartRef.current) macdChartRef.current.timeScale().setVisibleLogicalRange(range)
-      if (rsiChartRef.current) rsiChartRef.current.timeScale().setVisibleLogicalRange(range)
+      if (macdChartRef.current) macdChartRef.current.timeScale().setVisibleRange(range)
+      if (rsiChartRef.current) rsiChartRef.current.timeScale().setVisibleRange(range)
     }
-    chart.timeScale().subscribeVisibleLogicalRangeChange(syncHandler)
+    chart.timeScale().subscribeVisibleTimeRangeChange(syncHandler)
 
     // Initial alignment: fire after MACD/RSI effects have had time to mount
     const alignTimer = setTimeout(syncWidths, 100)
@@ -201,7 +203,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
 
     return () => {
       clearTimeout(alignTimer)
-      chart.timeScale().unsubscribeVisibleLogicalRangeChange(syncHandler)
+      chart.timeScale().unsubscribeVisibleTimeRangeChange(syncHandler)
       chart.unsubscribeCrosshairMove(crosshairHandler)
       chart.remove()
       candleSeriesRef.current = null
