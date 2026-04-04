@@ -18,24 +18,58 @@ app.add_middleware(
 )
 
 
+_INTRADAY_INTERVALS = {'1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h'}
+
+# yfinance max lookback per interval (days)
+_INTERVAL_MAX_DAYS = {
+    '1m': 7, '2m': 60, '5m': 60, '15m': 60, '30m': 60,
+    '60m': 730, '90m': 60, '1h': 730,
+}
+
+
+def _fetch(ticker: str, start: str, end: str, interval: str) -> pd.DataFrame:
+    """Thread-safe data fetch using yf.Ticker instead of yf.download.
+
+    yf.download uses shared global state that corrupts data when called
+    concurrently from FastAPI's thread pool.
+    """
+    # Clamp date range to yfinance limits for intraday intervals
+    max_days = _INTERVAL_MAX_DAYS.get(interval)
+    if max_days is not None:
+        from datetime import datetime, timedelta
+        end_dt = datetime.strptime(end, '%Y-%m-%d')
+        earliest = end_dt - timedelta(days=max_days)
+        start_dt = datetime.strptime(start, '%Y-%m-%d')
+        if start_dt < earliest:
+            start = earliest.strftime('%Y-%m-%d')
+
+    df = yf.Ticker(ticker).history(start=start, end=end, interval=interval, auto_adjust=True)
+    if df.empty:
+        raise HTTPException(status_code=404, detail=f"No data for {ticker}")
+    return df.dropna()
+
+
+def _format_time(idx, interval: str):
+    """Return lightweight-charts compatible time: unix seconds for intraday, YYYY-MM-DD for daily+."""
+    if interval in _INTRADAY_INTERVALS:
+        ts = pd.Timestamp(idx)
+        if ts.tzinfo is not None:
+            ts = ts.tz_convert('UTC')
+        return int(ts.timestamp())
+    return str(idx)[:10]
+
+
 # ── Data endpoint ─────────────────────────────────────────────────────────────
 
 @app.get("/api/ohlcv/{ticker}")
 def get_ohlcv(ticker: str, start: str = "2023-01-01", end: str = "2024-01-01", interval: str = "1d"):
     try:
-        df = yf.download(ticker, start=start, end=end, interval=interval, auto_adjust=True, progress=False)
-        if df.empty:
-            raise HTTPException(status_code=404, detail=f"No data for {ticker}")
-        df = df.dropna()
-        df.index = df.index.astype(str)
-        # Flatten multi-level columns if present
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+        df = _fetch(ticker, start, end, interval)
         return {
             "ticker": ticker,
             "data": [
                 {
-                    "time": str(idx)[:10],
+                    "time": _format_time(idx, interval),
                     "open": round(float(row["Open"]), 4),
                     "high": round(float(row["High"]), 4),
                     "low": round(float(row["Low"]), 4),
@@ -62,16 +96,11 @@ def get_indicators(
     indicators: str = "macd,rsi",
 ):
     try:
-        df = yf.download(ticker, start=start, end=end, interval=interval, auto_adjust=True, progress=False)
-        if df.empty:
-            raise HTTPException(status_code=404, detail=f"No data for {ticker}")
-        df = df.dropna()
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+        df = _fetch(ticker, start, end, interval)
 
-        close = df["Close"].squeeze()
-        high = df["High"].squeeze()
-        low = df["Low"].squeeze()
+        close = df["Close"]
+        high = df["High"]
+        low = df["Low"]
 
         result = {}
         requested = [i.strip().lower() for i in indicators.split(",")]
@@ -83,9 +112,9 @@ def get_indicators(
             signal_line = macd_line.ewm(span=9, adjust=False).mean()
             histogram = macd_line - signal_line
             result["macd"] = {
-                "macd": _series_to_list(df.index, macd_line),
-                "signal": _series_to_list(df.index, signal_line),
-                "histogram": _series_to_list(df.index, histogram),
+                "macd": _series_to_list(df.index, interval,macd_line),
+                "signal": _series_to_list(df.index, interval,signal_line),
+                "histogram": _series_to_list(df.index, interval,histogram),
             }
 
         if "rsi" in requested:
@@ -94,34 +123,34 @@ def get_indicators(
             loss = (-delta.clip(upper=0)).rolling(14).mean()
             rs = gain / loss.replace(0, np.nan)
             rsi = 100 - (100 / (1 + rs))
-            result["rsi"] = _series_to_list(df.index, rsi)
+            result["rsi"] = _series_to_list(df.index, interval,rsi)
 
         if "ema" in requested:
             result["ema"] = {
-                "ema20": _series_to_list(df.index, close.ewm(span=20, adjust=False).mean()),
-                "ema50": _series_to_list(df.index, close.ewm(span=50, adjust=False).mean()),
-                "ema200": _series_to_list(df.index, close.ewm(span=200, adjust=False).mean()),
+                "ema20": _series_to_list(df.index, interval,close.ewm(span=20, adjust=False).mean()),
+                "ema50": _series_to_list(df.index, interval,close.ewm(span=50, adjust=False).mean()),
+                "ema200": _series_to_list(df.index, interval,close.ewm(span=200, adjust=False).mean()),
             }
 
         if "bb" in requested:
             sma20 = close.rolling(20).mean()
             std20 = close.rolling(20).std()
             result["bb"] = {
-                "upper": _series_to_list(df.index, sma20 + 2 * std20),
-                "middle": _series_to_list(df.index, sma20),
-                "lower": _series_to_list(df.index, sma20 - 2 * std20),
+                "upper": _series_to_list(df.index, interval,sma20 + 2 * std20),
+                "middle": _series_to_list(df.index, interval,sma20),
+                "lower": _series_to_list(df.index, interval,sma20 - 2 * std20),
             }
 
         if "orb" in requested:
             # Opening Range Breakout — first 30 min high/low extended as daily levels
             # For daily data, use first candle of each day (same as day open)
             result["orb"] = {
-                "high": _series_to_list(df.index, high),
-                "low": _series_to_list(df.index, low),
+                "high": _series_to_list(df.index, interval,high),
+                "low": _series_to_list(df.index, interval,low),
             }
 
         if "volume" in requested:
-            result["volume"] = _series_to_list(df.index, df["Volume"].squeeze())
+            result["volume"] = _series_to_list(df.index, interval,df["Volume"])
 
         return result
     except HTTPException:
@@ -130,9 +159,9 @@ def get_indicators(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _series_to_list(index, series):
+def _series_to_list(index, interval, series):
     return [
-        {"time": str(t)[:10], "value": round(float(v), 4) if pd.notna(v) else None}
+        {"time": _format_time(t, interval), "value": round(float(v), 4) if pd.notna(v) else None}
         for t, v in zip(index, series)
     ]
 
@@ -166,14 +195,9 @@ class StrategyRequest(BaseModel):
 @app.post("/api/backtest")
 def run_backtest(req: StrategyRequest):
     try:
-        df = yf.download(req.ticker, start=req.start, end=req.end, interval=req.interval, auto_adjust=True, progress=False)
-        if df.empty:
-            raise HTTPException(status_code=404, detail=f"No data for {req.ticker}")
-        df = df.dropna()
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+        df = _fetch(req.ticker, req.start, req.end, req.interval)
 
-        close = df["Close"].squeeze()
+        close = df["Close"]
 
         # Precompute all indicators
         ema12 = close.ewm(span=12, adjust=False).mean()
@@ -269,7 +293,7 @@ def run_backtest(req: StrategyRequest):
 
         for i in range(len(df)):
             price = close.iloc[i]
-            date = str(df.index[i])[:10]
+            date = _format_time(df.index[i], req.interval)
 
             if position == 0 and eval_rules(req.buy_rules, req.buy_logic, i):
                 shares = (capital * req.position_size) / price

@@ -68,6 +68,7 @@ export default function App() {
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {ohlcv.length > 0 ? (
               <Chart
+                ticker={ticker}
                 data={ohlcv}
                 spyData={showSpy ? (spyData ?? []) : undefined}
                 qqqData={showQqq ? (qqqData ?? []) : undefined}

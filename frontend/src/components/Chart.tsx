@@ -11,6 +11,7 @@ import type { IChartApi, ISeriesApi } from 'lightweight-charts'
 import type { OHLCVBar, IndicatorData, IndicatorKey, TimeValue } from '../types'
 
 interface ChartProps {
+  ticker: string
   data: OHLCVBar[]
   spyData?: OHLCVBar[]
   qqqData?: OHLCVBar[]
@@ -28,7 +29,12 @@ const UP = '#26a641'
 const DOWN = '#f85149'
 
 function toLineData(arr: TimeValue[]) {
-  return arr.filter(d => d.value !== null).map(d => ({ time: d.time as any, value: d.value as number }))
+  // Use whitespace data (no value field) for nulls so the bar still occupies
+  // space in the time scale — keeps logical range aligned across charts
+  return arr.map(d => d.value !== null
+    ? { time: d.time as any, value: d.value as number }
+    : { time: d.time as any }
+  )
 }
 
 function buildMarkers(trades: Array<{ type: 'buy' | 'sell'; date: string; price: number }>) {
@@ -41,7 +47,7 @@ function buildMarkers(trades: Array<{ type: 'buy' | 'sell'; date: string; price:
   }))
 }
 
-export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicatorData, activeIndicators, trades }: ChartProps) {
+export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq, indicatorData, activeIndicators, trades }: ChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const macdChartRef = useRef<IChartApi | null>(null)
@@ -56,17 +62,15 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   const showMacd = activeIndicators.includes('macd')
   const showRsi = activeIndicators.includes('rsi')
 
-  // % change from start — used for SPY/QQQ comparison on left axis
-  const normalizedSpy = useMemo(() => {
+  // SPY/QQQ as real close prices on their own left axis
+  const spyLineData = useMemo(() => {
     if (!spyData || spyData.length === 0) return []
-    const base = spyData[0].close
-    return spyData.map(d => ({ time: d.time as any, value: ((d.close - base) / base) * 100 }))
+    return spyData.map(d => ({ time: d.time as any, value: d.close }))
   }, [spyData])
 
-  const normalizedQqq = useMemo(() => {
+  const qqqLineData = useMemo(() => {
     if (!qqqData || qqqData.length === 0) return []
-    const base = qqqData[0].close
-    return qqqData.map(d => ({ time: d.time as any, value: ((d.close - base) / base) * 100 }))
+    return qqqData.map(d => ({ time: d.time as any, value: d.close }))
   }, [qqqData])
 
   const chartOptions = {
@@ -94,24 +98,25 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     candleSeries.setData(data.map(d => ({ ...d, time: d.time as any })))
     candleSeriesRef.current = candleSeries
 
-    // SPY/QQQ as % change from start on visible left axis
-    // Each starts at 0% so you can directly compare performance
-    if (showSpy && normalizedSpy.length > 0) {
-      chart.addSeries(LineSeries, {
-        color: '#f0883e', lineWidth: 1, title: 'SPY %',
-        priceScaleId: 'left',
+    // SPY/QQQ as real close prices — each on its own left-side scale so
+    // different price ranges (e.g. SPY ~$500 vs QQQ ~$420) don't squash together
+    if (showSpy && spyLineData.length > 0) {
+      const spySeries = chart.addSeries(LineSeries, {
+        color: '#f0883e', lineWidth: 1, title: 'SPY',
+        priceScaleId: 'spy-scale',
         priceFormat: { type: 'price', precision: 2 },
-      }).setData(normalizedSpy)
+      })
+      spySeries.setData(spyLineData)
+      chart.priceScale('spy-scale').applyOptions({ visible: false })
     }
-    if (showQqq && normalizedQqq.length > 0) {
-      chart.addSeries(LineSeries, {
-        color: '#a371f7', lineWidth: 1, title: 'QQQ %',
-        priceScaleId: 'left',
+    if (showQqq && qqqLineData.length > 0) {
+      const qqqSeries = chart.addSeries(LineSeries, {
+        color: '#a371f7', lineWidth: 1, title: 'QQQ',
+        priceScaleId: 'qqq-scale',
         priceFormat: { type: 'price', precision: 2 },
-      }).setData(normalizedQqq)
-    }
-    if (showSpy || showQqq) {
-      chart.applyOptions({ leftPriceScale: { visible: true, borderColor: GRID } })
+      })
+      qqqSeries.setData(qqqLineData)
+      chart.priceScale('qqq-scale').applyOptions({ visible: false })
     }
 
     // Volume overlay — semi-transparent bars at bottom 25% of chart
@@ -169,15 +174,14 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     }
 
     // Pan/zoom sync + price scale width equalization
-    // Use time-based range (not logical/bar-index) so RSI aligns even though
-    // its data starts 14 bars later (rolling(14) warmup)
+    // Use logical range (bar-index) so scrolling stays locked across all panes
     const syncHandler = (range: any) => {
       if (!range) return
       syncWidths()
-      if (macdChartRef.current) macdChartRef.current.timeScale().setVisibleRange(range)
-      if (rsiChartRef.current) rsiChartRef.current.timeScale().setVisibleRange(range)
+      if (macdChartRef.current) macdChartRef.current.timeScale().setVisibleLogicalRange(range)
+      if (rsiChartRef.current) rsiChartRef.current.timeScale().setVisibleLogicalRange(range)
     }
-    chart.timeScale().subscribeVisibleTimeRangeChange(syncHandler)
+    chart.timeScale().subscribeVisibleLogicalRangeChange(syncHandler)
 
     // Initial alignment: fire after MACD/RSI effects have had time to mount
     const alignTimer = setTimeout(syncWidths, 100)
@@ -203,13 +207,13 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
 
     return () => {
       clearTimeout(alignTimer)
-      chart.timeScale().unsubscribeVisibleTimeRangeChange(syncHandler)
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(syncHandler)
       chart.unsubscribeCrosshairMove(crosshairHandler)
       chart.remove()
       candleSeriesRef.current = null
       ro.disconnect()
     }
-  }, [data, normalizedSpy, normalizedQqq, showSpy, showQqq, activeIndicators, indicatorData, trades])
+  }, [data, spyLineData, qqqLineData, showSpy, showQqq, activeIndicators, indicatorData, trades])
 
   // MACD chart
   useEffect(() => {
@@ -223,16 +227,21 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       color: UP,
       priceFormat: { type: 'price', precision: 4 },
     })
-    histSeries.setData(histogram.filter(d => d.value !== null).map(d => ({
-      time: d.time as any,
-      value: d.value as number,
-      color: (d.value ?? 0) >= 0 ? UP : DOWN,
-    })))
+    histSeries.setData(histogram.map(d => d.value !== null
+      ? { time: d.time as any, value: d.value as number, color: d.value >= 0 ? UP : DOWN }
+      : { time: d.time as any }
+    ))
     macdSeriesRef.current = histSeries
 
     chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'MACD' }).setData(toLineData(macd))
     chart.addSeries(LineSeries, { color: '#f0883e', lineWidth: 1, title: 'Signal' }).setData(toLineData(signal))
     chart.timeScale().fitContent()
+
+    // Sync to main chart's current visible range
+    if (chartRef.current) {
+      const mainRange = chartRef.current.timeScale().getVisibleLogicalRange()
+      if (mainRange) chart.timeScale().setVisibleLogicalRange(mainRange)
+    }
 
     // Crosshair sync: MACD → main + RSI
     const crosshairHandler = (param: any) => {
@@ -280,6 +289,12 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       chart.addSeries(LineSeries, { color: '#26a641', lineWidth: 1, lineStyle: 2 }).setData([{ time: first as any, value: 30 }, { time: last as any, value: 30 }])
     }
     chart.timeScale().fitContent()
+
+    // Sync to main chart's current visible range
+    if (chartRef.current) {
+      const mainRange = chartRef.current.timeScale().getVisibleLogicalRange()
+      if (mainRange) chart.timeScale().setVisibleLogicalRange(mainRange)
+    }
 
     // Crosshair sync: RSI → main + MACD
     const crosshairHandler = (param: any) => {

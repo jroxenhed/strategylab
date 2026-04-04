@@ -34,9 +34,11 @@ Three separate `IChartApi` instances rendered as a flex column:
 
 ### Pane synchronization
 
-Pan/zoom: `subscribeVisibleTimeRangeChange` on the main chart → `setVisibleRange()` on MACD/RSI. Time-based (not logical/bar-index) because RSI's `rolling(14)` warmup means RSI's bar-0 is 14 days later than the main chart's bar-0. Logical range sync would offset the RSI pane by 14 bars.
+Pan/zoom: `subscribeVisibleLogicalRangeChange` on the main chart → `setVisibleLogicalRange()` on MACD/RSI. Uses logical (bar-index) sync. Indicator data uses **whitespace entries** (`{ time }` with no `value`) for warmup bars (e.g. RSI's first 14 points) so all charts have the same bar count and stay aligned.
 
-Price scale alignment: `syncWidths()` equalises `rightPriceScale.minimumWidth` across all three charts. Also mirrors the main chart's left axis width (visible when SPY/QQQ are shown) onto MACD/RSI as invisible left axes — otherwise MACD/RSI plot areas start further left than the main chart. Called on every range change AND via `setTimeout(100)` on initial mount (fires after MACD/RSI effects have had time to run).
+MACD/RSI effects sync to the main chart's logical range on mount via `getVisibleLogicalRange()`.
+
+Price scale alignment: `syncWidths()` equalises `rightPriceScale.minimumWidth` across all three charts. Also mirrors the main chart's left axis width onto MACD/RSI as invisible left axes — otherwise MACD/RSI plot areas start further left than the main chart. Called on every range change AND via `setTimeout(100)` on initial mount.
 
 Crosshair sync: `subscribeCrosshairMove` on each chart → `setCrosshairPosition(NaN, param.time, seriesRef)` on the other two. Requires series refs (`candleSeriesRef`, `macdSeriesRef`, `rsiSeriesRef`).
 
@@ -44,12 +46,13 @@ Crosshair sync: `subscribeCrosshairMove` on each chart → `setCrosshairPosition
 
 In v5, `addSeries()` without an explicit `priceScaleId` creates an **independent** scale rather than sharing 'right'. Always set explicitly:
 - Candlesticks, EMA, BB → `priceScaleId: 'right'`
-- SPY/QQQ % lines → `priceScaleId: 'left'` (visible left axis)
+- SPY → `priceScaleId: 'spy-scale'` (hidden, real close prices)
+- QQQ → `priceScaleId: 'qqq-scale'` (hidden, real close prices)
 - Volume → `priceScaleId: 'volume'` (hidden, `scaleMargins: { top: 0.75, bottom: 0 }`)
 
 ### SPY/QQQ overlay
 
-Fetched in App.tsx always (even when hidden) to avoid loading delay. Passed to Chart only when `showSpy`/`showQqq` is true. Normalized to % change from first close: `((close - base) / base) * 100`. Displayed on a visible left axis. The left axis is hidden (`visible: false` in chartOptions) by default and made visible when either is active.
+Fetched in App.tsx always (even when hidden) to avoid loading delay. Passed to Chart only when `showSpy`/`showQqq` is true. Displayed as real close prices on independent hidden scales (`spy-scale`, `qqq-scale`), so each line auto-scales independently and the crosshair tooltip shows actual dollar values.
 
 ### Indicator pane height split
 
@@ -61,16 +64,10 @@ Fetched in App.tsx always (even when hidden) to avoid loading delay. Passed to C
 
 ## Backend Notes
 
-- `yf.download(ticker, ...)` with `auto_adjust=True` — prices are adjusted for splits/dividends
-- Intraday data limits (yfinance): 1m=7d, 5m/15m/30m=60d, 1h=730d
-- Sidebar shows an orange warning when the selected date range exceeds the interval limit
-- Backend passes interval string directly to yfinance — no mapping needed
-
-## Known Open Issues (as of 2026-04-04)
-
-1. **RSI / MACD alignment** — mostly fixed (switched to time-based range sync). May still be slightly off in edge cases; root cause is that MACD/RSI are separate chart instances, not lightweight-charts native panes. The `syncWidths()` + `setTimeout(100)` approach works for most situations but is inherently racy on first load.
-
-2. **SPY/QQQ visual similarity** — the lines look very correlated because QQQ and SPY both track large-cap US equities. The data IS fetched separately (verified by different queryKeys in React Query). Label precision is 2 decimal places so similar values like 30.28 vs 30.35 are distinguishable.
+- **CRITICAL: Never use `yf.download()`** — it shares global state and returns wrong data under concurrent requests. Always use `yf.Ticker(symbol).history()` via the `_fetch()` helper.
+- `_fetch()` auto-clamps date ranges to yfinance limits for intraday intervals (1m=7d, 5m/15m/30m=60d, 1h=730d)
+- `_format_time()` returns `"YYYY-MM-DD"` strings for daily+ intervals and **unix timestamps** (seconds, UTC) for intraday — lightweight-charts requires unique timestamps per bar
+- `_series_to_list()` preserves null values (for indicator warmup periods) so the frontend can use whitespace data for bar alignment
 
 ## Branches
 
