@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { createChart, LineSeries, ColorType } from 'lightweight-charts'
-import type { BacktestResult } from '../types'
+import type { BacktestResult } from '../../shared/types'
 
 type Tab = 'summary' | 'equity' | 'trades'
 

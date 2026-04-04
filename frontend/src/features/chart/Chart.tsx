@@ -8,7 +8,7 @@ import {
   ColorType,
 } from 'lightweight-charts'
 import type { IChartApi, ISeriesApi } from 'lightweight-charts'
-import type { OHLCVBar, IndicatorData, IndicatorKey, TimeValue } from '../types'
+import type { OHLCVBar, IndicatorData, IndicatorKey, TimeValue } from '../../shared/types'
 
 interface ChartProps {
   ticker: string

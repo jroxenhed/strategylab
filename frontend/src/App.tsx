@@ -1,10 +1,10 @@
 import { useState, useCallback } from 'react'
-import type { BacktestResult, IndicatorKey } from './types'
-import { useOHLCV, useIndicators } from './hooks/useOHLCV'
-import Sidebar from './components/Sidebar'
-import Chart from './components/Chart'
-import StrategyBuilder from './components/StrategyBuilder'
-import Results from './components/Results'
+import type { BacktestResult, IndicatorKey } from './shared/types'
+import { useOHLCV, useIndicators } from './shared/hooks/useOHLCV'
+import Sidebar from './features/sidebar/Sidebar'
+import Chart from './features/chart/Chart'
+import StrategyBuilder from './features/strategy/StrategyBuilder'
+import Results from './features/strategy/Results'
 
 const today = new Date().toISOString().slice(0, 10)
 const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)

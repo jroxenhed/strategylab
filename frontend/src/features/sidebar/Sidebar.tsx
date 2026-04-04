@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Search, X } from 'lucide-react'
-import { useSearch } from '../hooks/useOHLCV'
-import type { IndicatorKey } from '../types'
+import { useSearch } from '../../shared/hooks/useOHLCV'
+import type { IndicatorKey } from '../../shared/types'
 
 interface SidebarProps {
   ticker: string

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Plus, Trash2, Play } from 'lucide-react'
-import type { Rule, StrategyRequest, BacktestResult } from '../types'
+import type { Rule, StrategyRequest, BacktestResult } from '../../shared/types'
 import axios from 'axios'
 
 interface Props {
