@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import type { BacktestResult, IndicatorKey } from './shared/types'
 import { useOHLCV, useIndicators } from './shared/hooks/useOHLCV'
 import Sidebar from './features/sidebar/Sidebar'
@@ -6,18 +6,34 @@ import Chart from './features/chart/Chart'
 import StrategyBuilder from './features/strategy/StrategyBuilder'
 import Results from './features/strategy/Results'
 
+const STORAGE_KEY = 'strategylab-settings'
 const today = new Date().toISOString().slice(0, 10)
 const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
+const saved = loadSettings()
+
 export default function App() {
-  const [ticker, setTicker] = useState('AAPL')
-  const [start, setStart] = useState(oneYearAgo)
-  const [end, setEnd] = useState(today)
-  const [interval, setInterval] = useState('1d')
-  const [activeIndicators, setActiveIndicators] = useState<IndicatorKey[]>(['macd', 'rsi'])
-  const [showSpy, setShowSpy] = useState(false)
-  const [showQqq, setShowQqq] = useState(false)
+  const [ticker, setTicker] = useState(saved?.ticker ?? 'AAPL')
+  const [start, setStart] = useState(saved?.start ?? oneYearAgo)
+  const [end, setEnd] = useState(saved?.end ?? today)
+  const [interval, setInterval] = useState(saved?.interval ?? '1d')
+  const [activeIndicators, setActiveIndicators] = useState<IndicatorKey[]>(saved?.activeIndicators ?? ['macd', 'rsi'])
+  const [showSpy, setShowSpy] = useState(saved?.showSpy ?? false)
+  const [showQqq, setShowQqq] = useState(saved?.showQqq ?? false)
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null)
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      ticker, start, end, interval, activeIndicators, showSpy, showQqq,
+    }))
+  }, [ticker, start, end, interval, activeIndicators, showSpy, showQqq])
 
   const { data: ohlcv = [] } = useOHLCV(ticker, start, end, interval)
   const { data: spyData } = useOHLCV('SPY', start, end, interval)
