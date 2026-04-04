@@ -9,17 +9,28 @@ Interactive trading strategy backtester. Read this before touching anything.
 
 ```
 frontend/src/
-  App.tsx              — state, data fetching, layout
-  components/
-    Chart.tsx          — the complex one (see below)
-    Sidebar.tsx        — ticker search, date range, indicators, compare
-    StrategyBuilder.tsx — buy/sell rule builder, backtest trigger
-    Results.tsx        — tabbed: Summary / Equity Curve / Trades
-  hooks/useOHLCV.ts    — useOHLCV, useIndicators, useSearch (React Query)
-  types/index.ts       — all shared TypeScript types
+  App.tsx              — state, data fetching, layout (central hub)
+  features/
+    chart/
+      Chart.tsx        — the complex one (see below)
+    strategy/
+      StrategyBuilder.tsx — buy/sell rule builder, backtest trigger
+      Results.tsx      — tabbed: Summary / Equity Curve / Trades
+    sidebar/
+      Sidebar.tsx      — ticker search, date range, indicators, compare
+  shared/
+    hooks/useOHLCV.ts  — useOHLCV, useIndicators, useSearch (React Query)
+    types/index.ts     — all shared TypeScript types
 
-backend/main.py        — FastAPI; /api/ohlcv/{ticker}, /api/indicators/{ticker},
-                         /api/backtest, /api/search
+backend/
+  main.py              — app setup, CORS, mounts routers (~25 lines)
+  shared.py            — _fetch(), _format_time(), interval constants
+  routes/
+    data.py            — GET /api/ohlcv/{ticker}
+    indicators.py      — GET /api/indicators/{ticker}
+    backtest.py        — POST /api/backtest + models
+    search.py          — GET /api/search
+  tests/
 start.sh               — starts both servers
 ```
 
@@ -67,7 +78,7 @@ Fetched in App.tsx always (even when hidden) to avoid loading delay. Passed to C
 - **CRITICAL: Never use `yf.download()`** — it shares global state and returns wrong data under concurrent requests. Always use `yf.Ticker(symbol).history()` via the `_fetch()` helper.
 - `_fetch()` auto-clamps date ranges to yfinance limits for intraday intervals (1m=7d, 5m/15m/30m=60d, 1h=730d)
 - `_format_time()` returns `"YYYY-MM-DD"` strings for daily+ intervals and **unix timestamps** (seconds, UTC) for intraday — lightweight-charts requires unique timestamps per bar
-- `_series_to_list()` preserves null values (for indicator warmup periods) so the frontend can use whitespace data for bar alignment
+- `_series_to_list()` lives in `routes/indicators.py`; preserves null values (for indicator warmup periods) so the frontend can use whitespace data for bar alignment
 
 ## Branches
 
