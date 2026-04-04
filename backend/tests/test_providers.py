@@ -123,3 +123,15 @@ def test_fetch_rejects_unknown_source():
         _fetch("AAPL", "2024-01-01", "2024-01-03", "1d", source="nonexistent")
     assert exc_info.value.status_code == 400
     assert "Unknown data source" in exc_info.value.detail
+
+
+from fastapi.testclient import TestClient
+
+
+def test_providers_endpoint_includes_yahoo():
+    """GET /api/providers always includes yahoo."""
+    from main import app
+    client = TestClient(app)
+    resp = client.get("/api/providers")
+    assert resp.status_code == 200
+    assert "yahoo" in resp.json()["providers"]

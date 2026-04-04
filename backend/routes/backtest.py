@@ -25,6 +25,7 @@ class StrategyRequest(BaseModel):
     sell_logic: str = "AND"
     initial_capital: float = 10000.0
     position_size: float = 1.0   # fraction of capital per trade (0.01–1.0)
+    source: str = "yahoo"
 
     @field_validator('position_size')
     @classmethod
@@ -35,7 +36,7 @@ class StrategyRequest(BaseModel):
 @router.post("/api/backtest")
 def run_backtest(req: StrategyRequest):
     try:
-        df = _fetch(req.ticker, req.start, req.end, req.interval)
+        df = _fetch(req.ticker, req.start, req.end, req.interval, source=req.source)
 
         close = df["Close"]
 

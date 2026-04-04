@@ -20,9 +20,10 @@ def get_indicators(
     end: str = "2024-01-01",
     interval: str = "1d",
     indicators: str = "macd,rsi",
+    source: str = "yahoo",
 ):
     try:
-        df = _fetch(ticker, start, end, interval)
+        df = _fetch(ticker, start, end, interval, source=source)
 
         close = df["Close"]
         high = df["High"]
