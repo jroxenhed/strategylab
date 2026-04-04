@@ -135,3 +135,35 @@ def test_providers_endpoint_includes_yahoo():
     resp = client.get("/api/providers")
     assert resp.status_code == 200
     assert "yahoo" in resp.json()["providers"]
+
+
+def test_ohlcv_rejects_unknown_source():
+    """GET /api/ohlcv returns 400 for unknown source."""
+    from main import app
+    client = TestClient(app)
+    resp = client.get("/api/ohlcv/AAPL", params={"source": "nonexistent"})
+    assert resp.status_code == 400
+    assert "Unknown data source" in resp.json()["detail"]
+
+
+def test_ohlcv_defaults_to_yahoo(monkeypatch):
+    """GET /api/ohlcv without source param uses yahoo (no error)."""
+    import pandas as pd
+    import yfinance as yf
+
+    fake_df = pd.DataFrame({
+        "Open": [100.0], "High": [105.0], "Low": [99.0],
+        "Close": [103.0], "Volume": [1000000],
+    }, index=pd.to_datetime(["2024-01-02"]))
+
+    class FakeTicker:
+        def history(self, **kwargs):
+            return fake_df
+    monkeypatch.setattr(yf, "Ticker", lambda symbol: FakeTicker())
+
+    from main import app
+    client = TestClient(app)
+    resp = client.get("/api/ohlcv/AAPL", params={"start": "2024-01-01", "end": "2024-01-03"})
+    assert resp.status_code == 200
+    assert resp.json()["ticker"] == "AAPL"
+    assert len(resp.json()["data"]) == 1
