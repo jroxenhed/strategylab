@@ -7,3 +7,5 @@ numpy
 python-multipart
 httpx
 pytest
+alpaca-py
+python-dotenv
