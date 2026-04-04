@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Search, X } from 'lucide-react'
-import { useSearch } from '../../shared/hooks/useOHLCV'
-import type { IndicatorKey } from '../../shared/types'
+import { useSearch, useProviders } from '../../shared/hooks/useOHLCV'
+import type { IndicatorKey, DataSource } from '../../shared/types'
 
 interface SidebarProps {
   ticker: string
@@ -18,6 +18,8 @@ interface SidebarProps {
   onToggleIndicator: (k: IndicatorKey) => void
   onToggleSpy: () => void
   onToggleQqq: () => void
+  dataSource: DataSource
+  onDataSourceChange: (s: DataSource) => void
 }
 
 const ALL_INDICATORS: { key: IndicatorKey; label: string }[] = [
@@ -40,12 +42,15 @@ export default function Sidebar({
   ticker, start, end, interval, activeIndicators, showSpy, showQqq,
   onTickerChange, onStartChange, onEndChange, onIntervalChange,
   onToggleIndicator, onToggleSpy, onToggleQqq,
+  dataSource, onDataSourceChange,
 }: SidebarProps) {
   const daysDiff = Math.round(
     (new Date(end).getTime() - new Date(start).getTime()) / (1000 * 60 * 60 * 24)
   )
   const intervalLimit = INTERVAL_LIMITS[interval]
   const showIntervalWarning = intervalLimit !== undefined && daysDiff > intervalLimit
+
+  const { data: providers = ['yahoo'] } = useProviders()
 
   const [query, setQuery] = useState('')
   const [showDropdown, setShowDropdown] = useState(false)
@@ -89,6 +94,37 @@ export default function Sidebar({
           )}
         </div>
         <div style={{ marginTop: 8, fontSize: 18, fontWeight: 700, color: '#58a6ff' }}>{ticker}</div>
+      </div>
+
+      <div style={styles.section}>
+        <div style={styles.sectionTitle}>Data Source</div>
+        <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid #30363d' }}>
+          {(['yahoo', 'alpaca'] as const).map(src => {
+            const available = providers.includes(src)
+            const active = dataSource === src
+            return (
+              <button
+                key={src}
+                onClick={() => available && onDataSourceChange(src)}
+                disabled={!available}
+                title={!available ? 'Set ALPACA_API_KEY in .env to enable' : undefined}
+                style={{
+                  flex: 1,
+                  padding: '5px 0',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  background: active ? '#58a6ff' : '#0d1117',
+                  color: active ? '#000' : available ? '#e6edf3' : '#484f58',
+                  border: 'none',
+                  cursor: available ? 'pointer' : 'not-allowed',
+                  opacity: available ? 1 : 0.5,
+                }}
+              >
+                {src.charAt(0).toUpperCase() + src.slice(1)}
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       <div style={styles.section}>

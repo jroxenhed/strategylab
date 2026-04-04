@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Plus, Trash2, Play } from 'lucide-react'
-import type { Rule, StrategyRequest, BacktestResult } from '../../shared/types'
+import type { Rule, StrategyRequest, BacktestResult, DataSource } from '../../shared/types'
 import axios from 'axios'
 
 interface Props {
@@ -9,6 +9,7 @@ interface Props {
   end: string
   interval: string
   onResult: (r: BacktestResult | null) => void
+  dataSource: DataSource
 }
 
 const INDICATORS = ['macd', 'rsi', 'price', 'ema20', 'ema50', 'ema200'] as const
@@ -71,7 +72,7 @@ function validateRules(rules: Rule[], label: string): string | null {
   return null
 }
 
-export default function StrategyBuilder({ ticker, start, end, interval, onResult }: Props) {
+export default function StrategyBuilder({ ticker, start, end, interval, onResult, dataSource }: Props) {
   const [buyRules, setBuyRules] = useState<Rule[]>([{ indicator: 'macd', condition: 'crossover_up' }])
   const [sellRules, setSellRules] = useState<Rule[]>([{ indicator: 'macd', condition: 'crossover_down' }])
   const [buyLogic, setBuyLogic] = useState<'AND' | 'OR'>('AND')
@@ -99,6 +100,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         buy_rules: buyRules, sell_rules: sellRules,
         buy_logic: buyLogic, sell_logic: sellLogic,
         initial_capital: capital, position_size: posSize / 100,
+        source: dataSource,
       }
       const { data } = await axios.post('http://localhost:8000/api/backtest', req)
       onResult(data)

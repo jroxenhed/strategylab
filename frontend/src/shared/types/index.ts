@@ -58,6 +58,7 @@ export interface StrategyRequest {
   sell_logic: 'AND' | 'OR'
   initial_capital: number
   position_size: number
+  source: DataSource
 }
 
 export interface Trade {

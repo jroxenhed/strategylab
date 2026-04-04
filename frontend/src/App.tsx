@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import type { BacktestResult, IndicatorKey } from './shared/types'
+import type { BacktestResult, IndicatorKey, DataSource } from './shared/types'
 import { useOHLCV, useIndicators } from './shared/hooks/useOHLCV'
 import Sidebar from './features/sidebar/Sidebar'
 import Chart from './features/chart/Chart'
@@ -27,20 +27,21 @@ export default function App() {
   const [activeIndicators, setActiveIndicators] = useState<IndicatorKey[]>(saved?.activeIndicators ?? ['macd', 'rsi'])
   const [showSpy, setShowSpy] = useState(saved?.showSpy ?? false)
   const [showQqq, setShowQqq] = useState(saved?.showQqq ?? false)
+  const [dataSource, setDataSource] = useState<DataSource>((saved?.dataSource as DataSource) ?? 'yahoo')
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null)
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      ticker, start, end, interval, activeIndicators, showSpy, showQqq,
+      ticker, start, end, interval, activeIndicators, showSpy, showQqq, dataSource,
     }))
-  }, [ticker, start, end, interval, activeIndicators, showSpy, showQqq])
+  }, [ticker, start, end, interval, activeIndicators, showSpy, showQqq, dataSource])
 
-  const { data: ohlcv = [] } = useOHLCV(ticker, start, end, interval)
-  const { data: spyData } = useOHLCV('SPY', start, end, interval)
-  const { data: qqqData } = useOHLCV('QQQ', start, end, interval)
+  const { data: ohlcv = [] } = useOHLCV(ticker, start, end, interval, dataSource)
+  const { data: spyData } = useOHLCV('SPY', start, end, interval, dataSource)
+  const { data: qqqData } = useOHLCV('QQQ', start, end, interval, dataSource)
 
   const indicatorKeys = activeIndicators.filter(k => k !== 'volume')
-  const { data: indicatorData = {} } = useIndicators(ticker, start, end, interval, indicatorKeys)
+  const { data: indicatorData = {} } = useIndicators(ticker, start, end, interval, indicatorKeys, dataSource)
 
   const toggleIndicator = useCallback((key: IndicatorKey) => {
     setActiveIndicators(prev =>
@@ -77,6 +78,8 @@ export default function App() {
           onToggleIndicator={toggleIndicator}
           onToggleSpy={() => setShowSpy(v => !v)}
           onToggleQqq={() => setShowQqq(v => !v)}
+          dataSource={dataSource}
+          onDataSourceChange={setDataSource}
         />
 
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -106,6 +109,7 @@ export default function App() {
             end={end}
             interval={interval}
             onResult={setBacktestResult}
+            dataSource={dataSource}
           />
 
           {/* Results */}
