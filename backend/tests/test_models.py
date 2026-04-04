@@ -1,7 +1,7 @@
 from sys import path as sys_path
 from os.path import dirname, abspath
 sys_path.insert(0, dirname(dirname(abspath(__file__))))
-from main import StrategyRequest
+from routes.backtest import StrategyRequest
 
 
 def make_req(**kwargs):
