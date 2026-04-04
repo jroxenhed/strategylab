@@ -38,8 +38,93 @@ class YahooProvider:
         return df.dropna()
 
 
+# Alpaca interval mapping
+_ALPACA_INTERVAL_MAP: dict[str, tuple] | None = None
+
+def _get_alpaca_interval_map():
+    global _ALPACA_INTERVAL_MAP
+    if _ALPACA_INTERVAL_MAP is None:
+        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+        _ALPACA_INTERVAL_MAP = {
+            '1m': TimeFrame.Minute,
+            '5m': TimeFrame(5, TimeFrameUnit.Minute),
+            '15m': TimeFrame(15, TimeFrameUnit.Minute),
+            '30m': TimeFrame(30, TimeFrameUnit.Minute),
+            '1h': TimeFrame.Hour,
+            '60m': TimeFrame.Hour,
+            '1d': TimeFrame.Day,
+            '1wk': TimeFrame.Week,
+            '1mo': TimeFrame.Month,
+        }
+    return _ALPACA_INTERVAL_MAP
+
+_ALPACA_UNSUPPORTED = {'2m', '90m'}
+
+
+class AlpacaProvider:
+    def __init__(self, client):
+        self._client = client
+
+    def fetch(self, ticker: str, start: str, end: str, interval: str) -> pd.DataFrame:
+        if interval in _ALPACA_UNSUPPORTED:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Interval {interval} not supported by Alpaca"
+            )
+
+        from alpaca.data.requests import StockBarsRequest
+        interval_map = _get_alpaca_interval_map()
+        timeframe = interval_map.get(interval)
+        if timeframe is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Interval {interval} not supported by Alpaca"
+            )
+
+        request = StockBarsRequest(
+            symbol_or_symbols=ticker,
+            timeframe=timeframe,
+            start=pd.Timestamp(start, tz='UTC'),
+            end=pd.Timestamp(end, tz='UTC'),
+        )
+
+        bars = self._client.get_stock_bars(request)
+        bar_list = bars.get(ticker, [])
+        if not bar_list:
+            raise HTTPException(status_code=404, detail=f"No data for {ticker}")
+
+        rows = []
+        for bar in bar_list:
+            rows.append({
+                "Open": bar.open,
+                "High": bar.high,
+                "Low": bar.low,
+                "Close": bar.close,
+                "Volume": bar.volume,
+                "timestamp": bar.timestamp,
+            })
+
+        df = pd.DataFrame(rows)
+        df.index = pd.to_datetime(df.pop("timestamp"))
+        return df
+
+
+def _create_alpaca_client():
+    """Create an Alpaca StockHistoricalDataClient from env vars. Returns None if no keys."""
+    api_key = os.environ.get("ALPACA_API_KEY", "").strip()
+    secret_key = os.environ.get("ALPACA_SECRET_KEY", "").strip()
+    if not api_key or not secret_key:
+        return None
+    from alpaca.data.historical import StockHistoricalDataClient
+    return StockHistoricalDataClient(api_key, secret_key)
+
+
 # Provider registry
 _providers: dict[str, DataProvider] = {"yahoo": YahooProvider()}
+
+_alpaca_client = _create_alpaca_client()
+if _alpaca_client is not None:
+    _providers["alpaca"] = AlpacaProvider(_alpaca_client)
 
 
 def register_provider(name: str, provider: DataProvider) -> None:
