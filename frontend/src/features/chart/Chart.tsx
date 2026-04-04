@@ -152,7 +152,15 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
     // Trade markers
     if (trades && trades.length > 0) createSeriesMarkers(candleSeries, buildMarkers(trades))
 
-    chart.timeScale().fitContent()
+    // Restore saved scroll/zoom position, or fit all content on first visit
+    const savedRange = sessionStorage.getItem('strategylab-chart-range')
+    if (savedRange) {
+      try {
+        chart.timeScale().setVisibleLogicalRange(JSON.parse(savedRange))
+      } catch { chart.timeScale().fitContent() }
+    } else {
+      chart.timeScale().fitContent()
+    }
 
     function syncWidths() {
       const mainRightW = chart.priceScale('right').width()
@@ -178,6 +186,7 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
     const syncHandler = (range: any) => {
       if (!range) return
       syncWidths()
+      sessionStorage.setItem('strategylab-chart-range', JSON.stringify(range))
       if (macdChartRef.current) macdChartRef.current.timeScale().setVisibleLogicalRange(range)
       if (rsiChartRef.current) rsiChartRef.current.timeScale().setVisibleLogicalRange(range)
     }
