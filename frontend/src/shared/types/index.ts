@@ -93,3 +93,5 @@ export interface AppState {
   showSpy: boolean
   showQqq: boolean
 }
+
+export type DataSource = 'yahoo' | 'alpaca'
