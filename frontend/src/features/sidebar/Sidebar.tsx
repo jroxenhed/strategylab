@@ -48,7 +48,7 @@ export default function Sidebar({
     (new Date(end).getTime() - new Date(start).getTime()) / (1000 * 60 * 60 * 24)
   )
   const intervalLimit = INTERVAL_LIMITS[interval]
-  const showIntervalWarning = intervalLimit !== undefined && daysDiff > intervalLimit
+  const showIntervalWarning = dataSource === 'yahoo' && intervalLimit !== undefined && daysDiff > intervalLimit
 
   const { data: providers = ['yahoo'] } = useProviders()
 
