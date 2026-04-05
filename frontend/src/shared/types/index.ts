@@ -42,7 +42,7 @@ export type IndicatorKey = 'macd' | 'rsi' | 'ema' | 'bb' | 'volume'
 
 export interface Rule {
   indicator: 'macd' | 'rsi' | 'price' | 'ema20' | 'ema50' | 'ema200'
-  condition: 'crossover_up' | 'crossover_down' | 'above' | 'below' | 'crosses_above' | 'crosses_below'
+  condition: 'crossover_up' | 'crossover_down' | 'above' | 'below' | 'crosses_above' | 'crosses_below' | 'turns_up_below' | 'turns_down_above'
   value?: number
   param?: string
 }

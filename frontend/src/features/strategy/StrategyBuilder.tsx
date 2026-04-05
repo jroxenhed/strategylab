@@ -15,7 +15,7 @@ interface Props {
 const INDICATORS = ['macd', 'rsi', 'price', 'ema20', 'ema50', 'ema200'] as const
 const CONDITIONS: Record<string, string[]> = {
   macd: ['crossover_up', 'crossover_down', 'crosses_above', 'crosses_below', 'above', 'below'],
-  rsi: ['above', 'below', 'crosses_above', 'crosses_below'],
+  rsi: ['above', 'below', 'crosses_above', 'crosses_below', 'turns_up_below', 'turns_down_above'],
   price: ['above', 'below', 'crosses_above', 'crosses_below'],
   ema20: ['above', 'below'],
   ema50: ['above', 'below'],
@@ -28,8 +28,10 @@ const CONDITION_LABELS: Record<string, string> = {
   crosses_below: 'Crosses below value',
   above: 'Is above',
   below: 'Is below',
+  turns_up_below: 'Turns up from below',
+  turns_down_above: 'Turns down from above',
 }
-const NEEDS_VALUE = ['above', 'below', 'crosses_above', 'crosses_below']
+const NEEDS_VALUE = ['above', 'below', 'crosses_above', 'crosses_below', 'turns_up_below', 'turns_down_above']
 const NEEDS_PARAM: Record<string, string[]> = {
   macd: ['crossover_up', 'crossover_down'],
 }

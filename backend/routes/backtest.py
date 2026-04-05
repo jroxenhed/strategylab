@@ -10,7 +10,7 @@ router = APIRouter()
 
 class Rule(BaseModel):
     indicator: str       # "macd", "rsi", "price", "ema"
-    condition: str       # "crossover_up", "crossover_down", "above", "below", "crosses_above", "crosses_below"
+    condition: str       # "crossover_up", "crossover_down", "above", "below", "crosses_above", "crosses_below", "turns_up_below", "turns_down_above"
     value: Optional[float] = None   # threshold (e.g. RSI < 30)
     param: Optional[str] = None     # e.g. "signal", "ema20"
 
@@ -117,6 +117,14 @@ def run_backtest(req: StrategyRequest):
                     return v_now < ref_map[rule.param].iloc[i]
                 elif rule.value is not None:
                     return v_now < rule.value
+            elif cond == "turns_up_below":
+                # RSI was below threshold and is now turning up (current > previous)
+                if rule.value is not None:
+                    return v_prev < rule.value and v_now > v_prev
+            elif cond == "turns_down_above":
+                # RSI was above threshold and is now turning down (current < previous)
+                if rule.value is not None:
+                    return v_prev > rule.value and v_now < v_prev
             return False
 
         def eval_rules(rules: list[Rule], logic: str, i: int) -> bool:
