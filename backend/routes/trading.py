@@ -1,9 +1,16 @@
+import json
+import math
+from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional
-from shared import get_trading_client
+import pandas as pd
+from shared import get_trading_client, _fetch, _alpaca_client
+from signal_engine import Rule, compute_indicators, eval_rules
 
 router = APIRouter(prefix="/api/trading")
+
+WATCHLIST_PATH = Path(__file__).resolve().parent.parent / "data" / "watchlist.json"
 
 
 class BuyRequest(BaseModel):
@@ -15,6 +22,22 @@ class BuyRequest(BaseModel):
 class SellRequest(BaseModel):
     symbol: str
     qty: Optional[float] = None
+
+
+class ScanRequest(BaseModel):
+    symbols: list[str]
+    interval: str = "15m"
+    buy_rules: list[Rule]
+    sell_rules: list[Rule]
+    buy_logic: str = "AND"
+    sell_logic: str = "AND"
+    auto_execute: bool = False
+    position_size_usd: float = 5000.0
+    stop_loss_pct: Optional[float] = None
+
+
+class WatchlistRequest(BaseModel):
+    symbols: list[str]
 
 
 @router.get("/account")
@@ -173,3 +196,117 @@ def cancel_all_orders():
     client = get_trading_client()
     client.cancel_orders()
     return {"action": "all_orders_cancelled"}
+
+
+@router.post("/scan")
+def scan_signals(req: ScanRequest):
+    client = get_trading_client()
+
+    # If auto-executing, get existing positions AND pending buy orders to avoid duplicates
+    existing_positions = set()
+    if req.auto_execute:
+        for p in client.get_all_positions():
+            existing_positions.add(p.symbol)
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus, OrderSide
+        open_orders = client.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
+        for o in open_orders:
+            if o.side == OrderSide.BUY:
+                existing_positions.add(o.symbol)
+
+    results = []
+    actions = []
+
+    for symbol in req.symbols:
+        try:
+            end = pd.Timestamp.now(tz='UTC')
+            start = end - pd.Timedelta(days=30)
+
+            df = _fetch(symbol, start.strftime('%Y-%m-%d'),
+                        end.strftime('%Y-%m-%d'), req.interval, source='alpaca')
+
+            indicators = compute_indicators(df["Close"])
+            i = len(df) - 1
+
+            buy_signal = eval_rules(req.buy_rules, req.buy_logic, indicators, i)
+            sell_signal = eval_rules(req.sell_rules, req.sell_logic, indicators, i)
+
+            signal = "BUY" if buy_signal else ("SELL" if sell_signal else "NONE")
+
+            rsi_val = float(indicators["rsi"].iloc[i])
+            ema50_val = float(indicators["ema50"].iloc[i])
+            price = float(df["Close"].iloc[i])
+
+            result = {
+                "symbol": symbol,
+                "signal": signal,
+                "price": price,
+                "rsi": round(rsi_val, 2),
+                "ema50": round(ema50_val, 2),
+                "last_bar": str(df.index[i]),
+            }
+
+            # Auto-execute with guardrails
+            if req.auto_execute:
+                if signal == "BUY" and symbol not in existing_positions:
+                    qty = math.floor(req.position_size_usd / price)
+                    if qty > 0:
+                        from alpaca.trading.requests import MarketOrderRequest, StopLossRequest
+                        from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
+
+                        order_kwargs = dict(
+                            symbol=symbol,
+                            qty=qty,
+                            side=OrderSide.BUY,
+                            time_in_force=TimeInForce.DAY,
+                        )
+                        if req.stop_loss_pct and req.stop_loss_pct > 0:
+                            stop_price = round(price * (1 - req.stop_loss_pct / 100), 2)
+                            order_kwargs["order_class"] = OrderClass.OTO
+                            order_kwargs["stop_loss"] = StopLossRequest(stop_price=stop_price)
+
+                        order = client.submit_order(MarketOrderRequest(**order_kwargs))
+                        action = {
+                            "symbol": symbol, "action": "BUY",
+                            "qty": qty, "order_id": str(order.id),
+                        }
+                        if req.stop_loss_pct:
+                            action["stop_price"] = round(price * (1 - req.stop_loss_pct / 100), 2)
+                        actions.append(action)
+                        existing_positions.add(symbol)
+
+                elif signal == "SELL" and symbol in existing_positions:
+                    try:
+                        client.close_position(symbol)
+                        actions.append({
+                            "symbol": symbol, "action": "SELL",
+                            "detail": "position_closed",
+                        })
+                        existing_positions.discard(symbol)
+                    except Exception:
+                        actions.append({
+                            "symbol": symbol, "action": "SELL_FAILED",
+                        })
+
+            results.append(result)
+        except Exception as e:
+            results.append({"symbol": symbol, "signal": "ERROR", "error": str(e)})
+
+    response = {"signals": results, "scanned_at": str(pd.Timestamp.now(tz='UTC'))}
+    if req.auto_execute:
+        response["actions"] = actions
+    return response
+
+
+@router.get("/watchlist")
+def get_watchlist():
+    if WATCHLIST_PATH.exists():
+        return json.loads(WATCHLIST_PATH.read_text())
+    return {"symbols": []}
+
+
+@router.post("/watchlist")
+def save_watchlist(req: WatchlistRequest):
+    WATCHLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    WATCHLIST_PATH.write_text(json.dumps({"symbols": req.symbols}, indent=2))
+    return {"symbols": req.symbols}
