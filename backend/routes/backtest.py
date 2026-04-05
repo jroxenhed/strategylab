@@ -25,6 +25,9 @@ class StrategyRequest(BaseModel):
     sell_logic: str = "AND"
     initial_capital: float = 10000.0
     position_size: float = 1.0   # fraction of capital per trade (0.01–1.0)
+    stop_loss_pct: Optional[float] = None  # e.g. 5.0 means sell if price drops 5% from entry
+    slippage_pct: float = 0.0    # e.g. 0.1 means 0.1% worse fill on every trade
+    commission_pct: float = 0.0  # e.g. 0.1 means 0.1% fee per trade
     source: str = "yahoo"
 
     @field_validator('position_size')
@@ -117,6 +120,20 @@ def run_backtest(req: StrategyRequest):
                     return v_now < ref_map[rule.param].iloc[i]
                 elif rule.value is not None:
                     return v_now < rule.value
+            elif cond == "rising":
+                return v_now > v_prev
+            elif cond == "falling":
+                return v_now < v_prev
+            elif cond == "rising_over":
+                lookback = int(rule.value) if rule.value is not None else 10
+                if i < lookback:
+                    return False
+                return v_now > s.iloc[i - lookback]
+            elif cond == "falling_over":
+                lookback = int(rule.value) if rule.value is not None else 10
+                if i < lookback:
+                    return False
+                return v_now < s.iloc[i - lookback]
             elif cond == "turns_up_below":
                 # RSI was below threshold and is now turning up (current > previous)
                 if rule.value is not None:
@@ -140,30 +157,54 @@ def run_backtest(req: StrategyRequest):
         trades = []
         equity = []
 
+        low = df["Low"]
+
         for i in range(len(df)):
             price = close.iloc[i]
             date = _format_time(df.index[i], req.interval)
 
             if position == 0 and eval_rules(req.buy_rules, req.buy_logic, i):
-                shares = (capital * req.position_size) / price
+                # Slippage: buy at a worse (higher) price
+                fill_price = price * (1 + req.slippage_pct / 100)
+                shares = (capital * req.position_size) / fill_price
+                commission = shares * fill_price * req.commission_pct / 100
                 position = shares
-                entry_price = price
-                capital -= shares * price
-                trades.append({"type": "buy", "date": date, "price": round(price, 4), "shares": round(shares, 4)})
-
-            elif position > 0 and eval_rules(req.sell_rules, req.sell_logic, i):
-                proceeds = position * price
-                pnl = proceeds - position * entry_price
+                entry_price = fill_price
+                capital -= shares * fill_price + commission
+                buy_slippage = shares * (fill_price - price)
                 trades.append({
-                    "type": "sell",
-                    "date": date,
-                    "price": round(price, 4),
-                    "shares": round(position, 4),
-                    "pnl": round(pnl, 2),
-                    "pnl_pct": round(pnl / (position * entry_price) * 100, 2),
+                    "type": "buy", "date": date, "price": round(fill_price, 4),
+                    "shares": round(shares, 4),
+                    "slippage": round(buy_slippage, 2),
+                    "commission": round(commission, 2),
                 })
-                capital += proceeds
-                position = 0.0
+
+            elif position > 0:
+                # Check stop loss using the bar's low price
+                stop_price_limit = entry_price * (1 - req.stop_loss_pct / 100) if (req.stop_loss_pct and req.stop_loss_pct > 0) else None
+                stop_hit = stop_price_limit is not None and low.iloc[i] <= stop_price_limit
+                # If stopped out, use the stop price; otherwise use close
+                raw_exit = stop_price_limit if stop_hit else price
+                # Slippage: sell at a worse (lower) price
+                exit_price = raw_exit * (1 - req.slippage_pct / 100)
+                if stop_hit or eval_rules(req.sell_rules, req.sell_logic, i):
+                    proceeds = position * exit_price
+                    commission = proceeds * req.commission_pct / 100
+                    sell_slippage = position * (raw_exit - exit_price)
+                    pnl = (proceeds - commission) - position * entry_price
+                    trades.append({
+                        "type": "sell",
+                        "date": date,
+                        "price": round(exit_price, 4),
+                        "shares": round(position, 4),
+                        "pnl": round(pnl, 2),
+                        "pnl_pct": round(pnl / (position * entry_price) * 100, 2),
+                        "stop_loss": bool(stop_hit),
+                        "slippage": round(sell_slippage, 2),
+                        "commission": round(commission, 2),
+                    })
+                    capital += proceeds - commission
+                    position = 0.0
 
             total_value = capital + (position * price if position > 0 else 0)
             equity.append({"time": date, "value": round(total_value, 2)})

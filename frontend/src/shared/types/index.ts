@@ -42,7 +42,7 @@ export type IndicatorKey = 'macd' | 'rsi' | 'ema' | 'bb' | 'volume'
 
 export interface Rule {
   indicator: 'macd' | 'rsi' | 'price' | 'ema20' | 'ema50' | 'ema200'
-  condition: 'crossover_up' | 'crossover_down' | 'above' | 'below' | 'crosses_above' | 'crosses_below' | 'turns_up_below' | 'turns_down_above'
+  condition: 'crossover_up' | 'crossover_down' | 'above' | 'below' | 'crosses_above' | 'crosses_below' | 'turns_up_below' | 'turns_down_above' | 'rising' | 'falling' | 'rising_over' | 'falling_over'
   value?: number
   param?: string
 }
@@ -58,16 +58,22 @@ export interface StrategyRequest {
   sell_logic: 'AND' | 'OR'
   initial_capital: number
   position_size: number
+  stop_loss_pct?: number
+  slippage_pct?: number
+  commission_pct?: number
   source: DataSource
 }
 
 export interface Trade {
   type: 'buy' | 'sell'
-  date: string
+  date: string | number
   price: number
   shares: number
   pnl?: number
   pnl_pct?: number
+  stop_loss?: boolean
+  slippage?: number
+  commission?: number
 }
 
 export interface BacktestResult {

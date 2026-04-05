@@ -19,7 +19,7 @@ interface ChartProps {
   showQqq: boolean
   indicatorData: IndicatorData
   activeIndicators: IndicatorKey[]
-  trades?: Array<{ type: 'buy' | 'sell'; date: string; price: number }>
+  trades?: Array<{ type: 'buy' | 'sell'; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean }>
 }
 
 const CHART_BG = '#0d1117'
@@ -37,14 +37,29 @@ function toLineData(arr: TimeValue[]) {
   )
 }
 
-function buildMarkers(trades: Array<{ type: 'buy' | 'sell'; date: string; price: number }>) {
-  return trades.map(t => ({
-    time: t.date as any,
-    position: t.type === 'buy' ? 'belowBar' as const : 'aboveBar' as const,
-    color: t.type === 'buy' ? UP : DOWN,
-    shape: t.type === 'buy' ? 'arrowUp' as const : 'arrowDown' as const,
-    text: t.type === 'buy' ? `B $${t.price}` : `S $${t.price}`,
-  }))
+function buildMarkers(trades: Array<{ type: 'buy' | 'sell'; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean }>, showPrice = true) {
+  return trades.map(t => {
+    if (t.type === 'buy') {
+      return {
+        time: t.date as any,
+        position: 'belowBar' as const,
+        color: '#e5c07b',
+        shape: 'arrowUp' as const,
+        text: showPrice ? `B $${t.price}` : 'B',
+      }
+    }
+    const win = (t.pnl ?? 0) >= 0
+    const color = win ? UP : DOWN
+    const pctStr = t.pnl_pct != null ? ` ${t.pnl_pct > 0 ? '+' : ''}${t.pnl_pct}%` : ''
+    const label = t.stop_loss ? 'SL' : 'S'
+    return {
+      time: t.date as any,
+      position: 'aboveBar' as const,
+      color,
+      shape: 'arrowDown' as const,
+      text: showPrice ? `${label} $${t.price}${pctStr}` : label,
+    }
+  })
 }
 
 export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq, indicatorData, activeIndicators, trades }: ChartProps) {
@@ -244,6 +259,9 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
 
     chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'MACD' }).setData(toLineData(macd))
     chart.addSeries(LineSeries, { color: '#f0883e', lineWidth: 1, title: 'Signal' }).setData(toLineData(signal))
+
+    if (trades && trades.length > 0) createSeriesMarkers(histSeries, buildMarkers(trades, false))
+
     chart.timeScale().fitContent()
 
     // Sync to main chart's current visible range
@@ -277,7 +295,7 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
       macdSeriesRef.current = null
       ro.disconnect()
     }
-  }, [showMacd, indicatorData.macd])
+  }, [showMacd, indicatorData.macd, trades])
 
   // RSI chart
   useEffect(() => {
@@ -297,6 +315,9 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
       chart.addSeries(LineSeries, { color: '#f85149', lineWidth: 1, lineStyle: 2 }).setData([{ time: first as any, value: 70 }, { time: last as any, value: 70 }])
       chart.addSeries(LineSeries, { color: '#26a641', lineWidth: 1, lineStyle: 2 }).setData([{ time: first as any, value: 30 }, { time: last as any, value: 30 }])
     }
+
+    if (trades && trades.length > 0) createSeriesMarkers(rsiLine, buildMarkers(trades, false))
+
     chart.timeScale().fitContent()
 
     // Sync to main chart's current visible range
@@ -330,7 +351,7 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
       rsiSeriesRef.current = null
       ro.disconnect()
     }
-  }, [showRsi, indicatorData.rsi])
+  }, [showRsi, indicatorData.rsi, trades])
 
   const indicatorPaneCount = (showMacd ? 1 : 0) + (showRsi ? 1 : 0)
   const mainHeightPct = indicatorPaneCount === 0 ? 100 : indicatorPaneCount === 1 ? 65 : 50

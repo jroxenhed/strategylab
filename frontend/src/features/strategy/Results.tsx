@@ -4,6 +4,15 @@ import type { BacktestResult } from '../../shared/types'
 
 type Tab = 'summary' | 'equity' | 'trades'
 
+function fmtDate(d: string | number | undefined): string {
+  if (d === undefined) return '—'
+  if (typeof d === 'number') {
+    const dt = new Date(d * 1000)
+    return dt.toISOString().replace('T', ' ').slice(0, 16)
+  }
+  return d
+}
+
 interface Props {
   result: BacktestResult
 }
@@ -81,17 +90,53 @@ export default function Results({ result }: Props) {
         <div style={styles.tradeList}>
           {sells.length === 0 ? (
             <div style={{ color: '#8b949e', fontSize: 12, padding: 8 }}>No completed trades</div>
-          ) : (
-            sells.map((t, i) => (
-              <div key={i} style={styles.tradeRow}>
-                <span style={{ color: '#8b949e', fontSize: 11, width: 80 }}>{t.date}</span>
-                <span style={{ color: (t.pnl ?? 0) >= 0 ? '#26a641' : '#f85149', fontSize: 12, width: 60 }}>
-                  {(t.pnl ?? 0) >= 0 ? '+' : ''}{t.pnl?.toFixed(2)}
-                </span>
-                <span style={{ color: '#8b949e', fontSize: 11 }}>{t.pnl_pct?.toFixed(1)}%</span>
-              </div>
-            ))
-          )}
+          ) : (<>
+            <div style={{ ...styles.tradeRow, borderBottom: '1px solid #30363d', marginBottom: 2 }}>
+              <span style={{ ...styles.tradeCell, width: 24, color: '#8b949e', fontSize: 10 }}>#</span>
+              <span style={{ ...styles.tradeCell, width: 115, color: '#8b949e', fontSize: 10 }}>Buy</span>
+              <span style={{ ...styles.tradeCell, width: 65, color: '#8b949e', fontSize: 10 }}>Buy $</span>
+              <span style={{ ...styles.tradeCell, width: 115, color: '#8b949e', fontSize: 10 }}>Sell</span>
+              <span style={{ ...styles.tradeCell, width: 65, color: '#8b949e', fontSize: 10 }}>Sell $</span>
+              <span style={{ ...styles.tradeCell, width: 45, color: '#8b949e', fontSize: 10 }}>Shares</span>
+              <span style={{ ...styles.tradeCell, width: 60, color: '#8b949e', fontSize: 10 }}>P&L</span>
+              <span style={{ ...styles.tradeCell, width: 50, color: '#8b949e', fontSize: 10 }}>Return</span>
+              <span style={{ ...styles.tradeCell, width: 50, color: '#8b949e', fontSize: 10 }}>Slip</span>
+              <span style={{ ...styles.tradeCell, width: 50, color: '#8b949e', fontSize: 10 }}>Comm</span>
+              <span style={{ ...styles.tradeCell, width: 40, color: '#8b949e', fontSize: 10 }}>Exit</span>
+            </div>
+            {sells.map((sell, i) => {
+              const buy = trades.filter(t => t.type === 'buy')[i]
+              const win = (sell.pnl ?? 0) >= 0
+              const color = win ? '#26a641' : '#f85149'
+              const totalSlip = (buy?.slippage ?? 0) + (sell.slippage ?? 0)
+              const totalComm = (buy?.commission ?? 0) + (sell.commission ?? 0)
+              return (
+                <div key={i} style={styles.tradeRow}>
+                  <span style={{ ...styles.tradeCell, width: 24, color: '#8b949e' }}>{i + 1}</span>
+                  <span style={{ ...styles.tradeCell, width: 115, color: '#e5c07b' }}>{fmtDate(buy?.date)}</span>
+                  <span style={{ ...styles.tradeCell, width: 65, color: '#e5c07b' }}>${buy?.price.toFixed(2)}</span>
+                  <span style={{ ...styles.tradeCell, width: 115, color }}>{fmtDate(sell.date)}</span>
+                  <span style={{ ...styles.tradeCell, width: 65, color }}>${sell.price.toFixed(2)}</span>
+                  <span style={{ ...styles.tradeCell, width: 45, color: '#8b949e' }}>{sell.shares?.toFixed(1)}</span>
+                  <span style={{ ...styles.tradeCell, width: 60, color }}>
+                    {win ? '+' : ''}{sell.pnl?.toFixed(2)}
+                  </span>
+                  <span style={{ ...styles.tradeCell, width: 50, color }}>
+                    {win ? '+' : ''}{sell.pnl_pct?.toFixed(2)}%
+                  </span>
+                  <span style={{ ...styles.tradeCell, width: 50, color: totalSlip > 0 ? '#f0883e' : '#484f58' }}>
+                    {totalSlip > 0 ? `$${totalSlip.toFixed(2)}` : '—'}
+                  </span>
+                  <span style={{ ...styles.tradeCell, width: 50, color: totalComm > 0 ? '#f0883e' : '#484f58' }}>
+                    {totalComm > 0 ? `$${totalComm.toFixed(2)}` : '—'}
+                  </span>
+                  <span style={{ ...styles.tradeCell, width: 40, color: sell.stop_loss ? '#f0883e' : '#8b949e', fontSize: 10 }}>
+                    {sell.stop_loss ? 'SL' : 'Signal'}
+                  </span>
+                </div>
+              )
+            })}
+          </>)}
         </div>
       )}
     </div>
@@ -113,5 +158,6 @@ const styles: Record<string, React.CSSProperties> = {
   metricsGrid: { display: 'flex', flexWrap: 'wrap', padding: '12px 16px', gap: 0, alignContent: 'flex-start' },
   metric: { padding: '6px 20px 6px 0', minWidth: 110 },
   tradeList: { flex: 1, overflowY: 'auto', padding: '8px 12px' },
-  tradeRow: { display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0', borderBottom: '1px solid #21262d' },
+  tradeRow: { display: 'flex', gap: 4, alignItems: 'center', padding: '3px 0', borderBottom: '1px solid #21262d' },
+  tradeCell: { fontSize: 11, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
 }
