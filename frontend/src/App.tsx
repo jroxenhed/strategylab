@@ -72,8 +72,8 @@ export default function App() {
           showSpy={showSpy}
           showQqq={showQqq}
           onTickerChange={t => { setTicker(t); setBacktestResult(null) }}
-          onStartChange={setStart}
-          onEndChange={setEnd}
+          onStartChange={d => { if (d > end) { setStart(end); setEnd(d) } else { setStart(d) } }}
+          onEndChange={d => { if (d < start) { setEnd(start); setStart(d) } else { setEnd(d) } }}
           onIntervalChange={setInterval}
           onToggleIndicator={toggleIndicator}
           onToggleSpy={() => setShowSpy(v => !v)}

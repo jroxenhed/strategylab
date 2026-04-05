@@ -89,7 +89,10 @@ class AlpacaProvider:
         )
 
         bars = self._client.get_stock_bars(request)
-        bar_list = bars.get(ticker, [])
+        try:
+            bar_list = bars[ticker]
+        except (KeyError, IndexError):
+            bar_list = []
         if not bar_list:
             raise HTTPException(status_code=404, detail=f"No data for {ticker}")
 
