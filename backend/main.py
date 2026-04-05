@@ -11,6 +11,7 @@ from routes.indicators import router as indicators_router
 from routes.backtest import router as backtest_router
 from routes.search import router as search_router
 from routes.providers import router as providers_router
+from routes.trading import router as trading_router
 
 app = FastAPI()
 
@@ -26,3 +27,4 @@ app.include_router(indicators_router)
 app.include_router(backtest_router)
 app.include_router(search_router)
 app.include_router(providers_router)
+app.include_router(trading_router)

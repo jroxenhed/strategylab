@@ -4,15 +4,10 @@ import numpy as np
 import pandas as pd
 from typing import Optional
 from shared import _fetch, _format_time
+from signal_engine import Rule, compute_indicators, eval_rules
 
 router = APIRouter()
 
-
-class Rule(BaseModel):
-    indicator: str       # "macd", "rsi", "price", "ema"
-    condition: str       # "crossover_up", "crossover_down", "above", "below", "crosses_above", "crosses_below", "turns_up_below", "turns_down_above"
-    value: Optional[float] = None   # threshold (e.g. RSI < 30)
-    param: Optional[str] = None     # e.g. "signal", "ema20"
 
 class StrategyRequest(BaseModel):
     ticker: str
@@ -42,113 +37,7 @@ def run_backtest(req: StrategyRequest):
         df = _fetch(req.ticker, req.start, req.end, req.interval, source=req.source)
 
         close = df["Close"]
-
-        # Precompute all indicators
-        ema12 = close.ewm(span=12, adjust=False).mean()
-        ema26 = close.ewm(span=26, adjust=False).mean()
-        macd_line = ema12 - ema26
-        signal_line = macd_line.ewm(span=9, adjust=False).mean()
-
-        delta = close.diff()
-        gain = delta.clip(lower=0).rolling(14).mean()
-        loss = (-delta.clip(upper=0)).rolling(14).mean()
-        rs = gain / loss.replace(0, np.nan)
-        rsi = 100 - (100 / (1 + rs))
-
-        ema20 = close.ewm(span=20, adjust=False).mean()
-        ema50 = close.ewm(span=50, adjust=False).mean()
-        ema200 = close.ewm(span=200, adjust=False).mean()
-
-        indicators = {
-            "macd": macd_line,
-            "signal": signal_line,
-            "rsi": rsi,
-            "ema20": ema20,
-            "ema50": ema50,
-            "ema200": ema200,
-            "close": close,
-        }
-
-        def eval_rule(rule: Rule, i: int) -> bool:
-            if i < 1:
-                return False
-            ind = rule.indicator.lower()
-            cond = rule.condition.lower()
-
-            series_map = {
-                "macd": indicators["macd"],
-                "rsi": indicators["rsi"],
-                "price": indicators["close"],
-                "ema20": indicators["ema20"],
-                "ema50": indicators["ema50"],
-                "ema200": indicators["ema200"],
-            }
-            ref_map = {
-                "signal": indicators["signal"],
-                "ema20": indicators["ema20"],
-                "ema50": indicators["ema50"],
-                "ema200": indicators["ema200"],
-                "close": indicators["close"],
-            }
-
-            s = series_map.get(ind)
-            if s is None:
-                return False
-
-            v_now = s.iloc[i]
-            v_prev = s.iloc[i - 1]
-
-            if cond in ("crossover_up", "crosses_above"):
-                if rule.param and rule.param in ref_map:
-                    ref = ref_map[rule.param]
-                    return v_prev < ref.iloc[i - 1] and v_now >= ref.iloc[i]
-                elif rule.value is not None:
-                    return v_prev < rule.value <= v_now
-            elif cond in ("crossover_down", "crosses_below"):
-                if rule.param and rule.param in ref_map:
-                    ref = ref_map[rule.param]
-                    return v_prev > ref.iloc[i - 1] and v_now <= ref.iloc[i]
-                elif rule.value is not None:
-                    return v_prev > rule.value >= v_now
-            elif cond == "above":
-                if rule.param and rule.param in ref_map:
-                    return v_now > ref_map[rule.param].iloc[i]
-                elif rule.value is not None:
-                    return v_now > rule.value
-            elif cond == "below":
-                if rule.param and rule.param in ref_map:
-                    return v_now < ref_map[rule.param].iloc[i]
-                elif rule.value is not None:
-                    return v_now < rule.value
-            elif cond == "rising":
-                return v_now > v_prev
-            elif cond == "falling":
-                return v_now < v_prev
-            elif cond == "rising_over":
-                lookback = int(rule.value) if rule.value is not None else 10
-                if i < lookback:
-                    return False
-                return v_now > s.iloc[i - lookback]
-            elif cond == "falling_over":
-                lookback = int(rule.value) if rule.value is not None else 10
-                if i < lookback:
-                    return False
-                return v_now < s.iloc[i - lookback]
-            elif cond == "turns_up_below":
-                # RSI was below threshold and is now turning up (current > previous)
-                if rule.value is not None:
-                    return v_prev < rule.value and v_now > v_prev
-            elif cond == "turns_down_above":
-                # RSI was above threshold and is now turning down (current < previous)
-                if rule.value is not None:
-                    return v_prev > rule.value and v_now < v_prev
-            return False
-
-        def eval_rules(rules: list[Rule], logic: str, i: int) -> bool:
-            results = [eval_rule(r, i) for r in rules]
-            if not results:
-                return False
-            return all(results) if logic == "AND" else any(results)
+        indicators = compute_indicators(close)
 
         # Simulate
         capital = req.initial_capital
@@ -163,7 +52,7 @@ def run_backtest(req: StrategyRequest):
             price = close.iloc[i]
             date = _format_time(df.index[i], req.interval)
 
-            if position == 0 and eval_rules(req.buy_rules, req.buy_logic, i):
+            if position == 0 and eval_rules(req.buy_rules, req.buy_logic, indicators, i):
                 # Slippage: buy at a worse (higher) price
                 fill_price = price * (1 + req.slippage_pct / 100)
                 shares = (capital * req.position_size) / fill_price
@@ -187,7 +76,7 @@ def run_backtest(req: StrategyRequest):
                 raw_exit = stop_price_limit if stop_hit else price
                 # Slippage: sell at a worse (lower) price
                 exit_price = raw_exit * (1 - req.slippage_pct / 100)
-                if stop_hit or eval_rules(req.sell_rules, req.sell_logic, i):
+                if stop_hit or eval_rules(req.sell_rules, req.sell_logic, indicators, i):
                     proceeds = position * exit_price
                     commission = proceeds * req.commission_pct / 100
                     sell_slippage = position * (raw_exit - exit_price)

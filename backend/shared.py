@@ -122,6 +122,25 @@ def _create_alpaca_client():
     return StockHistoricalDataClient(api_key, secret_key)
 
 
+def _create_trading_client():
+    """Create an Alpaca TradingClient for paper trading. Returns None if no keys."""
+    api_key = os.environ.get("ALPACA_API_KEY", "").strip()
+    secret_key = os.environ.get("ALPACA_SECRET_KEY", "").strip()
+    if not api_key or not secret_key:
+        return None
+    from alpaca.trading.client import TradingClient
+    return TradingClient(api_key, secret_key, paper=True)
+
+
+_trading_client = _create_trading_client()
+
+
+def get_trading_client():
+    if _trading_client is None:
+        raise HTTPException(status_code=503, detail="Alpaca trading not configured")
+    return _trading_client
+
+
 # Provider registry
 _providers: dict[str, DataProvider] = {"yahoo": YahooProvider()}
 
