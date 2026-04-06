@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Plus, Play } from 'lucide-react'
-import type { Rule, StrategyRequest, BacktestResult, DataSource } from '../../shared/types'
+import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopConfig } from '../../shared/types'
 import RuleRow, { emptyRule, validateRules } from './RuleRow'
 import axios from 'axios'
 
@@ -31,16 +31,19 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [capital, setCapital] = useState(saved?.capital ?? 10000)
   const [posSize, setPosSize] = useState(saved?.posSize ?? 100)
   const [stopLoss, setStopLoss] = useState<number | ''>(saved?.stopLoss ?? '')
+  const [trailingEnabled, setTrailingEnabled] = useState<boolean>(saved?.trailingEnabled ?? false)
+  const [trailingConfig, setTrailingConfig] = useState<TrailingStopConfig>(saved?.trailingConfig ?? { type: 'pct', value: 5, source: 'high', activate_on_profit: false })
   const [slippage, setSlippage] = useState<number | ''>(saved?.slippage ?? '')
   const [commission, setCommission] = useState<number | ''>(saved?.commission ?? '')
+  const [debug, setDebug] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
     localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({
-      buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, slippage, commission,
+      buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, trailingEnabled, trailingConfig, slippage, commission,
     }))
-  }, [buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, slippage, commission])
+  }, [buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, trailingEnabled, trailingConfig, slippage, commission])
 
   async function runBacktest() {
     setLoading(true)
@@ -61,9 +64,11 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         buy_logic: buyLogic, sell_logic: sellLogic,
         initial_capital: capital, position_size: posSize / 100,
         stop_loss_pct: stopLoss !== '' && stopLoss > 0 ? stopLoss : undefined,
+        trailing_stop: trailingEnabled ? trailingConfig : undefined,
         slippage_pct: slippage !== '' && slippage > 0 ? slippage : undefined,
         commission_pct: commission !== '' && commission > 0 ? commission : undefined,
         source: dataSource,
+        debug,
       }
       const { data } = await axios.post('http://localhost:8000/api/backtest', req)
       onResult(data)
@@ -129,6 +134,38 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             <input type="number" value={stopLoss} step={0.5} min={0} placeholder="Off" onChange={e => setStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
           </div>
           <div style={styles.settingsRow}>
+            <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+              <input type="checkbox" checked={trailingEnabled} onChange={e => setTrailingEnabled(e.target.checked)} />
+              Trailing Stop
+            </label>
+          </div>
+          {trailingEnabled && (<>
+            <div style={styles.settingsRow}>
+              <label style={styles.settingsLabel}>Type</label>
+              <select value={trailingConfig.type} onChange={e => setTrailingConfig(c => ({ ...c, type: e.target.value as 'pct' | 'atr' }))} style={styles.settingsInput}>
+                <option value="pct">%</option>
+                <option value="atr">ATR</option>
+              </select>
+            </div>
+            <div style={styles.settingsRow}>
+              <label style={styles.settingsLabel}>Value</label>
+              <input type="number" value={trailingConfig.value} step={0.5} min={0.1} onChange={e => setTrailingConfig(c => ({ ...c, value: +e.target.value }))} style={styles.settingsInput} />
+            </div>
+            <div style={styles.settingsRow}>
+              <label style={styles.settingsLabel}>Source</label>
+              <select value={trailingConfig.source} onChange={e => setTrailingConfig(c => ({ ...c, source: e.target.value as 'high' | 'close' }))} style={styles.settingsInput}>
+                <option value="high">High</option>
+                <option value="close">Close</option>
+              </select>
+            </div>
+            <div style={styles.settingsRow}>
+              <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', width: 'auto' }}>
+                <input type="checkbox" checked={trailingConfig.activate_on_profit} onChange={e => setTrailingConfig(c => ({ ...c, activate_on_profit: e.target.checked }))} />
+                Activate on profit only
+              </label>
+            </div>
+          </>)}
+          <div style={styles.settingsRow}>
             <label style={styles.settingsLabel}>Slippage (%)</label>
             <input type="number" value={slippage} step={0.05} min={0} placeholder="0" onChange={e => setSlippage(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
           </div>
@@ -143,6 +180,10 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         <button onClick={runBacktest} disabled={loading} style={styles.runBtn}>
           <Play size={14} /> {loading ? 'Running...' : 'Run Backtest'}
         </button>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#8b949e', cursor: 'pointer' }}>
+          <input type="checkbox" checked={debug} onChange={e => setDebug(e.target.checked)} />
+          Signal Trace
+        </label>
         {error && <span style={{ color: '#f85149', fontSize: 12 }}>{error}</span>}
       </div>
     </div>

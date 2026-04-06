@@ -9,9 +9,10 @@ class Rule(BaseModel):
     condition: str       # "crossover_up", "crossover_down", "above", "below", "crosses_above", "crosses_below", "turns_up_below", "turns_down_above"
     value: Optional[float] = None   # threshold (e.g. RSI < 30)
     param: Optional[str] = None     # e.g. "signal", "ema20"
+    muted: bool = False
 
 
-def compute_indicators(close: pd.Series) -> dict[str, pd.Series]:
+def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series = None) -> dict[str, pd.Series]:
     """Compute all indicators from a close price series. Returns dict of named series."""
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
@@ -28,7 +29,7 @@ def compute_indicators(close: pd.Series) -> dict[str, pd.Series]:
     ema50 = close.ewm(span=50, adjust=False).mean()
     ema200 = close.ewm(span=200, adjust=False).mean()
 
-    return {
+    result = {
         "macd": macd_line,
         "signal": signal_line,
         "rsi": rsi,
@@ -37,6 +38,17 @@ def compute_indicators(close: pd.Series) -> dict[str, pd.Series]:
         "ema200": ema200,
         "close": close,
     }
+
+    if high is not None and low is not None:
+        prev_close = close.shift(1)
+        tr = pd.concat([
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ], axis=1).max(axis=1)
+        result["atr"] = tr.rolling(14).mean()
+
+    return result
 
 
 def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
@@ -116,7 +128,7 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
 
 def eval_rules(rules: list[Rule], logic: str, indicators: dict[str, pd.Series], i: int) -> bool:
     """Evaluate a list of rules with AND/OR logic."""
-    results = [eval_rule(r, indicators, i) for r in rules]
+    results = [eval_rule(r, indicators, i) for r in rules if not r.muted]
     if not results:
         return False
     return all(results) if logic == "AND" else any(results)

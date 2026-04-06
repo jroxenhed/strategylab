@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { createChart, LineSeries, ColorType } from 'lightweight-charts'
-import type { BacktestResult } from '../../shared/types'
+import type { BacktestResult, SignalTraceEntry } from '../../shared/types'
 
-type Tab = 'summary' | 'equity' | 'trades'
+type Tab = 'summary' | 'equity' | 'trades' | 'trace'
 
 function fmtDate(d: string | number | undefined): string {
   if (d === undefined) return '—'
@@ -18,7 +18,7 @@ interface Props {
 }
 
 export default function Results({ result }: Props) {
-  const { summary, trades, equity_curve } = result
+  const { summary, trades, equity_curve, signal_trace } = result
   const [activeTab, setActiveTab] = useState<Tab>('summary')
   const chartRef = useRef<HTMLDivElement>(null)
   const sells = trades.filter(t => t.type === 'sell')
@@ -52,13 +52,13 @@ export default function Results({ result }: Props) {
   return (
     <div style={styles.container}>
       <div style={styles.tabBar}>
-        {(['summary', 'equity', 'trades'] as Tab[]).map(tab => (
+        {(['summary', 'equity', 'trades', ...(signal_trace ? ['trace'] : [])] as Tab[]).map(tab => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
             style={{ ...styles.tab, ...(activeTab === tab ? styles.tabActive : {}) }}
           >
-            {tab === 'summary' ? 'Summary' : tab === 'equity' ? 'Equity Curve' : `Trades (${sells.length})`}
+            {tab === 'summary' ? 'Summary' : tab === 'equity' ? 'Equity Curve' : tab === 'trades' ? `Trades (${sells.length})` : `Signal Trace (${signal_trace!.length})`}
           </button>
         ))}
       </div>
@@ -130,8 +130,49 @@ export default function Results({ result }: Props) {
                   <span style={{ ...styles.tradeCell, width: 50, color: totalComm > 0 ? '#f0883e' : '#484f58' }}>
                     {totalComm > 0 ? `$${totalComm.toFixed(2)}` : '—'}
                   </span>
-                  <span style={{ ...styles.tradeCell, width: 40, color: sell.stop_loss ? '#f0883e' : '#8b949e', fontSize: 10 }}>
-                    {sell.stop_loss ? 'SL' : 'Signal'}
+                  <span style={{ ...styles.tradeCell, width: 40, color: sell.stop_loss ? '#f0883e' : sell.trailing_stop ? '#f0883e' : '#8b949e', fontSize: 10 }}>
+                    {sell.stop_loss ? 'SL' : sell.trailing_stop ? 'TSL' : 'Signal'}
+                  </span>
+                </div>
+              )
+            })}
+          </>)}
+        </div>
+      )}
+
+      {activeTab === 'trace' && signal_trace && (
+        <div style={styles.tradeList}>
+          {signal_trace.length === 0 ? (
+            <div style={{ color: '#8b949e', fontSize: 12, padding: 8 }}>No signal events recorded</div>
+          ) : (<>
+            <div style={{ ...styles.tradeRow, borderBottom: '1px solid #30363d', marginBottom: 2 }}>
+              <span style={{ ...styles.traceCell, width: 140, color: '#8b949e', fontSize: 10 }}>Date</span>
+              <span style={{ ...styles.traceCell, width: 65, color: '#8b949e', fontSize: 10 }}>Price</span>
+              <span style={{ ...styles.traceCell, width: 65, color: '#8b949e', fontSize: 10 }}>Position</span>
+              <span style={{ ...styles.traceCell, width: 140, color: '#8b949e', fontSize: 10 }}>Action</span>
+              <span style={{ ...styles.traceCell, flex: 1, color: '#8b949e', fontSize: 10 }}>Rule Details</span>
+            </div>
+            {signal_trace.map((entry: SignalTraceEntry, i: number) => {
+              const actionColor = entry.action === 'BUY' ? '#26a641'
+                : entry.action === 'SELL' ? '#f85149'
+                : entry.action === 'STOP_LOSS' ? '#f0883e'
+                : entry.action.startsWith('MISSED') ? '#e5c07b'
+                : '#8b949e'
+              const rules = entry.sell_rules ?? entry.buy_rules ?? []
+              return (
+                <div key={i} style={styles.tradeRow}>
+                  <span style={{ ...styles.traceCell, width: 140, color: '#e6edf3' }}>{fmtDate(entry.date)}</span>
+                  <span style={{ ...styles.traceCell, width: 65, color: '#e6edf3' }}>${entry.price.toFixed(2)}</span>
+                  <span style={{ ...styles.traceCell, width: 65, color: '#8b949e' }}>{entry.position}</span>
+                  <span style={{ ...styles.traceCell, width: 140, color: actionColor, fontWeight: 600 }}>{entry.action}</span>
+                  <span style={{ ...styles.traceCell, flex: 1, color: '#8b949e' }}>
+                    {rules.map((r, j) => (
+                      <span key={j} style={{ marginRight: 10, color: r.muted ? '#484f58' : r.result ? '#26a641' : '#f85149' }}>
+                        {r.muted ? '🔇 ' : r.result ? '✓ ' : '✗ '}
+                        {r.rule.trim()}
+                        {!r.muted && r.v_now != null ? ` [${r.v_prev}→${r.v_now}]` : ''}
+                      </span>
+                    ))}
                   </span>
                 </div>
               )
@@ -160,4 +201,5 @@ const styles: Record<string, React.CSSProperties> = {
   tradeList: { flex: 1, overflowY: 'auto', padding: '8px 12px' },
   tradeRow: { display: 'flex', gap: 4, alignItems: 'center', padding: '3px 0', borderBottom: '1px solid #21262d' },
   tradeCell: { fontSize: 11, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
+  traceCell: { fontSize: 11, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
 }

@@ -4,10 +4,17 @@ import numpy as np
 import pandas as pd
 from typing import Optional
 from shared import _fetch, _format_time
-from signal_engine import Rule, compute_indicators, eval_rules
+from signal_engine import Rule, compute_indicators, eval_rules, eval_rule
 from routes.indicators import _series_to_list
 
 router = APIRouter()
+
+
+class TrailingStopConfig(BaseModel):
+    type: str = "pct"               # "pct" | "atr"
+    value: float = 5.0              # % below peak (pct), or ATR multiplier (atr)
+    source: str = "high"            # "high" | "close" — which price updates the peak
+    activate_on_profit: bool = False  # only start trailing once price exceeds entry
 
 
 class StrategyRequest(BaseModel):
@@ -22,9 +29,11 @@ class StrategyRequest(BaseModel):
     initial_capital: float = 10000.0
     position_size: float = 1.0   # fraction of capital per trade (0.01–1.0)
     stop_loss_pct: Optional[float] = None  # e.g. 5.0 means sell if price drops 5% from entry
+    trailing_stop: Optional[TrailingStopConfig] = None
     slippage_pct: float = 0.0    # e.g. 0.1 means 0.1% worse fill on every trade
     commission_pct: float = 0.0  # e.g. 0.1 means 0.1% fee per trade
     source: str = "yahoo"
+    debug: bool = False
 
     @field_validator('position_size')
     @classmethod
@@ -38,16 +47,41 @@ def run_backtest(req: StrategyRequest):
         df = _fetch(req.ticker, req.start, req.end, req.interval, source=req.source)
 
         close = df["Close"]
-        indicators = compute_indicators(close)
+        high = df["High"]
+        low = df["Low"]
+        indicators = compute_indicators(close, high=high, low=low)
 
         # Simulate
         capital = req.initial_capital
         position = 0.0
         entry_price = 0.0
+        trail_peak = 0.0
+        trail_stop_price = None
         trades = []
         equity = []
 
-        low = df["Low"]
+        ts = req.trailing_stop
+        atr = indicators.get("atr")
+        signal_trace = [] if req.debug else None
+
+        def _trace_rules(rules, indicators, i, label):
+            """Build per-rule evaluation detail for debug trace."""
+            details = []
+            for r in rules:
+                if r.muted:
+                    details.append({"rule": f"{r.indicator} {r.condition} {r.value if r.value is not None else ''}", "muted": True, "result": False})
+                    continue
+                result = eval_rule(r, indicators, i)
+                ind_series = indicators.get(r.indicator, indicators.get("close"))
+                v_now = round(float(ind_series.iloc[i]), 4) if ind_series is not None else None
+                v_prev = round(float(ind_series.iloc[i - 1]), 4) if ind_series is not None and i > 0 else None
+                details.append({
+                    "rule": f"{r.indicator} {r.condition} {r.value if r.value is not None else ''}",
+                    "result": bool(result),
+                    "v_now": v_now,
+                    "v_prev": v_prev,
+                })
+            return details
 
         for i in range(len(df)):
             price = close.iloc[i]
@@ -61,6 +95,8 @@ def run_backtest(req: StrategyRequest):
                 position = shares
                 entry_price = fill_price
                 capital -= shares * fill_price + commission
+                trail_peak = fill_price
+                trail_stop_price = None
                 buy_slippage = shares * (fill_price - price)
                 trades.append({
                     "type": "buy", "date": date, "price": round(fill_price, 4),
@@ -68,16 +104,46 @@ def run_backtest(req: StrategyRequest):
                     "slippage": round(buy_slippage, 2),
                     "commission": round(commission, 2),
                 })
+                if signal_trace is not None:
+                    signal_trace.append({
+                        "date": date, "price": round(price, 4), "position": "entered",
+                        "action": "BUY",
+                        "buy_rules": _trace_rules(req.buy_rules, indicators, i, "buy"),
+                    })
 
             elif position > 0:
-                # Check stop loss using the bar's low price
+                # Update trailing stop peak and compute trail_stop_price
+                trail_hit = False
+                if ts:
+                    source_price = high.iloc[i] if ts.source == "high" else price
+                    if not ts.activate_on_profit or source_price > entry_price:
+                        trail_peak = max(trail_peak, source_price)
+                    if ts.type == "pct":
+                        trail_stop_price = trail_peak * (1 - ts.value / 100)
+                    else:  # atr
+                        atr_val = atr.iloc[i] if atr is not None and not pd.isna(atr.iloc[i]) else 0.0
+                        trail_stop_price = trail_peak - ts.value * atr_val
+                    trail_hit = low.iloc[i] <= trail_stop_price
+
+                # Check fixed stop loss using the bar's low price
                 stop_price_limit = entry_price * (1 - req.stop_loss_pct / 100) if (req.stop_loss_pct and req.stop_loss_pct > 0) else None
                 stop_hit = stop_price_limit is not None and low.iloc[i] <= stop_price_limit
-                # If stopped out, use the stop price; otherwise use close
-                raw_exit = stop_price_limit if stop_hit else price
+
+                # Exit priority: fixed stop beats trailing stop (it's the harder floor)
+                if stop_hit:
+                    raw_exit = stop_price_limit
+                    exit_reason = "stop_loss"
+                elif trail_hit:
+                    raw_exit = trail_stop_price
+                    exit_reason = "trailing_stop"
+                else:
+                    raw_exit = price
+                    exit_reason = "signal"
+
                 # Slippage: sell at a worse (lower) price
                 exit_price = raw_exit * (1 - req.slippage_pct / 100)
-                if stop_hit or eval_rules(req.sell_rules, req.sell_logic, indicators, i):
+                sell_fired = eval_rules(req.sell_rules, req.sell_logic, indicators, i)
+                if stop_hit or trail_hit or sell_fired:
                     proceeds = position * exit_price
                     commission = proceeds * req.commission_pct / 100
                     sell_slippage = position * (raw_exit - exit_price)
@@ -89,12 +155,43 @@ def run_backtest(req: StrategyRequest):
                         "shares": round(position, 4),
                         "pnl": round(pnl, 2),
                         "pnl_pct": round(pnl / (position * entry_price) * 100, 2),
-                        "stop_loss": bool(stop_hit),
+                        "stop_loss": exit_reason == "stop_loss",
+                        "trailing_stop": exit_reason == "trailing_stop",
                         "slippage": round(sell_slippage, 2),
                         "commission": round(commission, 2),
                     })
                     capital += proceeds - commission
                     position = 0.0
+                    trail_peak = 0.0
+                    trail_stop_price = None
+                    if signal_trace is not None:
+                        action = "STOP_LOSS" if exit_reason == "stop_loss" else "TRAIL_STOP" if exit_reason == "trailing_stop" else "SELL"
+                        signal_trace.append({
+                            "date": date, "price": round(price, 4), "position": "exited",
+                            "action": action,
+                            "sell_rules": _trace_rules(req.sell_rules, indicators, i, "sell"),
+                        })
+                elif signal_trace is not None:
+                    # In position but no sell — trace any bar where at least one sell rule fires
+                    sell_details = _trace_rules(req.sell_rules, indicators, i, "sell")
+                    if any(d["result"] for d in sell_details if not d.get("muted")):
+                        signal_trace.append({
+                            "date": date, "price": round(price, 4), "position": "holding",
+                            "action": "SELL_PARTIAL (AND not met)",
+                            "sell_rules": sell_details,
+                        })
+
+            elif signal_trace is not None and position == 0:
+                # Not in position — trace if sell rules WOULD have fired
+                active_sell = [r for r in req.sell_rules if not r.muted]
+                if active_sell and i > 0:
+                    sell_details = _trace_rules(req.sell_rules, indicators, i, "sell")
+                    if any(d["result"] for d in sell_details if not d.get("muted")):
+                        signal_trace.append({
+                            "date": date, "price": round(price, 4), "position": "flat",
+                            "action": "MISSED (no position)",
+                            "sell_rules": sell_details,
+                        })
 
             total_value = capital + (position * price if position > 0 else 0)
             equity.append({"time": date, "value": round(total_value, 2)})
@@ -162,6 +259,8 @@ def run_backtest(req: StrategyRequest):
         }
         if ema_overlays:
             result["ema_overlays"] = ema_overlays
+        if signal_trace is not None:
+            result["signal_trace"] = signal_trace
         return result
     except HTTPException:
         raise

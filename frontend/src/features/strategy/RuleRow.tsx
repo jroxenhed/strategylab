@@ -1,4 +1,4 @@
-import { Trash2 } from 'lucide-react'
+import { Trash2, VolumeX, Volume2 } from 'lucide-react'
 import type { Rule } from '../../shared/types'
 
 export const INDICATORS = ['macd', 'rsi', 'price', 'ema20', 'ema50', 'ema200'] as const
@@ -44,7 +44,7 @@ export const PARAM_OPTIONS = [
 export const emptyRule = (): Rule => ({ indicator: 'macd', condition: 'crossover_up' })
 
 export function validateRules(rules: Rule[], label: string): string | null {
-  for (const rule of rules) {
+  for (const rule of rules.filter(r => !r.muted)) {
     const hasParam = !!rule.param || NEEDS_PARAM[rule.indicator]?.includes(rule.condition)
     const needsValue = NEEDS_VALUE.includes(rule.condition) && !hasParam
     if (needsValue && (typeof rule.value !== 'number' || isNaN(rule.value))) {
@@ -55,6 +55,7 @@ export function validateRules(rules: Rule[], label: string): string | null {
 }
 
 export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onChange: (r: Rule) => void; onDelete: () => void }) {
+  const muted = rule.muted ?? false
   const conditions = CONDITIONS[rule.indicator] || []
   const canParam = CAN_USE_PARAM[rule.indicator]?.includes(rule.condition)
   const hasParam = canParam && !!rule.param
@@ -68,7 +69,10 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
   })
 
   return (
-    <div style={styles.ruleRow}>
+    <div style={{ ...styles.ruleRow, opacity: muted ? 0.4 : 1 }}>
+      <button onClick={() => onChange({ ...rule, muted: !muted })} title={muted ? 'Unmute rule' : 'Mute rule'} style={{ color: muted ? '#f85149' : '#8b949e', padding: '4px 6px' }}>
+        {muted ? <VolumeX size={13} /> : <Volume2 size={13} />}
+      </button>
       <select value={rule.indicator} onChange={e => onChange({ ...rule, indicator: e.target.value as Rule['indicator'], condition: CONDITIONS[e.target.value][0] as any, value: undefined, param: undefined })} style={styles.ruleSelect}>
         {INDICATORS.map(i => <option key={i} value={i}>{i.toUpperCase()}</option>)}
       </select>

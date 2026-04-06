@@ -45,6 +45,14 @@ export interface Rule {
   condition: 'crossover_up' | 'crossover_down' | 'above' | 'below' | 'crosses_above' | 'crosses_below' | 'turns_up_below' | 'turns_down_above' | 'rising' | 'falling' | 'rising_over' | 'falling_over'
   value?: number
   param?: string
+  muted?: boolean
+}
+
+export interface TrailingStopConfig {
+  type: 'pct' | 'atr'
+  value: number
+  source: 'high' | 'close'
+  activate_on_profit: boolean
 }
 
 export interface StrategyRequest {
@@ -59,9 +67,11 @@ export interface StrategyRequest {
   initial_capital: number
   position_size: number
   stop_loss_pct?: number
+  trailing_stop?: TrailingStopConfig
   slippage_pct?: number
   commission_pct?: number
   source: DataSource
+  debug?: boolean
 }
 
 export interface Trade {
@@ -72,6 +82,7 @@ export interface Trade {
   pnl?: number
   pnl_pct?: number
   stop_loss?: boolean
+  trailing_stop?: boolean
   slippage?: number
   commission?: number
 }
@@ -99,6 +110,24 @@ export interface BacktestResult {
   trades: Trade[]
   equity_curve: TimeValue[]
   ema_overlays?: EMAOverlay[]
+  signal_trace?: SignalTraceEntry[]
+}
+
+export interface SignalTraceRule {
+  rule: string
+  result: boolean
+  muted?: boolean
+  v_now?: number | null
+  v_prev?: number | null
+}
+
+export interface SignalTraceEntry {
+  date: string | number
+  price: number
+  position: string
+  action: string
+  buy_rules?: SignalTraceRule[]
+  sell_rules?: SignalTraceRule[]
 }
 
 export interface AppState {

@@ -19,7 +19,7 @@ interface ChartProps {
   showQqq: boolean
   indicatorData: IndicatorData
   activeIndicators: IndicatorKey[]
-  trades?: Array<{ type: 'buy' | 'sell'; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean }>
+  trades?: Array<{ type: 'buy' | 'sell'; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean; trailing_stop?: boolean }>
   emaOverlays?: EMAOverlay[]
 }
 
@@ -38,7 +38,7 @@ function toLineData(arr: TimeValue[]) {
   )
 }
 
-function buildMarkers(trades: Array<{ type: 'buy' | 'sell'; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean }>, showPrice = true) {
+function buildMarkers(trades: Array<{ type: 'buy' | 'sell'; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean; trailing_stop?: boolean }>, showPrice = true) {
   return trades.map(t => {
     if (t.type === 'buy') {
       return {
@@ -52,7 +52,7 @@ function buildMarkers(trades: Array<{ type: 'buy' | 'sell'; date: string; price:
     const win = (t.pnl ?? 0) >= 0
     const color = win ? UP : DOWN
     const pctStr = t.pnl_pct != null ? ` ${t.pnl_pct > 0 ? '+' : ''}${t.pnl_pct}%` : ''
-    const label = t.stop_loss ? 'SL' : 'S'
+    const label = t.stop_loss ? 'SL' : t.trailing_stop ? 'TSL' : 'S'
     return {
       time: t.date as any,
       position: 'aboveBar' as const,
