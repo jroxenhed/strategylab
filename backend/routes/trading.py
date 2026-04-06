@@ -390,6 +390,17 @@ def get_performance(req: PerformanceRequest):
     actual_wins = sum(1 for p in paired_pnl if p > 0)
     actual_win_rate = (actual_wins / len(paired_pnl) * 100) if paired_pnl else 0
 
+    # Build paper equity curve from paired trades (cumulative P&L)
+    paper_equity = []
+    cumulative = 0.0
+    for i, buy in enumerate(buys):
+        if i < len(paired_pnl):
+            cumulative += paired_pnl[i]
+            paper_equity.append({
+                "time": sells[i]["timestamp"][:10],
+                "value": round(cumulative, 2),
+            })
+
     # --- Backtest (expected) ---
     from routes.backtest import StrategyRequest, run_backtest
     try:
@@ -416,12 +427,14 @@ def get_performance(req: PerformanceRequest):
             "completed_trades": len(paired_pnl),
             "total_pnl": round(actual_total_pnl, 2),
             "win_rate_pct": round(actual_win_rate, 2),
+            "equity_curve": paper_equity,
         },
         "backtest": {
             "trade_count": bt_summary["num_trades"] if bt_summary else None,
             "total_return_pct": bt_summary["total_return_pct"] if bt_summary else None,
             "win_rate_pct": bt_summary["win_rate_pct"] if bt_summary else None,
             "sharpe_ratio": bt_summary["sharpe_ratio"] if bt_summary else None,
+            "equity_curve": bt_result.get("equity_curve"),
         } if bt_summary else None,
     }
 

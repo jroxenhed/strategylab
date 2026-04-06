@@ -5,6 +5,7 @@ import pandas as pd
 from typing import Optional
 from shared import _fetch, _format_time
 from signal_engine import Rule, compute_indicators, eval_rules
+from routes.indicators import _series_to_list
 
 router = APIRouter()
 
@@ -120,7 +121,32 @@ def run_backtest(req: StrategyRequest):
         winning = [t for t in sell_trades if t.get("pnl", 0) > 0]
         win_rate = len(winning) / len(sell_trades) * 100 if sell_trades else 0
 
-        return {
+        # Build EMA overlay for rising_over/falling_over conditions in buy rules
+        ema_overlays = []
+        for rule in req.buy_rules:
+            if rule.condition in ("rising_over", "falling_over") and rule.indicator.startswith("ema"):
+                ema_key = rule.indicator.lower()
+                ema_series = indicators.get(ema_key)
+                if ema_series is not None:
+                    lookback = int(rule.value) if rule.value is not None else 10
+                    active = []
+                    for i in range(len(ema_series)):
+                        if i < lookback:
+                            active.append(False)
+                        elif rule.condition == "rising_over":
+                            active.append(bool(ema_series.iloc[i] > ema_series.iloc[i - lookback]))
+                        else:
+                            active.append(bool(ema_series.iloc[i] < ema_series.iloc[i - lookback]))
+                    ema_overlays.append({
+                        "indicator": ema_key,
+                        "condition": rule.condition,
+                        "lookback": lookback,
+                        "series": _series_to_list(df.index, req.interval, ema_series),
+                        "active": active,
+                        "side": "buy",
+                    })
+
+        result = {
             "summary": {
                 "initial_capital": req.initial_capital,
                 "final_value": round(final_value, 2),
@@ -134,6 +160,9 @@ def run_backtest(req: StrategyRequest):
             "trades": trades,
             "equity_curve": equity,
         }
+        if ema_overlays:
+            result["ema_overlays"] = ema_overlays
+        return result
     except HTTPException:
         raise
     except Exception as e:

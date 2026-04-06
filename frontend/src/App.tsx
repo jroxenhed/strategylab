@@ -54,6 +54,7 @@ export default function App() {
   }, [])
 
   const trades = backtestResult?.trades ?? []
+  const emaOverlays = backtestResult?.ema_overlays
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
@@ -116,6 +117,7 @@ export default function App() {
                     indicatorData={indicatorData}
                     activeIndicators={activeIndicators}
                     trades={trades}
+                    emaOverlays={emaOverlays}
                   />
                 ) : (
                   <div style={styles.empty}>Loading {ticker}...</div>

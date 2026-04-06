@@ -76,6 +76,15 @@ export interface Trade {
   commission?: number
 }
 
+export interface EMAOverlay {
+  indicator: string
+  condition: string
+  lookback: number
+  series: TimeValue[]
+  active: boolean[]
+  side: 'buy' | 'sell'
+}
+
 export interface BacktestResult {
   summary: {
     initial_capital: number
@@ -89,6 +98,7 @@ export interface BacktestResult {
   }
   trades: Trade[]
   equity_curve: TimeValue[]
+  ema_overlays?: EMAOverlay[]
 }
 
 export interface AppState {

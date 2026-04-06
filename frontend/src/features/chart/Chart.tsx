@@ -8,7 +8,7 @@ import {
   ColorType,
 } from 'lightweight-charts'
 import type { IChartApi, ISeriesApi } from 'lightweight-charts'
-import type { OHLCVBar, IndicatorData, IndicatorKey, TimeValue } from '../../shared/types'
+import type { OHLCVBar, IndicatorData, IndicatorKey, TimeValue, EMAOverlay } from '../../shared/types'
 
 interface ChartProps {
   ticker: string
@@ -20,6 +20,7 @@ interface ChartProps {
   indicatorData: IndicatorData
   activeIndicators: IndicatorKey[]
   trades?: Array<{ type: 'buy' | 'sell'; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean }>
+  emaOverlays?: EMAOverlay[]
 }
 
 const CHART_BG = '#0d1117'
@@ -62,7 +63,7 @@ function buildMarkers(trades: Array<{ type: 'buy' | 'sell'; date: string; price:
   })
 }
 
-export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq, indicatorData, activeIndicators, trades }: ChartProps) {
+export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq, indicatorData, activeIndicators, trades, emaOverlays }: ChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const macdChartRef = useRef<IChartApi | null>(null)
@@ -167,6 +168,58 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
     // Trade markers
     if (trades && trades.length > 0) createSeriesMarkers(candleSeries, buildMarkers(trades))
 
+    // EMA overlays from backtest (rising_over / falling_over conditions)
+    // Draw one line with per-point color via separate segments
+    if (emaOverlays && emaOverlays.length > 0) {
+      for (const overlay of emaOverlays) {
+        const activeColor = overlay.side === 'buy' ? '#26a641' : '#f85149'
+        const inactiveColor = '#484f58'
+        const label = `${overlay.indicator.toUpperCase()} ${overlay.condition === 'rising_over' ? '↑' : '↓'}${overlay.lookback}`
+
+        // Build segments: contiguous runs of active/inactive points
+        // Each segment becomes its own line series so colors don't bleed
+        type Segment = { active: boolean; pts: Array<{ time: any; value: number }> }
+        const segments: Segment[] = []
+        let current: Segment | null = null
+
+        for (let i = 0; i < overlay.series.length; i++) {
+          const pt = overlay.series[i]
+          if (pt.value === null) {
+            current = null
+            continue
+          }
+          const isActive = overlay.active[i]
+          if (!current || current.active !== isActive) {
+            // Start new segment — duplicate the last point of previous segment
+            // as the first point of new segment so they connect
+            const newSeg: Segment = { active: isActive, pts: [] }
+            if (current && current.pts.length > 0) {
+              newSeg.pts.push({ ...current.pts[current.pts.length - 1] })
+            }
+            segments.push(newSeg)
+            current = newSeg
+          }
+          current.pts.push({ time: pt.time as any, value: pt.value })
+        }
+
+        let labeled = false
+        for (const seg of segments) {
+          if (seg.pts.length < 2) continue
+          const color = seg.active ? activeColor : inactiveColor
+          const title = !labeled ? label : ''
+          chart.addSeries(LineSeries, {
+            color,
+            lineWidth: seg.active ? 2 : 1,
+            title,
+            priceScaleId: 'right',
+            lastValueVisible: false,
+            priceLineVisible: false,
+          }).setData(seg.pts)
+          if (title) labeled = true
+        }
+      }
+    }
+
     // Restore saved scroll/zoom position, or fit all content on first visit
     const savedRange = sessionStorage.getItem('strategylab-chart-range')
     if (savedRange) {
@@ -237,7 +290,7 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
       candleSeriesRef.current = null
       ro.disconnect()
     }
-  }, [data, spyLineData, qqqLineData, showSpy, showQqq, activeIndicators, indicatorData, trades])
+  }, [data, spyLineData, qqqLineData, showSpy, showQqq, activeIndicators, indicatorData, trades, emaOverlays])
 
   // MACD chart
   useEffect(() => {

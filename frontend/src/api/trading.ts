@@ -98,6 +98,11 @@ export interface PerformanceRequest {
   sell_logic: 'AND' | 'OR'
 }
 
+export interface PerformanceEquityPoint {
+  time: string
+  value: number
+}
+
 export interface PerformanceResponse {
   symbol: string
   period: { start: string; end: string }
@@ -106,12 +111,14 @@ export interface PerformanceResponse {
     completed_trades: number
     total_pnl: number
     win_rate_pct: number
+    equity_curve: PerformanceEquityPoint[]
   }
   backtest: {
     trade_count: number
     total_return_pct: number
     win_rate_pct: number
     sharpe_ratio: number
+    equity_curve: PerformanceEquityPoint[]
   } | null
 }
 
