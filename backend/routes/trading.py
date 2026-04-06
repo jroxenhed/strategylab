@@ -1,5 +1,7 @@
 import json
 import math
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -10,7 +12,30 @@ from signal_engine import Rule, compute_indicators, eval_rules
 
 router = APIRouter(prefix="/api/trading")
 
-WATCHLIST_PATH = Path(__file__).resolve().parent.parent / "data" / "watchlist.json"
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+WATCHLIST_PATH = DATA_DIR / "watchlist.json"
+JOURNAL_PATH = DATA_DIR / "trade_journal.json"
+
+
+def _log_trade(symbol: str, side: str, qty: float, price: float | None,
+               source: str, stop_loss_price: float | None = None):
+    """Append a trade entry to the journal."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if JOURNAL_PATH.exists():
+        journal = json.loads(JOURNAL_PATH.read_text())
+    else:
+        journal = {"trades": []}
+    journal["trades"].append({
+        "id": str(uuid.uuid4()),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "symbol": symbol,
+        "side": side,
+        "qty": qty,
+        "price": price,
+        "stop_loss_price": stop_loss_price,
+        "source": source,
+    })
+    JOURNAL_PATH.write_text(json.dumps(journal, indent=2))
 
 
 class BuyRequest(BaseModel):
@@ -42,8 +67,12 @@ class WatchlistRequest(BaseModel):
 
 @router.get("/account")
 def get_account():
+    from fastapi import HTTPException as _HTTPException
     client = get_trading_client()
-    account = client.get_account()
+    try:
+        account = client.get_account()
+    except Exception as e:
+        raise _HTTPException(status_code=502, detail=f"Alpaca API error: {e}")
     return {
         "equity": float(account.equity),
         "cash": float(account.cash),
@@ -58,8 +87,12 @@ def get_account():
 
 @router.get("/positions")
 def get_positions():
+    from fastapi import HTTPException as _HTTPException
     client = get_trading_client()
-    positions = client.get_all_positions()
+    try:
+        positions = client.get_all_positions()
+    except Exception as e:
+        raise _HTTPException(status_code=502, detail=f"Alpaca API error: {e}")
     return [
         {
             "symbol": p.symbol,
@@ -77,10 +110,14 @@ def get_positions():
 
 @router.get("/orders")
 def get_orders():
+    from fastapi import HTTPException as _HTTPException
     client = get_trading_client()
     from alpaca.trading.requests import GetOrdersRequest
     from alpaca.trading.enums import QueryOrderStatus
-    orders = client.get_orders(GetOrdersRequest(status=QueryOrderStatus.ALL, limit=50))
+    try:
+        orders = client.get_orders(GetOrdersRequest(status=QueryOrderStatus.ALL, limit=50))
+    except Exception as e:
+        raise _HTTPException(status_code=502, detail=f"Alpaca API error: {e}")
     return [
         {
             "id": str(o.id),
@@ -110,20 +147,27 @@ def place_buy(req: BuyRequest):
         time_in_force=TimeInForce.DAY,
     )
 
-    stop_price = None
-    if req.stop_loss_pct and req.stop_loss_pct > 0:
-        # Get latest trade price for stop calculation
-        from alpaca.data.requests import StockLatestTradeRequest
-        from shared import _alpaca_client
+    # Get latest trade price for journal and optional stop loss
+    from alpaca.data.requests import StockLatestTradeRequest
+    current_price = None
+    try:
         latest = _alpaca_client.get_stock_latest_trade(
             StockLatestTradeRequest(symbol_or_symbols=req.symbol)
         )
         current_price = float(latest[req.symbol].price)
+    except Exception:
+        pass
+
+    stop_price = None
+    if req.stop_loss_pct and req.stop_loss_pct > 0 and current_price:
         stop_price = round(current_price * (1 - req.stop_loss_pct / 100), 2)
         order_kwargs["order_class"] = OrderClass.OTO
         order_kwargs["stop_loss"] = StopLossRequest(stop_price=stop_price)
 
     order = client.submit_order(MarketOrderRequest(**order_kwargs))
+
+    _log_trade(req.symbol, "buy", req.qty, price=current_price,
+               source="manual", stop_loss_price=stop_price)
 
     result = {
         "order_id": str(order.id),
@@ -152,6 +196,7 @@ def place_sell(req: SellRequest):
             client.close_position(req.symbol)
         except APIError as e:
             raise _HTTPException(status_code=404, detail=f"No open position for {req.symbol}")
+        _log_trade(req.symbol, "sell", 0, price=None, source="manual")
         return {"symbol": req.symbol, "action": "position_closed"}
 
     order = client.submit_order(
@@ -173,6 +218,8 @@ def place_sell(req: SellRequest):
         if o.side == OrderSide.SELL and o.type.value == "stop":
             client.cancel_order_by_id(o.id)
             cancelled_stops.append(str(o.id))
+
+    _log_trade(req.symbol, "sell", req.qty, price=None, source="manual")
 
     return {
         "order_id": str(order.id),
@@ -266,18 +313,22 @@ def scan_signals(req: ScanRequest):
                             order_kwargs["stop_loss"] = StopLossRequest(stop_price=stop_price)
 
                         order = client.submit_order(MarketOrderRequest(**order_kwargs))
+                        sl_price = round(price * (1 - req.stop_loss_pct / 100), 2) if req.stop_loss_pct else None
+                        _log_trade(symbol, "buy", qty, price=price,
+                                   source="auto", stop_loss_price=sl_price)
                         action = {
                             "symbol": symbol, "action": "BUY",
                             "qty": qty, "order_id": str(order.id),
                         }
-                        if req.stop_loss_pct:
-                            action["stop_price"] = round(price * (1 - req.stop_loss_pct / 100), 2)
+                        if sl_price:
+                            action["stop_price"] = sl_price
                         actions.append(action)
                         existing_positions.add(symbol)
 
                 elif signal == "SELL" and symbol in existing_positions:
                     try:
                         client.close_position(symbol)
+                        _log_trade(symbol, "sell", 0, price=price, source="auto")
                         actions.append({
                             "symbol": symbol, "action": "SELL",
                             "detail": "position_closed",
@@ -296,6 +347,94 @@ def scan_signals(req: ScanRequest):
     if req.auto_execute:
         response["actions"] = actions
     return response
+
+
+class PerformanceRequest(BaseModel):
+    symbol: str
+    start: str
+    end: Optional[str] = None
+    interval: str = "15m"
+    buy_rules: list[Rule]
+    sell_rules: list[Rule]
+    buy_logic: str = "AND"
+    sell_logic: str = "AND"
+
+
+@router.post("/performance")
+def get_performance(req: PerformanceRequest):
+    end = req.end or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # --- Journal (actual) trades ---
+    journal_trades = []
+    if JOURNAL_PATH.exists():
+        journal = json.loads(JOURNAL_PATH.read_text())
+        for t in journal.get("trades", []):
+            if t["symbol"].upper() != req.symbol.upper():
+                continue
+            ts = t["timestamp"][:10]  # YYYY-MM-DD
+            if ts < req.start or ts > end:
+                continue
+            journal_trades.append(t)
+
+    buys = [t for t in journal_trades if t["side"] == "buy"]
+    sells = [t for t in journal_trades if t["side"] == "sell"]
+
+    # Pair buy→sell for P&L (simple sequential pairing)
+    paired_pnl = []
+    for i, buy in enumerate(buys):
+        if i < len(sells) and buy.get("price") and sells[i].get("price"):
+            pnl = (sells[i]["price"] - buy["price"]) * buy["qty"]
+            paired_pnl.append(pnl)
+
+    actual_total_pnl = sum(paired_pnl)
+    actual_wins = sum(1 for p in paired_pnl if p > 0)
+    actual_win_rate = (actual_wins / len(paired_pnl) * 100) if paired_pnl else 0
+
+    # --- Backtest (expected) ---
+    from routes.backtest import StrategyRequest, run_backtest
+    try:
+        bt_result = run_backtest(StrategyRequest(
+            ticker=req.symbol,
+            start=req.start,
+            end=end,
+            interval=req.interval,
+            buy_rules=req.buy_rules,
+            sell_rules=req.sell_rules,
+            buy_logic=req.buy_logic,
+            sell_logic=req.sell_logic,
+            source="alpaca",
+        ))
+        bt_summary = bt_result["summary"]
+    except Exception:
+        bt_summary = None
+
+    return {
+        "symbol": req.symbol,
+        "period": {"start": req.start, "end": end},
+        "actual": {
+            "trade_count": len(buys),
+            "completed_trades": len(paired_pnl),
+            "total_pnl": round(actual_total_pnl, 2),
+            "win_rate_pct": round(actual_win_rate, 2),
+        },
+        "backtest": {
+            "trade_count": bt_summary["num_trades"] if bt_summary else None,
+            "total_return_pct": bt_summary["total_return_pct"] if bt_summary else None,
+            "win_rate_pct": bt_summary["win_rate_pct"] if bt_summary else None,
+            "sharpe_ratio": bt_summary["sharpe_ratio"] if bt_summary else None,
+        } if bt_summary else None,
+    }
+
+
+@router.get("/journal")
+def get_journal(symbol: Optional[str] = None):
+    if not JOURNAL_PATH.exists():
+        return {"trades": []}
+    journal = json.loads(JOURNAL_PATH.read_text())
+    trades = journal.get("trades", [])
+    if symbol:
+        trades = [t for t in trades if t["symbol"].upper() == symbol.upper()]
+    return {"trades": trades}
 
 
 @router.get("/watchlist")

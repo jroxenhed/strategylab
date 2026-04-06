@@ -4,12 +4,15 @@ import { fetchAccount, type Account } from '../../api/trading'
 export default function AccountBar() {
   const [account, setAccount] = useState<Account | null>(null)
   const [error, setError] = useState<string | null>(null)
-
-  const load = () => {
-    fetchAccount().then(setAccount).catch(e => setError(e.message))
-  }
+  const hasLoaded = useState({ value: false })[0]
 
   useEffect(() => {
+    const load = () => {
+      fetchAccount().then(a => { setAccount(a); setError(null); hasLoaded.value = true }).catch(e => {
+        // Only show error if we've never loaded successfully
+        if (!hasLoaded.value) setError(e.message)
+      })
+    }
     load()
     const id = window.setInterval(load, 30_000)
     return () => clearInterval(id)

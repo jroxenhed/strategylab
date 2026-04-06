@@ -5,6 +5,9 @@ import Sidebar from './features/sidebar/Sidebar'
 import Chart from './features/chart/Chart'
 import StrategyBuilder from './features/strategy/StrategyBuilder'
 import Results from './features/strategy/Results'
+import PaperTrading from './features/trading/PaperTrading'
+
+type AppTab = 'chart' | 'trading'
 
 const STORAGE_KEY = 'strategylab-settings'
 const today = new Date().toISOString().slice(0, 10)
@@ -29,6 +32,7 @@ export default function App() {
   const [showQqq, setShowQqq] = useState(saved?.showQqq ?? false)
   const [dataSource, setDataSource] = useState<DataSource>((saved?.dataSource as DataSource) ?? 'yahoo')
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null)
+  const [activeTab, setActiveTab] = useState<AppTab>('chart')
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -56,6 +60,20 @@ export default function App() {
       {/* Header */}
       <header style={styles.header}>
         <span style={styles.logo}>StrategyLab</span>
+        <div style={styles.tabs}>
+          {(['chart', 'trading'] as const).map(tab => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              style={{
+                ...styles.tab,
+                ...(activeTab === tab ? styles.tabActive : {}),
+              }}
+            >
+              {tab === 'chart' ? 'Chart' : 'Paper Trading'}
+            </button>
+          ))}
+        </div>
         <span style={{ color: '#8b949e', fontSize: 13 }}>
           {ticker} &nbsp;·&nbsp; {start} → {end}
         </span>
@@ -63,58 +81,64 @@ export default function App() {
 
       {/* Main area */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        <Sidebar
-          ticker={ticker}
-          start={start}
-          end={end}
-          interval={interval}
-          activeIndicators={activeIndicators}
-          showSpy={showSpy}
-          showQqq={showQqq}
-          onTickerChange={t => { setTicker(t); setBacktestResult(null) }}
-          onStartChange={d => { if (d > end) { setStart(end); setEnd(d) } else { setStart(d) } }}
-          onEndChange={d => { if (d < start) { setEnd(start); setStart(d) } else { setEnd(d) } }}
-          onIntervalChange={setInterval}
-          onToggleIndicator={toggleIndicator}
-          onToggleSpy={() => setShowSpy(v => !v)}
-          onToggleQqq={() => setShowQqq(v => !v)}
-          dataSource={dataSource}
-          onDataSourceChange={setDataSource}
-        />
+        {activeTab === 'chart' ? (
+          <>
+            <Sidebar
+              ticker={ticker}
+              start={start}
+              end={end}
+              interval={interval}
+              activeIndicators={activeIndicators}
+              showSpy={showSpy}
+              showQqq={showQqq}
+              onTickerChange={t => { setTicker(t); setBacktestResult(null) }}
+              onStartChange={d => { if (d > end) { setStart(end); setEnd(d) } else { setStart(d) } }}
+              onEndChange={d => { if (d < start) { setEnd(start); setStart(d) } else { setEnd(d) } }}
+              onIntervalChange={setInterval}
+              onToggleIndicator={toggleIndicator}
+              onToggleSpy={() => setShowSpy(v => !v)}
+              onToggleQqq={() => setShowQqq(v => !v)}
+              dataSource={dataSource}
+              onDataSourceChange={setDataSource}
+            />
 
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          {/* Chart */}
-          <div style={{ flex: 1, overflow: 'hidden' }}>
-            {ohlcv.length > 0 ? (
-              <Chart
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              {/* Chart */}
+              <div style={{ flex: 1, overflow: 'hidden' }}>
+                {ohlcv.length > 0 ? (
+                  <Chart
+                    ticker={ticker}
+                    data={ohlcv}
+                    spyData={showSpy ? (spyData ?? []) : undefined}
+                    qqqData={showQqq ? (qqqData ?? []) : undefined}
+                    showSpy={showSpy}
+                    showQqq={showQqq}
+                    indicatorData={indicatorData}
+                    activeIndicators={activeIndicators}
+                    trades={trades}
+                  />
+                ) : (
+                  <div style={styles.empty}>Loading {ticker}...</div>
+                )}
+              </div>
+
+              {/* Strategy builder */}
+              <StrategyBuilder
                 ticker={ticker}
-                data={ohlcv}
-                spyData={showSpy ? (spyData ?? []) : undefined}
-                qqqData={showQqq ? (qqqData ?? []) : undefined}
-                showSpy={showSpy}
-                showQqq={showQqq}
-                indicatorData={indicatorData}
-                activeIndicators={activeIndicators}
-                trades={trades}
+                start={start}
+                end={end}
+                interval={interval}
+                onResult={setBacktestResult}
+                dataSource={dataSource}
               />
-            ) : (
-              <div style={styles.empty}>Loading {ticker}…</div>
-            )}
-          </div>
 
-          {/* Strategy builder */}
-          <StrategyBuilder
-            ticker={ticker}
-            start={start}
-            end={end}
-            interval={interval}
-            onResult={setBacktestResult}
-            dataSource={dataSource}
-          />
-
-          {/* Results */}
-          {backtestResult && <Results result={backtestResult} />}
-        </div>
+              {/* Results */}
+              {backtestResult && <Results result={backtestResult} />}
+            </div>
+          </>
+        ) : (
+          <PaperTrading />
+        )}
       </div>
     </div>
   )
@@ -128,5 +152,14 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   logo: { fontWeight: 700, fontSize: 16, color: '#58a6ff', letterSpacing: '-0.02em' },
+  tabs: { display: 'flex', gap: 4 },
+  tab: {
+    fontSize: 12, padding: '4px 12px', borderRadius: 6,
+    background: 'transparent', color: '#8b949e', border: '1px solid transparent',
+    cursor: 'pointer', fontWeight: 500,
+  },
+  tabActive: {
+    background: '#21262d', color: '#e6edf3', border: '1px solid #30363d',
+  },
   empty: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8b949e', fontSize: 14 },
 }

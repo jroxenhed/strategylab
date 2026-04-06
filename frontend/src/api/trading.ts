@@ -76,6 +76,45 @@ export interface ScanRequest {
   stop_loss_pct?: number
 }
 
+export interface JournalTrade {
+  id: string
+  timestamp: string
+  symbol: string
+  side: string
+  qty: number
+  price: number | null
+  stop_loss_price: number | null
+  source: string
+}
+
+export interface PerformanceRequest {
+  symbol: string
+  start: string
+  end?: string
+  interval: string
+  buy_rules: Rule[]
+  sell_rules: Rule[]
+  buy_logic: 'AND' | 'OR'
+  sell_logic: 'AND' | 'OR'
+}
+
+export interface PerformanceResponse {
+  symbol: string
+  period: { start: string; end: string }
+  actual: {
+    trade_count: number
+    completed_trades: number
+    total_pnl: number
+    win_rate_pct: number
+  }
+  backtest: {
+    trade_count: number
+    total_return_pct: number
+    win_rate_pct: number
+    sharpe_ratio: number
+  } | null
+}
+
 // --- API calls ---
 
 export async function fetchAccount(): Promise<Account> {
@@ -125,4 +164,15 @@ export async function fetchWatchlist(): Promise<string[]> {
 
 export async function saveWatchlist(symbols: string[]): Promise<void> {
   await axios.post(`${API}/api/trading/watchlist`, { symbols })
+}
+
+export async function fetchJournal(symbol?: string): Promise<JournalTrade[]> {
+  const params = symbol ? { symbol } : {}
+  const { data } = await axios.get(`${API}/api/trading/journal`, { params })
+  return data.trades ?? []
+}
+
+export async function fetchPerformance(req: PerformanceRequest): Promise<PerformanceResponse> {
+  const { data } = await axios.post(`${API}/api/trading/performance`, req)
+  return data
 }
