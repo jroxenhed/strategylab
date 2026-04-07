@@ -2,8 +2,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 import numpy as np
 import pandas as pd
+from datetime import datetime, timezone
 from typing import Optional
-from shared import _fetch, _format_time
+from shared import _fetch, _format_time, _INTRADAY_INTERVALS
 from signal_engine import Rule, compute_indicators, eval_rules, eval_rule
 from routes.indicators import _series_to_list
 
@@ -16,6 +17,19 @@ class TrailingStopConfig(BaseModel):
     source: str = "high"            # "high" | "close" — which price updates the peak
     activate_on_profit: bool = False  # only start trailing once profit threshold is reached
     activate_pct: float = 0.0        # min profit % required before trailing starts (0 = any profit)
+
+
+class DynamicSizingConfig(BaseModel):
+    enabled: bool = False
+    consec_sls: int = 2             # number of consecutive stop losses before reducing size
+    reduced_pct: float = 25.0       # position size % to use when triggered
+
+
+class TradingHoursConfig(BaseModel):
+    enabled: bool = False
+    start_hour: int = 9             # ET hour (inclusive)
+    end_hour: int = 16              # ET hour (exclusive)
+    skip_hours: list[int] = []      # specific ET hours to skip (e.g. [12] for lunch)
 
 
 class StrategyRequest(BaseModel):
@@ -33,6 +47,8 @@ class StrategyRequest(BaseModel):
     trailing_stop: Optional[TrailingStopConfig] = None
     slippage_pct: float = 0.0    # e.g. 0.1 means 0.1% worse fill on every trade
     commission_pct: float = 0.0  # e.g. 0.1 means 0.1% fee per trade
+    dynamic_sizing: Optional[DynamicSizingConfig] = None
+    trading_hours: Optional[TradingHoursConfig] = None
     source: str = "yahoo"
     debug: bool = False
 
@@ -64,6 +80,10 @@ def run_backtest(req: StrategyRequest):
         ts = req.trailing_stop
         atr = indicators.get("atr")
         signal_trace = [] if req.debug else None
+        ds = req.dynamic_sizing
+        th = req.trading_hours
+        consec_sl_count = 0  # track consecutive stop losses for dynamic sizing
+        is_intraday = req.interval in _INTRADAY_INTERVALS
 
         def _trace_rules(rules, indicators, i, label):
             """Build per-rule evaluation detail for debug trace."""
@@ -88,10 +108,28 @@ def run_backtest(req: StrategyRequest):
             price = close.iloc[i]
             date = _format_time(df.index[i], req.interval)
 
-            if position == 0 and eval_rules(req.buy_rules, req.buy_logic, indicators, i):
+            # Trading hours filter (only affects entries, not exits)
+            hour_ok = True
+            if is_intraday and th and th.enabled:
+                bar_dt = df.index[i]
+                if bar_dt.tzinfo is not None:
+                    et_hour = bar_dt.astimezone(pd.Timestamp.now(tz="America/New_York").tzinfo).hour
+                else:
+                    et_hour = pd.Timestamp(bar_dt, tz="UTC").tz_convert("America/New_York").hour
+                if et_hour < th.start_hour or et_hour >= th.end_hour:
+                    hour_ok = False
+                if et_hour in th.skip_hours:
+                    hour_ok = False
+
+            if position == 0 and hour_ok and eval_rules(req.buy_rules, req.buy_logic, indicators, i):
+                # Dynamic sizing: reduce position after consecutive stop losses
+                effective_size = req.position_size
+                if ds and ds.enabled and consec_sl_count >= ds.consec_sls:
+                    effective_size = req.position_size * (ds.reduced_pct / 100)
+
                 # Slippage: buy at a worse (higher) price
                 fill_price = price * (1 + req.slippage_pct / 100)
-                shares = (capital * req.position_size) / fill_price
+                shares = (capital * effective_size) / fill_price
                 commission = shares * fill_price * req.commission_pct / 100
                 position = shares
                 entry_price = fill_price
@@ -166,6 +204,10 @@ def run_backtest(req: StrategyRequest):
                     position = 0.0
                     trail_peak = 0.0
                     trail_stop_price = None
+                    if exit_reason == "stop_loss":
+                        consec_sl_count += 1
+                    else:
+                        consec_sl_count = 0
                     if signal_trace is not None:
                         action = "STOP_LOSS" if exit_reason == "stop_loss" else "TRAIL_STOP" if exit_reason == "trailing_stop" else "SELL"
                         signal_trace.append({

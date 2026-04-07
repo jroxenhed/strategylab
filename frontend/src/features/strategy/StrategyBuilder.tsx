@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Plus, Play } from 'lucide-react'
-import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopConfig } from '../../shared/types'
+import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig } from '../../shared/types'
 import RuleRow, { emptyRule, validateRules } from './RuleRow'
 import axios from 'axios'
 
@@ -33,6 +33,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [stopLoss, setStopLoss] = useState<number | ''>(saved?.stopLoss ?? '')
   const [trailingEnabled, setTrailingEnabled] = useState<boolean>(saved?.trailingEnabled ?? false)
   const [trailingConfig, setTrailingConfig] = useState<TrailingStopConfig>(saved?.trailingConfig ?? { type: 'pct', value: 5, source: 'high', activate_on_profit: false, activate_pct: 0 })
+  const [dynamicSizing, setDynamicSizing] = useState<DynamicSizingConfig>(saved?.dynamicSizing ?? { enabled: false, consec_sls: 2, reduced_pct: 25 })
+  const [tradingHours, setTradingHours] = useState<TradingHoursConfig>(saved?.tradingHours ?? { enabled: false, start_hour: 9, end_hour: 16, skip_hours: [] })
   const [slippage, setSlippage] = useState<number | ''>(saved?.slippage ?? '')
   const [commission, setCommission] = useState<number | ''>(saved?.commission ?? '')
   const [debug, setDebug] = useState(false)
@@ -41,9 +43,9 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
 
   useEffect(() => {
     localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({
-      buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, trailingEnabled, trailingConfig, slippage, commission,
+      buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, trailingEnabled, trailingConfig, dynamicSizing, tradingHours, slippage, commission,
     }))
-  }, [buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, trailingEnabled, trailingConfig, slippage, commission])
+  }, [buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, trailingEnabled, trailingConfig, dynamicSizing, tradingHours, slippage, commission])
 
   async function runBacktest() {
     setLoading(true)
@@ -65,6 +67,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         initial_capital: capital, position_size: posSize / 100,
         stop_loss_pct: stopLoss !== '' && stopLoss > 0 ? stopLoss : undefined,
         trailing_stop: trailingEnabled ? trailingConfig : undefined,
+        dynamic_sizing: dynamicSizing.enabled ? dynamicSizing : undefined,
+        trading_hours: tradingHours.enabled ? tradingHours : undefined,
         slippage_pct: slippage !== '' && slippage > 0 ? slippage : undefined,
         commission_pct: commission !== '' && commission > 0 ? commission : undefined,
         source: dataSource,
@@ -172,6 +176,54 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
                 style={{ ...styles.settingsInput, width: 48, opacity: trailingConfig.activate_on_profit ? 1 : 0.35 }}
               />
               <span style={{ fontSize: 11, color: '#8b949e' }}>% profit</span>
+            </div>
+          </>)}
+          {/* Dynamic Sizing */}
+          <div style={styles.settingsRow}>
+            <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+              <input type="checkbox" checked={dynamicSizing.enabled} onChange={e => setDynamicSizing(c => ({ ...c, enabled: e.target.checked }))} />
+              Dynamic Sizing
+            </label>
+          </div>
+          {dynamicSizing.enabled && (<>
+            <div style={styles.settingsRow}>
+              <label style={styles.settingsLabel}>After</label>
+              <input type="number" value={dynamicSizing.consec_sls} step={1} min={1} max={10} onChange={e => setDynamicSizing(c => ({ ...c, consec_sls: +e.target.value }))} style={{ ...styles.settingsInput, width: 40 }} />
+              <span style={{ fontSize: 11, color: '#8b949e' }}>consec SLs</span>
+            </div>
+            <div style={styles.settingsRow}>
+              <label style={styles.settingsLabel}>Reduce to</label>
+              <input type="number" value={dynamicSizing.reduced_pct} step={5} min={5} max={100} onChange={e => setDynamicSizing(c => ({ ...c, reduced_pct: +e.target.value }))} style={{ ...styles.settingsInput, width: 48 }} />
+              <span style={{ fontSize: 11, color: '#8b949e' }}>% size</span>
+            </div>
+          </>)}
+          {/* Trading Hours */}
+          <div style={styles.settingsRow}>
+            <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+              <input type="checkbox" checked={tradingHours.enabled} onChange={e => setTradingHours(c => ({ ...c, enabled: e.target.checked }))} />
+              Trading Hours
+            </label>
+          </div>
+          {tradingHours.enabled && (<>
+            <div style={styles.settingsRow}>
+              <label style={styles.settingsLabel}>Window (ET)</label>
+              <input type="number" value={tradingHours.start_hour} step={1} min={4} max={20} onChange={e => setTradingHours(c => ({ ...c, start_hour: +e.target.value }))} style={{ ...styles.settingsInput, width: 40 }} />
+              <span style={{ fontSize: 11, color: '#8b949e' }}>–</span>
+              <input type="number" value={tradingHours.end_hour} step={1} min={4} max={20} onChange={e => setTradingHours(c => ({ ...c, end_hour: +e.target.value }))} style={{ ...styles.settingsInput, width: 40 }} />
+            </div>
+            <div style={styles.settingsRow}>
+              <label style={styles.settingsLabel}>Skip hours</label>
+              <input
+                type="text"
+                value={tradingHours.skip_hours.join(',')}
+                placeholder="e.g. 12,15"
+                onChange={e => {
+                  const hours = e.target.value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n) && n >= 0 && n <= 23)
+                  setTradingHours(c => ({ ...c, skip_hours: hours }))
+                }}
+                style={{ ...styles.settingsInput, width: 80 }}
+              />
+              <span style={{ fontSize: 11, color: '#8b949e' }}>ET</span>
             </div>
           </>)}
           <div style={styles.settingsRow}>

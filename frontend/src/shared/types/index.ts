@@ -57,6 +57,19 @@ export interface TrailingStopConfig {
   activate_pct: number  // min profit % before trailing starts (0 = any profit)
 }
 
+export interface DynamicSizingConfig {
+  enabled: boolean
+  consec_sls: number      // consecutive stop losses before reducing size
+  reduced_pct: number     // position size % to use when triggered
+}
+
+export interface TradingHoursConfig {
+  enabled: boolean
+  start_hour: number      // ET hour (inclusive)
+  end_hour: number        // ET hour (exclusive)
+  skip_hours: number[]    // specific ET hours to skip (e.g. [12] for lunch)
+}
+
 export interface StrategyRequest {
   ticker: string
   start: string
@@ -70,6 +83,8 @@ export interface StrategyRequest {
   position_size: number
   stop_loss_pct?: number
   trailing_stop?: TrailingStopConfig
+  dynamic_sizing?: DynamicSizingConfig
+  trading_hours?: TradingHoursConfig
   slippage_pct?: number
   commission_pct?: number
   source: DataSource
