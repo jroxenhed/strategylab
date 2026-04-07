@@ -33,6 +33,7 @@ export default function App() {
   const [dataSource, setDataSource] = useState<DataSource>((saved?.dataSource as DataSource) ?? 'yahoo')
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null)
   const [activeTab, setActiveTab] = useState<AppTab>('chart')
+  const [showChart, setShowChart] = useState(true)
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -104,8 +105,15 @@ export default function App() {
             />
 
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              {/* Chart toggle bar */}
+              <div style={styles.chartToggleBar}>
+                <button onClick={() => setShowChart(v => !v)} style={styles.chartToggleBtn}>
+                  {showChart ? '▾ Hide Chart' : '▸ Show Chart'}
+                </button>
+              </div>
+
               {/* Chart */}
-              <div style={{ flex: 1, overflow: 'hidden' }}>
+              <div style={{ flex: showChart ? 1 : 0, overflow: 'hidden', display: showChart ? 'block' : 'none' }}>
                 {ohlcv.length > 0 ? (
                   <Chart
                     ticker={ticker}
@@ -164,4 +172,13 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#21262d', color: '#e6edf3', border: '1px solid #30363d',
   },
   empty: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8b949e', fontSize: 14 },
+  chartToggleBar: {
+    display: 'flex', alignItems: 'center',
+    padding: '2px 8px', background: '#161b22', borderBottom: '1px solid #21262d',
+    flexShrink: 0,
+  },
+  chartToggleBtn: {
+    fontSize: 11, color: '#8b949e', background: 'none', border: 'none',
+    cursor: 'pointer', padding: '2px 4px', fontWeight: 500,
+  },
 }

@@ -68,11 +68,24 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
     return true
   })
 
+  const negated = rule.negated ?? false
+
   return (
     <div style={{ ...styles.ruleRow, opacity: muted ? 0.4 : 1 }}>
       <button onClick={() => onChange({ ...rule, muted: !muted })} title={muted ? 'Unmute rule' : 'Mute rule'} style={{ color: muted ? '#f85149' : '#8b949e', padding: '4px 6px' }}>
         {muted ? <VolumeX size={13} /> : <Volume2 size={13} />}
       </button>
+      <button
+        onClick={() => onChange({ ...rule, negated: !negated })}
+        title={negated ? 'Remove NOT' : 'Negate this rule (NOT)'}
+        style={{
+          fontSize: 10, fontWeight: 700, padding: '2px 5px', borderRadius: 4,
+          border: `1px solid ${negated ? '#f0883e' : '#30363d'}`,
+          background: negated ? '#f0883e22' : 'transparent',
+          color: negated ? '#f0883e' : '#484f58',
+          cursor: 'pointer', lineHeight: 1,
+        }}
+      >NOT</button>
       <select value={rule.indicator} onChange={e => onChange({ ...rule, indicator: e.target.value as Rule['indicator'], condition: CONDITIONS[e.target.value][0] as any, value: undefined, param: undefined })} style={styles.ruleSelect}>
         {INDICATORS.map(i => <option key={i} value={i}>{i.toUpperCase()}</option>)}
       </select>

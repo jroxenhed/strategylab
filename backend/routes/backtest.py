@@ -14,7 +14,8 @@ class TrailingStopConfig(BaseModel):
     type: str = "pct"               # "pct" | "atr"
     value: float = 5.0              # % below peak (pct), or ATR multiplier (atr)
     source: str = "high"            # "high" | "close" — which price updates the peak
-    activate_on_profit: bool = False  # only start trailing once price exceeds entry
+    activate_on_profit: bool = False  # only start trailing once profit threshold is reached
+    activate_pct: float = 0.0        # min profit % required before trailing starts (0 = any profit)
 
 
 class StrategyRequest(BaseModel):
@@ -116,7 +117,8 @@ def run_backtest(req: StrategyRequest):
                 trail_hit = False
                 if ts:
                     source_price = high.iloc[i] if ts.source == "high" else price
-                    if not ts.activate_on_profit or source_price > entry_price:
+                    threshold = entry_price * (1 + ts.activate_pct / 100)
+                    if not ts.activate_on_profit or source_price >= threshold:
                         trail_peak = max(trail_peak, source_price)
                     if ts.type == "pct":
                         trail_stop_price = trail_peak * (1 - ts.value / 100)

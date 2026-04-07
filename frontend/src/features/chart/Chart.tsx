@@ -29,12 +29,29 @@ const TEXT = '#8b949e'
 const UP = '#26a641'
 const DOWN = '#f85149'
 
+// lightweight-charts v5 has no localization.timeZone support.
+// Shift unix timestamps to ET wall-clock time by reconstructing them as UTC
+// so the chart displays 9:30 instead of 13:30 for NYSE open.
+// Date strings (daily+) pass through unchanged.
+function toET(time: string | number): any {
+  if (typeof time !== 'number') return time
+  const d = new Date(time * 1000)
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  }).formatToParts(d)
+  const get = (type: string) => parseInt(parts.find(p => p.type === type)?.value ?? '0')
+  return Date.UTC(get('year'), get('month') - 1, get('day'), get('hour') % 24, get('minute'), get('second')) / 1000
+}
+
 function toLineData(arr: TimeValue[]) {
   // Use whitespace data (no value field) for nulls so the bar still occupies
   // space in the time scale — keeps logical range aligned across charts
   return arr.map(d => d.value !== null
-    ? { time: d.time as any, value: d.value as number }
-    : { time: d.time as any }
+    ? { time: toET(d.time as any) as any, value: d.value as number }
+    : { time: toET(d.time as any) as any }
   )
 }
 
@@ -42,7 +59,7 @@ function buildMarkers(trades: Array<{ type: 'buy' | 'sell'; date: string; price:
   return trades.map(t => {
     if (t.type === 'buy') {
       return {
-        time: t.date as any,
+        time: toET(t.date as any) as any,
         position: 'belowBar' as const,
         color: '#e5c07b',
         shape: 'arrowUp' as const,
@@ -54,7 +71,7 @@ function buildMarkers(trades: Array<{ type: 'buy' | 'sell'; date: string; price:
     const pctStr = t.pnl_pct != null ? ` ${t.pnl_pct > 0 ? '+' : ''}${t.pnl_pct}%` : ''
     const label = t.stop_loss ? 'SL' : t.trailing_stop ? 'TSL' : 'S'
     return {
-      time: t.date as any,
+      time: toET(t.date as any) as any,
       position: 'aboveBar' as const,
       color,
       shape: 'arrowDown' as const,
@@ -81,12 +98,12 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
   // SPY/QQQ as real close prices on their own left axis
   const spyLineData = useMemo(() => {
     if (!spyData || spyData.length === 0) return []
-    return spyData.map(d => ({ time: d.time as any, value: d.close }))
+    return spyData.map(d => ({ time: toET(d.time as any) as any, value: d.close }))
   }, [spyData])
 
   const qqqLineData = useMemo(() => {
     if (!qqqData || qqqData.length === 0) return []
-    return qqqData.map(d => ({ time: d.time as any, value: d.close }))
+    return qqqData.map(d => ({ time: toET(d.time as any) as any, value: d.close }))
   }, [qqqData])
 
   const chartOptions = {
@@ -111,7 +128,7 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
       wickUpColor: UP, wickDownColor: DOWN,
       priceScaleId: 'right',
     })
-    candleSeries.setData(data.map(d => ({ ...d, time: d.time as any })))
+    candleSeries.setData(data.map(d => ({ ...d, time: toET(d.time as any) as any })))
     candleSeriesRef.current = candleSeries
 
     // SPY/QQQ as real close prices — each on its own left-side scale so
@@ -143,7 +160,7 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
       })
       volSeries.priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 }, visible: false })
       volSeries.setData(data.map(d => ({
-        time: d.time as any,
+        time: toET(d.time as any) as any,
         value: d.volume,
         color: d.close >= d.open ? '#26a64166' : '#f8514966',
       })))
@@ -199,7 +216,7 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
             segments.push(newSeg)
             current = newSeg
           }
-          current.pts.push({ time: pt.time as any, value: pt.value })
+          current.pts.push({ time: toET(pt.time as any) as any, value: pt.value })
         }
 
         let labeled = false
@@ -305,8 +322,8 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
       priceFormat: { type: 'price', precision: 4 },
     })
     histSeries.setData(histogram.map(d => d.value !== null
-      ? { time: d.time as any, value: d.value as number, color: d.value >= 0 ? UP : DOWN }
-      : { time: d.time as any }
+      ? { time: toET(d.time as any) as any, value: d.value as number, color: d.value >= 0 ? UP : DOWN }
+      : { time: toET(d.time as any) as any }
     ))
     macdSeriesRef.current = histSeries
 
@@ -365,8 +382,8 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
     if (len > 0) {
       const first = indicatorData.rsi[0].time
       const last = indicatorData.rsi[len - 1].time
-      chart.addSeries(LineSeries, { color: '#f85149', lineWidth: 1, lineStyle: 2 }).setData([{ time: first as any, value: 70 }, { time: last as any, value: 70 }])
-      chart.addSeries(LineSeries, { color: '#26a641', lineWidth: 1, lineStyle: 2 }).setData([{ time: first as any, value: 30 }, { time: last as any, value: 30 }])
+      chart.addSeries(LineSeries, { color: '#f85149', lineWidth: 1, lineStyle: 2 }).setData([{ time: toET(first as any) as any, value: 70 }, { time: toET(last as any) as any, value: 70 }])
+      chart.addSeries(LineSeries, { color: '#26a641', lineWidth: 1, lineStyle: 2 }).setData([{ time: toET(first as any) as any, value: 30 }, { time: toET(last as any) as any, value: 30 }])
     }
 
     if (trades && trades.length > 0) createSeriesMarkers(rsiLine, buildMarkers(trades, false))

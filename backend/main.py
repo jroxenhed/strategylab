@@ -28,3 +28,9 @@ app.include_router(backtest_router)
 app.include_router(search_router)
 app.include_router(providers_router)
 app.include_router(trading_router)
+
+
+@app.get("/api/cache")
+def get_cache_info():
+    from shared import cache_info
+    return cache_info()

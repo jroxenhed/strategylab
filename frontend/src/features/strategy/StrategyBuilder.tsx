@@ -32,7 +32,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [posSize, setPosSize] = useState(saved?.posSize ?? 100)
   const [stopLoss, setStopLoss] = useState<number | ''>(saved?.stopLoss ?? '')
   const [trailingEnabled, setTrailingEnabled] = useState<boolean>(saved?.trailingEnabled ?? false)
-  const [trailingConfig, setTrailingConfig] = useState<TrailingStopConfig>(saved?.trailingConfig ?? { type: 'pct', value: 5, source: 'high', activate_on_profit: false })
+  const [trailingConfig, setTrailingConfig] = useState<TrailingStopConfig>(saved?.trailingConfig ?? { type: 'pct', value: 5, source: 'high', activate_on_profit: false, activate_pct: 0 })
   const [slippage, setSlippage] = useState<number | ''>(saved?.slippage ?? '')
   const [commission, setCommission] = useState<number | ''>(saved?.commission ?? '')
   const [debug, setDebug] = useState(false)
@@ -161,8 +161,17 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             <div style={styles.settingsRow}>
               <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', width: 'auto' }}>
                 <input type="checkbox" checked={trailingConfig.activate_on_profit} onChange={e => setTrailingConfig(c => ({ ...c, activate_on_profit: e.target.checked }))} />
-                Activate on profit only
+                Activate after
               </label>
+              <input
+                type="number"
+                value={trailingConfig.activate_pct}
+                step={0.5} min={0}
+                disabled={!trailingConfig.activate_on_profit}
+                onChange={e => setTrailingConfig(c => ({ ...c, activate_pct: +e.target.value }))}
+                style={{ ...styles.settingsInput, width: 48, opacity: trailingConfig.activate_on_profit ? 1 : 0.35 }}
+              />
+              <span style={{ fontSize: 11, color: '#8b949e' }}>% profit</span>
             </div>
           </>)}
           <div style={styles.settingsRow}>

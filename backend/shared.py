@@ -1,6 +1,7 @@
 from typing import Protocol
 from fastapi import HTTPException
 import os
+import time
 import pandas as pd
 import yfinance as yf
 
@@ -62,8 +63,9 @@ _ALPACA_UNSUPPORTED = {'2m', '90m'}
 
 
 class AlpacaProvider:
-    def __init__(self, client):
+    def __init__(self, client, feed: str = 'sip'):
         self._client = client
+        self._feed = feed
 
     def fetch(self, ticker: str, start: str, end: str, interval: str) -> pd.DataFrame:
         if interval in _ALPACA_UNSUPPORTED:
@@ -73,6 +75,7 @@ class AlpacaProvider:
             )
 
         from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.enums import Adjustment
         interval_map = _get_alpaca_interval_map()
         timeframe = interval_map.get(interval)
         if timeframe is None:
@@ -81,11 +84,19 @@ class AlpacaProvider:
                 detail=f"Interval {interval} not supported by Alpaca"
             )
 
+        now = pd.Timestamp.now(tz='UTC')
+        end_ts = pd.Timestamp(end, tz='UTC')
+        # If end is today or in the future, use now so intraday bars aren't cut off at midnight UTC
+        if end_ts.date() >= now.date():
+            end_ts = now
+
         request = StockBarsRequest(
             symbol_or_symbols=ticker,
             timeframe=timeframe,
             start=pd.Timestamp(start, tz='UTC'),
-            end=pd.Timestamp(end, tz='UTC'),
+            end=end_ts,
+            feed=self._feed,
+            adjustment=Adjustment.SPLIT,
         )
 
         bars = self._client.get_stock_bars(request)
@@ -146,7 +157,8 @@ _providers: dict[str, DataProvider] = {"yahoo": YahooProvider()}
 
 _alpaca_client = _create_alpaca_client()
 if _alpaca_client is not None:
-    _providers["alpaca"] = AlpacaProvider(_alpaca_client)
+    _providers["alpaca"] = AlpacaProvider(_alpaca_client, feed='sip')
+    _providers["alpaca-iex"] = AlpacaProvider(_alpaca_client, feed='iex')
 
 
 def register_provider(name: str, provider: DataProvider) -> None:
@@ -157,8 +169,37 @@ def get_available_providers() -> list[str]:
     return list(_providers.keys())
 
 
+# ---------------------------------------------------------------------------
+# TTL cache for _fetch()
+# Historical data (end < today): 1 hour TTL — won't change.
+# Live intraday (end >= today):  2 min TTL — data is still moving.
+# ---------------------------------------------------------------------------
+_fetch_cache: dict[tuple, tuple[float, pd.DataFrame]] = {}
+_CACHE_MAX = 100
+_TTL_HISTORICAL = 3600.0
+_TTL_LIVE = 120.0
+
+
+def _fetch_ttl(end: str, interval: str) -> float:
+    from datetime import date
+    if interval in _INTRADAY_INTERVALS and end >= date.today().isoformat():
+        return _TTL_LIVE
+    return _TTL_HISTORICAL
+
+
+def _evict_cache() -> None:
+    """Remove expired entries; if still over limit, drop the oldest."""
+    now = time.monotonic()
+    expired = [k for k, (ts, _) in _fetch_cache.items() if now - ts > _fetch_ttl(k[2], k[3])]
+    for k in expired:
+        del _fetch_cache[k]
+    while len(_fetch_cache) >= _CACHE_MAX:
+        oldest = min(_fetch_cache, key=lambda k: _fetch_cache[k][0])
+        del _fetch_cache[oldest]
+
+
 def _fetch(ticker: str, start: str, end: str, interval: str, source: str = "yahoo") -> pd.DataFrame:
-    """Fetch OHLCV data from the specified provider.
+    """Fetch OHLCV data from the specified provider, with TTL caching.
 
     yf.download uses shared global state that corrupts data when called
     concurrently from FastAPI's thread pool — YahooProvider uses yf.Ticker instead.
@@ -166,7 +207,41 @@ def _fetch(ticker: str, start: str, end: str, interval: str, source: str = "yaho
     provider = _providers.get(source)
     if provider is None:
         raise HTTPException(status_code=400, detail=f"Unknown data source: {source}")
-    return provider.fetch(ticker, start, end, interval)
+
+    key = (ticker.upper(), start, end, interval, source)
+    now = time.monotonic()
+    ttl = _fetch_ttl(end, interval)
+
+    cached = _fetch_cache.get(key)
+    if cached and (now - cached[0]) < ttl:
+        age = round(now - cached[0])
+        print(f"[cache HIT]  {ticker} {interval} {start}→{end} [{source}]  age={age}s", flush=True)
+        return cached[1]
+
+    print(f"[cache MISS] {ticker} {interval} {start}→{end} [{source}]", flush=True)
+    df = provider.fetch(ticker, start, end, interval)
+
+    if len(_fetch_cache) >= _CACHE_MAX:
+        _evict_cache()
+    _fetch_cache[key] = (now, df)
+    return df
+
+
+def cache_info() -> dict:
+    """Return current cache stats — exposed via /api/cache for debugging."""
+    now = time.monotonic()
+    entries = []
+    for (ticker, start, end, interval, source), (ts, df) in _fetch_cache.items():
+        ttl = _fetch_ttl(end, interval)
+        entries.append({
+            "key": f"{ticker} {interval} {start}→{end} [{source}]",
+            "rows": len(df),
+            "age_s": round(now - ts),
+            "ttl_s": int(ttl),
+            "expires_in_s": max(0, round(ttl - (now - ts))),
+        })
+    entries.sort(key=lambda e: e["age_s"])
+    return {"count": len(entries), "max": _CACHE_MAX, "entries": entries}
 
 
 def _format_time(idx, interval: str):

@@ -10,6 +10,7 @@ class Rule(BaseModel):
     value: Optional[float] = None   # threshold (e.g. RSI < 30)
     param: Optional[str] = None     # e.g. "signal", "ema20"
     muted: bool = False
+    negated: bool = False
 
 
 def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series = None) -> dict[str, pd.Series]:
@@ -127,8 +128,15 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
 
 
 def eval_rules(rules: list[Rule], logic: str, indicators: dict[str, pd.Series], i: int) -> bool:
-    """Evaluate a list of rules with AND/OR logic."""
-    results = [eval_rule(r, indicators, i) for r in rules if not r.muted]
+    """Evaluate a list of rules with AND/OR logic. Negated rules are inverted,
+    except when i < 1 (no prior bar) where we always return False."""
+    results = []
+    for r in rules:
+        if r.muted:
+            continue
+        raw = eval_rule(r, indicators, i)
+        result = (not raw) if (r.negated and i >= 1) else raw
+        results.append(result)
     if not results:
         return False
     return all(results) if logic == "AND" else any(results)

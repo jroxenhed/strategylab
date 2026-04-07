@@ -46,6 +46,7 @@ export interface Rule {
   value?: number
   param?: string
   muted?: boolean
+  negated?: boolean
 }
 
 export interface TrailingStopConfig {
@@ -53,6 +54,7 @@ export interface TrailingStopConfig {
   value: number
   source: 'high' | 'close'
   activate_on_profit: boolean
+  activate_pct: number  // min profit % before trailing starts (0 = any profit)
 }
 
 export interface StrategyRequest {
@@ -140,4 +142,4 @@ export interface AppState {
   showQqq: boolean
 }
 
-export type DataSource = 'yahoo' | 'alpaca'
+export type DataSource = 'yahoo' | 'alpaca' | 'alpaca-iex'

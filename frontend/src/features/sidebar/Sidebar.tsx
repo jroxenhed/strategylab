@@ -52,6 +52,11 @@ export default function Sidebar({
 
   const { data: providers = ['yahoo'] } = useProviders()
 
+  const [localStart, setLocalStart] = useState(start)
+  const [localEnd, setLocalEnd] = useState(end)
+  useEffect(() => setLocalStart(start), [start])
+  useEffect(() => setLocalEnd(end), [end])
+
   const [query, setQuery] = useState('')
   const [showDropdown, setShowDropdown] = useState(false)
   const { data: searchResults } = useSearch(query)
@@ -101,7 +106,7 @@ export default function Sidebar({
         <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid #30363d' }}>
           {(['yahoo', 'alpaca'] as const).map(src => {
             const available = providers.includes(src)
-            const active = dataSource === src
+            const active = dataSource === src || (src === 'alpaca' && dataSource === 'alpaca-iex')
             return (
               <button
                 key={src}
@@ -125,17 +130,38 @@ export default function Sidebar({
             )
           })}
         </div>
+        {(dataSource === 'alpaca' || dataSource === 'alpaca-iex') && (
+          <label style={{ ...styles.checkRow, marginTop: 8, marginBottom: 0 }}>
+            <input
+              type="checkbox"
+              checked={dataSource === 'alpaca-iex'}
+              onChange={() => onDataSourceChange(dataSource === 'alpaca-iex' ? 'alpaca' : 'alpaca-iex')}
+              style={{ accentColor: '#58a6ff' }}
+            />
+            <span style={{ marginLeft: 8, fontSize: 12 }}>IEX feed <span style={{ color: '#3fb950' }}>(real-time)</span></span>
+          </label>
+        )}
       </div>
 
       <div style={styles.section}>
         <div style={styles.sectionTitle}>Date Range</div>
         <div style={styles.field}>
           <label style={styles.label}>From</label>
-          <input type="date" value={start} onChange={e => onStartChange(e.target.value)} style={styles.dateInput} />
+          <input
+            type="date" value={localStart} style={styles.dateInput}
+            onChange={e => setLocalStart(e.target.value)}
+            onBlur={e => onStartChange(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && onStartChange((e.target as HTMLInputElement).value)}
+          />
         </div>
         <div style={styles.field}>
           <label style={styles.label}>To</label>
-          <input type="date" value={end} onChange={e => onEndChange(e.target.value)} style={styles.dateInput} />
+          <input
+            type="date" value={localEnd} style={styles.dateInput}
+            onChange={e => setLocalEnd(e.target.value)}
+            onBlur={e => onEndChange(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && onEndChange((e.target as HTMLInputElement).value)}
+          />
         </div>
         <div style={styles.field}>
           <label style={styles.label}>Interval</label>
