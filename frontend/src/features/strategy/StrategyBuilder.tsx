@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Plus, Play } from 'lucide-react'
-import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig } from '../../shared/types'
+import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, SavedStrategy } from '../../shared/types'
 import RuleRow, { emptyRule, validateRules } from './RuleRow'
 import axios from 'axios'
 
@@ -16,12 +16,24 @@ interface Props {
 }
 
 const STRATEGY_STORAGE_KEY = 'strategylab-strategy'
+const SAVED_STRATEGIES_KEY = 'strategylab-saved-strategies'
 
 function loadStrategy() {
   try {
     const raw = localStorage.getItem(STRATEGY_STORAGE_KEY)
     return raw ? JSON.parse(raw) : null
   } catch { return null }
+}
+
+function loadSavedStrategies(): SavedStrategy[] {
+  try {
+    const raw = localStorage.getItem(SAVED_STRATEGIES_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch { return [] }
+}
+
+function persistSavedStrategies(strategies: SavedStrategy[]) {
+  localStorage.setItem(SAVED_STRATEGIES_KEY, JSON.stringify(strategies))
 }
 
 export default function StrategyBuilder({ ticker, start, end, interval, onResult, dataSource, settingsPortalId }: Props) {
@@ -50,6 +62,48 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [debug, setDebug] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [savedStrategies, setSavedStrategies] = useState<SavedStrategy[]>(loadSavedStrategies)
+  const [activeStrategyName, setActiveStrategyName] = useState<string | null>(null)
+  const [showSaveAs, setShowSaveAs] = useState(false)
+  const [saveAsName, setSaveAsName] = useState('')
+
+  function currentSnapshot(name: string): SavedStrategy {
+    return {
+      name, savedAt: new Date().toISOString(),
+      ticker, interval,
+      buyRules, sellRules, buyLogic, sellLogic,
+      capital, posSize, stopLoss,
+      trailingEnabled, trailingConfig, dynamicSizing, tradingHours,
+      slippage, commission,
+    }
+  }
+
+  function saveStrategy(name: string) {
+    const snap = currentSnapshot(name)
+    const updated = savedStrategies.filter(s => s.name !== name).concat(snap)
+    setSavedStrategies(updated)
+    persistSavedStrategies(updated)
+    setActiveStrategyName(name)
+    setShowSaveAs(false)
+    setSaveAsName('')
+  }
+
+  function loadSavedStrategy(s: SavedStrategy) {
+    setBuyRules(s.buyRules); setSellRules(s.sellRules)
+    setBuyLogic(s.buyLogic); setSellLogic(s.sellLogic)
+    setCapital(s.capital); setPosSize(s.posSize); setStopLoss(s.stopLoss)
+    setTrailingEnabled(s.trailingEnabled); setTrailingConfig(s.trailingConfig)
+    setDynamicSizing(s.dynamicSizing); setTradingHours(s.tradingHours)
+    setSlippage(s.slippage); setCommission(s.commission)
+    setActiveStrategyName(s.name)
+  }
+
+  function deleteStrategy(name: string) {
+    const updated = savedStrategies.filter(s => s.name !== name)
+    setSavedStrategies(updated)
+    persistSavedStrategies(updated)
+    if (activeStrategyName === name) setActiveStrategyName(null)
+  }
 
   // Portal target must be found after first DOM commit, not during render
   const [settingsTarget, setSettingsTarget] = useState<HTMLElement | null>(null)
@@ -236,6 +290,45 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
 
       {/* BUY / SELL rules + Run button */}
       <div style={styles.container}>
+        {/* Strategy save/load bar */}
+        <div style={styles.strategyBar}>
+          <select
+            value={activeStrategyName ?? ''}
+            onChange={e => {
+              const name = e.target.value
+              if (!name) { setActiveStrategyName(null); return }
+              const s = savedStrategies.find(s => s.name === name)
+              if (s) loadSavedStrategy(s)
+            }}
+            style={styles.strategySelect}
+          >
+            <option value="">Strategy: unsaved</option>
+            {savedStrategies.map(s => (
+              <option key={s.name} value={s.name}>{s.name}</option>
+            ))}
+          </select>
+          {activeStrategyName && (
+            <button onClick={() => saveStrategy(activeStrategyName)} style={styles.strategyBtn}>Save</button>
+          )}
+          <button onClick={() => { setShowSaveAs(true); setSaveAsName(activeStrategyName ?? '') }} style={styles.strategyBtn}>Save As</button>
+          {activeStrategyName && (
+            <button onClick={() => { if (confirm(`Delete "${activeStrategyName}"?`)) deleteStrategy(activeStrategyName) }} style={{ ...styles.strategyBtn, color: '#f85149' }}>Delete</button>
+          )}
+          {showSaveAs && (
+            <div style={styles.saveAsRow}>
+              <input
+                autoFocus
+                value={saveAsName}
+                onChange={e => setSaveAsName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && saveAsName.trim()) saveStrategy(saveAsName.trim()); if (e.key === 'Escape') setShowSaveAs(false) }}
+                placeholder="Strategy name"
+                style={styles.saveAsInput}
+              />
+              <button onClick={() => { if (saveAsName.trim()) saveStrategy(saveAsName.trim()) }} style={styles.strategyBtn}>OK</button>
+              <button onClick={() => setShowSaveAs(false)} style={styles.strategyBtn}>Cancel</button>
+            </div>
+          )}
+        </div>
         <div style={styles.panels}>
           {/* BUY */}
           <div style={styles.panel}>
@@ -291,6 +384,11 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
 
 const styles: Record<string, React.CSSProperties> = {
   container: { background: 'var(--bg-main)', borderTop: '1px solid var(--border-light)', paddingTop: 12, paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 },
+  strategyBar: { display: 'flex', alignItems: 'center', gap: 6, padding: '0 16px', flexWrap: 'wrap' as const },
+  strategySelect: { fontSize: 12, padding: '4px 8px', background: 'var(--bg-input)', color: 'var(--text-primary)', border: '1px solid var(--border-light)', borderRadius: 4, minWidth: 160 },
+  strategyBtn: { fontSize: 11, padding: '3px 10px', background: 'var(--bg-input)', color: 'var(--text-secondary)', border: '1px solid var(--border-light)', borderRadius: 4, cursor: 'pointer' },
+  saveAsRow: { display: 'flex', alignItems: 'center', gap: 4 },
+  saveAsInput: { fontSize: 12, padding: '4px 8px', background: 'var(--bg-input)', color: 'var(--text-primary)', border: '1px solid var(--border-light)', borderRadius: 4, width: 150 },
   panels: { display: 'flex', gap: 16, overflowX: 'auto', paddingBottom: 4, paddingLeft: 16, paddingRight: 16, alignItems: 'flex-start' },
   panel: { minWidth: 260, padding: '12px 14px', background: 'var(--bg-panel)', border: '1px solid var(--border-light)', borderRadius: 'var(--radius-md)' },
   settingsPanelInner: { display: 'flex', flexDirection: 'column', padding: 16, height: '100%', overflowY: 'auto' },

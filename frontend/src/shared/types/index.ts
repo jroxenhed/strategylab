@@ -91,6 +91,26 @@ export interface StrategyRequest {
   debug?: boolean
 }
 
+export interface SavedStrategy {
+  name: string
+  savedAt: string              // ISO date string
+  ticker?: string
+  interval?: string
+  buyRules: Rule[]
+  sellRules: Rule[]
+  buyLogic: 'AND' | 'OR'
+  sellLogic: 'AND' | 'OR'
+  capital: number
+  posSize: number
+  stopLoss: number | ''
+  trailingEnabled: boolean
+  trailingConfig: TrailingStopConfig
+  dynamicSizing: DynamicSizingConfig
+  tradingHours: TradingHoursConfig
+  slippage: number | ''
+  commission: number | ''
+}
+
 export interface Trade {
   type: 'buy' | 'sell'
   date: string | number
