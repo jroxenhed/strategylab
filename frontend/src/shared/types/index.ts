@@ -65,8 +65,8 @@ export interface DynamicSizingConfig {
 
 export interface TradingHoursConfig {
   enabled: boolean
-  start_hour: number      // ET hour (inclusive)
-  end_hour: number        // ET hour (exclusive)
+  start_time: string      // ET time e.g. "09:30"
+  end_time: string        // ET time e.g. "16:00"
   skip_hours: number[]    // specific ET hours to skip (e.g. [12] for lunch)
 }
 

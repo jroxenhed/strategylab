@@ -59,6 +59,7 @@ export default function Sidebar({
 
   const [query, setQuery] = useState('')
   const [showDropdown, setShowDropdown] = useState(false)
+  const [selectedIndex, setSelectedIndex] = useState(0)
   const { data: searchResults } = useSearch(query)
   const dropRef = useRef<HTMLDivElement>(null)
 
@@ -76,34 +77,52 @@ export default function Sidebar({
         <div style={styles.sectionTitle}>Ticker</div>
         <div style={{ position: 'relative' }} ref={dropRef}>
           <div style={styles.searchBox}>
-            <Search size={14} color="#8b949e" />
+            <Search size={14} color="var(--text-muted)" />
             <input
               style={styles.searchInput}
-              value={query || ticker}
-              onChange={e => { setQuery(e.target.value); setShowDropdown(true) }}
-              onFocus={() => { setQuery(''); setShowDropdown(true) }}
+              value={showDropdown ? query : ticker}
+              onChange={e => { setQuery(e.target.value); setShowDropdown(true); setSelectedIndex(0) }}
+              onFocus={() => { setQuery(''); setShowDropdown(true); setSelectedIndex(0) }}
+              onKeyDown={e => {
+                const maxIndex = (searchResults?.length || 1) - 1;
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setSelectedIndex(i => Math.min(i + 1, maxIndex));
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setSelectedIndex(i => Math.max(i - 1, 0));
+                } else if (e.key === 'Enter') {
+                  const target = (searchResults && searchResults.length > selectedIndex) ? searchResults[selectedIndex].symbol : query;
+                  if (target) {
+                    onTickerChange(target.toUpperCase());
+                    setQuery('');
+                    setShowDropdown(false);
+                  }
+                }
+              }}
               placeholder="Search ticker..."
             />
-            {query && <button onClick={() => setQuery('')}><X size={12} color="#8b949e" /></button>}
+            {query && <button onClick={() => setQuery('')}><X size={12} color="var(--text-muted)" /></button>}
           </div>
           {showDropdown && searchResults && searchResults.length > 0 && (
             <div style={styles.dropdown}>
-              {searchResults.map((r: any) => (
-                <div key={r.symbol} style={styles.dropdownItem}
+              {searchResults.map((r: any, i: number) => (
+                <div key={r.symbol} style={{ ...styles.dropdownItem, backgroundColor: i === selectedIndex ? 'var(--bg-panel-hover)' : 'transparent' }}
+                  onMouseEnter={() => setSelectedIndex(i)}
                   onClick={() => { onTickerChange(r.symbol); setQuery(''); setShowDropdown(false) }}>
-                  <span style={{ fontWeight: 600, color: '#58a6ff' }}>{r.symbol}</span>
-                  <span style={{ fontSize: 11, color: '#8b949e', marginLeft: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+                  <span style={{ fontWeight: 600, color: 'var(--accent-primary)' }}>{r.symbol}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
                 </div>
               ))}
             </div>
           )}
         </div>
-        <div style={{ marginTop: 8, fontSize: 18, fontWeight: 700, color: '#58a6ff' }}>{ticker}</div>
+        <div style={{ marginTop: 12, fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>{ticker}</div>
       </div>
 
       <div style={styles.section}>
         <div style={styles.sectionTitle}>Data Source</div>
-        <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', border: '1px solid #30363d' }}>
+        <div style={styles.segmentedToggle}>
           {(['yahoo', 'alpaca'] as const).map(src => {
             const available = providers.includes(src)
             const active = dataSource === src || (src === 'alpaca' && dataSource === 'alpaca-iex')
@@ -115,14 +134,17 @@ export default function Sidebar({
                 title={!available ? 'Set ALPACA_API_KEY in .env to enable' : undefined}
                 style={{
                   flex: 1,
-                  padding: '5px 0',
+                  padding: '6px 0',
                   fontSize: 12,
                   fontWeight: 600,
-                  background: active ? '#58a6ff' : '#0d1117',
-                  color: active ? '#000' : available ? '#e6edf3' : '#484f58',
+                  background: active ? 'var(--bg-panel-hover)' : 'transparent',
+                  color: active ? 'var(--text-primary)' : available ? 'var(--text-secondary)' : 'var(--text-muted)',
                   border: 'none',
+                  borderRadius: 'var(--radius-sm)',
                   cursor: available ? 'pointer' : 'not-allowed',
                   opacity: available ? 1 : 0.5,
+                  transition: 'all 0.2s',
+                  boxShadow: active ? 'var(--shadow-sm)' : 'none',
                 }}
               >
                 {src.charAt(0).toUpperCase() + src.slice(1)}
@@ -131,14 +153,13 @@ export default function Sidebar({
           })}
         </div>
         {(dataSource === 'alpaca' || dataSource === 'alpaca-iex') && (
-          <label style={{ ...styles.checkRow, marginTop: 8, marginBottom: 0 }}>
+          <label style={{ ...styles.checkRow, marginTop: 12, marginBottom: 0 }}>
             <input
               type="checkbox"
               checked={dataSource === 'alpaca-iex'}
               onChange={() => onDataSourceChange(dataSource === 'alpaca-iex' ? 'alpaca' : 'alpaca-iex')}
-              style={{ accentColor: '#58a6ff' }}
             />
-            <span style={{ marginLeft: 8, fontSize: 12 }}>IEX feed <span style={{ color: '#3fb950' }}>(real-time)</span></span>
+            <span style={{ marginLeft: 8, fontSize: 12 }}>IEX feed <span style={{ color: 'var(--accent-green)' }}>(real-time)</span></span>
           </label>
         )}
       </div>
@@ -176,7 +197,7 @@ export default function Sidebar({
             <option value="1mo">Monthly</option>
           </select>
           {showIntervalWarning && (
-            <div style={{ fontSize: 11, color: '#f0883e', marginTop: 6, lineHeight: 1.4 }}>
+            <div style={{ fontSize: 11, color: 'var(--accent-orange)', marginTop: 8, lineHeight: 1.4 }}>
               {interval} data only supports {intervalLimit} days of history. Your range is {daysDiff} days — shorten the From date.
             </div>
           )}
@@ -191,7 +212,6 @@ export default function Sidebar({
               type="checkbox"
               checked={activeIndicators.includes(key)}
               onChange={() => onToggleIndicator(key)}
-              style={{ accentColor: '#58a6ff' }}
             />
             <span style={{ marginLeft: 8 }}>{label}</span>
           </label>
@@ -201,15 +221,15 @@ export default function Sidebar({
       <div style={styles.section}>
         <div style={styles.sectionTitle}>Compare</div>
         <label style={styles.checkRow}>
-          <input type="checkbox" checked={showSpy} onChange={onToggleSpy} style={{ accentColor: '#f0883e' }} />
-          <span style={{ marginLeft: 8, color: '#f0883e' }}>SPY</span>
+          <input type="checkbox" checked={showSpy} onChange={onToggleSpy} style={{ accentColor: 'var(--accent-orange)' }} />
+          <span style={{ marginLeft: 8, color: 'var(--accent-orange)' }}>SPY</span>
         </label>
         <label style={styles.checkRow}>
-          <input type="checkbox" checked={showQqq} onChange={onToggleQqq} style={{ accentColor: '#a371f7' }} />
-          <span style={{ marginLeft: 8, color: '#a371f7' }}>QQQ</span>
+          <input type="checkbox" checked={showQqq} onChange={onToggleQqq} style={{ accentColor: 'var(--accent-purple)' }} />
+          <span style={{ marginLeft: 8, color: 'var(--accent-purple)' }}>QQQ</span>
         </label>
         {(showSpy || showQqq) && (
-          <div style={{ fontSize: 11, color: '#8b949e', marginTop: 4 }}>% change from start (left axis)</div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>% change from start</div>
         )}
       </div>
     </aside>
@@ -218,23 +238,23 @@ export default function Sidebar({
 
 const styles: Record<string, React.CSSProperties> = {
   sidebar: {
-    width: 220,
-    minWidth: 220,
-    background: '#161b22',
-    borderRight: '1px solid #30363d',
+    height: '100%',
+    background: 'var(--bg-main)',
+    borderRight: '1px solid var(--border-light)',
     overflowY: 'auto',
     display: 'flex',
     flexDirection: 'column',
     gap: 0,
   },
-  section: { padding: '14px 12px', borderBottom: '1px solid #21262d' },
-  sectionTitle: { fontSize: 11, fontWeight: 600, color: '#8b949e', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 },
-  searchBox: { display: 'flex', alignItems: 'center', gap: 6, background: '#0d1117', border: '1px solid #30363d', borderRadius: 6, padding: '5px 8px' },
-  searchInput: { background: 'none', border: 'none', outline: 'none', color: '#e6edf3', flex: 1, fontSize: 13, padding: 0 },
-  dropdown: { position: 'absolute', top: '100%', left: 0, right: 0, background: '#161b22', border: '1px solid #30363d', borderRadius: 6, zIndex: 100, maxHeight: 220, overflowY: 'auto' },
-  dropdownItem: { padding: '7px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center', fontSize: 13 },
-  field: { marginBottom: 8 },
-  label: { display: 'block', fontSize: 11, color: '#8b949e', marginBottom: 3 },
-  dateInput: { width: '100%', fontSize: 12 },
-  checkRow: { display: 'flex', alignItems: 'center', marginBottom: 8, cursor: 'pointer', fontSize: 13 },
+  section: { padding: '16px 20px', borderBottom: '1px solid var(--border-light)' },
+  sectionTitle: { fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 16 },
+  searchBox: { display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg-input)', border: '1px solid var(--border-light)', borderRadius: 'var(--radius-md)', padding: '8px 12px', transition: 'border-color 0.2s' },
+  searchInput: { background: 'none', border: 'none', outline: 'none', color: 'var(--text-primary)', flex: 1, fontSize: 13, padding: 0 },
+  dropdown: { position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, background: 'var(--bg-panel)', border: '1px solid var(--border-light)', borderRadius: 'var(--radius-md)', zIndex: 100, maxHeight: 220, overflowY: 'auto', boxShadow: 'var(--shadow-md)' },
+  dropdownItem: { padding: '10px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', fontSize: 13, borderBottom: '1px solid var(--border-light)' },
+  segmentedToggle: { display: 'flex', borderRadius: 'var(--radius-md)', background: 'var(--bg-input)', padding: 4, gap: 2 },
+  field: { marginBottom: 12 },
+  label: { display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6, fontWeight: 500 },
+  dateInput: { width: '100%', fontSize: 13, padding: '8px 12px' },
+  checkRow: { display: 'flex', alignItems: 'center', marginBottom: 10, cursor: 'pointer', fontSize: 13, color: 'var(--text-primary)' },
 }

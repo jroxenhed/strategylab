@@ -27,8 +27,8 @@ class DynamicSizingConfig(BaseModel):
 
 class TradingHoursConfig(BaseModel):
     enabled: bool = False
-    start_hour: int = 9             # ET hour (inclusive)
-    end_hour: int = 16              # ET hour (exclusive)
+    start_time: str = "09:30"
+    end_time: str = "16:00"
     skip_hours: list[int] = []      # specific ET hours to skip (e.g. [12] for lunch)
 
 
@@ -113,12 +113,14 @@ def run_backtest(req: StrategyRequest):
             if is_intraday and th and th.enabled:
                 bar_dt = df.index[i]
                 if bar_dt.tzinfo is not None:
-                    et_hour = bar_dt.astimezone(pd.Timestamp.now(tz="America/New_York").tzinfo).hour
+                    et_time = bar_dt.astimezone(pd.Timestamp.now(tz="America/New_York").tzinfo)
                 else:
-                    et_hour = pd.Timestamp(bar_dt, tz="UTC").tz_convert("America/New_York").hour
-                if et_hour < th.start_hour or et_hour >= th.end_hour:
+                    et_time = pd.Timestamp(bar_dt, tz="UTC").tz_convert("America/New_York")
+                
+                et_time_str = et_time.strftime("%H:%M")
+                if et_time_str < th.start_time or et_time_str >= th.end_time:
                     hour_ok = False
-                if et_hour in th.skip_hours:
+                if et_time.hour in th.skip_hours:
                     hour_ok = False
 
             if position == 0 and hour_ok and eval_rules(req.buy_rules, req.buy_logic, indicators, i):

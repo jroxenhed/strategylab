@@ -1,19 +1,127 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  /* Colors */
+  --bg-main: #0B0E14;      /* Deep dark background */
+  --bg-panel: #151821;     /* Slightly lighter for panels */
+  --bg-panel-hover: #1E222D; /* Hover background */
+  --bg-input: #0A0C10;     /* Darker inputs */
+  
+  --border-light: rgba(255, 255, 255, 0.08); /* Soft borders */
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --border-focus: #3B82F6;
+  
+  --text-primary: #ECEFF4;
+  --text-secondary: #94A0B8;
+  --text-muted: #64748B;
+  
+  /* Brand / Accents */
+  --accent-primary: #3B82F6;  /* Blue */
+  --accent-hover: #60A5FA;
+  --accent-green: #10B981;
+  --accent-green-bg: rgba(16, 185, 129, 0.1);
+  --accent-red: #EF4444;
+  --accent-red-bg: rgba(239, 68, 68, 0.1);
+  --accent-purple: #8B5CF6;
+  --accent-orange: #F59E0B;
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -2px rgba(0, 0, 0, 0.2);
+  
+  /* Layout */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: #0d1117;
-  color: #e6edf3;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg-main);
+  color: var(--text-primary);
   height: 100vh;
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
 }
 
 #root { height: 100vh; display: flex; flex-direction: column; }
 
+/* Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #161b22; }
-::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+::-webkit-scrollbar-track { background: var(--bg-main); }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
-button { cursor: pointer; border: none; background: none; color: inherit; font-family: inherit; font-size: inherit; }
-input, select { font-family: inherit; font-size: inherit; background: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 6px 10px; outline: none; }
-input:focus, select:focus { border-color: #58a6ff; }
+/* Globals */
+button { 
+  cursor: pointer; 
+  border: none; 
+  background: none; 
+  color: inherit; 
+  font-family: inherit; 
+  font-size: inherit; 
+  transition: all 0.2s ease;
+}
+
+input, select { 
+  font-family: inherit; 
+  font-size: inherit; 
+  background: var(--bg-input); 
+  color: var(--text-primary); 
+  border: 1px solid var(--border-light); 
+  border-radius: var(--radius-md); 
+  padding: 6px 10px; 
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+input:focus, select:focus { 
+  border-color: var(--border-focus); 
+  box-shadow: 0 0 0 1px var(--border-focus);
+}
+
+input[type="checkbox"] {
+  accent-color: var(--accent-primary);
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+/* Resizable panel handles (react-resizable-panels v4) */
+.resize-handle-v {
+  width: 4px;
+  background: var(--border-light);
+  cursor: col-resize;
+  transition: background 0.15s ease;
+  flex-shrink: 0;
+  z-index: 10;
+}
+.resize-handle-v:hover,
+.resize-handle-v[data-active] {
+  background: var(--accent-primary);
+}
+
+.resize-handle-h {
+  height: 4px;
+  background: var(--border-light);
+  cursor: row-resize;
+  transition: background 0.15s ease;
+  flex-shrink: 0;
+  z-index: 10;
+}
+.resize-handle-h:hover,
+.resize-handle-h[data-active] {
+  background: var(--accent-primary);
+}
+
+/* Panel containers */
+.panel-fill {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}

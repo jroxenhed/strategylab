@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
+import { Group, Panel, Separator } from 'react-resizable-panels'
 import type { BacktestResult, IndicatorKey, DataSource } from './shared/types'
 import { useOHLCV, useIndicators } from './shared/hooks/useOHLCV'
 import Sidebar from './features/sidebar/Sidebar'
@@ -33,7 +34,6 @@ export default function App() {
   const [dataSource, setDataSource] = useState<DataSource>((saved?.dataSource as DataSource) ?? 'yahoo')
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null)
   const [activeTab, setActiveTab] = useState<AppTab>('chart')
-  const [showChart, setShowChart] = useState(true)
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -67,10 +67,7 @@ export default function App() {
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              style={{
-                ...styles.tab,
-                ...(activeTab === tab ? styles.tabActive : {}),
-              }}
+              style={{ ...styles.tab, ...(activeTab === tab ? styles.tabActive : {}) }}
             >
               {tab === 'chart' ? 'Chart' : 'Paper Trading'}
             </button>
@@ -81,71 +78,94 @@ export default function App() {
         </span>
       </header>
 
-      {/* Main area */}
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+      {/* Main area — calc height required for react-resizable-panels v4 */}
+      <div style={{ height: 'calc(100vh - 56px)' }}>
         {activeTab === 'chart' ? (
-          <>
-            <Sidebar
-              ticker={ticker}
-              start={start}
-              end={end}
-              interval={interval}
-              activeIndicators={activeIndicators}
-              showSpy={showSpy}
-              showQqq={showQqq}
-              onTickerChange={t => { setTicker(t); setBacktestResult(null) }}
-              onStartChange={d => { if (d > end) { setStart(end); setEnd(d) } else { setStart(d) } }}
-              onEndChange={d => { if (d < start) { setEnd(start); setStart(d) } else { setEnd(d) } }}
-              onIntervalChange={setInterval}
-              onToggleIndicator={toggleIndicator}
-              onToggleSpy={() => setShowSpy(v => !v)}
-              onToggleQqq={() => setShowQqq(v => !v)}
-              dataSource={dataSource}
-              onDataSourceChange={setDataSource}
-            />
+          <Group orientation="horizontal" style={{ height: '100%' }}>
 
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              {/* Chart toggle bar */}
-              <div style={styles.chartToggleBar}>
-                <button onClick={() => setShowChart(v => !v)} style={styles.chartToggleBtn}>
-                  {showChart ? '▾ Hide Chart' : '▸ Show Chart'}
-                </button>
-              </div>
-
-              {/* Chart */}
-              <div style={{ flex: showChart ? 1 : 0, overflow: 'hidden', display: showChart ? 'block' : 'none' }}>
-                {ohlcv.length > 0 ? (
-                  <Chart
-                    ticker={ticker}
-                    data={ohlcv}
-                    spyData={showSpy ? (spyData ?? []) : undefined}
-                    qqqData={showQqq ? (qqqData ?? []) : undefined}
-                    showSpy={showSpy}
-                    showQqq={showQqq}
-                    indicatorData={indicatorData}
-                    activeIndicators={activeIndicators}
-                    trades={trades}
-                    emaOverlays={emaOverlays}
-                  />
-                ) : (
-                  <div style={styles.empty}>Loading {ticker}...</div>
-                )}
-              </div>
-
-              {/* Strategy builder */}
-              <StrategyBuilder
+            {/* LEFT SIDEBAR */}
+            <Panel defaultSize="14%" minSize="8%">
+              <Sidebar
                 ticker={ticker}
                 start={start}
                 end={end}
                 interval={interval}
-                onResult={setBacktestResult}
+                activeIndicators={activeIndicators}
+                showSpy={showSpy}
+                showQqq={showQqq}
+                onTickerChange={t => { setTicker(t); setBacktestResult(null) }}
+                onStartChange={d => { if (d > end) { setStart(end); setEnd(d) } else { setStart(d) } }}
+                onEndChange={d => { if (d < start) { setEnd(start); setStart(d) } else { setEnd(d) } }}
+                onIntervalChange={setInterval}
+                onToggleIndicator={toggleIndicator}
+                onToggleSpy={() => setShowSpy(v => !v)}
+                onToggleQqq={() => setShowQqq(v => !v)}
                 dataSource={dataSource}
+                onDataSourceChange={setDataSource}
               />
+            </Panel>
 
-              {/* Results */}
-              {backtestResult && <Results result={backtestResult} />}
-            </div>
-          </>
+            <Separator className="resize-handle-v" />
+
+            {/* CENTER COLUMN */}
+            <Panel defaultSize="66%" minSize="30%">
+              <div style={{ height: '100%', overflow: 'hidden' }}>
+                <Group orientation="vertical" style={{ height: '100%' }}>
+
+                  {/* CHART */}
+                  <Panel defaultSize="58%" minSize="15%">
+                    <div className="panel-fill">
+                      {ohlcv.length > 0 ? (
+                        <Chart
+                          ticker={ticker}
+                          data={ohlcv}
+                          spyData={showSpy ? (spyData ?? []) : undefined}
+                          qqqData={showQqq ? (qqqData ?? []) : undefined}
+                          showSpy={showSpy}
+                          showQqq={showQqq}
+                          indicatorData={indicatorData}
+                          activeIndicators={activeIndicators}
+                          trades={trades}
+                          emaOverlays={emaOverlays}
+                        />
+                      ) : (
+                        <div style={styles.empty}>Loading {ticker}...</div>
+                      )}
+                    </div>
+                  </Panel>
+
+                  <Separator className="resize-handle-h" />
+
+                  {/* BOTTOM PANE: Strategy rules + Results */}
+                  <Panel defaultSize="42%" minSize="12%" collapsible>
+                    <div style={{ height: '100%', overflowY: 'auto', display: 'flex', flexDirection: 'column', background: 'var(--bg-main)' }}>
+                      <StrategyBuilder
+                        ticker={ticker}
+                        start={start}
+                        end={end}
+                        interval={interval}
+                        onResult={setBacktestResult}
+                        dataSource={dataSource}
+                        settingsPortalId="strategy-settings-portal"
+                      />
+                      {backtestResult && <Results result={backtestResult} />}
+                    </div>
+                  </Panel>
+
+                </Group>
+              </div>
+            </Panel>
+
+            <Separator className="resize-handle-v" />
+
+            {/* RIGHT SIDEBAR: Settings portal target */}
+            <Panel defaultSize="20%" minSize="12%" collapsible>
+              <div style={styles.rightPanel}>
+                <div id="strategy-settings-portal" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }} />
+              </div>
+            </Panel>
+
+          </Group>
         ) : (
           <PaperTrading />
         )}
@@ -157,28 +177,28 @@ export default function App() {
 const styles: Record<string, React.CSSProperties> = {
   header: {
     display: 'flex', alignItems: 'center', gap: 16,
-    padding: '0 16px', height: 44,
-    background: '#161b22', borderBottom: '1px solid #30363d',
-    flexShrink: 0,
+    padding: '0 20px', height: 56,
+    background: 'var(--bg-panel)', borderBottom: '1px solid var(--border-light)',
+    flexShrink: 0, boxShadow: 'var(--shadow-sm)', zIndex: 10,
   },
-  logo: { fontWeight: 700, fontSize: 16, color: '#58a6ff', letterSpacing: '-0.02em' },
-  tabs: { display: 'flex', gap: 4 },
+  logo: { fontWeight: 800, fontSize: 18, color: 'var(--accent-primary)', letterSpacing: '-0.03em' },
+  tabs: { display: 'flex', gap: 4, background: 'var(--bg-input)', padding: 4, borderRadius: 'var(--radius-md)' },
   tab: {
-    fontSize: 12, padding: '4px 12px', borderRadius: 6,
-    background: 'transparent', color: '#8b949e', border: '1px solid transparent',
-    cursor: 'pointer', fontWeight: 500,
+    fontSize: 13, padding: '6px 16px', borderRadius: 'var(--radius-sm)',
+    background: 'transparent', color: 'var(--text-secondary)',
+    cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s ease', border: 'none',
   },
   tabActive: {
-    background: '#21262d', color: '#e6edf3', border: '1px solid #30363d',
+    background: 'var(--bg-panel-hover)', color: 'var(--text-primary)',
+    boxShadow: 'var(--shadow-sm)',
   },
-  empty: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8b949e', fontSize: 14 },
-  chartToggleBar: {
-    display: 'flex', alignItems: 'center',
-    padding: '2px 8px', background: '#161b22', borderBottom: '1px solid #21262d',
-    flexShrink: 0,
-  },
-  chartToggleBtn: {
-    fontSize: 11, color: '#8b949e', background: 'none', border: 'none',
-    cursor: 'pointer', padding: '2px 4px', fontWeight: 500,
+  empty: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 14 },
+  rightPanel: {
+    height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    background: 'var(--bg-main)',
+    borderLeft: '1px solid var(--border-light)',
+    overflow: 'hidden',
   },
 }

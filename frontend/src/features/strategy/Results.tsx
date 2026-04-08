@@ -188,7 +188,7 @@ const styles: Record<string, React.CSSProperties> = {
   container: {
     display: 'flex', flexDirection: 'column',
     background: '#161b22', borderTop: '1px solid #30363d',
-    height: 220, flexShrink: 0,
+    flex: 1, minHeight: 0,
   },
   tabBar: { display: 'flex', borderBottom: '1px solid #30363d', flexShrink: 0 },
   tab: {
