@@ -67,7 +67,7 @@ export interface TradingHoursConfig {
   enabled: boolean
   start_time: string      // ET time e.g. "09:30"
   end_time: string        // ET time e.g. "16:00"
-  skip_hours: number[]    // specific ET hours to skip (e.g. [12] for lunch)
+  skip_ranges: string[]   // ET time ranges to skip, e.g. ["12:00-13:00", "15:45-16:00"]
 }
 
 export interface StrategyRequest {

@@ -37,11 +37,13 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [trailingConfig, setTrailingConfig] = useState<TrailingStopConfig>(saved?.trailingConfig ?? { type: 'pct', value: 5, source: 'high', activate_on_profit: false, activate_pct: 0 })
   const [dynamicSizing, setDynamicSizing] = useState<DynamicSizingConfig>(saved?.dynamicSizing ?? { enabled: false, consec_sls: 2, reduced_pct: 25 })
   const [tradingHours, setTradingHours] = useState<TradingHoursConfig>(() => {
-    let th = saved?.tradingHours
-    if (th && typeof th.start_hour === 'number') {
-      th = { enabled: th.enabled, start_time: th.start_hour < 10 ? `0${th.start_hour}:00` : `${th.start_hour}:00`, end_time: th.end_hour < 10 ? `0${th.end_hour}:00` : `${th.end_hour}:00`, skip_hours: th.skip_hours }
-    }
-    return th ?? { enabled: false, start_time: '09:30', end_time: '16:00', skip_hours: [] }
+    const th = saved?.tradingHours
+    if (!th) return { enabled: false, start_time: '08:30', end_time: '16:00', skip_ranges: [] }
+    // Migrate old formats
+    const start = typeof th.start_hour === 'number' ? `${String(th.start_hour).padStart(2,'0')}:00` : (th.start_time ?? '08:30')
+    const end = typeof th.end_hour === 'number' ? `${String(th.end_hour).padStart(2,'0')}:00` : (th.end_time ?? '16:00')
+    const ranges = th.skip_ranges ?? (th.skip_hours ? (th.skip_hours as number[]).map((h: number) => `${String(h).padStart(2,'0')}:00-${String(h+1).padStart(2,'0')}:00`) : [])
+    return { enabled: th.enabled, start_time: start, end_time: end, skip_ranges: ranges }
   })
   const [slippage, setSlippage] = useState<number | ''>(saved?.slippage ?? '')
   const [commission, setCommission] = useState<number | ''>(saved?.commission ?? '')
@@ -199,18 +201,21 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
           {tradingHours.enabled && (
             <div style={{ paddingLeft: 12, borderLeft: '2px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={styles.settingsRow}>
-                <label style={styles.settingsLabel}>Window (ET)</label>
-                <input type="time" value={tradingHours.start_time} onChange={e => setTradingHours(c => ({ ...c, start_time: e.target.value }))} style={{ ...styles.settingsInput, width: 115 }} />
-                <span style={{ fontSize: 11, color: '#8b949e' }}>–</span>
-                <input type="time" value={tradingHours.end_time} onChange={e => setTradingHours(c => ({ ...c, end_time: e.target.value }))} style={{ ...styles.settingsInput, width: 115 }} />
+                <label style={styles.settingsLabel}>Window</label>
+                <input type="text" value={`${tradingHours.start_time}-${tradingHours.end_time}`} placeholder="08:30-16:00" onChange={e => {
+                  const parts = e.target.value.split('-', 2)
+                  if (parts.length === 2) {
+                    setTradingHours(c => ({ ...c, start_time: parts[0].trim(), end_time: parts[1].trim() }))
+                  }
+                }} style={{ ...styles.settingsInput, width: 100 }} />
+                <span style={{ fontSize: 11, color: '#8b949e' }}>ET</span>
               </div>
               <div style={styles.settingsRow}>
-                <label style={styles.settingsLabel}>Skip hours</label>
-                <input type="text" value={tradingHours.skip_hours.join(',')} placeholder="e.g. 12,15" onChange={e => {
-                  const hours = e.target.value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n) && n >= 0 && n <= 23)
-                  setTradingHours(c => ({ ...c, skip_hours: hours }))
-                }} style={{ ...styles.settingsInput, width: 80 }} />
-                <span style={{ fontSize: 11, color: '#8b949e' }}>ET</span>
+                <label style={styles.settingsLabel}>Skip</label>
+                <input type="text" value={tradingHours.skip_ranges.join(', ')} placeholder="e.g. 12:00-13:00, 15:45-16:00" onChange={e => {
+                  const ranges = e.target.value.split(',').map(s => s.trim()).filter(s => s.length > 0)
+                  setTradingHours(c => ({ ...c, skip_ranges: ranges }))
+                }} style={{ ...styles.settingsInput, width: 180 }} />
               </div>
             </div>
           )}

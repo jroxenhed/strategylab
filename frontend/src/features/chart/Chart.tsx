@@ -21,6 +21,7 @@ interface ChartProps {
   activeIndicators: IndicatorKey[]
   trades?: Array<{ type: 'buy' | 'sell'; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean; trailing_stop?: boolean }>
   emaOverlays?: EMAOverlay[]
+  onChartReady?: (chart: IChartApi | null) => void
 }
 
 const CHART_BG = '#0d1117'
@@ -80,7 +81,7 @@ function buildMarkers(trades: Array<{ type: 'buy' | 'sell'; date: string; price:
   })
 }
 
-export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq, indicatorData, activeIndicators, trades, emaOverlays }: ChartProps) {
+export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq, indicatorData, activeIndicators, trades, emaOverlays, onChartReady }: ChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const macdChartRef = useRef<IChartApi | null>(null)
@@ -121,6 +122,7 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
 
     const chart = createChart(containerRef.current, { ...chartOptions, height: containerRef.current.clientHeight })
     chartRef.current = chart
+    onChartReady?.(chart)
 
     // Candlesticks always on right axis
     const candleSeries = chart.addSeries(CandlestickSeries, {
@@ -303,6 +305,7 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
       clearTimeout(alignTimer)
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(syncHandler)
       chart.unsubscribeCrosshairMove(crosshairHandler)
+      onChartReady?.(null)
       chart.remove()
       candleSeriesRef.current = null
       ro.disconnect()

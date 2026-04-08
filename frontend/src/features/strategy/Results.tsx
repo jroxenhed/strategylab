@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { createChart, LineSeries, ColorType } from 'lightweight-charts'
+import { createChart, BaselineSeries, ColorType } from 'lightweight-charts'
+import type { IChartApi } from 'lightweight-charts'
 import type { BacktestResult, SignalTraceEntry } from '../../shared/types'
 
 type Tab = 'summary' | 'equity' | 'trades' | 'trace'
@@ -15,9 +16,10 @@ function fmtDate(d: string | number | undefined): string {
 
 interface Props {
   result: BacktestResult
+  mainChart?: IChartApi | null
 }
 
-export default function Results({ result }: Props) {
+export default function Results({ result, mainChart }: Props) {
   const { summary, trades, equity_curve, signal_trace } = result
   const [activeTab, setActiveTab] = useState<Tab>('summary')
   const chartRef = useRef<HTMLDivElement>(null)
@@ -32,8 +34,15 @@ export default function Results({ result }: Props) {
       timeScale: { borderColor: '#30363d' },
       rightPriceScale: { borderColor: '#30363d' },
     })
-    const series = chart.addSeries(LineSeries, {
-      color: summary.total_return_pct >= 0 ? '#26a641' : '#f85149',
+    const initialCapital = equity_curve.length > 0 && equity_curve[0].value !== null ? equity_curve[0].value : 10000
+    const series = chart.addSeries(BaselineSeries, {
+      baseValue: { type: 'price', price: initialCapital as number },
+      topLineColor: '#26a641',
+      bottomLineColor: '#f85149',
+      topFillColor1: 'rgba(38, 166, 65, 0.1)',
+      topFillColor2: 'rgba(38, 166, 65, 0)',
+      bottomFillColor1: 'rgba(248, 81, 73, 0)',
+      bottomFillColor2: 'rgba(248, 81, 73, 0.1)',
       lineWidth: 2,
     })
     series.setData(
@@ -41,13 +50,61 @@ export default function Results({ result }: Props) {
         .filter(d => d.value !== null)
         .map(d => ({ time: d.time as any, value: d.value as number }))
     )
-    chart.timeScale().fitContent()
+
+    // Initial alignment: match main chart's visible range, or fit content as fallback
+    if (mainChart) {
+      const range = mainChart.timeScale().getVisibleLogicalRange()
+      if (range) {
+        chart.timeScale().setVisibleLogicalRange(range)
+      } else {
+        chart.timeScale().fitContent()
+      }
+    } else {
+      chart.timeScale().fitContent()
+    }
+
+    // Bidirectional scroll/zoom sync with main chart
+    let syncing = false
+    const onMainRangeChange = (range: any) => {
+      if (syncing || !range) return
+      syncing = true
+      chart.timeScale().setVisibleLogicalRange(range)
+      syncing = false
+    }
+    const onEquityRangeChange = (range: any) => {
+      if (syncing || !range || !mainChart) return
+      syncing = true
+      mainChart.timeScale().setVisibleLogicalRange(range)
+      syncing = false
+    }
+    // One-way crosshair sync: main → equity
+    const onMainCrosshairMove = (param: any) => {
+      if (param.time) {
+        chart.setCrosshairPosition(NaN, param.time, series)
+      } else {
+        chart.clearCrosshairPosition()
+      }
+    }
+
+    if (mainChart) {
+      mainChart.timeScale().subscribeVisibleLogicalRangeChange(onMainRangeChange)
+      chart.timeScale().subscribeVisibleLogicalRangeChange(onEquityRangeChange)
+      mainChart.subscribeCrosshairMove(onMainCrosshairMove)
+    }
+
     const ro = new ResizeObserver(() => {
-      if (chartRef.current) chart.applyOptions({ width: chartRef.current.clientWidth })
+      if (chartRef.current) chart.applyOptions({ width: chartRef.current.clientWidth, height: chartRef.current.clientHeight })
     })
     ro.observe(chartRef.current)
-    return () => { chart.remove(); ro.disconnect() }
-  }, [activeTab, equity_curve, summary.total_return_pct])
+    return () => {
+      if (mainChart) {
+        mainChart.timeScale().unsubscribeVisibleLogicalRangeChange(onMainRangeChange)
+        mainChart.unsubscribeCrosshairMove(onMainCrosshairMove)
+      }
+      chart.remove()
+      ro.disconnect()
+    }
+  }, [activeTab, equity_curve, summary.total_return_pct, mainChart])
 
   return (
     <div style={styles.container}>
@@ -83,7 +140,7 @@ export default function Results({ result }: Props) {
       )}
 
       {activeTab === 'equity' && (
-        <div ref={chartRef} style={{ flex: 1, width: '100%' }} />
+        <div ref={chartRef} style={{ width: '100%', height: 200, minHeight: 100, maxHeight: 600, resize: 'vertical', overflow: 'hidden' }} />
       )}
 
       {activeTab === 'trades' && (

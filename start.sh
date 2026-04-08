@@ -2,10 +2,11 @@
 set -e
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+export PATH="/opt/homebrew/bin:$PATH"
 
 echo "Starting backend..."
 cd "$ROOT/backend"
-../venv/bin/uvicorn main:app --reload --port 8000 &
+venv/bin/uvicorn main:app --reload --port 8000 &
 BACKEND_PID=$!
 
 echo "Starting frontend..."

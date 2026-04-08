@@ -29,7 +29,7 @@ class TradingHoursConfig(BaseModel):
     enabled: bool = False
     start_time: str = "09:30"
     end_time: str = "16:00"
-    skip_hours: list[int] = []      # specific ET hours to skip (e.g. [12] for lunch)
+    skip_ranges: list[str] = []     # ET time ranges to skip, e.g. ["12:00-13:00", "15:45-16:00"]
 
 
 class StrategyRequest(BaseModel):
@@ -116,12 +116,16 @@ def run_backtest(req: StrategyRequest):
                     et_time = bar_dt.astimezone(pd.Timestamp.now(tz="America/New_York").tzinfo)
                 else:
                     et_time = pd.Timestamp(bar_dt, tz="UTC").tz_convert("America/New_York")
-                
+
                 et_time_str = et_time.strftime("%H:%M")
                 if et_time_str < th.start_time or et_time_str >= th.end_time:
                     hour_ok = False
-                if et_time.hour in th.skip_hours:
-                    hour_ok = False
+                for sr in th.skip_ranges:
+                    if "-" in sr:
+                        parts = sr.split("-", 1)
+                        if parts[0].strip() <= et_time_str < parts[1].strip():
+                            hour_ok = False
+                            break
 
             if position == 0 and hour_ok and eval_rules(req.buy_rules, req.buy_logic, indicators, i):
                 # Dynamic sizing: reduce position after consecutive stop losses

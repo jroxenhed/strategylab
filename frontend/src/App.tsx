@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import type { BacktestResult, IndicatorKey, DataSource } from './shared/types'
+import type { IChartApi } from 'lightweight-charts'
 import { useOHLCV, useIndicators } from './shared/hooks/useOHLCV'
 import Sidebar from './features/sidebar/Sidebar'
 import Chart from './features/chart/Chart'
@@ -34,6 +35,7 @@ export default function App() {
   const [dataSource, setDataSource] = useState<DataSource>((saved?.dataSource as DataSource) ?? 'yahoo')
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null)
   const [activeTab, setActiveTab] = useState<AppTab>('chart')
+  const [mainChart, setMainChart] = useState<IChartApi | null>(null)
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -127,6 +129,7 @@ export default function App() {
                           activeIndicators={activeIndicators}
                           trades={trades}
                           emaOverlays={emaOverlays}
+                          onChartReady={setMainChart}
                         />
                       ) : (
                         <div style={styles.empty}>Loading {ticker}...</div>
@@ -148,7 +151,7 @@ export default function App() {
                         dataSource={dataSource}
                         settingsPortalId="strategy-settings-portal"
                       />
-                      {backtestResult && <Results result={backtestResult} />}
+                      {backtestResult && <Results result={backtestResult} mainChart={mainChart} />}
                     </div>
                   </Panel>
 
