@@ -36,6 +36,7 @@ export default function App() {
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null)
   const [activeTab, setActiveTab] = useState<AppTab>('chart')
   const [mainChart, setMainChart] = useState<IChartApi | null>(null)
+  const [chartEnabled, setChartEnabled] = useState(true)
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -75,8 +76,13 @@ export default function App() {
             </button>
           ))}
         </div>
-        <span style={{ color: '#8b949e', fontSize: 13 }}>
+        <span style={{ color: '#8b949e', fontSize: 13, display: 'flex', alignItems: 'center', gap: 12 }}>
           {ticker} &nbsp;·&nbsp; {start} → {end}
+          {activeTab === 'chart' && (
+            <button onClick={() => setChartEnabled(c => !c)} style={{ ...styles.chartToggleBtn, opacity: chartEnabled ? 0.5 : 1 }}>
+              {chartEnabled ? 'Disable Chart' : 'Enable Chart'}
+            </button>
+          )}
         </span>
       </header>
 
@@ -117,7 +123,12 @@ export default function App() {
                   {/* CHART */}
                   <Panel defaultSize="58%" minSize="15%">
                     <div className="panel-fill">
-                      {ohlcv.length > 0 ? (
+                      {!chartEnabled ? (
+                        <div style={styles.chartDisabled}>
+                          <span style={{ color: '#8b949e', fontSize: 12 }}>Chart disabled</span>
+                          <button onClick={() => setChartEnabled(true)} style={styles.chartToggleBtn}>Enable</button>
+                        </div>
+                      ) : ohlcv.length > 0 ? (
                         <Chart
                           ticker={ticker}
                           data={ohlcv}
@@ -196,6 +207,8 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: 'var(--shadow-sm)',
   },
   empty: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 14 },
+  chartDisabled: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12 },
+  chartToggleBtn: { fontSize: 11, padding: '3px 10px', borderRadius: 4, background: '#21262d', color: '#8b949e', border: '1px solid #30363d', cursor: 'pointer' },
   rightPanel: {
     height: '100%',
     display: 'flex',
