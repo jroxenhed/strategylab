@@ -1,0 +1,165 @@
+"""
+routes/bots.py — REST API for the live trading bot system.
+
+Endpoints:
+  GET  /api/bots/fund          — get fund status
+  PUT  /api/bots/fund          — set bot fund amount
+  POST /api/bots               — add a new bot (stopped)
+  GET  /api/bots               — list all bots + fund status
+  GET  /api/bots/{id}          — full bot detail
+  POST /api/bots/{id}/start    — start live polling
+  POST /api/bots/{id}/stop     — stop polling (?close=true to also close position)
+  POST /api/bots/{id}/backtest — run backtest with bot's config
+  DELETE /api/bots/{id}        — delete a stopped bot
+
+NOTE: /api/bots/fund is registered before /{id} routes to prevent
+FastAPI treating "fund" as a bot_id.
+"""
+
+from typing import Optional
+from fastapi import APIRouter, HTTPException, BackgroundTasks
+from pydantic import BaseModel
+
+from bot_manager import BotConfig, BotManager
+
+router = APIRouter(prefix="/api/bots")
+
+# Module-level reference set by main.py lifespan handler
+bot_manager: Optional[BotManager] = None
+
+
+def _get_manager() -> BotManager:
+    if bot_manager is None:
+        raise HTTPException(status_code=503, detail="Bot manager not initialized")
+    return bot_manager
+
+
+# ---------------------------------------------------------------------------
+# Request models
+# ---------------------------------------------------------------------------
+
+class SetFundRequest(BaseModel):
+    amount: float
+
+
+class AddBotRequest(BaseModel):
+    strategy_name: str
+    symbol: str
+    interval: str
+    buy_rules: list
+    sell_rules: list
+    buy_logic: str = "AND"
+    sell_logic: str = "AND"
+    allocated_capital: float
+    position_size: float = 1.0
+    stop_loss_pct: Optional[float] = None
+    trailing_stop: Optional[dict] = None
+    dynamic_sizing: Optional[dict] = None
+    trading_hours: Optional[dict] = None
+    slippage_pct: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Fund endpoints (must be before /{bot_id} routes)
+# ---------------------------------------------------------------------------
+
+@router.get("/fund")
+def get_fund():
+    return _get_manager().get_fund_status()
+
+
+@router.put("/fund")
+def set_fund(req: SetFundRequest):
+    mgr = _get_manager()
+    try:
+        mgr.set_bot_fund(req.amount)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return mgr.get_fund_status()
+
+
+# ---------------------------------------------------------------------------
+# Bot CRUD
+# ---------------------------------------------------------------------------
+
+@router.post("")
+def add_bot(req: AddBotRequest):
+    mgr = _get_manager()
+    try:
+        config = BotConfig(**req.model_dump())
+        bot_id = mgr.add_bot(config)
+    except (ValueError, Exception) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"bot_id": bot_id}
+
+
+@router.get("")
+def list_bots():
+    mgr = _get_manager()
+    return {
+        "fund": mgr.get_fund_status(),
+        "bots": mgr.list_bots(),
+    }
+
+
+@router.get("/{bot_id}")
+def get_bot(bot_id: str):
+    mgr = _get_manager()
+    try:
+        config, state = mgr.get_bot(bot_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {
+        "config": config.model_dump(),
+        "state": state.to_dict(),
+    }
+
+
+@router.delete("/{bot_id}")
+def delete_bot(bot_id: str):
+    mgr = _get_manager()
+    try:
+        mgr.delete_bot(bot_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Bot actions
+# ---------------------------------------------------------------------------
+
+@router.post("/{bot_id}/start")
+async def start_bot(bot_id: str):
+    mgr = _get_manager()
+    try:
+        mgr.start_bot(bot_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "status": "running"}
+
+
+@router.post("/{bot_id}/stop")
+def stop_bot(bot_id: str, close: bool = False):
+    mgr = _get_manager()
+    try:
+        mgr.stop_bot(bot_id, close_position=close)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True, "status": "stopped"}
+
+
+@router.post("/{bot_id}/backtest")
+def backtest_bot(bot_id: str, background_tasks: BackgroundTasks):
+    mgr = _get_manager()
+    try:
+        mgr.get_bot(bot_id)  # validates existence
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    # Run in background so the request returns immediately
+    background_tasks.add_task(mgr.backtest_bot, bot_id)
+    return {"ok": True, "status": "backtesting"}

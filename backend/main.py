@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -12,8 +13,21 @@ from routes.backtest import router as backtest_router
 from routes.search import router as search_router
 from routes.providers import router as providers_router
 from routes.trading import router as trading_router
+from routes.bots import router as bots_router
+import routes.bots as bots_module
+from bot_manager import BotManager
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    manager = BotManager()
+    manager.load()
+    bots_module.bot_manager = manager
+    yield
+    await manager.shutdown()
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,6 +42,7 @@ app.include_router(backtest_router)
 app.include_router(search_router)
 app.include_router(providers_router)
 app.include_router(trading_router)
+app.include_router(bots_router)
 
 
 @app.get("/api/cache")

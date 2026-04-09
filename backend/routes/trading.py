@@ -272,7 +272,7 @@ def scan_signals(req: ScanRequest):
             df = _fetch(symbol, start.strftime('%Y-%m-%d'),
                         end.strftime('%Y-%m-%d'), req.interval, source='alpaca')
 
-            indicators = compute_indicators(df["Close"])
+            indicators = compute_indicators(df["Close"], high=df["High"], low=df["Low"])
             i = len(df) - 1
 
             buy_signal = eval_rules(req.buy_rules, req.buy_logic, indicators, i)
