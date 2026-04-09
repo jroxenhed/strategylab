@@ -25,6 +25,49 @@ BotManager (singleton, in backend process)
 
 ---
 
+## Fund Management
+
+Bots share a single Alpaca paper account. The fund management system prevents multiple bots from collectively exceeding available capital and separates bot funds from manual trading.
+
+**Bot fund** — A user-configured global cap (e.g. $50,000) representing the maximum total capital all bots combined can use. The rest of the account remains untouched for manual trading. Stored in `data/bots.json` alongside bot configs. Defaults to 0 (must be set before starting any bot).
+
+**Per-bot allocation** (`allocated_capital`) — Each bot gets a slice of the bot fund (e.g. $5,000). The bot uses `position_size` as a **fraction** of its allocation per trade (same model as the backtester: 0.01–1.0), so a bot with $5,000 allocation and `position_size: 0.5` risks $2,500 per trade.
+
+**Enforcement rules:**
+- `sum(all bots' allocated_capital)` can never exceed the bot fund
+- When adding a bot, the UI shows **available = bot_fund - sum(existing allocations)** and caps the input
+- `start_bot()` rejects if allocation would push total over the bot fund
+- Deleting a bot frees its allocation back to available
+- The bot fund itself cannot exceed current Alpaca account equity (validated on set)
+
+**Example flow:**
+- Account equity: $100,000
+- User sets bot fund to $50,000 (other $50k for manual trading)
+- Creates Bot A with $20,000 allocation → available drops to $30,000
+- Creates Bot B with $25,000 allocation → available drops to $5,000
+- Creates Bot C — UI shows "Available: $5,000", allocation input maxes at $5,000
+
+**API endpoints:**
+- `GET /api/bots/fund` → `{bot_fund, allocated, available}`
+- `PUT /api/bots/fund` → set bot fund amount (rejects if < current allocations)
+
+**BotManager methods:**
+- `set_bot_fund(amount)` — set global cap, reject if amount < sum(existing allocations)
+- `get_fund_status()` → `{bot_fund, allocated, available}`
+- `_validate_allocation(amount, exclude_bot_id=None)` — internal check used by add_bot
+
+**Persistence** (`data/bots.json`):
+```json
+{
+  "bot_fund": 50000.0,
+  "bots": [
+    {"config": {...}, "state": {...}}
+  ]
+}
+```
+
+---
+
 ## Implementation Steps
 
 ### Step 1: Fix ATR gap in live scans
@@ -40,7 +83,9 @@ The core file. Contains:
 **`BotConfig`** (Pydantic) — strategy config for one bot:
 - `bot_id`, `strategy_name`, `symbol`, `interval`
 - `buy_rules`, `sell_rules`, `buy_logic`, `sell_logic`
-- `position_size_usd`, `stop_loss_pct`
+- `allocated_capital` — dollar amount allocated from bot fund (e.g. $5,000)
+- `position_size` — fraction of allocated_capital per trade (0.01–1.0, same as backtester)
+- `stop_loss_pct`
 - `trailing_stop` (reuse `TrailingStopConfig` from backtest.py)
 - `dynamic_sizing` (reuse `DynamicSizingConfig`)
 - `trading_hours` (reuse `TradingHoursConfig`)
@@ -79,7 +124,8 @@ async def _tick():
     4. Compute indicators WITH high/low (so ATR works)
     5. Check Alpaca positions for this symbol (source of truth)
     6. If NO position -> evaluate buy rules
-       - Apply dynamic sizing: if consec_sl >= threshold, reduce size
+       - Compute effective_size = allocated_capital * position_size
+       - Apply dynamic sizing: if consec_sl >= threshold, reduce further by reduced_pct
        - Calculate qty = floor(effective_size / price)
        - If trailing_stop configured: place plain market buy (bot manages exits)
        - If only fixed stop_loss: place OTO buy with stop (Alpaca manages exit)
@@ -100,10 +146,13 @@ async def _tick():
 - **New bar detection:** Only evaluate rules when `df.index[-1]` changes. Prevents duplicate signals from repeated polls within the same bar.
 
 **`BotManager`** — singleton managing all bots:
+- `bot_fund: float` — global cap on total capital for all bots
+- `set_bot_fund(amount)`, `get_fund_status()` — fund management (see Fund Management section above)
+- `add_bot(config)` — validate allocated_capital fits within available fund, create bot as "stopped"
 - `start_bot(bot_id)` — reject if symbol already has a running bot. On first tick, detects existing Alpaca position and resumes managing it (sets entry_price, starts trailing stop tracking).
 - `stop_bot(bot_id, close_position=False)` — set status "stopped", cancel asyncio task. If `close_position=True`, also close the Alpaca position for that symbol.
-- `get_bot(bot_id)`, `list_bots()`, `delete_bot(bot_id)`
-- `save()` — persist configs + state to `data/bots.json`
+- `get_bot(bot_id)`, `list_bots()`, `delete_bot(bot_id)` — delete frees allocation back to available
+- `save()` — persist bot_fund + configs + state to `data/bots.json`
 - `load()` — restore on startup (all bots start as "stopped")
 - `shutdown()` — stop all bots (keep positions open), save state
 
@@ -116,15 +165,19 @@ async def _tick():
 ### Step 3: Bot API endpoints — `backend/routes/bots.py` (NEW)
 
 ```
-POST /api/bots              -> add a new bot (stopped), returns {bot_id}
+GET  /api/bots/fund         -> fund status: {bot_fund, allocated, available}
+PUT  /api/bots/fund         -> set bot fund amount (rejects if < current allocations)
+POST /api/bots              -> add a new bot (stopped), validates allocation fits. Returns {bot_id}
 POST /api/bots/{id}/start   -> start live polling (detects existing position on first tick)
 POST /api/bots/{id}/stop    -> stop polling, keep open position (safe default)
 POST /api/bots/{id}/stop?close=true -> stop polling AND close open position
 POST /api/bots/{id}/backtest -> run backtest with bot config, cache result on state
-GET  /api/bots              -> list all bots with summary state
+GET  /api/bots              -> list all bots with summary state + fund status
 GET  /api/bots/{id}         -> full bot detail (config + state + backtest_result + activity log)
-DELETE /api/bots/{id}       -> remove a stopped bot
+DELETE /api/bots/{id}       -> remove a stopped bot, frees allocation
 ```
+
+Note: Fund endpoints (`/api/bots/fund`) must be registered before `/{id}` routes to avoid FastAPI treating "fund" as a bot ID.
 
 The `/backtest` endpoint calls `run_backtest()` from `routes/backtest.py` with the bot's strategy config, then stores the result on `state.backtest_result`. This is the same backtest engine used in the Chart tab — identical results.
 
@@ -145,7 +198,12 @@ Layout:
 ```
 +--------------------------------------------------+
 | Bot Control Center                               |
-| [Strategy v] [Ticker ___] [Interval v] [+ Add]  |
+| Bot Fund: [$50,000]  Allocated: $45,000          |
+| Available: $5,000  [====:::::]                   |
++--------------------------------------------------+
+| [Strategy v] [Ticker] [Interval v]               |
+| Allocation: [$____] (max $5,000)  Size: [1.0]   |
+| [+ Add Bot]                                      |
 +--------------------------------------------------+
 | * FSLR "RSI 26-64"  LIVE  3 trades  +$420       |
 | +------------ mini equity ------------+ [Log v]  |
@@ -249,11 +307,12 @@ Add `BotConfig`, `BotState`, `BotSummary`, `BotActivityEntry` interfaces.
 ## Safety Guardrails
 
 1. **Paper mode only** — `shared.py` has `paper=True` hardcoded. No live trading path.
-2. **One bot per symbol** — `BotManager.start_bot()` rejects duplicates.
-3. **Bots start stopped on server restart** — no surprise auto-trading after a crash.
-4. **Position truth from Alpaca** — bot checks real positions each tick, not internal state.
-5. **Activity log** — every action is logged and visible in the UI.
-6. **Journal integration** — bot trades logged via existing `_log_trade()` with `source="bot"`.
+2. **Fund management** — global bot fund cap prevents bots from consuming all account equity. Per-bot allocations enforce individual limits. Cannot over-allocate.
+3. **One bot per symbol** — `BotManager.start_bot()` rejects duplicates.
+4. **Bots start stopped on server restart** — no surprise auto-trading after a crash.
+5. **Position truth from Alpaca** — bot checks real positions each tick, not internal state.
+6. **Activity log** — every action is logged and visible in the UI.
+7. **Journal integration** — bot trades logged via existing `_log_trade()` with `source="bot"`.
 
 ---
 
