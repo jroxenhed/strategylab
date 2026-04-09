@@ -2,16 +2,13 @@ import { useState, useEffect, useRef } from 'react'
 import { createChart, BaselineSeries, ColorType } from 'lightweight-charts'
 import type { IChartApi } from 'lightweight-charts'
 import type { BacktestResult, SignalTraceEntry } from '../../shared/types'
+import { fmtDateTimeET } from '../../shared/utils/time'
 
 type Tab = 'summary' | 'equity' | 'trades' | 'trace'
 
 function fmtDate(d: string | number | undefined): string {
-  if (d === undefined) return '—'
-  if (typeof d === 'number') {
-    const dt = new Date(d * 1000)
-    return dt.toISOString().replace('T', ' ').slice(0, 16)
-  }
-  return d
+  if (typeof d === 'number') return fmtDateTimeET(d)
+  return d ?? '—'
 }
 
 interface Props {

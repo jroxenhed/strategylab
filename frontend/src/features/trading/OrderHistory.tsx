@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchOrders, type Order } from '../../api/trading'
+import { fmtShortET } from '../../shared/utils/time'
 
 export default function OrderHistory() {
   const [orders, setOrders] = useState<Order[]>([])
@@ -25,7 +26,7 @@ export default function OrderHistory() {
   }
 
   const fmtTime = (s: string) => {
-    try { return new Date(s).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }
+    try { return fmtShortET(s) }
     catch { return s }
   }
 

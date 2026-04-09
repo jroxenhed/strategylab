@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchJournal, type JournalTrade } from '../../api/trading'
+import { fmtShortET } from '../../shared/utils/time'
 
 export default function TradeJournal() {
   const [trades, setTrades] = useState<JournalTrade[]>([])
@@ -14,7 +15,7 @@ export default function TradeJournal() {
     : trades
 
   const fmtTime = (s: string) => {
-    try { return new Date(s).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }
+    try { return fmtShortET(s) }
     catch { return s }
   }
 

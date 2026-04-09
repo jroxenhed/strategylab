@@ -3,6 +3,7 @@ import { Plus } from 'lucide-react'
 import { fetchWatchlist, saveWatchlist, scanSignals, placeBuy, placeSell, type SignalResult } from '../../api/trading'
 import type { Rule } from '../../shared/types'
 import RuleRow, { emptyRule } from '../strategy/RuleRow'
+import { fmtTimeET, fmtShortET } from '../../shared/utils/time'
 
 const SCANNER_STORAGE_KEY = 'strategylab-scanner'
 
@@ -201,7 +202,7 @@ export default function SignalScanner() {
         <div style={styles.results}>
           {scannedAt && (
             <div style={styles.scannedAt}>
-              Scanned at {new Date(scannedAt).toLocaleTimeString()}
+              Scanned at {fmtTimeET(scannedAt)} ET
             </div>
           )}
           {executeMsg && (
@@ -225,7 +226,7 @@ export default function SignalScanner() {
                 <span style={styles.cell}>{r.price != null ? `$${r.price.toFixed(2)}` : '—'}</span>
                 <span style={styles.cell}>{r.rsi != null ? r.rsi.toFixed(1) : '—'}</span>
                 <span style={styles.cell}>{r.ema50 != null ? `$${r.ema50.toFixed(2)}` : '—'}</span>
-                <span style={styles.cell}>{r.error ?? (r.last_bar ? new Date(r.last_bar).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—')}</span>
+                <span style={styles.cell}>{r.error ?? (r.last_bar ? fmtShortET(r.last_bar) : '—')}</span>
                 <span style={styles.cell}>
                   {canExecute && (
                     <button

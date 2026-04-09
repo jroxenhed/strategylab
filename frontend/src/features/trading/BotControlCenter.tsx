@@ -7,6 +7,7 @@ import {
   listBots, fetchBotDetail, setBotFund, addBot,
   startBot, stopBot, backtestBot, deleteBot,
 } from '../../api/bots'
+import { fmtTimeET } from '../../shared/utils/time'
 
 const SAVED_KEY = 'strategylab-saved-strategies'
 const INTERVALS = ['1m', '5m', '15m', '30m', '1h']
@@ -96,7 +97,7 @@ function ActivityLog({ entries }: { entries: BotActivityEntry[] }) {
       {entries.map((e, i) => (
         <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 2 }}>
           <span style={{ color: '#444', flexShrink: 0 }}>
-            {new Date(e.time).toLocaleTimeString()}
+            {fmtTimeET(e.time)}
           </span>
           <span style={{ color: levelColor(e.level), flexShrink: 0 }}>[{e.level}]</span>
           <span style={{ color: '#ccc' }}>{e.msg}</span>
