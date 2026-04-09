@@ -1,4 +1,5 @@
 import AccountBar from './AccountBar'
+import BotControlCenter from './BotControlCenter'
 import PositionsTable from './PositionsTable'
 import SignalScanner from './SignalScanner'
 import PerformanceComparison from './PerformanceComparison'
@@ -9,6 +10,7 @@ export default function PaperTrading() {
   return (
     <div style={styles.container}>
       <AccountBar />
+      <BotControlCenter />
       <PositionsTable />
       <SignalScanner />
       <PerformanceComparison />

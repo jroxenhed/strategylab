@@ -178,3 +178,75 @@ export interface AppState {
 }
 
 export type DataSource = 'yahoo' | 'alpaca' | 'alpaca-iex'
+
+// ---------------------------------------------------------------------------
+// Bot types
+// ---------------------------------------------------------------------------
+
+export interface BotConfig {
+  bot_id: string
+  strategy_name: string
+  symbol: string
+  interval: string
+  buy_rules: Rule[]
+  sell_rules: Rule[]
+  buy_logic: 'AND' | 'OR'
+  sell_logic: 'AND' | 'OR'
+  allocated_capital: number
+  position_size: number
+  stop_loss_pct?: number
+  trailing_stop?: TrailingStopConfig
+  dynamic_sizing?: DynamicSizingConfig
+  trading_hours?: TradingHoursConfig
+  slippage_pct?: number
+}
+
+export interface BotFundStatus {
+  bot_fund: number
+  allocated: number
+  available: number
+}
+
+export interface BotActivityEntry {
+  time: string
+  msg: string
+  level: 'INFO' | 'WARN' | 'ERROR' | 'TRADE'
+}
+
+export interface BotState {
+  status: 'stopped' | 'backtesting' | 'running' | 'error'
+  started_at?: string
+  last_scan_at?: string
+  last_signal?: string
+  last_price?: number
+  trades_count: number
+  total_pnl: number
+  equity_snapshots: { time: string; value: number }[]
+  backtest_result?: {
+    summary: BacktestResult['summary']
+    equity_curve: { time: string; value: number }[]
+  }
+  activity_log: BotActivityEntry[]
+  error_message?: string
+}
+
+export interface BotSummary {
+  bot_id: string
+  strategy_name: string
+  symbol: string
+  interval: string
+  allocated_capital: number
+  status: string
+  trades_count: number
+  total_pnl: number
+}
+
+export interface BotDetail {
+  config: BotConfig
+  state: BotState
+}
+
+export interface BotListResponse {
+  fund: BotFundStatus
+  bots: BotSummary[]
+}
