@@ -267,8 +267,20 @@ class BotRunner:
                 try:
                     client = await self._run_in_executor(get_trading_client)
 
-                    if cfg.trailing_stop:
-                        # Plain market order — bot manages trailing exit via polling
+                    if cfg.trailing_stop and cfg.stop_loss_pct:
+                        # Both trailing stop AND fixed stop: place OTO bracket as hard floor
+                        # (server-side safety if bot dies), bot still manages trailing exit via polling
+                        stop_price = round(price * (1 - cfg.stop_loss_pct / 100), 2)
+                        order_req = MarketOrderRequest(
+                            symbol=cfg.symbol.upper(),
+                            qty=qty,
+                            side=OrderSide.BUY,
+                            time_in_force=TimeInForce.DAY,
+                            order_class=OrderClass.OTO,
+                            stop_loss=StopLossRequest(stop_price=stop_price),
+                        )
+                    elif cfg.trailing_stop:
+                        # Trailing stop only — plain market order, bot manages exit via polling
                         order_req = MarketOrderRequest(
                             symbol=cfg.symbol.upper(),
                             qty=qty,
