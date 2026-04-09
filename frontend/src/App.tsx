@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import type { BacktestResult, IndicatorKey, DataSource } from './shared/types'
 import type { IChartApi } from 'lightweight-charts'
@@ -12,6 +12,8 @@ import PaperTrading from './features/trading/PaperTrading'
 type AppTab = 'chart' | 'trading'
 
 const STORAGE_KEY = 'strategylab-settings'
+const EMPTY_OHLCV: never[] = []
+const EMPTY_INDICATORS: Record<string, never[]> = {}
 const today = new Date().toISOString().slice(0, 10)
 const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
@@ -44,12 +46,12 @@ export default function App() {
     }))
   }, [ticker, start, end, interval, activeIndicators, showSpy, showQqq, dataSource])
 
-  const { data: ohlcv = [] } = useOHLCV(ticker, start, end, interval, dataSource)
+  const { data: ohlcv = EMPTY_OHLCV } = useOHLCV(ticker, start, end, interval, dataSource)
   const { data: spyData } = useOHLCV('SPY', start, end, interval, dataSource)
   const { data: qqqData } = useOHLCV('QQQ', start, end, interval, dataSource)
 
   const indicatorKeys = activeIndicators.filter(k => k !== 'volume')
-  const { data: indicatorData = {} } = useIndicators(ticker, start, end, interval, indicatorKeys, dataSource)
+  const { data: indicatorData = EMPTY_INDICATORS } = useIndicators(ticker, start, end, interval, indicatorKeys, dataSource)
 
   const toggleIndicator = useCallback((key: IndicatorKey) => {
     setActiveIndicators(prev =>
@@ -57,7 +59,7 @@ export default function App() {
     )
   }, [])
 
-  const trades = backtestResult?.trades ?? []
+  const trades = useMemo(() => backtestResult?.trades ?? [], [backtestResult])
   const emaOverlays = backtestResult?.ema_overlays
 
   return (
