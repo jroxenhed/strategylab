@@ -119,8 +119,8 @@ export default function App() {
 
             {/* CENTER COLUMN */}
             <Panel defaultSize="66%" minSize="30%">
-              <div style={{ height: '100%', overflow: 'hidden' }}>
-                <Group orientation="vertical" style={{ height: '100%' }}>
+              <div style={{ height: '100%', overflow: 'auto' }}>
+                <Group orientation="vertical" style={{ height: '100%', minHeight: 480 }}>
 
                   {/* CHART */}
                   <Panel defaultSize="58%" minSize="15%">
@@ -153,7 +153,7 @@ export default function App() {
                   <Separator className="resize-handle-h" />
 
                   {/* BOTTOM PANE: Strategy rules + Results */}
-                  <Panel defaultSize="42%" minSize="12%" collapsible>
+                  <Panel defaultSize="42%" minSize="20%" collapsible>
                     <div style={{ height: '100%', overflowY: 'auto', display: 'flex', flexDirection: 'column', background: 'var(--bg-main)' }}>
                       <StrategyBuilder
                         ticker={ticker}
