@@ -133,6 +133,10 @@ function BotCard({
   const [editingAlloc, setEditingAlloc] = useState(false)
   const [allocValue, setAllocValue] = useState('')
   const [editingStrategy, setEditingStrategy] = useState(false)
+
+  const running = summary.status === 'running'
+  const stopped = summary.status === 'stopped'
+
   useEffect(() => {
     let active = true
     const load = async () => {
@@ -148,9 +152,6 @@ function BotCard({
     }
     return () => { active = false }
   }, [expanded, running, summary.bot_id])
-
-  const running = summary.status === 'running'
-  const stopped = summary.status === 'stopped'
   const pnlColor = summary.total_pnl >= 0 ? '#26a69a' : '#ef5350'
 
   const dir = summary.direction ?? 'long'
