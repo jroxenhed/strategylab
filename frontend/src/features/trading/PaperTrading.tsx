@@ -23,6 +23,6 @@ export default function PaperTrading() {
 const styles: Record<string, React.CSSProperties> = {
   container: {
     display: 'flex', flexDirection: 'column', flex: 1,
-    overflow: 'hidden', background: '#0d1117',
+    overflowY: 'auto', background: '#0d1117',
   },
 }
