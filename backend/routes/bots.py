@@ -50,6 +50,7 @@ class UpdateBotRequest(BaseModel):
     buy_logic: Optional[str] = None
     sell_logic: Optional[str] = None
     data_source: Optional[str] = None
+    direction: Optional[str] = None
 
 
 class AddBotRequest(BaseModel):
@@ -67,6 +68,7 @@ class AddBotRequest(BaseModel):
     dynamic_sizing: Optional[dict] = None
     trading_hours: Optional[dict] = None
     slippage_pct: float = 0.0
+    direction: str = "long"
 
 
 # ---------------------------------------------------------------------------

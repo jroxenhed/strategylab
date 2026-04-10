@@ -203,6 +203,7 @@ class BotRunner:
     async def _tick(self):
         cfg = self.config
         state = self.state
+        is_short = cfg.direction == "short"
         loop = asyncio.get_event_loop()
 
         state.last_scan_at = datetime.now(timezone.utc).isoformat()
@@ -261,7 +262,7 @@ class BotRunner:
             for pos in positions:
                 if pos.symbol == cfg.symbol.upper():
                     has_position = True
-                    alpaca_qty = float(pos.qty)
+                    alpaca_qty = abs(float(pos.qty))
                     # Resume tracking if re-started with open position
                     if state.entry_price is None:
                         state.entry_price = float(pos.avg_entry_price)
@@ -292,8 +293,9 @@ class BotRunner:
                             limit=5,
                         ),
                     )
+                    close_side = OrderSide.BUY if is_short else OrderSide.SELL
                     for o in filled_orders:
-                        if o.side == OrderSide.SELL and o.filled_avg_price is not None:
+                        if o.side == close_side and o.filled_avg_price is not None:
                             exit_price = float(o.filled_avg_price)
                             exit_qty = float(o.filled_qty)
                             if o.type in (OrderType.STOP, OrderType.STOP_LIMIT):
@@ -307,7 +309,10 @@ class BotRunner:
                     self._log("WARN", f"Failed to query filled orders: {e}")
 
                 sell_qty = exit_qty or alpaca_qty or 0
-                pnl = (exit_price - state.entry_price) * sell_qty if sell_qty else 0
+                if is_short:
+                    pnl = (state.entry_price - exit_price) * sell_qty if sell_qty else 0
+                else:
+                    pnl = (exit_price - state.entry_price) * sell_qty if sell_qty else 0
                 state.total_pnl += pnl
 
                 if exit_reason in ("stop_loss", "trailing_stop"):
@@ -320,11 +325,13 @@ class BotRunner:
                     "value": round(state.total_pnl, 2),
                 })
 
-                self._log("TRADE", f"SELL {cfg.symbol} @ {exit_price:.2f} | PnL={pnl:+.2f} | reason={exit_reason} (detected)")
+                side_label = "COVER" if is_short else "SELL"
+                self._log("TRADE", f"{side_label} {cfg.symbol} @ {exit_price:.2f} | PnL={pnl:+.2f} | reason={exit_reason} (detected)")
 
                 try:
                     from routes.trading import _log_trade
-                    _log_trade(cfg.symbol, "sell", sell_qty, exit_price, source="bot", reason=exit_reason)
+                    _log_trade(cfg.symbol, "cover" if is_short else "sell", sell_qty, exit_price,
+                               source="bot", reason=exit_reason, direction=cfg.direction)
                 except Exception:
                     pass
 
@@ -359,7 +366,15 @@ class BotRunner:
                 try:
                     client = await self._run_in_executor(get_trading_client)
 
-                    if cfg.trailing_stop and cfg.stop_loss_pct:
+                    if is_short:
+                        # Short: plain market sell, bot manages all stops via polling
+                        order_req = MarketOrderRequest(
+                            symbol=cfg.symbol.upper(),
+                            qty=qty,
+                            side=OrderSide.SELL,
+                            time_in_force=TimeInForce.DAY,
+                        )
+                    elif cfg.trailing_stop and cfg.stop_loss_pct:
                         # Both trailing stop AND fixed stop: place OTO bracket as hard floor
                         # (server-side safety if bot dies), bot still manages trailing exit via polling
                         stop_price = round(price * (1 - cfg.stop_loss_pct / 100), 2)
@@ -410,17 +425,22 @@ class BotRunner:
                 state.entry_price = fill_price
                 state.trail_peak = fill_price
                 state.trades_count += 1
-                state.last_signal = "BUY"
-                slippage = fill_price - price
+                side_label = "SHORT" if is_short else "BUY"
+                state.last_signal = side_label
+                if is_short:
+                    slippage = price - fill_price  # lower fill is worse for short seller
+                else:
+                    slippage = fill_price - price  # higher fill is worse for buyer
                 slippage_pct = (slippage / price) * 100 if price else 0
                 state.slippage_pcts.append(round(slippage_pct, 4))
-                self._log("TRADE", f"BUY {qty} {cfg.symbol} @ {fill_price:.2f} (expected={price:.2f}, slippage={slippage_pct:+.4f}%)")
+                self._log("TRADE", f"{side_label} {qty} {cfg.symbol} @ {fill_price:.2f} (expected={price:.2f}, slippage={slippage_pct:+.4f}%)")
 
                 # Log to trade journal
                 try:
                     from routes.trading import _log_trade
-                    _log_trade(cfg.symbol, "buy", qty, fill_price, source="bot", reason="entry",
-                               expected_price=price)
+                    _log_trade(cfg.symbol, "short" if is_short else "buy", qty, fill_price,
+                               source="bot", reason="entry", expected_price=price,
+                               direction=cfg.direction)
                 except Exception:
                     pass
 
@@ -432,34 +452,57 @@ class BotRunner:
         else:
             exit_reason = None
 
-            # Update trailing peak
+            # Update trailing peak/trough
             if cfg.trailing_stop and state.entry_price is not None:
                 ts = cfg.trailing_stop
-                source_price = float(df["High"].iloc[-1]) if ts.source == "high" else price
-                activated = (not ts.activate_on_profit) or (
-                    source_price >= state.entry_price * (1 + ts.activate_pct / 100)
-                )
-                if activated:
-                    if state.trail_peak is None or source_price > state.trail_peak:
-                        state.trail_peak = source_price
+                if is_short:
+                    source_price = float(df["Low"].iloc[-1]) if ts.source == "high" else price
+                    activated = (not ts.activate_on_profit) or (
+                        source_price <= state.entry_price * (1 - ts.activate_pct / 100)
+                    )
+                    if activated:
+                        if state.trail_peak is None or source_price < state.trail_peak:
+                            state.trail_peak = source_price
 
-                    # Compute trail stop price
-                    atr_val = float(indicators.get("atr", {}).get(i, 0) or 0)
-                    if ts.type == "pct":
-                        state.trail_stop_price = state.trail_peak * (1 - ts.value / 100)
-                    elif ts.type == "atr" and atr_val:
-                        state.trail_stop_price = state.trail_peak - ts.value * atr_val
+                        # Compute trail stop price (above trough for shorts)
+                        atr_val = float(indicators.get("atr", {}).get(i, 0) or 0)
+                        if ts.type == "pct":
+                            state.trail_stop_price = state.trail_peak * (1 + ts.value / 100)
+                        elif ts.type == "atr" and atr_val:
+                            state.trail_stop_price = state.trail_peak + ts.value * atr_val
+                else:
+                    source_price = float(df["High"].iloc[-1]) if ts.source == "high" else price
+                    activated = (not ts.activate_on_profit) or (
+                        source_price >= state.entry_price * (1 + ts.activate_pct / 100)
+                    )
+                    if activated:
+                        if state.trail_peak is None or source_price > state.trail_peak:
+                            state.trail_peak = source_price
+
+                        # Compute trail stop price
+                        atr_val = float(indicators.get("atr", {}).get(i, 0) or 0)
+                        if ts.type == "pct":
+                            state.trail_stop_price = state.trail_peak * (1 - ts.value / 100)
+                        elif ts.type == "atr" and atr_val:
+                            state.trail_stop_price = state.trail_peak - ts.value * atr_val
 
             # Check exits in priority order
-            if cfg.stop_loss_pct and state.entry_price and not cfg.trailing_stop:
-                # Fixed stop managed by bot (not OTO) — shouldn't normally happen
-                # but handle gracefully
-                if price <= state.entry_price * (1 - cfg.stop_loss_pct / 100):
-                    exit_reason = "stop_loss"
-
-            if exit_reason is None and cfg.trailing_stop and state.trail_stop_price:
-                if price <= state.trail_stop_price:
-                    exit_reason = "trailing_stop"
+            if is_short:
+                if cfg.stop_loss_pct and state.entry_price:
+                    if price >= state.entry_price * (1 + cfg.stop_loss_pct / 100):
+                        exit_reason = "stop_loss"
+                if exit_reason is None and cfg.trailing_stop and state.trail_stop_price:
+                    if price >= state.trail_stop_price:
+                        exit_reason = "trailing_stop"
+            else:
+                if cfg.stop_loss_pct and state.entry_price and not cfg.trailing_stop:
+                    # Fixed stop managed by bot (not OTO) — shouldn't normally happen
+                    # but handle gracefully
+                    if price <= state.entry_price * (1 - cfg.stop_loss_pct / 100):
+                        exit_reason = "stop_loss"
+                if exit_reason is None and cfg.trailing_stop and state.trail_stop_price:
+                    if price <= state.trail_stop_price:
+                        exit_reason = "trailing_stop"
 
             if exit_reason is None:
                 sell_signal = await self._run_in_executor(
@@ -480,8 +523,9 @@ class BotRunner:
                             client.get_orders,
                             GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[cfg.symbol.upper()]),
                         )
+                        cancel_side = OrderSide.BUY if is_short else OrderSide.SELL
                         for o in orders:
-                            if o.side == OrderSide.SELL:
+                            if o.side == cancel_side:
                                 await self._run_with_retry(client.cancel_order_by_id, o.id)
                                 self._log("INFO", f"Cancelled pending {o.type.value} order {o.id}")
                     except Exception as e:
@@ -495,9 +539,13 @@ class BotRunner:
                 order_id = getattr(close_resp, 'id', None) or (close_resp.get('id') if isinstance(close_resp, dict) else None)
                 sell_fill = await self._get_fill_price(client, order_id, price) if order_id else price
 
-                pnl = (sell_fill - state.entry_price) * alpaca_qty if state.entry_price else 0
+                if is_short:
+                    pnl = (state.entry_price - sell_fill) * alpaca_qty if state.entry_price else 0
+                else:
+                    pnl = (sell_fill - state.entry_price) * alpaca_qty if state.entry_price else 0
                 state.total_pnl += pnl
-                state.last_signal = f"SELL ({exit_reason})"
+                exit_label = "COVER" if is_short else "SELL"
+                state.last_signal = f"{exit_label} ({exit_reason})"
 
                 # Update dynamic sizing counter
                 if exit_reason in ("stop_loss", "trailing_stop"):
@@ -510,15 +558,19 @@ class BotRunner:
                     "value": round(state.total_pnl, 2),
                 })
 
-                slippage = sell_fill - price
+                if is_short:
+                    slippage = sell_fill - price  # higher cover fill is worse
+                else:
+                    slippage = sell_fill - price
                 slippage_pct = (slippage / price) * 100 if price else 0
                 state.slippage_pcts.append(round(slippage_pct, 4))
-                self._log("TRADE", f"SELL {cfg.symbol} @ {sell_fill:.2f} | PnL={pnl:+.2f} | reason={exit_reason} (expected={price:.2f}, slippage={slippage_pct:+.4f}%)")
+                self._log("TRADE", f"{exit_label} {cfg.symbol} @ {sell_fill:.2f} | PnL={pnl:+.2f} | reason={exit_reason} (expected={price:.2f}, slippage={slippage_pct:+.4f}%)")
 
                 try:
                     from routes.trading import _log_trade
-                    _log_trade(cfg.symbol, "sell", alpaca_qty, sell_fill, source="bot", reason=exit_reason,
-                               expected_price=price)
+                    _log_trade(cfg.symbol, "cover" if is_short else "sell", alpaca_qty, sell_fill,
+                               source="bot", reason=exit_reason, expected_price=price,
+                               direction=cfg.direction)
                 except Exception:
                     pass
 
@@ -666,6 +718,7 @@ class BotManager:
             trading_hours=config.trading_hours,
             slippage_pct=config.slippage_pct,
             source=config.data_source,
+            direction=config.direction,
         )
 
         try:
@@ -727,10 +780,11 @@ class BotManager:
             raise ValueError(f"Position too small: ${effective_size:.2f} / ${price:.2f}")
 
         # Submit order
+        is_short = config.direction == "short"
         order = client.submit_order(MarketOrderRequest(
             symbol=config.symbol.upper(),
             qty=qty,
-            side=OrderSide.BUY,
+            side=OrderSide.SELL if is_short else OrderSide.BUY,
             time_in_force=TimeInForce.DAY,
         ))
 
@@ -748,21 +802,27 @@ class BotManager:
                 break
 
         # Update bot state
-        slippage_pct = ((fill_price - price) / price) * 100 if price else 0
+        if is_short:
+            slippage = price - fill_price  # lower fill is worse for short seller
+        else:
+            slippage = fill_price - price  # higher fill is worse for buyer
+        slippage_pct = (slippage / price) * 100 if price else 0
         state.slippage_pcts.append(round(slippage_pct, 4))
         state.entry_price = fill_price
         state.trail_peak = fill_price
         state.trades_count += 1
-        state.last_signal = "BUY (manual)"
+        side_label = "SHORT" if is_short else "BUY"
+        state.last_signal = f"{side_label} (manual)"
 
         # Log
         runner = BotRunner(config, state, self)
-        runner._log("TRADE", f"BUY {qty} {config.symbol} @ {fill_price:.2f} (manual, expected={price:.2f}, slippage={slippage_pct:+.4f}%)")
+        runner._log("TRADE", f"{side_label} {qty} {config.symbol} @ {fill_price:.2f} (manual, expected={price:.2f}, slippage={slippage_pct:+.4f}%)")
 
         try:
             from routes.trading import _log_trade
-            _log_trade(config.symbol, "buy", qty, fill_price, source="bot", reason="manual_entry",
-                       expected_price=price)
+            _log_trade(config.symbol, "short" if is_short else "buy", qty, fill_price,
+                       source="bot", reason="manual_entry", expected_price=price,
+                       direction=config.direction)
         except Exception:
             pass
 
@@ -783,6 +843,7 @@ class BotManager:
                 "total_pnl": round(state.total_pnl, 2),
                 "backtest_summary": state.backtest_result.get("summary") if state.backtest_result else None,
                 "data_source": config.data_source,
+                "direction": config.direction,
                 "avg_slippage_pct": round(sum(state.slippage_pcts) / len(state.slippage_pcts), 4) if state.slippage_pcts else None,
                 "has_position": state.entry_price is not None,
             })
