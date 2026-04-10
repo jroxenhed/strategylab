@@ -172,11 +172,11 @@ function BotCard({
         </span>
       </div>
 
-      {/* Backtest summary (if available) */}
-      {detail?.state.backtest_result?.summary && (
+      {/* Backtest summary (always visible if available) */}
+      {summary.backtest_summary && (
         <div style={{ display: 'flex', gap: 12, fontSize: 11, color: '#666' }}>
           {(() => {
-            const s = detail.state.backtest_result!.summary as any
+            const s = summary.backtest_summary as any
             return <>
               <span>BT Return: <span style={{ color: '#aaa' }}>{s.total_return_pct?.toFixed(1)}%</span></span>
               <span>Sharpe: <span style={{ color: '#aaa' }}>{s.sharpe_ratio?.toFixed(2)}</span></span>

@@ -239,6 +239,7 @@ export interface BotSummary {
   status: string
   trades_count: number
   total_pnl: number
+  backtest_summary: Record<string, number> | null
 }
 
 export interface BotDetail {

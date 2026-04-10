@@ -579,6 +579,7 @@ class BotManager:
                 "status": state.status,
                 "trades_count": state.trades_count,
                 "total_pnl": round(state.total_pnl, 2),
+                "backtest_summary": state.backtest_result.get("summary") if state.backtest_result else None,
             })
         return result
 
