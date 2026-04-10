@@ -89,9 +89,8 @@ export default function App() {
       </header>
 
       {/* Main area — calc height required for react-resizable-panels v4 */}
-      <div style={{ height: 'calc(100vh - 56px)', overflowY: 'auto' }}>
+      <div style={{ height: 'calc(100vh - 56px)' }}>
         {activeTab === 'chart' ? (
-          <div style={{ height: 'max(calc(100vh - 56px), 600px)' }}>
           <Group orientation="horizontal" style={{ height: '100%' }}>
 
             {/* LEFT SIDEBAR */}
@@ -120,56 +119,50 @@ export default function App() {
 
             {/* CENTER COLUMN */}
             <Panel defaultSize="66%" minSize="30%">
-              <div style={{ height: '100%', overflow: 'hidden' }}>
-                <Group orientation="vertical" style={{ height: '100%' }}>
+              <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
-                  {/* CHART */}
-                  <Panel defaultSize="58%" minSize="15%">
-                    <div className="panel-fill">
-                      {!chartEnabled ? (
-                        <div style={styles.chartDisabled}>
-                          <span style={{ color: '#8b949e', fontSize: 12 }}>Chart disabled</span>
-                          <button onClick={() => setChartEnabled(true)} style={styles.chartToggleBtn}>Enable</button>
-                        </div>
-                      ) : ohlcv.length > 0 ? (
-                        <Chart
-                          ticker={ticker}
-                          data={ohlcv}
-                          spyData={showSpy ? (spyData ?? []) : undefined}
-                          qqqData={showQqq ? (qqqData ?? []) : undefined}
-                          showSpy={showSpy}
-                          showQqq={showQqq}
-                          indicatorData={indicatorData}
-                          activeIndicators={activeIndicators}
-                          trades={trades}
-                          emaOverlays={emaOverlays}
-                          onChartReady={setMainChart}
-                        />
-                      ) : (
-                        <div style={styles.empty}>Loading {ticker}...</div>
-                      )}
-                    </div>
-                  </Panel>
-
-                  <Separator className="resize-handle-h" />
-
-                  {/* BOTTOM PANE: Strategy rules + Results */}
-                  <Panel defaultSize="42%" minSize="20%" collapsible>
-                    <div style={{ height: '100%', overflowY: 'auto', display: 'flex', flexDirection: 'column', background: 'var(--bg-main)' }}>
-                      <StrategyBuilder
+                {/* CHART — takes remaining space */}
+                <div style={{ flex: 1, minHeight: 0 }}>
+                  <div className="panel-fill">
+                    {!chartEnabled ? (
+                      <div style={styles.chartDisabled}>
+                        <span style={{ color: '#8b949e', fontSize: 12 }}>Chart disabled</span>
+                        <button onClick={() => setChartEnabled(true)} style={styles.chartToggleBtn}>Enable</button>
+                      </div>
+                    ) : ohlcv.length > 0 ? (
+                      <Chart
                         ticker={ticker}
-                        start={start}
-                        end={end}
-                        interval={interval}
-                        onResult={setBacktestResult}
-                        dataSource={dataSource}
-                        settingsPortalId="strategy-settings-portal"
+                        data={ohlcv}
+                        spyData={showSpy ? (spyData ?? []) : undefined}
+                        qqqData={showQqq ? (qqqData ?? []) : undefined}
+                        showSpy={showSpy}
+                        showQqq={showQqq}
+                        indicatorData={indicatorData}
+                        activeIndicators={activeIndicators}
+                        trades={trades}
+                        emaOverlays={emaOverlays}
+                        onChartReady={setMainChart}
                       />
-                      {backtestResult && <Results result={backtestResult} mainChart={mainChart} />}
-                    </div>
-                  </Panel>
+                    ) : (
+                      <div style={styles.empty}>Loading {ticker}...</div>
+                    )}
+                  </div>
+                </div>
 
-                </Group>
+                {/* BOTTOM PANE: Strategy rules + Results — fixed height, scrolls */}
+                <div style={{ height: 300, flexShrink: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', background: 'var(--bg-main)', borderTop: '1px solid var(--border-light)' }}>
+                  <StrategyBuilder
+                    ticker={ticker}
+                    start={start}
+                    end={end}
+                    interval={interval}
+                    onResult={setBacktestResult}
+                    dataSource={dataSource}
+                    settingsPortalId="strategy-settings-portal"
+                  />
+                  {backtestResult && <Results result={backtestResult} mainChart={mainChart} />}
+                </div>
+
               </div>
             </Panel>
 
@@ -183,7 +176,6 @@ export default function App() {
             </Panel>
 
           </Group>
-          </div>
         ) : (
           <PaperTrading />
         )}
