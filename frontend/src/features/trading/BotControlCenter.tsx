@@ -413,6 +413,7 @@ function AddBotBar({
   const [interval, setInterval] = useState('15m')
   const [allocation, setAllocation] = useState('')
   const [dataSource, setDataSource] = useState('alpaca-iex')
+  const [direction, setDirection] = useState<'long' | 'short'>('long')
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -457,6 +458,7 @@ function AddBotBar({
         trading_hours: s.tradingHours ?? null,
         slippage_pct: typeof s.slippage === 'number' ? s.slippage : 0,
         data_source: dataSource,
+        direction,
       })
       setAllocation('')
     } catch (e: any) {
@@ -497,6 +499,12 @@ function AddBotBar({
           <option value="alpaca-iex">IEX</option>
           <option value="alpaca">Alpaca SIP</option>
           <option value="yahoo">Yahoo</option>
+        </select>
+
+        {/* Direction */}
+        <select value={direction} onChange={e => setDirection(e.target.value as 'long' | 'short')} style={inputStyle}>
+          <option value="long">Long</option>
+          <option value="short">Short</option>
         </select>
 
         {/* Allocation */}
