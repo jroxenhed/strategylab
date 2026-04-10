@@ -56,16 +56,16 @@ function toLineData(arr: TimeValue[]) {
   )
 }
 
-function buildMarkers(trades: Array<{ type: string; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean; trailing_stop?: boolean }>, showPrice = true) {
+function buildMarkers(trades: Array<{ type: string; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean; trailing_stop?: boolean }>, showPrice = true, subPane = false) {
   return trades.map(t => {
     const isEntry = t.type === 'buy' || t.type === 'short'
     if (isEntry) {
       const label = t.type === 'short' ? 'SH' : 'B'
       return {
         time: toET(t.date as any) as any,
-        position: 'belowBar' as const,
+        position: subPane ? 'inBar' as const : 'belowBar' as const,
         color: '#e5c07b',
-        shape: 'arrowUp' as const,
+        shape: subPane ? 'circle' as const : 'arrowUp' as const,
         text: showPrice ? `${label} $${t.price}` : label,
       }
     }
@@ -76,9 +76,9 @@ function buildMarkers(trades: Array<{ type: string; date: string; price: number;
     const label = t.stop_loss ? 'SL' : t.trailing_stop ? 'TSL' : (t.type === 'cover' ? 'COV' : 'S')
     return {
       time: toET(t.date as any) as any,
-      position: 'aboveBar' as const,
+      position: subPane ? 'inBar' as const : 'aboveBar' as const,
       color,
-      shape: 'arrowDown' as const,
+      shape: subPane ? 'circle' as const : 'arrowDown' as const,
       text: showPrice ? `${label} $${t.price}${pctStr}` : label,
     }
   })
@@ -336,7 +336,7 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
     chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'MACD' }).setData(toLineData(macd))
     chart.addSeries(LineSeries, { color: '#f0883e', lineWidth: 1, title: 'Signal' }).setData(toLineData(signal))
 
-    if (trades && trades.length > 0) createSeriesMarkers(histSeries, buildMarkers(trades, false))
+    if (trades && trades.length > 0) createSeriesMarkers(histSeries, buildMarkers(trades, false, true))
 
     chart.timeScale().fitContent()
 
@@ -392,7 +392,7 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
       chart.addSeries(LineSeries, { color: '#26a641', lineWidth: 1, lineStyle: 2 }).setData([{ time: toET(first as any) as any, value: 30 }, { time: toET(last as any) as any, value: 30 }])
     }
 
-    if (trades && trades.length > 0) createSeriesMarkers(rsiLine, buildMarkers(trades, false))
+    if (trades && trades.length > 0) createSeriesMarkers(rsiLine, buildMarkers(trades, false, true))
 
     chart.timeScale().fitContent()
 
