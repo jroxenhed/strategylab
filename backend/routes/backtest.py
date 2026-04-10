@@ -78,6 +78,7 @@ def run_backtest(req: StrategyRequest):
         trades = []
         equity = []
 
+        is_short = req.direction == "short"
         ts = req.trailing_stop
         atr = indicators.get("atr")
         signal_trace = [] if req.debug else None
@@ -134,8 +135,11 @@ def run_backtest(req: StrategyRequest):
                 if ds and ds.enabled and consec_sl_count >= ds.consec_sls:
                     effective_size = req.position_size * (ds.reduced_pct / 100)
 
-                # Slippage: buy at a worse (higher) price
-                fill_price = price * (1 + req.slippage_pct / 100)
+                # Slippage: short entry fills lower (worse for seller), long fills higher (worse for buyer)
+                if is_short:
+                    fill_price = price * (1 - req.slippage_pct / 100)
+                else:
+                    fill_price = price * (1 + req.slippage_pct / 100)
                 shares = (capital * effective_size) / fill_price
                 commission = shares * fill_price * req.commission_pct / 100
                 position = shares
@@ -143,17 +147,19 @@ def run_backtest(req: StrategyRequest):
                 capital -= shares * fill_price + commission
                 trail_peak = fill_price
                 trail_stop_price = None
-                buy_slippage = shares * (fill_price - price)
+                entry_slippage = abs(shares * (fill_price - price))
+                entry_type = "short" if is_short else "buy"
                 trades.append({
-                    "type": "buy", "date": date, "price": round(fill_price, 4),
+                    "type": entry_type, "date": date, "price": round(fill_price, 4),
                     "shares": round(shares, 4),
-                    "slippage": round(buy_slippage, 2),
+                    "direction": req.direction,
+                    "slippage": round(entry_slippage, 2),
                     "commission": round(commission, 2),
                 })
                 if signal_trace is not None:
                     signal_trace.append({
                         "date": date, "price": round(price, 4), "position": "entered",
-                        "action": "BUY",
+                        "action": "SHORT" if is_short else "BUY",
                         "buy_rules": _trace_rules(req.buy_rules, indicators, i, "buy"),
                     })
 
@@ -161,20 +167,37 @@ def run_backtest(req: StrategyRequest):
                 # Update trailing stop peak and compute trail_stop_price
                 trail_hit = False
                 if ts:
-                    source_price = high.iloc[i] if ts.source == "high" else price
-                    threshold = entry_price * (1 + ts.activate_pct / 100)
-                    if not ts.activate_on_profit or source_price >= threshold:
-                        trail_peak = max(trail_peak, source_price)
-                    if ts.type == "pct":
-                        trail_stop_price = trail_peak * (1 - ts.value / 100)
-                    else:  # atr
-                        atr_val = atr.iloc[i] if atr is not None and not pd.isna(atr.iloc[i]) else 0.0
-                        trail_stop_price = trail_peak - ts.value * atr_val
-                    trail_hit = low.iloc[i] <= trail_stop_price
+                    if is_short:
+                        # Short: track trough (mirror high→low)
+                        source_price = low.iloc[i] if ts.source == "high" else price
+                        threshold = entry_price * (1 - ts.activate_pct / 100)
+                        if not ts.activate_on_profit or source_price <= threshold:
+                            trail_peak = min(trail_peak, source_price)
+                        if ts.type == "pct":
+                            trail_stop_price = trail_peak * (1 + ts.value / 100)
+                        else:  # atr
+                            atr_val = atr.iloc[i] if atr is not None and not pd.isna(atr.iloc[i]) else 0.0
+                            trail_stop_price = trail_peak + ts.value * atr_val
+                        trail_hit = high.iloc[i] >= trail_stop_price
+                    else:
+                        source_price = high.iloc[i] if ts.source == "high" else price
+                        threshold = entry_price * (1 + ts.activate_pct / 100)
+                        if not ts.activate_on_profit or source_price >= threshold:
+                            trail_peak = max(trail_peak, source_price)
+                        if ts.type == "pct":
+                            trail_stop_price = trail_peak * (1 - ts.value / 100)
+                        else:  # atr
+                            atr_val = atr.iloc[i] if atr is not None and not pd.isna(atr.iloc[i]) else 0.0
+                            trail_stop_price = trail_peak - ts.value * atr_val
+                        trail_hit = low.iloc[i] <= trail_stop_price
 
-                # Check fixed stop loss using the bar's low price
-                stop_price_limit = entry_price * (1 - req.stop_loss_pct / 100) if (req.stop_loss_pct and req.stop_loss_pct > 0) else None
-                stop_hit = stop_price_limit is not None and low.iloc[i] <= stop_price_limit
+                # Check fixed stop loss
+                if is_short:
+                    stop_price_limit = entry_price * (1 + req.stop_loss_pct / 100) if (req.stop_loss_pct and req.stop_loss_pct > 0) else None
+                    stop_hit = stop_price_limit is not None and high.iloc[i] >= stop_price_limit
+                else:
+                    stop_price_limit = entry_price * (1 - req.stop_loss_pct / 100) if (req.stop_loss_pct and req.stop_loss_pct > 0) else None
+                    stop_hit = stop_price_limit is not None and low.iloc[i] <= stop_price_limit
 
                 # Exit priority: fixed stop beats trailing stop (it's the harder floor)
                 if stop_hit:
@@ -187,27 +210,37 @@ def run_backtest(req: StrategyRequest):
                     raw_exit = price
                     exit_reason = "signal"
 
-                # Slippage: sell at a worse (lower) price
-                exit_price = raw_exit * (1 - req.slippage_pct / 100)
+                # Slippage: short covers at higher price (worse), long sells at lower price (worse)
+                if is_short:
+                    exit_price = raw_exit * (1 + req.slippage_pct / 100)
+                else:
+                    exit_price = raw_exit * (1 - req.slippage_pct / 100)
                 sell_fired = eval_rules(req.sell_rules, req.sell_logic, indicators, i)
                 if stop_hit or trail_hit or sell_fired:
-                    proceeds = position * exit_price
-                    commission = proceeds * req.commission_pct / 100
-                    sell_slippage = position * (raw_exit - exit_price)
-                    pnl = (proceeds - commission) - position * entry_price
+                    exit_slippage = abs(position * (raw_exit - exit_price))
+                    if is_short:
+                        commission = position * exit_price * req.commission_pct / 100
+                        pnl = position * (entry_price - exit_price) - commission
+                        capital += position * entry_price + pnl
+                    else:
+                        proceeds = position * exit_price
+                        commission = proceeds * req.commission_pct / 100
+                        pnl = (proceeds - commission) - position * entry_price
+                        capital += proceeds - commission
+                    exit_type = "cover" if is_short else "sell"
                     trades.append({
-                        "type": "sell",
+                        "type": exit_type,
                         "date": date,
                         "price": round(exit_price, 4),
                         "shares": round(position, 4),
+                        "direction": req.direction,
                         "pnl": round(pnl, 2),
                         "pnl_pct": round(pnl / (position * entry_price) * 100, 2),
                         "stop_loss": exit_reason == "stop_loss",
                         "trailing_stop": exit_reason == "trailing_stop",
-                        "slippage": round(sell_slippage, 2),
+                        "slippage": round(exit_slippage, 2),
                         "commission": round(commission, 2),
                     })
-                    capital += proceeds - commission
                     position = 0.0
                     trail_peak = 0.0
                     trail_stop_price = None
@@ -216,7 +249,7 @@ def run_backtest(req: StrategyRequest):
                     else:
                         consec_sl_count = 0
                     if signal_trace is not None:
-                        action = "STOP_LOSS" if exit_reason == "stop_loss" else "TRAIL_STOP" if exit_reason == "trailing_stop" else "SELL"
+                        action = "STOP_LOSS" if exit_reason == "stop_loss" else "TRAIL_STOP" if exit_reason == "trailing_stop" else ("COVER" if is_short else "SELL")
                         signal_trace.append({
                             "date": date, "price": round(price, 4), "position": "exited",
                             "action": action,
@@ -244,7 +277,11 @@ def run_backtest(req: StrategyRequest):
                             "sell_rules": sell_details,
                         })
 
-            total_value = capital + (position * price if position > 0 else 0)
+            if is_short and position > 0:
+                unrealized = position * (entry_price - price)
+                total_value = capital + position * entry_price + unrealized
+            else:
+                total_value = capital + (position * price if position > 0 else 0)
             equity.append({"time": date, "value": round(total_value, 2)})
 
         # Close open position at last price
@@ -265,7 +302,8 @@ def run_backtest(req: StrategyRequest):
         drawdown = (eq_series - peak) / peak
         max_drawdown = float(drawdown.min() * 100)
 
-        sell_trades = [t for t in trades if t["type"] == "sell"]
+        exit_type = "cover" if is_short else "sell"
+        sell_trades = [t for t in trades if t["type"] == exit_type]
         winning = [t for t in sell_trades if t.get("pnl", 0) > 0]
         win_rate = len(winning) / len(sell_trades) * 100 if sell_trades else 0
 
