@@ -19,15 +19,11 @@ from typing import Optional
 
 from pydantic import BaseModel, field_validator
 
-from routes.backtest import (
-    TrailingStopConfig,
-    DynamicSizingConfig,
-    TradingHoursConfig,
-    StrategyRequest,
-    run_backtest,
-)
+from models import TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, StrategyRequest
+from routes.backtest import run_backtest
 from signal_engine import Rule, compute_indicators, eval_rules
 from shared import _fetch, get_trading_client
+from journal import _log_trade
 
 # ---------------------------------------------------------------------------
 # Alpaca order helpers (imported lazily to avoid hard dep if Alpaca not set up)
@@ -329,7 +325,6 @@ class BotRunner:
                 self._log("TRADE", f"{side_label} {cfg.symbol} @ {exit_price:.2f} | PnL={pnl:+.2f} | reason={exit_reason} (detected)")
 
                 try:
-                    from routes.trading import _log_trade
                     _log_trade(cfg.symbol, "cover" if is_short else "sell", sell_qty, exit_price,
                                source="bot", reason=exit_reason, direction=cfg.direction)
                 except Exception:
@@ -437,7 +432,6 @@ class BotRunner:
 
                 # Log to trade journal
                 try:
-                    from routes.trading import _log_trade
                     _log_trade(cfg.symbol, "short" if is_short else "buy", qty, fill_price,
                                source="bot", reason="entry", expected_price=price,
                                direction=cfg.direction)
@@ -567,7 +561,6 @@ class BotRunner:
                 self._log("TRADE", f"{exit_label} {cfg.symbol} @ {sell_fill:.2f} | PnL={pnl:+.2f} | reason={exit_reason} (expected={price:.2f}, slippage={slippage_pct:+.4f}%)")
 
                 try:
-                    from routes.trading import _log_trade
                     _log_trade(cfg.symbol, "cover" if is_short else "sell", alpaca_qty, sell_fill,
                                source="bot", reason=exit_reason, expected_price=price,
                                direction=cfg.direction)
@@ -819,7 +812,6 @@ class BotManager:
         runner._log("TRADE", f"{side_label} {qty} {config.symbol} @ {fill_price:.2f} (manual, expected={price:.2f}, slippage={slippage_pct:+.4f}%)")
 
         try:
-            from routes.trading import _log_trade
             _log_trade(config.symbol, "short" if is_short else "buy", qty, fill_price,
                        source="bot", reason="manual_entry", expected_price=price,
                        direction=config.direction)

@@ -1,7 +1,7 @@
 from sys import path as sys_path
 from os.path import dirname, abspath
 sys_path.insert(0, dirname(dirname(abspath(__file__))))
-from routes.backtest import StrategyRequest
+from models import StrategyRequest
 from bot_manager import BotConfig
 
 

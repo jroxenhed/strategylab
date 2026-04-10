@@ -6,7 +6,8 @@ sys_path.insert(0, dirname(dirname(abspath(__file__))))
 import pandas as pd
 import numpy as np
 from unittest.mock import patch
-from routes.backtest import StrategyRequest, run_backtest
+from models import StrategyRequest
+from routes.backtest import run_backtest
 from signal_engine import Rule
 
 

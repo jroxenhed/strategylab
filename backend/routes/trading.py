@@ -1,15 +1,18 @@
 import json
 import math
 import time
-import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional
 import pandas as pd
 from shared import get_trading_client, _fetch, _alpaca_client
 from signal_engine import Rule, compute_indicators, eval_rules
+from journal import _log_trade, DATA_DIR, JOURNAL_PATH
+from models import StrategyRequest
+from routes.backtest import run_backtest
+
+WATCHLIST_PATH = DATA_DIR / "watchlist.json"
 
 router = APIRouter(prefix="/api/trading")
 
@@ -23,36 +26,6 @@ def _alpaca_call(fn, *args, **kwargs):
             print(f"[Alpaca] Stale connection, retrying {fn.__name__}...")
             return fn(*args, **kwargs)
         raise
-
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-WATCHLIST_PATH = DATA_DIR / "watchlist.json"
-JOURNAL_PATH = DATA_DIR / "trade_journal.json"
-
-
-def _log_trade(symbol: str, side: str, qty: float, price: float | None,
-               source: str, stop_loss_price: float | None = None,
-               reason: str | None = None, expected_price: float | None = None,
-               direction: str = "long"):
-    """Append a trade entry to the journal."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if JOURNAL_PATH.exists():
-        journal = json.loads(JOURNAL_PATH.read_text())
-    else:
-        journal = {"trades": []}
-    journal["trades"].append({
-        "id": str(uuid.uuid4()),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "symbol": symbol,
-        "side": side,
-        "qty": qty,
-        "price": price,
-        "stop_loss_price": stop_loss_price,
-        "source": source,
-        "reason": reason,
-        "expected_price": expected_price,
-        "direction": direction,
-    })
-    JOURNAL_PATH.write_text(json.dumps(journal, indent=2))
 
 
 class BuyRequest(BaseModel):
@@ -461,7 +434,6 @@ def get_performance(req: PerformanceRequest):
             })
 
     # --- Backtest (expected) ---
-    from routes.backtest import StrategyRequest, run_backtest
     try:
         bt_result = run_backtest(StrategyRequest(
             ticker=req.symbol,
