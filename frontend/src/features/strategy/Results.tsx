@@ -20,7 +20,7 @@ export default function Results({ result, mainChart }: Props) {
   const { summary, trades, equity_curve, signal_trace } = result
   const [activeTab, setActiveTab] = useState<Tab>('summary')
   const chartRef = useRef<HTMLDivElement>(null)
-  const sells = trades.filter(t => t.type === 'sell')
+  const sells = trades.filter(t => t.type === 'sell' || t.type === 'cover')
 
   useEffect(() => {
     if (activeTab !== 'equity' || !chartRef.current || equity_curve.length === 0) return
@@ -159,7 +159,7 @@ export default function Results({ result, mainChart }: Props) {
               <span style={{ ...styles.tradeCell, width: 40, color: '#8b949e', fontSize: 10 }}>Exit</span>
             </div>
             {sells.map((sell, i) => {
-              const buy = trades.filter(t => t.type === 'buy')[i]
+              const buy = trades.filter(t => t.type === 'buy' || t.type === 'short')[i]
               const win = (sell.pnl ?? 0) >= 0
               const color = win ? '#26a641' : '#f85149'
               const totalSlip = (buy?.slippage ?? 0) + (sell.slippage ?? 0)
