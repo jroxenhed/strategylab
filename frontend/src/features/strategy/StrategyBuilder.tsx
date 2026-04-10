@@ -59,6 +59,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   })
   const [slippage, setSlippage] = useState<number | ''>(saved?.slippage ?? '')
   const [commission, setCommission] = useState<number | ''>(saved?.commission ?? '')
+  const [direction, setDirection] = useState<'long' | 'short'>(saved?.direction ?? 'long')
   const [debug, setDebug] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -74,7 +75,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
       buyRules, sellRules, buyLogic, sellLogic,
       capital, posSize, stopLoss,
       trailingEnabled, trailingConfig, dynamicSizing, tradingHours,
-      slippage, commission,
+      slippage, commission, direction,
     }
   }
 
@@ -95,6 +96,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     setTrailingEnabled(s.trailingEnabled); setTrailingConfig(s.trailingConfig)
     setDynamicSizing(s.dynamicSizing); setTradingHours(s.tradingHours)
     setSlippage(s.slippage); setCommission(s.commission)
+    setDirection(s.direction ?? 'long')
     setActiveStrategyName(s.name)
   }
 
@@ -118,9 +120,9 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   useEffect(() => {
     localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({
       buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss,
-      trailingEnabled, trailingConfig, dynamicSizing, tradingHours, slippage, commission,
+      trailingEnabled, trailingConfig, dynamicSizing, tradingHours, slippage, commission, direction,
     }))
-  }, [buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, trailingEnabled, trailingConfig, dynamicSizing, tradingHours, slippage, commission])
+  }, [buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, trailingEnabled, trailingConfig, dynamicSizing, tradingHours, slippage, commission, direction])
 
   async function runBacktest() {
     setLoading(true)
@@ -140,7 +142,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         trading_hours: tradingHours.enabled ? tradingHours : undefined,
         slippage_pct: slippage !== '' && slippage > 0 ? slippage : undefined,
         commission_pct: commission !== '' && commission > 0 ? commission : undefined,
-        source: dataSource, debug,
+        source: dataSource, debug, direction,
       }
       const { data } = await axios.post('http://localhost:8000/api/backtest', req)
       onResult(data)
@@ -329,11 +331,31 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             </div>
           )}
         </div>
+        <div style={{ display: 'flex', gap: 4, marginBottom: 8, paddingLeft: 16 }}>
+          {(['long', 'short'] as const).map(d => (
+            <button
+              key={d}
+              onClick={() => setDirection(d)}
+              style={{
+                padding: '4px 12px', fontSize: 12, borderRadius: 4, border: 'none',
+                cursor: 'pointer', textTransform: 'uppercase', fontWeight: 600,
+                background: direction === d
+                  ? (d === 'long' ? '#1a3a2a' : '#3a1a1a')
+                  : '#161b22',
+                color: direction === d
+                  ? (d === 'long' ? '#26a69a' : '#ef5350')
+                  : '#666',
+              }}
+            >
+              {d}
+            </button>
+          ))}
+        </div>
         <div style={styles.panels}>
           {/* BUY */}
           <div style={styles.panel}>
             <div style={styles.panelHeader}>
-              <span style={{ color: 'var(--accent-green)', fontWeight: 600 }}>BUY when</span>
+              <span style={{ color: 'var(--accent-green)', fontWeight: 600 }}>{direction === 'short' ? 'Entry Rules' : 'BUY'} when</span>
               <div style={styles.logicToggle}>
                 {(['AND', 'OR'] as const).map(l => (
                   <button key={l} onClick={() => setBuyLogic(l)} style={{ ...styles.logicBtn, ...(buyLogic === l ? styles.logicBtnActive : {}) }}>{l}</button>
@@ -351,7 +373,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
           {/* SELL */}
           <div style={styles.panel}>
             <div style={styles.panelHeader}>
-              <span style={{ color: 'var(--accent-red)', fontWeight: 600 }}>SELL when</span>
+              <span style={{ color: 'var(--accent-red)', fontWeight: 600 }}>{direction === 'short' ? 'Exit Rules' : 'SELL'} when</span>
               <div style={styles.logicToggle}>
                 {(['AND', 'OR'] as const).map(l => (
                   <button key={l} onClick={() => setSellLogic(l)} style={{ ...styles.logicBtn, ...(sellLogic === l ? styles.logicBtnActive : {}) }}>{l}</button>
