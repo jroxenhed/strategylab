@@ -242,6 +242,8 @@ export interface BotSummary {
   total_pnl: number
   backtest_summary: Record<string, number> | null
   data_source?: string
+  avg_slippage_pct?: number | null
+  has_position?: boolean
 }
 
 export interface BotDetail {

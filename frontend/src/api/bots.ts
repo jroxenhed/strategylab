@@ -40,6 +40,11 @@ export async function backtestBot(botId: string): Promise<void> {
   await axios.post(`${API}/api/bots/${botId}/backtest`)
 }
 
+export async function manualBuyBot(botId: string): Promise<{ qty: number; fill_price: number; slippage_pct: number }> {
+  const res = await axios.post(`${API}/api/bots/${botId}/buy`)
+  return res.data
+}
+
 export async function deleteBot(botId: string): Promise<void> {
   await axios.delete(`${API}/api/bots/${botId}`)
 }

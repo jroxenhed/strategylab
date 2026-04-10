@@ -30,7 +30,7 @@ JOURNAL_PATH = DATA_DIR / "trade_journal.json"
 
 def _log_trade(symbol: str, side: str, qty: float, price: float | None,
                source: str, stop_loss_price: float | None = None,
-               reason: str | None = None):
+               reason: str | None = None, expected_price: float | None = None):
     """Append a trade entry to the journal."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if JOURNAL_PATH.exists():
@@ -47,6 +47,7 @@ def _log_trade(symbol: str, side: str, qty: float, price: float | None,
         "stop_loss_price": stop_loss_price,
         "source": source,
         "reason": reason,
+        "expected_price": expected_price,
     })
     JOURNAL_PATH.write_text(json.dumps(journal, indent=2))
 

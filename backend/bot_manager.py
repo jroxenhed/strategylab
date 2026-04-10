@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from routes.backtest import (
     TrailingStopConfig,
@@ -59,6 +59,12 @@ class BotConfig(BaseModel):
     sell_logic: str = "AND"
     allocated_capital: float          # dollar slice of the bot fund for this bot
     position_size: float = 1.0        # fraction of allocated_capital per trade (0.01–1.0)
+
+    @field_validator('position_size')
+    @classmethod
+    def clamp_position_size(cls, v: float) -> float:
+        return max(0.01, min(1.0, v))
+
     stop_loss_pct: Optional[float] = None
     trailing_stop: Optional[TrailingStopConfig] = None
     dynamic_sizing: Optional[DynamicSizingConfig] = None
@@ -92,6 +98,7 @@ class BotState:
     scans_count: int = 0
     trades_count: int = 0
     total_pnl: float = 0.0
+    slippage_pcts: list = field(default_factory=list)  # list of slippage % per fill
 
     # History
     equity_snapshots: list = field(default_factory=list)  # [{time, value}]
@@ -114,6 +121,7 @@ class BotState:
             "scans_count": self.scans_count,
             "trades_count": self.trades_count,
             "total_pnl": self.total_pnl,
+            "slippage_pcts": self.slippage_pcts,
             "equity_snapshots": self.equity_snapshots,
             "backtest_result": self.backtest_result,
             "activity_log": self.activity_log,
@@ -176,6 +184,20 @@ class BotRunner:
             if "Connection aborted" in str(e) or "RemoteDisconnected" in str(e):
                 return await self._run_in_executor(fn, *args)
             raise
+
+    async def _get_fill_price(self, client, order_id, fallback: float) -> float:
+        """Poll Alpaca order briefly to get the actual fill price."""
+        if not order_id:
+            return fallback
+        for _ in range(5):
+            await asyncio.sleep(0.5)
+            try:
+                order = await self._run_in_executor(client.get_order_by_id, str(order_id))
+                if order.filled_avg_price is not None:
+                    return float(order.filled_avg_price)
+            except Exception:
+                break
+        return fallback
 
     async def _tick(self):
         cfg = self.config
@@ -320,8 +342,9 @@ class BotRunner:
             )
 
             if buy_signal:
-                # Compute effective position size
-                effective_size = cfg.allocated_capital * cfg.position_size
+                # Compute effective position size (compounds P&L like backtest)
+                current_capital = cfg.allocated_capital + state.total_pnl
+                effective_size = max(current_capital, 0) * cfg.position_size
                 if cfg.dynamic_sizing and cfg.dynamic_sizing.enabled:
                     if state.consec_sl_count >= cfg.dynamic_sizing.consec_sls:
                         effective_size *= (cfg.dynamic_sizing.reduced_pct / 100.0)
@@ -374,22 +397,29 @@ class BotRunner:
                             time_in_force=TimeInForce.DAY,
                         )
 
-                    await self._run_in_executor(client.submit_order, order_req)
+                    order = await self._run_in_executor(client.submit_order, order_req)
 
                 except Exception as e:
                     self._log("ERROR", f"Buy order failed: {e}")
                     return
 
-                state.entry_price = price
-                state.trail_peak = price
+                # Get actual fill price from Alpaca
+                fill_price = await self._get_fill_price(client, order.id, price)
+
+                state.entry_price = fill_price
+                state.trail_peak = fill_price
                 state.trades_count += 1
                 state.last_signal = "BUY"
-                self._log("TRADE", f"BUY {qty} {cfg.symbol} @ {price:.2f} (size=${effective_size:.0f})")
+                slippage = fill_price - price
+                slippage_pct = (slippage / price) * 100 if price else 0
+                state.slippage_pcts.append(round(slippage_pct, 4))
+                self._log("TRADE", f"BUY {qty} {cfg.symbol} @ {fill_price:.2f} (expected={price:.2f}, slippage={slippage_pct:+.4f}%)")
 
                 # Log to trade journal
                 try:
                     from routes.trading import _log_trade
-                    _log_trade(cfg.symbol, "buy", qty, price, source="bot", reason="entry")
+                    _log_trade(cfg.symbol, "buy", qty, fill_price, source="bot", reason="entry",
+                               expected_price=price)
                 except Exception:
                     pass
 
@@ -455,12 +485,16 @@ class BotRunner:
                                 self._log("INFO", f"Cancelled pending {o.type.value} order {o.id}")
                     except Exception as e:
                         self._log("WARN", f"Cancel orders failed: {e}")
-                    await self._run_with_retry(client.close_position, cfg.symbol.upper())
+                    close_resp = await self._run_with_retry(client.close_position, cfg.symbol.upper())
                 except Exception as e:
                     self._log("ERROR", f"Close position failed: {e}")
                     return
 
-                pnl = (price - state.entry_price) * alpaca_qty if state.entry_price else 0
+                # Get actual fill price
+                order_id = getattr(close_resp, 'id', None) or (close_resp.get('id') if isinstance(close_resp, dict) else None)
+                sell_fill = await self._get_fill_price(client, order_id, price) if order_id else price
+
+                pnl = (sell_fill - state.entry_price) * alpaca_qty if state.entry_price else 0
                 state.total_pnl += pnl
                 state.last_signal = f"SELL ({exit_reason})"
 
@@ -475,11 +509,15 @@ class BotRunner:
                     "value": round(state.total_pnl, 2),
                 })
 
-                self._log("TRADE", f"SELL {cfg.symbol} @ {price:.2f} | PnL={pnl:+.2f} | reason={exit_reason}")
+                slippage = sell_fill - price
+                slippage_pct = (slippage / price) * 100 if price else 0
+                state.slippage_pcts.append(round(slippage_pct, 4))
+                self._log("TRADE", f"SELL {cfg.symbol} @ {sell_fill:.2f} | PnL={pnl:+.2f} | reason={exit_reason} (expected={price:.2f}, slippage={slippage_pct:+.4f}%)")
 
                 try:
                     from routes.trading import _log_trade
-                    _log_trade(cfg.symbol, "sell", alpaca_qty, price, source="bot", reason=exit_reason)
+                    _log_trade(cfg.symbol, "sell", alpaca_qty, sell_fill, source="bot", reason=exit_reason,
+                               expected_price=price)
                 except Exception:
                     pass
 
@@ -646,6 +684,77 @@ class BotManager:
             raise KeyError(f"Bot {bot_id} not found")
         return self.bots[bot_id]
 
+    def manual_buy(self, bot_id: str) -> dict:
+        """Place a manual buy for a bot using its allocation config."""
+        if bot_id not in self.bots:
+            raise KeyError(f"Bot {bot_id} not found")
+        config, state = self.bots[bot_id]
+
+        if state.entry_price is not None:
+            raise ValueError("Bot already has an open position")
+        if state.status != "running":
+            raise ValueError("Bot must be running to place a manual buy")
+
+        client = get_trading_client()
+
+        # Get current price
+        from shared import _fetch
+        from datetime import date, timedelta
+        end_date = date.today().isoformat()
+        start_date = (date.today() - timedelta(days=5)).isoformat()
+        df = _fetch(config.symbol, start_date, end_date, config.interval, config.data_source)
+        price = float(df["Close"].iloc[-1])
+
+        # Calculate qty
+        current_capital = config.allocated_capital + state.total_pnl
+        effective_size = max(current_capital, 0) * config.position_size
+        qty = math.floor(effective_size / price)
+        if qty < 1:
+            raise ValueError(f"Position too small: ${effective_size:.2f} / ${price:.2f}")
+
+        # Submit order
+        order = client.submit_order(MarketOrderRequest(
+            symbol=config.symbol.upper(),
+            qty=qty,
+            side=OrderSide.BUY,
+            time_in_force=TimeInForce.DAY,
+        ))
+
+        # Get fill price (blocking poll)
+        import time
+        fill_price = price
+        for _ in range(5):
+            time.sleep(0.5)
+            try:
+                o = client.get_order_by_id(str(order.id))
+                if o.filled_avg_price is not None:
+                    fill_price = float(o.filled_avg_price)
+                    break
+            except Exception:
+                break
+
+        # Update bot state
+        slippage_pct = ((fill_price - price) / price) * 100 if price else 0
+        state.slippage_pcts.append(round(slippage_pct, 4))
+        state.entry_price = fill_price
+        state.trail_peak = fill_price
+        state.trades_count += 1
+        state.last_signal = "BUY (manual)"
+
+        # Log
+        runner = BotRunner(config, state, self)
+        runner._log("TRADE", f"BUY {qty} {config.symbol} @ {fill_price:.2f} (manual, expected={price:.2f}, slippage={slippage_pct:+.4f}%)")
+
+        try:
+            from routes.trading import _log_trade
+            _log_trade(config.symbol, "buy", qty, fill_price, source="bot", reason="manual_entry",
+                       expected_price=price)
+        except Exception:
+            pass
+
+        self.save()
+        return {"qty": qty, "fill_price": fill_price, "slippage_pct": round(slippage_pct, 4)}
+
     def list_bots(self) -> list[dict]:
         result = []
         for bot_id, (config, state) in self.bots.items():
@@ -660,6 +769,8 @@ class BotManager:
                 "total_pnl": round(state.total_pnl, 2),
                 "backtest_summary": state.backtest_result.get("summary") if state.backtest_result else None,
                 "data_source": config.data_source,
+                "avg_slippage_pct": round(sum(state.slippage_pcts) / len(state.slippage_pcts), 4) if state.slippage_pcts else None,
+                "has_position": state.entry_price is not None,
             })
         return result
 

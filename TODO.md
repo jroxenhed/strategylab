@@ -1,21 +1,20 @@
 # StrategyLab TODO
 
 ## Critical (live trading accuracy)
-- [ ] Verify allocation logic (AAPL $1000 vs $10000 buys)
-- [ ] Verify SL fill detection works in practice
-- [ ] Does algo wait for candle close before buy/sell?
-- [ ] Does buying amount grow with P&L or stay at allocated? (currently static)
+- [x] Verify allocation logic — was position_size=10.0, added validator to clamp 0.01–1.0
+- [x] Verify SL fill detection — code verified, will confirm on next live SL trigger
+- [x] Does algo wait for candle close? — No, and that's fine. OTO SL is server-side (instant), trailing stop benefits from frequent checks
+- [x] Buying amount now compounds P&L (allocated_capital + total_pnl), matching backtest behavior
 
 ## Important (UX/correctness)
 - [ ] Bot log timezone: shows ET, user is in Sweden — use browser local time
-- [ ] Refresh button on journal
-- [ ] Increase update frequency + display interval on bot card
-- [ ] Calculate actual slippage/commissions on paper trades
+- [x] Refresh button on journal
+- [x] Increase UI update frequency (5s → 2s for bot list + detail polling)
+- [x] Track actual slippage — poll Alpaca fill price, log expected vs actual, show in journal
 
 ## Features
-- [ ] Position size: default 100%, hide slider
-- [ ] Show effective trade size on bot card when < 100%
-- [ ] Manual buy on bot to start a position
+- [x] Position size: removed slider, hardcoded to 100%
+- [x] Manual buy on bot to start a position
 - [ ] Make allocation, position size, strategy editable in-place on bot card
 - [ ] Pre-market / extended hours option
 - [ ] Portfolio equity chart (combined P&L across bots)

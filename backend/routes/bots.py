@@ -153,6 +153,18 @@ def stop_bot(bot_id: str, close: bool = False):
     return {"ok": True, "status": "stopped"}
 
 
+@router.post("/{bot_id}/buy")
+def manual_buy(bot_id: str):
+    mgr = _get_manager()
+    try:
+        result = mgr.manual_buy(bot_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return result
+
+
 @router.post("/{bot_id}/backtest")
 def backtest_bot(bot_id: str, background_tasks: BackgroundTasks):
     mgr = _get_manager()

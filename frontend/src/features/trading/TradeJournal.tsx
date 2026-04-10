@@ -6,9 +6,9 @@ export default function TradeJournal() {
   const [trades, setTrades] = useState<JournalTrade[]>([])
   const [filter, setFilter] = useState('')
 
-  useEffect(() => {
-    fetchJournal().then(setTrades).catch(() => {})
-  }, [])
+  const reload = () => fetchJournal().then(setTrades).catch(() => {})
+
+  useEffect(() => { reload() }, [])
 
   const filtered = filter
     ? trades.filter(t => t.symbol.toLowerCase().includes(filter.toLowerCase()))
@@ -24,6 +24,7 @@ export default function TradeJournal() {
       <div style={styles.header}>
         <span style={styles.title}>Trade Journal</span>
         <span style={styles.count}>{trades.length}</span>
+        <button onClick={reload} style={styles.reload} title="Refresh">↻</button>
         <input
           style={styles.filter}
           placeholder="Filter symbol..."
@@ -36,7 +37,7 @@ export default function TradeJournal() {
       ) : (
         <div style={styles.table}>
           <div style={styles.headRow}>
-            {['Time', 'Symbol', 'Side', 'Qty', 'Price', 'Stop Loss', 'Source', 'Reason'].map(h => (
+            {['Time', 'Symbol', 'Side', 'Qty', 'Price', 'Slippage', 'Source', 'Reason'].map(h => (
               <span key={h} style={styles.headCell}>{h}</span>
             ))}
           </div>
@@ -49,7 +50,11 @@ export default function TradeJournal() {
               </span>
               <span style={styles.cell}>{t.qty || '—'}</span>
               <span style={styles.cell}>{t.price != null ? `$${t.price.toFixed(2)}` : '—'}</span>
-              <span style={styles.cell}>{t.stop_loss_price != null ? `$${t.stop_loss_price.toFixed(2)}` : '—'}</span>
+              <span style={{ ...styles.cell, color: slippageColor(t) }}>
+                {t.expected_price != null && t.price != null
+                  ? `${((t.price - t.expected_price) / t.expected_price * 100).toFixed(3)}%`
+                  : '—'}
+              </span>
               <span style={{ ...styles.cell, color: t.source === 'auto' ? '#e5c07b' : '#8b949e' }}>
                 {t.source}
               </span>
@@ -62,6 +67,15 @@ export default function TradeJournal() {
       )}
     </div>
   )
+}
+
+const slippageColor = (t: JournalTrade) => {
+  if (t.expected_price == null || t.price == null) return '#8b949e'
+  const diff = t.price - t.expected_price
+  // For buys, positive slippage is bad (paid more). For sells, negative is bad (got less).
+  const isBad = t.side === 'buy' ? diff > 0 : diff < 0
+  if (Math.abs(diff) < 0.001) return '#8b949e'
+  return isBad ? '#f85149' : '#26a641'
 }
 
 const reasonColor = (r: string | null) => {
@@ -84,6 +98,10 @@ const styles: Record<string, React.CSSProperties> = {
   count: {
     fontSize: 11, color: '#8b949e', background: '#21262d',
     padding: '1px 6px', borderRadius: 10,
+  },
+  reload: {
+    background: 'none', border: 'none', color: '#8b949e',
+    cursor: 'pointer', fontSize: 14, padding: 0,
   },
   filter: {
     fontSize: 12, padding: '3px 8px', borderRadius: 4,

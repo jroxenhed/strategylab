@@ -5,7 +5,7 @@ import type {
 } from '../../shared/types'
 import {
   listBots, fetchBotDetail, setBotFund, addBot,
-  startBot, stopBot, backtestBot, deleteBot,
+  startBot, stopBot, backtestBot, deleteBot, manualBuyBot,
 } from '../../api/bots'
 import { fmtTimeET } from '../../shared/utils/time'
 
@@ -113,13 +113,14 @@ function ActivityLog({ entries }: { entries: BotActivityEntry[] }) {
 
 function BotCard({
   summary,
-  onStart, onStop, onBacktest, onDelete,
+  onStart, onStop, onBacktest, onDelete, onManualBuy,
 }: {
   summary: BotSummary
   onStart: () => void
   onStop: () => void
   onBacktest: () => void
   onDelete: () => void
+  onManualBuy: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const [detail, setDetail] = useState<BotDetail | null>(null)
@@ -133,7 +134,7 @@ function BotCard({
       } catch {}
     }
     load()
-    const id = setInterval(load, 5000)
+    const id = setInterval(load, 2000)
     return () => { active = false; clearInterval(id) }
   }, [expanded, summary.bot_id])
 
@@ -170,6 +171,9 @@ function BotCard({
         <span style={{ color: '#666', textTransform: 'capitalize' }}>
           Status: <span style={{ color: statusColor(summary.status) }}>{summary.status}</span>
         </span>
+        {summary.avg_slippage_pct != null && (
+          <span style={{ color: '#666' }}>Slippage: <span style={{ color: Math.abs(summary.avg_slippage_pct) > 0.05 ? '#f85149' : '#8b949e' }}>{summary.avg_slippage_pct.toFixed(3)}%</span></span>
+        )}
       </div>
 
       {/* Backtest summary (always visible if available) */}
@@ -201,6 +205,11 @@ function BotCard({
         ) : (
           <button onClick={onStop} style={btnStyle('#3a1a1a')}>Stop</button>
         )}
+        <button
+          onClick={onManualBuy}
+          disabled={!running || summary.has_position}
+          style={btnStyle('#1a3a2a', !running || summary.has_position)}
+        >Buy</button>
         <button
           onClick={() => setExpanded(e => !e)}
           style={btnStyle('#1e2530')}
@@ -317,7 +326,6 @@ function AddBotBar({
   const [symbol, setSymbol] = useState('')
   const [interval, setInterval] = useState('15m')
   const [allocation, setAllocation] = useState('')
-  const [posSize, setPosSize] = useState(1.0)
   const [dataSource, setDataSource] = useState('alpaca-iex')
   const [error, setError] = useState('')
 
@@ -334,7 +342,6 @@ function AddBotBar({
       const s = strategies[idx]
       setSymbol(s.ticker ?? '')
       setInterval(s.interval ?? '15m')
-      setPosSize(s.posSize ?? 1.0)
     }
   }
 
@@ -357,7 +364,7 @@ function AddBotBar({
         buy_logic: s.buyLogic ?? 'AND',
         sell_logic: s.sellLogic ?? 'AND',
         allocated_capital: alloc,
-        position_size: posSize,
+        position_size: 1.0,
         stop_loss_pct: typeof s.stopLoss === 'number' ? s.stopLoss : null,
         trailing_stop: s.trailingEnabled ? s.trailingConfig : null,
         dynamic_sizing: s.dynamicSizing ?? null,
@@ -423,18 +430,6 @@ function AddBotBar({
           )}
         </div>
 
-        {/* Position size */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 12, color: '#666' }}>Size:</span>
-          <input
-            type="range" min={0.01} max={1} step={0.01}
-            value={posSize}
-            onChange={e => setPosSize(parseFloat(e.target.value))}
-            style={{ width: 80 }}
-          />
-          <span style={{ fontSize: 12, color: '#aaa', width: 32 }}>{Math.round(posSize * 100)}%</span>
-        </div>
-
         <button
           onClick={handleAdd}
           disabled={!canAdd}
@@ -470,7 +465,7 @@ export default function BotControlCenter() {
 
   useEffect(() => {
     loadBots()
-    const id = setInterval(loadBots, 5000)
+    const id = setInterval(loadBots, 2000)
     return () => clearInterval(id)
   }, [])
 
@@ -508,6 +503,11 @@ export default function BotControlCenter() {
     catch (e: any) { setError(e?.response?.data?.detail ?? 'Failed to delete bot') }
   }
 
+  const handleManualBuy = async (botId: string) => {
+    try { await manualBuyBot(botId); await loadBots() }
+    catch (e: any) { setError(e?.response?.data?.detail ?? 'Failed to place buy') }
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 0' }}>
       <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 14, padding: '0 2px' }}>
@@ -538,6 +538,7 @@ export default function BotControlCenter() {
           onStop={() => handleStop(bot.bot_id)}
           onBacktest={() => handleBacktest(bot.bot_id)}
           onDelete={() => handleDelete(bot.bot_id)}
+          onManualBuy={() => handleManualBuy(bot.bot_id)}
         />
       ))}
     </div>
