@@ -385,7 +385,22 @@ class BotRunner:
             if exit_reason:
                 try:
                     client = await self._run_in_executor(get_trading_client)
-                    await self._run_in_executor(client.close_position, cfg.symbol.upper())
+                    # Cancel pending stop-loss orders for this symbol first
+                    # (OTO bracket legs hold shares, blocking close_position)
+                    try:
+                        from alpaca.trading.requests import GetOrdersRequest
+                        from alpaca.trading.enums import QueryOrderStatus
+                        orders = await self._run_with_retry(
+                            client.get_orders,
+                            GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[cfg.symbol.upper()]),
+                        )
+                        for o in orders:
+                            if o.side == OrderSide.SELL:
+                                await self._run_with_retry(client.cancel_order_by_id, o.id)
+                                self._log("INFO", f"Cancelled pending {o.type.value} order {o.id}")
+                    except Exception as e:
+                        self._log("WARN", f"Cancel orders failed: {e}")
+                    await self._run_with_retry(client.close_position, cfg.symbol.upper())
                 except Exception as e:
                     self._log("ERROR", f"Close position failed: {e}")
                     return

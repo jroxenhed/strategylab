@@ -205,6 +205,15 @@ def place_sell(req: SellRequest):
     from alpaca.trading.requests import MarketOrderRequest, GetOrdersRequest
     from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
+    # Cancel pending stop-loss orders first (OTO bracket legs hold shares)
+    open_orders = client.get_orders(GetOrdersRequest(
+        status=QueryOrderStatus.OPEN,
+        symbols=[req.symbol],
+    ))
+    for o in open_orders:
+        if o.side == OrderSide.SELL:
+            client.cancel_order_by_id(o.id)
+
     if req.qty is None:
         try:
             client.close_position(req.symbol)
@@ -222,17 +231,6 @@ def place_sell(req: SellRequest):
         )
     )
 
-    # Cancel any open stop loss orders for this symbol
-    open_orders = client.get_orders(GetOrdersRequest(
-        status=QueryOrderStatus.OPEN,
-        symbols=[req.symbol],
-    ))
-    cancelled_stops = []
-    for o in open_orders:
-        if o.side == OrderSide.SELL and o.type.value == "stop":
-            client.cancel_order_by_id(o.id)
-            cancelled_stops.append(str(o.id))
-
     _log_trade(req.symbol, "sell", req.qty, price=None, source="manual")
 
     return {
@@ -241,7 +239,6 @@ def place_sell(req: SellRequest):
         "qty": str(order.qty),
         "side": "sell",
         "status": order.status.value,
-        "cancelled_stops": cancelled_stops,
     }
 
 

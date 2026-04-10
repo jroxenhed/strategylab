@@ -46,12 +46,16 @@ export default function App() {
     }))
   }, [ticker, start, end, interval, activeIndicators, showSpy, showQqq, dataSource])
 
-  const { data: ohlcv = EMPTY_OHLCV } = useOHLCV(ticker, start, end, interval, dataSource)
-  const { data: spyData } = useOHLCV('SPY', start, end, interval, dataSource)
-  const { data: qqqData } = useOHLCV('QQQ', start, end, interval, dataSource)
+  const { data: ohlcv = EMPTY_OHLCV, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, interval, dataSource)
+  const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', start, end, interval, dataSource)
+  const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', start, end, interval, dataSource)
 
   const indicatorKeys = activeIndicators.filter(k => k !== 'volume')
-  const { data: indicatorData = EMPTY_INDICATORS } = useIndicators(ticker, start, end, interval, indicatorKeys, dataSource)
+  const { data: indicatorData = EMPTY_INDICATORS, refetch: refetchIndicators } = useIndicators(ticker, start, end, interval, indicatorKeys, dataSource)
+
+  const refreshChart = useCallback(() => {
+    refetchOhlcv(); refetchIndicators(); refetchSpy(); refetchQqq()
+  }, [refetchOhlcv, refetchIndicators, refetchSpy, refetchQqq])
 
   const toggleIndicator = useCallback((key: IndicatorKey) => {
     setActiveIndicators(prev =>
@@ -81,9 +85,14 @@ export default function App() {
         <span style={{ color: '#8b949e', fontSize: 13, display: 'flex', alignItems: 'center', gap: 12 }}>
           {ticker} &nbsp;·&nbsp; {start} → {end}
           {activeTab === 'chart' && (
-            <button onClick={() => setChartEnabled(c => !c)} style={{ ...styles.chartToggleBtn, opacity: chartEnabled ? 0.5 : 1 }}>
-              {chartEnabled ? 'Disable Chart' : 'Enable Chart'}
-            </button>
+            <>
+              <button onClick={refreshChart} style={styles.chartToggleBtn} title="Reload chart data">
+                ↻
+              </button>
+              <button onClick={() => setChartEnabled(c => !c)} style={{ ...styles.chartToggleBtn, opacity: chartEnabled ? 0.5 : 1 }}>
+                {chartEnabled ? 'Disable Chart' : 'Enable Chart'}
+              </button>
+            </>
           )}
         </span>
       </header>
