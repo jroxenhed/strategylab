@@ -59,13 +59,15 @@ function toLineData(arr: TimeValue[]) {
 function buildMarkers(trades: Array<{ type: string; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean; trailing_stop?: boolean }>, showPrice = true, subPane = false) {
   return trades.map(t => {
     const isEntry = t.type === 'buy' || t.type === 'short'
+    const isShortEntry = t.type === 'short'
+    const isCover = t.type === 'cover'
     if (isEntry) {
-      const label = t.type === 'short' ? 'SH' : 'B'
+      const label = isShortEntry ? 'SH' : 'B'
       return {
         time: toET(t.date as any) as any,
-        position: subPane ? 'inBar' as const : 'belowBar' as const,
+        position: subPane ? 'inBar' as const : (isShortEntry ? 'aboveBar' as const : 'belowBar' as const),
         color: '#e5c07b',
-        shape: subPane ? 'circle' as const : 'arrowUp' as const,
+        shape: subPane ? 'circle' as const : (isShortEntry ? 'arrowDown' as const : 'arrowUp' as const),
         text: showPrice ? `${label} $${t.price}` : label,
       }
     }
@@ -73,12 +75,12 @@ function buildMarkers(trades: Array<{ type: string; date: string; price: number;
     const win = (t.pnl ?? 0) >= 0
     const color = win ? UP : DOWN
     const pctStr = t.pnl_pct != null ? ` ${t.pnl_pct > 0 ? '+' : ''}${t.pnl_pct}%` : ''
-    const label = t.stop_loss ? 'SL' : t.trailing_stop ? 'TSL' : (t.type === 'cover' ? 'COV' : 'S')
+    const label = t.stop_loss ? 'SL' : t.trailing_stop ? 'TSL' : (isCover ? 'COV' : 'S')
     return {
       time: toET(t.date as any) as any,
-      position: subPane ? 'inBar' as const : 'aboveBar' as const,
+      position: subPane ? 'inBar' as const : (isCover ? 'belowBar' as const : 'aboveBar' as const),
       color,
-      shape: subPane ? 'circle' as const : 'arrowDown' as const,
+      shape: subPane ? 'circle' as const : (isCover ? 'arrowUp' as const : 'arrowDown' as const),
       text: showPrice ? `${label} $${t.price}${pctStr}` : label,
     }
   })
