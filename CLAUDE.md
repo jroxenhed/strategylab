@@ -109,6 +109,24 @@ lightweight-charts v5 has **no `localization.timeZone` support**. All unix times
 
 `Rule` has a `negated: boolean` field. Applied in `eval_rules()` — if `negated` and `i >= 1`, the rule result is inverted. Guard condition (`i < 1`) always returns False regardless of negation. UI: small **NOT** button on each rule row in RuleRow.tsx, orange when active.
 
+### Short selling (direction field)
+
+`StrategyRequest` and `BotConfig` both have `direction: str = "long"` (accepts `"long"` or `"short"`, defaults to `"long"` for backwards compatibility).
+
+The rule engine (`eval_rules`) is **direction-agnostic**. All inversion happens at execution boundaries:
+
+- **Entry**: short fills lower (slippage against seller), `OrderSide.SELL` for Alpaca
+- **Stop-loss**: triggers above entry for shorts (`high >= entry * (1 + pct)`)
+- **Trailing stop**: tracks trough (lowest price) instead of peak; `source: "high"` maps to Low for shorts
+- **PnL**: `(entry - exit) * shares` for shorts
+- **Equity while holding**: `capital + shares * (entry - price)` unrealized
+- **Trade types**: `"short"` / `"cover"` instead of `"buy"` / `"sell"`
+- **Chart markers**: short entry = arrow down (above bar), cover = arrow up (below bar), same yellow/green/red colors
+
+Bot runner for shorts: **no OTO brackets** — all stops managed via polling (Alpaca OTO doesn't cleanly support stops above entry). Same-symbol guard allows one long + one short bot simultaneously.
+
+Frontend: direction toggle in strategy builder (labels swap to "Entry Rules" / "Exit Rules"), direction dropdown in AddBotBar, direction badge + subtle background tint on bot cards.
+
 ### Trailing stop — profit activation threshold
 
 `TrailingStopConfig` has `activate_pct: float = 0.0`. When `activate_on_profit` is true, trailing only starts once `source_price >= entry_price * (1 + activate_pct / 100)`. Set to e.g. 2.0 to give a position room to breathe before the trailing stop starts following.

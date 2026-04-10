@@ -21,6 +21,7 @@
 - [ ] Clean up bot page, move signal scanner to new page
 
 ## Architecture
-- [ ] Implement shorting + borrow cost estimation
-- [ ] Multiple bots same ticker (long/short/different TFs), grouping
+- [x] Implement shorting — direction field, backtest + bot runner, chart markers, bot card refresh
+- [ ] Borrow cost estimation (for live short positions on real accounts)
+- [ ] Multiple bots same ticker — grouping UI (long+short pairs run fine, visual grouping deferred)
 - [ ] Rename "Paper Trading" to something cool

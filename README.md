@@ -19,6 +19,7 @@ Interactive trading strategy backtester and paper trading platform. Build strate
 
 ### Strategy & Backtesting
 - Rule builder with AND/OR logic (MACD crossover, RSI thresholds, price/EMA conditions, rule negation)
+- **Long and short strategies** — direction toggle swaps entry/exit labels, inverts all execution math
 - Fixed stop loss and trailing stops (percentage or ATR-based, with profit activation threshold)
 - Dynamic position sizing (reduce size after consecutive stop losses)
 - Trading hours filter with skip ranges (e.g. skip lunch, last 15 min)
@@ -28,12 +29,19 @@ Interactive trading strategy backtester and paper trading platform. Build strate
 - Strategy save/load/delete (localStorage)
 - Chart disable toggle for lightweight backtesting of large datasets
 
-### Paper Trading (Alpaca)
+### Live Trading Bots (Alpaca)
+- Automated strategy execution with fund management and per-bot capital allocation
+- **Long and short bots** — run both directions on the same ticker simultaneously
+- Trailing stop management, OTO bracket orders, stop-loss detection
+- Slippage tracking (expected vs actual fill price)
+- Bot cards with direction badges (LONG/SHORT), background tint, always-visible equity sparkline
+- Manual entry button, in-place config editing (allocation, strategy, data source)
+- Signal scanner: scan watchlist against strategy rules, one-click execution
+
+### Manual Trading (Alpaca)
 - Account overview (equity, cash, buying power, PDT status)
 - Manual buy/sell with OTO bracket orders (stop loss)
-- Signal scanner: scan watchlist against strategy rules, one-click execution
 - Positions table, order history, trade journal
-- Performance comparison (actual trades vs backtest)
 
 ### Data Providers
 - **Yahoo Finance** — always available, free
@@ -56,6 +64,10 @@ ALPACA_API_KEY=your_key
 ALPACA_SECRET_KEY=your_secret
 ```
 
-## In Progress
+## Planned
 
-- **Live trading bot** — automated strategy execution with fund management, per-bot capital allocation, trailing stop management, and portfolio equity tracking. See [spec](docs/superpowers/specs/2026-04-08-live-trading-bot-spec.md) and [implementation plan](docs/superpowers/plans/2026-04-09-bot-implementation-plan.md).
+- Portfolio equity chart (combined P&L across bots)
+- Bot grouping by ticker
+- Borrow cost estimation for live short positions
+- More indicators (ATR, Stochastic, VWAP)
+- Chart timeframe buttons (1W / 1M / 3M / 1Y)
