@@ -684,6 +684,19 @@ class BotManager:
             raise KeyError(f"Bot {bot_id} not found")
         return self.bots[bot_id]
 
+    def update_bot(self, bot_id: str, updates: dict):
+        if bot_id not in self.bots:
+            raise KeyError(f"Bot {bot_id} not found")
+        config, state = self.bots[bot_id]
+        if state.status == "running":
+            raise ValueError("Stop the bot before editing its config")
+        # Apply updates to config
+        config_dict = config.model_dump()
+        config_dict.update(updates)
+        new_config = BotConfig(**config_dict)
+        self.bots[bot_id] = (new_config, state)
+        self.save()
+
     def manual_buy(self, bot_id: str) -> dict:
         """Place a manual buy for a bot using its allocation config."""
         if bot_id not in self.bots:

@@ -15,7 +15,7 @@
 ## Features
 - [x] Position size: removed slider, hardcoded to 100%
 - [x] Manual buy on bot to start a position
-- [ ] Make allocation, position size, strategy editable in-place on bot card
+- [x] Make allocation and strategy editable in-place on bot card (click when stopped)
 - [ ] Pre-market / extended hours option
 - [ ] Portfolio equity chart (combined P&L across bots)
 - [ ] Clean up bot page, move signal scanner to new page

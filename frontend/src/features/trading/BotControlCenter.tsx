@@ -5,7 +5,7 @@ import type {
 } from '../../shared/types'
 import {
   listBots, fetchBotDetail, setBotFund, addBot,
-  startBot, stopBot, backtestBot, deleteBot, manualBuyBot,
+  startBot, stopBot, backtestBot, deleteBot, manualBuyBot, updateBot,
 } from '../../api/bots'
 import { fmtTimeET } from '../../shared/utils/time'
 
@@ -113,7 +113,7 @@ function ActivityLog({ entries }: { entries: BotActivityEntry[] }) {
 
 function BotCard({
   summary,
-  onStart, onStop, onBacktest, onDelete, onManualBuy,
+  onStart, onStop, onBacktest, onDelete, onManualBuy, onUpdate,
 }: {
   summary: BotSummary
   onStart: () => void
@@ -121,9 +121,13 @@ function BotCard({
   onBacktest: () => void
   onDelete: () => void
   onManualBuy: () => void
+  onUpdate: (updates: Record<string, unknown>) => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const [detail, setDetail] = useState<BotDetail | null>(null)
+  const [editingAlloc, setEditingAlloc] = useState(false)
+  const [allocValue, setAllocValue] = useState('')
+  const [editingStrategy, setEditingStrategy] = useState(false)
   useEffect(() => {
     if (!expanded) return
     let active = true
@@ -156,7 +160,41 @@ function BotCard({
           boxShadow: running ? `0 0 6px ${statusColor(summary.status)}` : 'none',
         }} />
         <span style={{ color: '#e6edf3', fontWeight: 600, flex: 1 }}>
-          {summary.strategy_name}
+          {editingStrategy ? (
+            <select
+              autoFocus
+              defaultValue={-1}
+              onChange={e => {
+                const idx = Number(e.target.value)
+                if (idx >= 0) {
+                  try {
+                    const strats: SavedStrategy[] = JSON.parse(localStorage.getItem(SAVED_KEY) || '[]')
+                    const s = strats[idx]
+                    if (s) onUpdate({
+                      strategy_name: s.name,
+                      buy_rules: s.buyRules,
+                      sell_rules: s.sellRules,
+                      buy_logic: s.buyLogic ?? 'AND',
+                      sell_logic: s.sellLogic ?? 'AND',
+                    })
+                  } catch {}
+                }
+                setEditingStrategy(false)
+              }}
+              onBlur={() => setEditingStrategy(false)}
+              style={{ fontSize: 12, background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3 }}
+            >
+              <option value={-1}>Select strategy…</option>
+              {(() => { try { return JSON.parse(localStorage.getItem(SAVED_KEY) || '[]') } catch { return [] } })()
+                .map((s: SavedStrategy, i: number) => <option key={i} value={i}>{s.name}</option>)}
+            </select>
+          ) : (
+            <span
+              style={{ cursor: stopped ? 'pointer' : 'default', borderBottom: stopped ? '1px dashed #58a6ff' : 'none' }}
+              onClick={() => { if (stopped) setEditingStrategy(true) }}
+              title={stopped ? 'Click to change strategy' : 'Stop bot to edit'}
+            >{summary.strategy_name}</span>
+          )}
         </span>
         <span style={{ color: '#888', fontSize: 12 }}>
           {summary.symbol} · {summary.interval} · {summary.data_source ?? 'alpaca-iex'}
@@ -165,7 +203,30 @@ function BotCard({
 
       {/* Stats row */}
       <div style={{ display: 'flex', gap: 16, fontSize: 12 }}>
-        <span style={{ color: '#666' }}>Allocated: <span style={{ color: '#aaa' }}>{fmtUsd(summary.allocated_capital)}</span></span>
+        <span style={{ color: '#666' }}>Allocated: {editingAlloc ? (
+          <input
+            autoFocus
+            type="number"
+            value={allocValue}
+            onChange={e => setAllocValue(e.target.value)}
+            onBlur={() => {
+              const v = parseFloat(allocValue)
+              if (!isNaN(v) && v > 0) onUpdate({ allocated_capital: v })
+              setEditingAlloc(false)
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+              if (e.key === 'Escape') setEditingAlloc(false)
+            }}
+            style={{ width: 80, fontSize: 12, background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3, padding: '1px 4px' }}
+          />
+        ) : (
+          <span
+            style={{ color: stopped ? '#58a6ff' : '#aaa', cursor: stopped ? 'pointer' : 'default', borderBottom: stopped ? '1px dashed #58a6ff' : 'none' }}
+            onClick={() => { if (stopped) { setAllocValue(String(summary.allocated_capital)); setEditingAlloc(true) } }}
+            title={stopped ? 'Click to edit' : 'Stop bot to edit'}
+          >{fmtUsd(summary.allocated_capital)}</span>
+        )}</span>
         <span style={{ color: '#666' }}>Trades: <span style={{ color: '#aaa' }}>{summary.trades_count}</span></span>
         <span style={{ color: '#666' }}>P&L: <span style={{ color: pnlColor }}>{fmtPnl(summary.total_pnl)}</span></span>
         <span style={{ color: '#666', textTransform: 'capitalize' }}>
@@ -508,6 +569,11 @@ export default function BotControlCenter() {
     catch (e: any) { setError(e?.response?.data?.detail ?? 'Failed to place buy') }
   }
 
+  const handleUpdate = async (botId: string, updates: Record<string, unknown>) => {
+    try { await updateBot(botId, updates); await loadBots() }
+    catch (e: any) { setError(e?.response?.data?.detail ?? 'Failed to update bot') }
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 0' }}>
       <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 14, padding: '0 2px' }}>
@@ -539,6 +605,7 @@ export default function BotControlCenter() {
           onBacktest={() => handleBacktest(bot.bot_id)}
           onDelete={() => handleDelete(bot.bot_id)}
           onManualBuy={() => handleManualBuy(bot.bot_id)}
+          onUpdate={(updates) => handleUpdate(bot.bot_id, updates)}
         />
       ))}
     </div>

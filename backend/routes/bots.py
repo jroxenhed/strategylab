@@ -42,6 +42,16 @@ class SetFundRequest(BaseModel):
     amount: float
 
 
+class UpdateBotRequest(BaseModel):
+    allocated_capital: Optional[float] = None
+    strategy_name: Optional[str] = None
+    buy_rules: Optional[list] = None
+    sell_rules: Optional[list] = None
+    buy_logic: Optional[str] = None
+    sell_logic: Optional[str] = None
+    data_source: Optional[str] = None
+
+
 class AddBotRequest(BaseModel):
     strategy_name: str
     symbol: str
@@ -113,6 +123,18 @@ def get_bot(bot_id: str):
         "config": config.model_dump(),
         "state": state.to_dict(),
     }
+
+
+@router.patch("/{bot_id}")
+def update_bot(bot_id: str, req: UpdateBotRequest):
+    mgr = _get_manager()
+    try:
+        mgr.update_bot(bot_id, req.model_dump(exclude_none=True))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True}
 
 
 @router.delete("/{bot_id}")

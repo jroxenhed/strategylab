@@ -40,6 +40,10 @@ export async function backtestBot(botId: string): Promise<void> {
   await axios.post(`${API}/api/bots/${botId}/backtest`)
 }
 
+export async function updateBot(botId: string, updates: Record<string, unknown>): Promise<void> {
+  await axios.patch(`${API}/api/bots/${botId}`, updates)
+}
+
 export async function manualBuyBot(botId: string): Promise<{ qty: number; fill_price: number; slippage_pct: number }> {
   const res = await axios.post(`${API}/api/bots/${botId}/buy`)
   return res.data
