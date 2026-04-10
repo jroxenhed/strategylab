@@ -64,10 +64,47 @@ ALPACA_API_KEY=your_key
 ALPACA_SECRET_KEY=your_secret
 ```
 
+## Project Structure
+
+```
+backend/
+  main.py              — app setup, CORS, mounts routers
+  shared.py            — _fetch(), data providers, TTL cache
+  models.py            — shared Pydantic models (StrategyRequest, etc.)
+  journal.py           — trade journal logger
+  signal_engine.py     — indicator computation, rule evaluation
+  bot_manager.py       — bot lifecycle (add/start/stop/delete)
+  bot_runner.py        — bot execution loop (polling, orders, stops)
+  routes/
+    data.py            — GET /api/ohlcv/{ticker}
+    indicators.py      — GET /api/indicators/{ticker}
+    backtest.py        — POST /api/backtest
+    trading.py         — manual trading, positions, journal
+    search.py          — GET /api/search
+
+frontend/src/
+  App.tsx              — state, data fetching, layout
+  api/
+    client.ts          — shared axios instance (configurable baseURL)
+    trading.ts         — trading API functions
+    bots.ts            — bot API functions
+  features/
+    chart/Chart.tsx    — three-pane chart (candlesticks, MACD, RSI)
+    strategy/          — StrategyBuilder, Results
+    trading/           — BotControlCenter, BotCard, AddBotBar, MiniSparkline
+    sidebar/Sidebar.tsx
+  shared/
+    hooks/             — useOHLCV, useLocalStorage
+    utils/             — format, colors, time
+    types/index.ts     — all shared TypeScript types
+```
+
 ## Planned
 
+- More indicators (ATR, Stochastic, VWAP) — chart display + backtest rules
+- More strategy rules — expand rule engine conditions
+- Chart timeframe buttons (1W / 1M / 3M / 1Y)
+- Watchlist — save/switch between tickers
 - Portfolio equity chart (combined P&L across bots)
 - Bot grouping by ticker
 - Borrow cost estimation for live short positions
-- More indicators (ATR, Stochastic, VWAP)
-- Chart timeframe buttons (1W / 1M / 3M / 1Y)

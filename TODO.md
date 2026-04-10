@@ -22,6 +22,13 @@
 
 ## Architecture
 - [x] Implement shorting — direction field, backtest + bot runner, chart markers, bot card refresh
+- [x] Structural refactoring — extract models/journal/bot_runner, split BotControlCenter, shared utils, centralize API client
 - [ ] Borrow cost estimation (for live short positions on real accounts)
 - [ ] Multiple bots same ticker — grouping UI (long+short pairs run fine, visual grouping deferred)
 - [ ] Rename "Paper Trading" to something cool
+
+## Planned Features
+- [ ] More indicators — ATR, Stochastic, VWAP (chart display + backtest rules)
+- [ ] More strategy rules — expand rule engine conditions
+- [ ] Chart timeframe buttons — 1W / 1M / 3M / 1Y quick selectors
+- [ ] Watchlist — save/switch between tickers quickly

@@ -131,14 +131,6 @@ Frontend: direction toggle in strategy builder (labels swap to "Entry Rules" / "
 
 `TrailingStopConfig` has `activate_pct: float = 0.0`. When `activate_on_profit` is true, trailing only starts once `source_price >= entry_price * (1 + activate_pct / 100)`. Set to e.g. 2.0 to give a position room to breathe before the trailing stop starts following.
 
-## Branches
-
-- `main` — primary working branch
-- `feature/more-indicators` — planned (ATR, Stochastic, VWAP, etc.)
-- `feature/more-strategy-rules` — planned
-- `feature/chart-timeframe-buttons` — planned (1W / 1M / 3M / 1Y buttons)
-- `feature/watchlist` — planned
-
 ## Running
 
 ```bash
