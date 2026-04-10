@@ -155,7 +155,7 @@ function BotCard({
   const pnlColor = summary.total_pnl >= 0 ? '#26a69a' : '#ef5350'
 
   const dir = summary.direction ?? 'long'
-  const bgTint = dir === 'short' ? 'rgba(200, 0, 0, 0.03)' : 'rgba(0, 200, 0, 0.03)'
+  const bgTint = dir === 'short' ? 'rgba(239, 83, 80, 0.08)' : 'rgba(38, 166, 154, 0.05)'
 
   return (
     <div style={{
