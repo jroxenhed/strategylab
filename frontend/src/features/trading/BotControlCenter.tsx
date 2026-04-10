@@ -417,12 +417,14 @@ function AddBotBar({
   const [direction, setDirection] = useState<'long' | 'short'>('long')
   const [error, setError] = useState('')
 
-  useEffect(() => {
+  const loadStrategies = () => {
     try {
       const raw = localStorage.getItem(SAVED_KEY)
       if (raw) setStrategies(JSON.parse(raw))
     } catch {}
-  }, [])
+  }
+
+  useEffect(() => { loadStrategies() }, [])
 
   const onStrategyChange = (idx: number) => {
     setSelectedIdx(idx)
@@ -474,6 +476,7 @@ function AddBotBar({
         <select
           value={selectedIdx}
           onChange={e => onStrategyChange(Number(e.target.value))}
+          onFocus={loadStrategies}
           style={{ ...inputStyle, minWidth: 160 }}
         >
           <option value={-1}>Select strategy…</option>
