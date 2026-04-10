@@ -12,6 +12,17 @@ from signal_engine import Rule, compute_indicators, eval_rules
 
 router = APIRouter(prefix="/api/trading")
 
+
+def _alpaca_call(fn, *args, **kwargs):
+    """Call an Alpaca SDK function, retrying once on stale connection errors."""
+    try:
+        return fn(*args, **kwargs)
+    except Exception as e:
+        if "Connection aborted" in str(e) or "ConnectionError" in type(e).__name__:
+            print(f"[Alpaca] Stale connection, retrying {fn.__name__}...")
+            return fn(*args, **kwargs)
+        raise
+
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 WATCHLIST_PATH = DATA_DIR / "watchlist.json"
 JOURNAL_PATH = DATA_DIR / "trade_journal.json"
@@ -70,8 +81,9 @@ def get_account():
     from fastapi import HTTPException as _HTTPException
     client = get_trading_client()
     try:
-        account = client.get_account()
+        account = _alpaca_call(client.get_account)
     except Exception as e:
+        print(f"[Alpaca ERROR] get_account: {type(e).__name__}: {e}")
         raise _HTTPException(status_code=502, detail=f"Alpaca API error: {e}")
     return {
         "equity": float(account.equity),
@@ -90,8 +102,9 @@ def get_positions():
     from fastapi import HTTPException as _HTTPException
     client = get_trading_client()
     try:
-        positions = client.get_all_positions()
+        positions = _alpaca_call(client.get_all_positions)
     except Exception as e:
+        print(f"[Alpaca ERROR] get_all_positions: {type(e).__name__}: {e}")
         raise _HTTPException(status_code=502, detail=f"Alpaca API error: {e}")
     return [
         {
