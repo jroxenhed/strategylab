@@ -167,6 +167,15 @@ class BotRunner:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, fn, *args)
 
+    async def _run_with_retry(self, fn, *args):
+        """Run in executor, retrying once on stale connection errors."""
+        try:
+            return await self._run_in_executor(fn, *args)
+        except Exception as e:
+            if "Connection aborted" in str(e) or "RemoteDisconnected" in str(e):
+                return await self._run_in_executor(fn, *args)
+            raise
+
     async def _tick(self):
         cfg = self.config
         state = self.state
@@ -188,7 +197,7 @@ class BotRunner:
         start_date = (date.today() - timedelta(days=30)).isoformat()
 
         try:
-            df = await self._run_in_executor(
+            df = await self._run_with_retry(
                 _fetch, cfg.symbol, start_date, end_date, cfg.interval, "alpaca-iex"
             )
         except Exception as e:
@@ -224,7 +233,7 @@ class BotRunner:
         alpaca_qty = 0
         try:
             client = await self._run_in_executor(get_trading_client)
-            positions = await self._run_in_executor(client.get_all_positions)
+            positions = await self._run_with_retry(client.get_all_positions)
             for pos in positions:
                 if pos.symbol == cfg.symbol.upper():
                     has_position = True
