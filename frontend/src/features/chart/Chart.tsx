@@ -19,7 +19,7 @@ interface ChartProps {
   showQqq: boolean
   indicatorData: IndicatorData
   activeIndicators: IndicatorKey[]
-  trades?: Array<{ type: 'buy' | 'sell'; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean; trailing_stop?: boolean }>
+  trades?: Array<{ type: string; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean; trailing_stop?: boolean }>
   emaOverlays?: EMAOverlay[]
   onChartReady?: (chart: IChartApi | null) => void
 }
@@ -56,21 +56,24 @@ function toLineData(arr: TimeValue[]) {
   )
 }
 
-function buildMarkers(trades: Array<{ type: 'buy' | 'sell'; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean; trailing_stop?: boolean }>, showPrice = true) {
+function buildMarkers(trades: Array<{ type: string; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean; trailing_stop?: boolean }>, showPrice = true) {
   return trades.map(t => {
-    if (t.type === 'buy') {
+    const isEntry = t.type === 'buy' || t.type === 'short'
+    if (isEntry) {
+      const label = t.type === 'short' ? 'SH' : 'B'
       return {
         time: toET(t.date as any) as any,
         position: 'belowBar' as const,
         color: '#e5c07b',
         shape: 'arrowUp' as const,
-        text: showPrice ? `B $${t.price}` : 'B',
+        text: showPrice ? `${label} $${t.price}` : label,
       }
     }
+    // Exit: sell or cover
     const win = (t.pnl ?? 0) >= 0
     const color = win ? UP : DOWN
     const pctStr = t.pnl_pct != null ? ` ${t.pnl_pct > 0 ? '+' : ''}${t.pnl_pct}%` : ''
-    const label = t.stop_loss ? 'SL' : t.trailing_stop ? 'TSL' : 'S'
+    const label = t.stop_loss ? 'SL' : t.trailing_stop ? 'TSL' : (t.type === 'cover' ? 'COV' : 'S')
     return {
       time: toET(t.date as any) as any,
       position: 'aboveBar' as const,
