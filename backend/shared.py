@@ -252,3 +252,11 @@ def _format_time(idx, interval: str):
             ts = ts.tz_convert('UTC')
         return int(ts.timestamp())
     return str(idx)[:10]
+
+
+def is_retryable_error(e: Exception) -> bool:
+    """Check if an Alpaca API error is a stale connection that should be retried."""
+    msg = str(e)
+    return ("Connection aborted" in msg
+            or "RemoteDisconnected" in msg
+            or "ConnectionError" in type(e).__name__)

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from bot_manager import BotConfig, BotState, BotManager
 
 from signal_engine import compute_indicators, eval_rules
-from shared import _fetch, get_trading_client
+from shared import _fetch, get_trading_client, is_retryable_error
 from journal import _log_trade
 
 # Alpaca order helpers (imported lazily to avoid hard dep if Alpaca not set up)
@@ -71,7 +71,7 @@ class BotRunner:
         try:
             return await self._run_in_executor(fn, *args)
         except Exception as e:
-            if "Connection aborted" in str(e) or "RemoteDisconnected" in str(e):
+            if is_retryable_error(e):
                 return await self._run_in_executor(fn, *args)
             raise
 

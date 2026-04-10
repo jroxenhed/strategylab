@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional
 import pandas as pd
-from shared import get_trading_client, _fetch, _alpaca_client
+from shared import get_trading_client, _fetch, _alpaca_client, is_retryable_error
 from signal_engine import Rule, compute_indicators, eval_rules
 from journal import _log_trade, DATA_DIR, JOURNAL_PATH
 from models import StrategyRequest
@@ -22,7 +22,7 @@ def _alpaca_call(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except Exception as e:
-        if "Connection aborted" in str(e) or "ConnectionError" in type(e).__name__:
+        if is_retryable_error(e):
             print(f"[Alpaca] Stale connection, retrying {fn.__name__}...")
             return fn(*args, **kwargs)
         raise
