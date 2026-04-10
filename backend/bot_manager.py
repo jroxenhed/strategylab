@@ -656,13 +656,13 @@ class BotManager:
         config, state = self.bots[bot_id]
         if bot_id in self.tasks and not self.tasks[bot_id].done():
             raise ValueError(f"Bot {bot_id} is already running")
-        # Guard: no two bots on the same symbol
+        # Guard: no two bots on the same symbol AND direction
         for bid, task in self.tasks.items():
             if bid != bot_id and not task.done():
                 other_cfg, _ = self.bots[bid]
-                if other_cfg.symbol == config.symbol:
+                if other_cfg.symbol == config.symbol and other_cfg.direction == config.direction:
                     raise ValueError(
-                        f"Bot {bid} is already running on {config.symbol}"
+                        f"Bot {bid} is already running {config.direction} on {config.symbol}"
                     )
         runner = BotRunner(config, state, self)
         task = asyncio.create_task(runner.run())
