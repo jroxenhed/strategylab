@@ -89,6 +89,7 @@ export interface StrategyRequest {
   commission_pct?: number
   source: DataSource
   debug?: boolean
+  direction?: 'long' | 'short'
 }
 
 export interface SavedStrategy {
@@ -109,10 +110,11 @@ export interface SavedStrategy {
   tradingHours: TradingHoursConfig
   slippage: number | ''
   commission: number | ''
+  direction: 'long' | 'short'
 }
 
 export interface Trade {
-  type: 'buy' | 'sell'
+  type: 'buy' | 'sell' | 'short' | 'cover'
   date: string | number
   price: number
   shares: number
@@ -122,6 +124,7 @@ export interface Trade {
   trailing_stop?: boolean
   slippage?: number
   commission?: number
+  direction?: 'long' | 'short'
 }
 
 export interface EMAOverlay {
@@ -200,6 +203,7 @@ export interface BotConfig {
   trading_hours?: TradingHoursConfig
   slippage_pct?: number
   data_source?: string
+  direction?: 'long' | 'short'
 }
 
 export interface BotFundStatus {
@@ -244,6 +248,7 @@ export interface BotSummary {
   data_source?: string
   avg_slippage_pct?: number | null
   has_position?: boolean
+  direction?: 'long' | 'short'
 }
 
 export interface BotDetail {
