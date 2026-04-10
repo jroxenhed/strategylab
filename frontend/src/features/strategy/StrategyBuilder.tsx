@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Plus, Play } from 'lucide-react'
 import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, SavedStrategy } from '../../shared/types'
 import RuleRow, { emptyRule, validateRules } from './RuleRow'
-import axios from 'axios'
+import { api } from '../../api/client'
 
 interface Props {
   ticker: string
@@ -144,7 +144,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         commission_pct: commission !== '' && commission > 0 ? commission : undefined,
         source: dataSource, debug, direction,
       }
-      const { data } = await axios.post('http://localhost:8000/api/backtest', req)
+      const { data } = await api.post('/api/backtest', req)
       onResult(data)
     } catch (e: any) {
       setError(e.response?.data?.detail || 'Backtest failed')

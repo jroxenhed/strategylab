@@ -1,7 +1,5 @@
-import axios from 'axios'
+import { api } from './client'
 import type { Rule } from '../shared/types'
-
-const API = 'http://localhost:8000'
 
 // --- Types ---
 
@@ -127,61 +125,61 @@ export interface PerformanceResponse {
 // --- API calls ---
 
 export async function fetchAccount(): Promise<Account> {
-  const { data } = await axios.get(`${API}/api/trading/account`)
+  const { data } = await api.get('/api/trading/account')
   return data
 }
 
 export async function fetchPositions(): Promise<Position[]> {
-  const { data } = await axios.get(`${API}/api/trading/positions`)
+  const { data } = await api.get('/api/trading/positions')
   return data
 }
 
 export async function fetchOrders(): Promise<Order[]> {
-  const { data } = await axios.get(`${API}/api/trading/orders`)
+  const { data } = await api.get('/api/trading/orders')
   return data
 }
 
 export async function placeBuy(symbol: string, qty: number, stop_loss_pct?: number) {
-  const { data } = await axios.post(`${API}/api/trading/buy`, { symbol, qty, stop_loss_pct })
+  const { data } = await api.post('/api/trading/buy', { symbol, qty, stop_loss_pct })
   return data
 }
 
 export async function placeSell(symbol: string, qty?: number) {
-  const { data } = await axios.post(`${API}/api/trading/sell`, { symbol, qty })
+  const { data } = await api.post('/api/trading/sell', { symbol, qty })
   return data
 }
 
 export async function closeAll() {
-  const { data } = await axios.post(`${API}/api/trading/close-all`)
+  const { data } = await api.post('/api/trading/close-all')
   return data
 }
 
 export async function cancelAll() {
-  const { data } = await axios.post(`${API}/api/trading/cancel-all`)
+  const { data } = await api.post('/api/trading/cancel-all')
   return data
 }
 
 export async function scanSignals(req: ScanRequest): Promise<ScanResponse> {
-  const { data } = await axios.post(`${API}/api/trading/scan`, req)
+  const { data } = await api.post('/api/trading/scan', req)
   return data
 }
 
 export async function fetchWatchlist(): Promise<string[]> {
-  const { data } = await axios.get(`${API}/api/trading/watchlist`)
+  const { data } = await api.get('/api/trading/watchlist')
   return data.symbols ?? []
 }
 
 export async function saveWatchlist(symbols: string[]): Promise<void> {
-  await axios.post(`${API}/api/trading/watchlist`, { symbols })
+  await api.post('/api/trading/watchlist', { symbols })
 }
 
 export async function fetchJournal(symbol?: string): Promise<JournalTrade[]> {
   const params = symbol ? { symbol } : {}
-  const { data } = await axios.get(`${API}/api/trading/journal`, { params })
+  const { data } = await api.get('/api/trading/journal', { params })
   return data.trades ?? []
 }
 
 export async function fetchPerformance(req: PerformanceRequest): Promise<PerformanceResponse> {
-  const { data } = await axios.post(`${API}/api/trading/performance`, req)
+  const { data } = await api.post('/api/trading/performance', req)
   return data
 }
