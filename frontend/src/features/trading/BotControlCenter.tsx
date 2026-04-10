@@ -8,36 +8,11 @@ import {
   startBot, stopBot, backtestBot, deleteBot, manualBuyBot, updateBot,
 } from '../../api/bots'
 import { fmtTimeET } from '../../shared/utils/time'
+import { fmtUsd, fmtPnl } from '../../shared/utils/format'
+import { statusColor, levelColor } from '../../shared/utils/colors'
 
 const SAVED_KEY = 'strategylab-saved-strategies'
 const INTERVALS = ['1m', '5m', '15m', '30m', '1h']
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function fmtUsd(n: number) {
-  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
-}
-
-function fmtPnl(n: number) {
-  const s = Math.abs(n).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
-  return n >= 0 ? `+${s}` : `-${s}`
-}
-
-function statusColor(status: string) {
-  if (status === 'running') return '#26a69a'
-  if (status === 'error') return '#ef5350'
-  if (status === 'backtesting') return '#f0b429'
-  return '#555'
-}
-
-function levelColor(level: BotActivityEntry['level']) {
-  if (level === 'TRADE') return '#26a69a'
-  if (level === 'ERROR') return '#ef5350'
-  if (level === 'WARN') return '#f0b429'
-  return '#aaa'
-}
 
 // ---------------------------------------------------------------------------
 // MiniSparkline — lightweight-charts BaselineSeries in a tiny container
