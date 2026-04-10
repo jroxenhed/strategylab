@@ -178,6 +178,10 @@ class BotRunner:
         # 1. Trading hours check (entries only)
         in_hours = self._in_trading_hours()
 
+        # Skip fetch entirely when outside trading hours and no open position
+        if not in_hours and state.entry_price is None:
+            return
+
         # 2. Fetch bars (30 days back for indicator warmup)
         from datetime import timedelta, date
         end_date = date.today().isoformat()
