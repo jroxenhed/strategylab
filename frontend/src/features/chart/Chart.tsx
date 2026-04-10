@@ -297,7 +297,7 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
     chart.subscribeCrosshairMove(crosshairHandler)
 
     const ro = new ResizeObserver(() => {
-      if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth })
+      if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth, height: containerRef.current.clientHeight })
     })
     ro.observe(containerRef.current)
 
@@ -358,7 +358,7 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
     chart.subscribeCrosshairMove(crosshairHandler)
 
     const ro = new ResizeObserver(() => {
-      if (macdContainerRef.current) chart.applyOptions({ width: macdContainerRef.current.clientWidth })
+      if (macdContainerRef.current) chart.applyOptions({ width: macdContainerRef.current.clientWidth, height: macdContainerRef.current.clientHeight })
     })
     ro.observe(macdContainerRef.current)
     return () => {
@@ -414,7 +414,7 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
     chart.subscribeCrosshairMove(crosshairHandler)
 
     const ro = new ResizeObserver(() => {
-      if (rsiContainerRef.current) chart.applyOptions({ width: rsiContainerRef.current.clientWidth })
+      if (rsiContainerRef.current) chart.applyOptions({ width: rsiContainerRef.current.clientWidth, height: rsiContainerRef.current.clientHeight })
     })
     ro.observe(rsiContainerRef.current)
     return () => {
