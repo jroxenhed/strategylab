@@ -10,5 +10,15 @@ frontend/dist/
 # Superpowers brainstorm session files
 .superpowers/
 
+# OS files
+.DS_Store
+
+# Claude Code
+.claude/
+
+# Runtime data (user-specific, not code)
+backend/data/bots.json
+backend/data/trade_journal.json
+
 # Misc
 .env
