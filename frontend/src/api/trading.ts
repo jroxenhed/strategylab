@@ -85,6 +85,7 @@ export interface JournalTrade {
   price: number | null
   stop_loss_price: number | null
   source: string
+  reason: string | null
 }
 
 export interface PerformanceRequest {

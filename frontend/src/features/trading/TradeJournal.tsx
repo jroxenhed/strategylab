@@ -36,7 +36,7 @@ export default function TradeJournal() {
       ) : (
         <div style={styles.table}>
           <div style={styles.headRow}>
-            {['Time', 'Symbol', 'Side', 'Qty', 'Price', 'Stop Loss', 'Source'].map(h => (
+            {['Time', 'Symbol', 'Side', 'Qty', 'Price', 'Stop Loss', 'Source', 'Reason'].map(h => (
               <span key={h} style={styles.headCell}>{h}</span>
             ))}
           </div>
@@ -53,12 +53,25 @@ export default function TradeJournal() {
               <span style={{ ...styles.cell, color: t.source === 'auto' ? '#e5c07b' : '#8b949e' }}>
                 {t.source}
               </span>
+              <span style={{ ...styles.cell, color: reasonColor(t.reason) }}>
+                {t.reason || '—'}
+              </span>
             </div>
           ))}
         </div>
       )}
     </div>
   )
+}
+
+const reasonColor = (r: string | null) => {
+  if (!r) return '#8b949e'
+  if (r === 'stop_loss') return '#f85149'
+  if (r === 'trailing_stop') return '#d29922'
+  if (r === 'signal') return '#58a6ff'
+  if (r === 'entry') return '#26a641'
+  if (r === 'manual') return '#8b949e'
+  return '#8b949e'
 }
 
 const styles: Record<string, React.CSSProperties> = {

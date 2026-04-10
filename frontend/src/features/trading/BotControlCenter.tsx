@@ -158,7 +158,7 @@ function BotCard({
           {summary.strategy_name}
         </span>
         <span style={{ color: '#888', fontSize: 12 }}>
-          {summary.symbol} · {summary.interval}
+          {summary.symbol} · {summary.interval} · {summary.data_source ?? 'alpaca-iex'}
         </span>
       </div>
 
@@ -318,6 +318,7 @@ function AddBotBar({
   const [interval, setInterval] = useState('15m')
   const [allocation, setAllocation] = useState('')
   const [posSize, setPosSize] = useState(1.0)
+  const [dataSource, setDataSource] = useState('alpaca-iex')
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -362,6 +363,7 @@ function AddBotBar({
         dynamic_sizing: s.dynamicSizing ?? null,
         trading_hours: s.tradingHours ?? null,
         slippage_pct: typeof s.slippage === 'number' ? s.slippage : 0,
+        data_source: dataSource,
       })
       setAllocation('')
     } catch (e: any) {
@@ -395,6 +397,13 @@ function AddBotBar({
         {/* Interval */}
         <select value={interval} onChange={e => setInterval(e.target.value)} style={inputStyle}>
           {INTERVALS.map(v => <option key={v} value={v}>{v}</option>)}
+        </select>
+
+        {/* Data source */}
+        <select value={dataSource} onChange={e => setDataSource(e.target.value)} style={inputStyle}>
+          <option value="alpaca-iex">IEX</option>
+          <option value="alpaca">Alpaca SIP</option>
+          <option value="yahoo">Yahoo</option>
         </select>
 
         {/* Allocation */}

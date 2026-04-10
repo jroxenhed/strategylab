@@ -29,7 +29,8 @@ JOURNAL_PATH = DATA_DIR / "trade_journal.json"
 
 
 def _log_trade(symbol: str, side: str, qty: float, price: float | None,
-               source: str, stop_loss_price: float | None = None):
+               source: str, stop_loss_price: float | None = None,
+               reason: str | None = None):
     """Append a trade entry to the journal."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if JOURNAL_PATH.exists():
@@ -45,6 +46,7 @@ def _log_trade(symbol: str, side: str, qty: float, price: float | None,
         "price": price,
         "stop_loss_price": stop_loss_price,
         "source": source,
+        "reason": reason,
     })
     JOURNAL_PATH.write_text(json.dumps(journal, indent=2))
 
@@ -181,7 +183,7 @@ def place_buy(req: BuyRequest):
     order = client.submit_order(MarketOrderRequest(**order_kwargs))
 
     _log_trade(req.symbol, "buy", req.qty, price=current_price,
-               source="manual", stop_loss_price=stop_price)
+               source="manual", stop_loss_price=stop_price, reason="entry")
 
     result = {
         "order_id": str(order.id),
@@ -219,7 +221,7 @@ def place_sell(req: SellRequest):
             client.close_position(req.symbol)
         except APIError as e:
             raise _HTTPException(status_code=404, detail=f"No open position for {req.symbol}")
-        _log_trade(req.symbol, "sell", 0, price=None, source="manual")
+        _log_trade(req.symbol, "sell", 0, price=None, source="manual", reason="manual")
         return {"symbol": req.symbol, "action": "position_closed"}
 
     order = client.submit_order(
@@ -231,7 +233,7 @@ def place_sell(req: SellRequest):
         )
     )
 
-    _log_trade(req.symbol, "sell", req.qty, price=None, source="manual")
+    _log_trade(req.symbol, "sell", req.qty, price=None, source="manual", reason="manual")
 
     return {
         "order_id": str(order.id),
@@ -326,7 +328,7 @@ def scan_signals(req: ScanRequest):
                         order = client.submit_order(MarketOrderRequest(**order_kwargs))
                         sl_price = round(price * (1 - req.stop_loss_pct / 100), 2) if req.stop_loss_pct else None
                         _log_trade(symbol, "buy", qty, price=price,
-                                   source="auto", stop_loss_price=sl_price)
+                                   source="auto", stop_loss_price=sl_price, reason="entry")
                         action = {
                             "symbol": symbol, "action": "BUY",
                             "qty": qty, "order_id": str(order.id),
@@ -339,7 +341,7 @@ def scan_signals(req: ScanRequest):
                 elif signal == "SELL" and symbol in existing_positions:
                     try:
                         client.close_position(symbol)
-                        _log_trade(symbol, "sell", 0, price=price, source="auto")
+                        _log_trade(symbol, "sell", 0, price=price, source="auto", reason="signal")
                         actions.append({
                             "symbol": symbol, "action": "SELL",
                             "detail": "position_closed",

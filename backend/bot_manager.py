@@ -34,7 +34,7 @@ from shared import _fetch, get_trading_client
 # ---------------------------------------------------------------------------
 try:
     from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakeProfitRequest, OrderRequest
-    from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
+    from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass, OrderType
     _ALPACA_AVAILABLE = True
 except ImportError:
     _ALPACA_AVAILABLE = False
@@ -64,6 +64,7 @@ class BotConfig(BaseModel):
     dynamic_sizing: Optional[DynamicSizingConfig] = None
     trading_hours: Optional[TradingHoursConfig] = None
     slippage_pct: float = 0.0
+    data_source: str = "alpaca-iex"    # yahoo | alpaca | alpaca-iex
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +199,7 @@ class BotRunner:
 
         try:
             df = await self._run_with_retry(
-                _fetch, cfg.symbol, start_date, end_date, cfg.interval, "alpaca-iex"
+                _fetch, cfg.symbol, start_date, end_date, cfg.interval, cfg.data_source
             )
         except Exception as e:
             self._log("WARN", f"Fetch failed: {e}")
@@ -252,6 +253,60 @@ class BotRunner:
         # 6. No position → evaluate buy rules
         # ---------------------------------------------------------------
         if not has_position:
+            # Detect externally-closed position (e.g. Alpaca SL fill)
+            if state.entry_price is not None:
+                exit_price = price  # fallback to current price
+                exit_qty = 0
+                exit_reason = "external"
+                try:
+                    from alpaca.trading.requests import GetOrdersRequest
+                    from alpaca.trading.enums import QueryOrderStatus
+                    filled_orders = await self._run_with_retry(
+                        client.get_orders,
+                        GetOrdersRequest(
+                            status=QueryOrderStatus.CLOSED,
+                            symbols=[cfg.symbol.upper()],
+                            limit=5,
+                        ),
+                    )
+                    for o in filled_orders:
+                        if o.side == OrderSide.SELL and o.filled_avg_price is not None:
+                            exit_price = float(o.filled_avg_price)
+                            exit_qty = float(o.filled_qty)
+                            if o.type in (OrderType.STOP, OrderType.STOP_LIMIT):
+                                exit_reason = "stop_loss"
+                            elif o.type == OrderType.TRAILING_STOP:
+                                exit_reason = "trailing_stop"
+                            else:
+                                exit_reason = "external"
+                            break
+                except Exception as e:
+                    self._log("WARN", f"Failed to query filled orders: {e}")
+
+                sell_qty = exit_qty or alpaca_qty or 0
+                pnl = (exit_price - state.entry_price) * sell_qty if sell_qty else 0
+                state.total_pnl += pnl
+
+                if exit_reason in ("stop_loss", "trailing_stop"):
+                    state.consec_sl_count += 1
+                else:
+                    state.consec_sl_count = 0
+
+                state.equity_snapshots.append({
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "value": round(state.total_pnl, 2),
+                })
+
+                self._log("TRADE", f"SELL {cfg.symbol} @ {exit_price:.2f} | PnL={pnl:+.2f} | reason={exit_reason} (detected)")
+
+                try:
+                    from routes.trading import _log_trade
+                    _log_trade(cfg.symbol, "sell", sell_qty, exit_price, source="bot", reason=exit_reason)
+                except Exception:
+                    pass
+
+                self.manager.save()
+
             state.entry_price = None
             state.trail_peak = None
             state.trail_stop_price = None
@@ -334,7 +389,7 @@ class BotRunner:
                 # Log to trade journal
                 try:
                     from routes.trading import _log_trade
-                    _log_trade(cfg.symbol, "buy", qty, price, source="bot")
+                    _log_trade(cfg.symbol, "buy", qty, price, source="bot", reason="entry")
                 except Exception:
                     pass
 
@@ -424,7 +479,7 @@ class BotRunner:
 
                 try:
                     from routes.trading import _log_trade
-                    _log_trade(cfg.symbol, "sell", alpaca_qty, price, source="bot")
+                    _log_trade(cfg.symbol, "sell", alpaca_qty, price, source="bot", reason=exit_reason)
                 except Exception:
                     pass
 
@@ -571,7 +626,7 @@ class BotManager:
             dynamic_sizing=config.dynamic_sizing,
             trading_hours=config.trading_hours,
             slippage_pct=config.slippage_pct,
-            source="alpaca-iex",
+            source=config.data_source,
         )
 
         try:
@@ -604,6 +659,7 @@ class BotManager:
                 "trades_count": state.trades_count,
                 "total_pnl": round(state.total_pnl, 2),
                 "backtest_summary": state.backtest_result.get("summary") if state.backtest_result else None,
+                "data_source": config.data_source,
             })
         return result
 

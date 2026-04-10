@@ -199,6 +199,7 @@ export interface BotConfig {
   dynamic_sizing?: DynamicSizingConfig
   trading_hours?: TradingHoursConfig
   slippage_pct?: number
+  data_source?: string
 }
 
 export interface BotFundStatus {
@@ -240,6 +241,7 @@ export interface BotSummary {
   trades_count: number
   total_pnl: number
   backtest_summary: Record<string, number> | null
+  data_source?: string
 }
 
 export interface BotDetail {
