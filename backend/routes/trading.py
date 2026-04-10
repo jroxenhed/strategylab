@@ -1,5 +1,6 @@
 import json
 import math
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -202,6 +203,33 @@ def place_buy(req: BuyRequest):
     return result
 
 
+def _wait_for_fill(client, order_id: str, timeout: float = 2.0) -> tuple[float | None, float | None]:
+    """Poll order until filled or timeout. Returns (fill_price, fill_qty)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        order = client.get_order_by_id(order_id)
+        if order.filled_avg_price is not None:
+            return float(order.filled_avg_price), float(order.filled_qty)
+        time.sleep(0.1)
+    return None, None
+
+
+def _clear_bot_entry_state(symbol: str):
+    """Tell bot manager to clear entry state for this symbol so it won't double-log."""
+    try:
+        from routes.bots import bot_manager
+        if bot_manager is None:
+            return
+        for bid, (cfg, state) in bot_manager.bots.items():
+            if cfg.symbol.upper() == symbol.upper() and state.entry_price is not None:
+                state.entry_price = None
+                state.trail_peak = None
+                state.trail_stop_price = None
+        bot_manager.save()
+    except Exception:
+        pass
+
+
 @router.post("/sell")
 def place_sell(req: SellRequest):
     client = get_trading_client()
@@ -221,11 +249,21 @@ def place_sell(req: SellRequest):
 
     if req.qty is None:
         try:
-            client.close_position(req.symbol)
+            resp = client.close_position(req.symbol)
         except APIError as e:
             raise _HTTPException(status_code=404, detail=f"No open position for {req.symbol}")
-        _log_trade(req.symbol, "sell", 0, price=None, source="manual", reason="manual")
-        return {"symbol": req.symbol, "action": "position_closed"}
+
+        # Wait for fill data instead of logging empty values
+        fill_price, fill_qty = None, None
+        order_id = getattr(resp, 'id', None)
+        if order_id:
+            fill_price, fill_qty = _wait_for_fill(client, str(order_id))
+
+        _log_trade(req.symbol, "sell", fill_qty or 0, price=fill_price,
+                   source="manual", reason="manual")
+        _clear_bot_entry_state(req.symbol)
+        return {"symbol": req.symbol, "action": "position_closed",
+                "fill_price": fill_price, "fill_qty": fill_qty}
 
     order = client.submit_order(
         MarketOrderRequest(
@@ -236,14 +274,19 @@ def place_sell(req: SellRequest):
         )
     )
 
-    _log_trade(req.symbol, "sell", req.qty, price=None, source="manual", reason="manual")
+    fill_price, fill_qty = _wait_for_fill(client, str(order.id))
+
+    _log_trade(req.symbol, "sell", fill_qty or req.qty, price=fill_price,
+               source="manual", reason="manual")
+    _clear_bot_entry_state(req.symbol)
 
     return {
         "order_id": str(order.id),
         "symbol": req.symbol,
-        "qty": str(order.qty),
+        "qty": str(fill_qty or order.qty),
         "side": "sell",
-        "status": order.status.value,
+        "status": "filled" if fill_price else order.status.value,
+        "fill_price": fill_price,
     }
 
 
