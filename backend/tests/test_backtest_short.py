@@ -119,3 +119,31 @@ def test_long_still_works(mock_fetch):
     sell_trades = [t for t in result["trades"] if t["type"] == "sell"]
     assert len(sell_trades) == 1
     assert sell_trades[0]["pnl"] > 0, "Long: buy at 100, sell at 110 should be profitable"
+
+
+from fastapi.testclient import TestClient
+from main import app
+
+
+def test_short_backtest_api_endpoint():
+    """Test the /api/backtest endpoint with direction=short."""
+    client = TestClient(app)
+    resp = client.post("/api/backtest", json={
+        "ticker": "AAPL",
+        "start": "2024-01-01",
+        "end": "2024-06-01",
+        "interval": "1d",
+        "buy_rules": [{"indicator": "rsi", "condition": "crosses_above", "value": 70}],
+        "sell_rules": [{"indicator": "rsi", "condition": "crosses_below", "value": 50}],
+        "direction": "short",
+        "initial_capital": 10000,
+        "position_size": 1.0,
+        "source": "yahoo",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "summary" in data
+    assert "trades" in data
+    # All trades should be short/cover type
+    for t in data["trades"]:
+        assert t["type"] in ("short", "cover"), f"Unexpected trade type: {t['type']}"
