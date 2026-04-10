@@ -88,9 +88,9 @@ export default function App() {
         </span>
       </header>
 
-      {/* Main area — calc height required for react-resizable-panels v4 */}
+      {/* Main area — both tabs stay mounted, toggle via display to preserve state */}
       <div style={{ height: 'calc(100vh - 56px)' }}>
-        {activeTab === 'chart' ? (
+        <div style={{ height: '100%', display: activeTab === 'chart' ? 'block' : 'none' }}>
           <Group orientation="horizontal" style={{ height: '100%' }}>
 
             {/* LEFT SIDEBAR */}
@@ -176,9 +176,10 @@ export default function App() {
             </Panel>
 
           </Group>
-        ) : (
+        </div>
+        <div style={{ height: '100%', display: activeTab === 'trading' ? 'block' : 'none' }}>
           <PaperTrading />
-        )}
+        </div>
       </div>
     </div>
   )
