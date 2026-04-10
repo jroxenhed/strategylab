@@ -128,8 +128,9 @@ def get_orders():
     from alpaca.trading.requests import GetOrdersRequest
     from alpaca.trading.enums import QueryOrderStatus
     try:
-        orders = client.get_orders(GetOrdersRequest(status=QueryOrderStatus.ALL, limit=50))
+        orders = _alpaca_call(client.get_orders, GetOrdersRequest(status=QueryOrderStatus.ALL, limit=50))
     except Exception as e:
+        print(f"[Alpaca ERROR] get_orders: {type(e).__name__}: {e}")
         raise _HTTPException(status_code=502, detail=f"Alpaca API error: {e}")
     return [
         {
