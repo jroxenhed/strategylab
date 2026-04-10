@@ -71,6 +71,7 @@ class BotConfig(BaseModel):
     trading_hours: Optional[TradingHoursConfig] = None
     slippage_pct: float = 0.0
     data_source: str = "alpaca-iex"    # yahoo | alpaca | alpaca-iex
+    direction: str = "long"            # "long" | "short"
 
 
 # ---------------------------------------------------------------------------

@@ -50,6 +50,7 @@ class StrategyRequest(BaseModel):
     dynamic_sizing: Optional[DynamicSizingConfig] = None
     trading_hours: Optional[TradingHoursConfig] = None
     source: str = "yahoo"
+    direction: str = "long"  # "long" | "short"
     debug: bool = False
 
     @field_validator('position_size')
