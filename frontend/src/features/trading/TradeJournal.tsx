@@ -79,7 +79,7 @@ export default function TradeJournal() {
       </div>
       {filtered.length === 0 ? (
         <div style={styles.empty}>{filter ? 'No matching trades' : 'No trades logged yet'}</div>
-      ) : (
+      ) : (<>
         <div style={{ ...styles.table, maxHeight: tableHeight }}>
           <div style={styles.headRow}>
             {['Time', 'Symbol', 'Side', 'Qty', 'Price', 'P&L', 'Slippage', 'Source', 'Reason'].map(h => (
@@ -120,7 +120,7 @@ export default function TradeJournal() {
         <div onMouseDown={onMouseDown} style={styles.resizeHandle}>
           <div style={styles.resizeGrip} />
         </div>
-      )}
+      </>)}
     </div>
   )
 }
