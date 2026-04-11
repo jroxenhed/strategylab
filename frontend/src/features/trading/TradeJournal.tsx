@@ -42,10 +42,10 @@ export default function TradeJournal() {
             ))}
           </div>
           {[...filtered].reverse().map(t => (
-            <div key={t.id} style={styles.row}>
+            <div key={t.id} style={{ ...styles.row, background: rowBackground(t) }}>
               <span style={styles.cell}>{fmtTime(t.timestamp)}</span>
               <span style={{ ...styles.cell, color: '#58a6ff', fontWeight: 600 }}>{t.symbol}</span>
-              <span style={{ ...styles.cell, color: t.side === 'buy' ? '#26a641' : '#f85149' }}>
+              <span style={{ ...styles.cell, color: sideColor(t) }}>
                 {t.side.toUpperCase()}
               </span>
               <span style={styles.cell}>{t.qty || '—'}</span>
@@ -67,6 +67,23 @@ export default function TradeJournal() {
       )}
     </div>
   )
+}
+
+const sideColor = (t: JournalTrade) => {
+  if (t.side === 'buy') return '#e5c07b'           // orange — entry (matches chart markers)
+  if (t.reason === 'stop_loss') return '#f85149'    // red — stop loss
+  if (t.reason === 'trailing_stop') return '#f85149' // red — trailing stop
+  if (t.reason === 'manual') return '#8b949e'       // grey — manual action
+  if (t.reason === 'signal') return '#26a641'       // green — signal exit
+  return '#e6edf3'                                  // default
+}
+
+const rowBackground = (t: JournalTrade) => {
+  if (t.side === 'buy') return 'rgba(229, 192, 123, 0.06)'   // orange tint — entry
+  if (t.reason === 'stop_loss' || t.reason === 'trailing_stop') return 'rgba(248, 81, 73, 0.06)'  // red tint
+  if (t.reason === 'manual') return 'rgba(139, 148, 158, 0.06)'  // grey tint
+  if (t.reason === 'signal') return 'rgba(38, 166, 65, 0.06)'    // green tint
+  return 'transparent'
 }
 
 const slippageColor = (t: JournalTrade) => {
