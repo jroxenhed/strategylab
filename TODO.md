@@ -20,6 +20,12 @@
 - [ ] Portfolio equity chart (combined P&L across bots)
 - [ ] Clean up bot page, move signal scanner to new page
 
+## Bot P&L ground-truth refactor (follow-ups)
+- [ ] Bot lifecycle vs journal: decide whether deleting/recreating a bot should reset its displayed P&L (filter journal by `bot.created_at`)
+- [ ] Clean up dead `BotState.total_pnl` field once migration is safe (currently kept for legacy `bots.json` deserialization)
+- [ ] Journal helper call frequency — runs on bot tick (for sizing) and on summary fetch. Journal is JSON-parsed each time. Fine for now, but if it gets slow (thousands of entries) add an mtime-based cache.
+- [ ] Bot card sparkline scale — currently local-per-card (each card fits its own first→last trade window). Consider a global/aligned x-axis so cards share a common time window and you can scan timing across bots at a glance. Tradeoff: alignment helps cross-bot coordination but squashes bots with few or recent-only trades. Revisit once the portfolio equity chart exists.
+
 ## Architecture
 - [x] Implement shorting — direction field, backtest + bot runner, chart markers, bot card refresh
 - [x] Structural refactoring — extract models/journal/bot_runner, split BotControlCenter, shared utils, centralize API client

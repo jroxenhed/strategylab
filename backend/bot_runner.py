@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 from signal_engine import compute_indicators, eval_rules
 from shared import _fetch, get_trading_client, is_retryable_error
-from journal import _log_trade
+from journal import _log_trade, compute_realized_pnl
 
 # Alpaca order helpers (imported lazily to avoid hard dep if Alpaca not set up)
 try:
@@ -202,17 +202,11 @@ class BotRunner:
                     pnl = (state.entry_price - exit_price) * sell_qty if sell_qty else 0
                 else:
                     pnl = (exit_price - state.entry_price) * sell_qty if sell_qty else 0
-                state.total_pnl += pnl
 
                 if exit_reason in ("stop_loss", "trailing_stop"):
                     state.consec_sl_count += 1
                 else:
                     state.consec_sl_count = 0
-
-                state.equity_snapshots.append({
-                    "time": datetime.now(timezone.utc).isoformat(),
-                    "value": round(state.total_pnl, 2),
-                })
 
                 side_label = "COVER" if is_short else "SELL"
                 self._log("TRADE", f"{side_label} {cfg.symbol} @ {exit_price:.2f} | PnL={pnl:+.2f} | reason={exit_reason} (detected)")
@@ -222,6 +216,11 @@ class BotRunner:
                                source="bot", reason=exit_reason, direction=cfg.direction)
                 except Exception:
                     pass
+
+                state.equity_snapshots.append({
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "value": round(compute_realized_pnl(cfg.symbol, cfg.direction), 2),
+                })
 
                 self.manager.save()
 
@@ -239,7 +238,7 @@ class BotRunner:
 
             if buy_signal:
                 # Compute effective position size (compounds P&L like backtest)
-                current_capital = cfg.allocated_capital + state.total_pnl
+                current_capital = cfg.allocated_capital + compute_realized_pnl(cfg.symbol, cfg.direction)
                 effective_size = max(current_capital, 0) * cfg.position_size
                 if cfg.dynamic_sizing and cfg.dynamic_sizing.enabled:
                     if state.consec_sl_count >= cfg.dynamic_sizing.consec_sls:
@@ -430,7 +429,6 @@ class BotRunner:
                     pnl = (state.entry_price - sell_fill) * alpaca_qty if state.entry_price else 0
                 else:
                     pnl = (sell_fill - state.entry_price) * alpaca_qty if state.entry_price else 0
-                state.total_pnl += pnl
                 exit_label = "COVER" if is_short else "SELL"
                 state.last_signal = f"{exit_label} ({exit_reason})"
 
@@ -439,11 +437,6 @@ class BotRunner:
                     state.consec_sl_count += 1
                 else:
                     state.consec_sl_count = 0
-
-                state.equity_snapshots.append({
-                    "time": datetime.now(timezone.utc).isoformat(),
-                    "value": round(state.total_pnl, 2),
-                })
 
                 if is_short:
                     slippage = sell_fill - price  # higher cover fill is worse
@@ -459,6 +452,11 @@ class BotRunner:
                                direction=cfg.direction)
                 except Exception:
                     pass
+
+                state.equity_snapshots.append({
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "value": round(compute_realized_pnl(cfg.symbol, cfg.direction), 2),
+                })
 
                 state.entry_price = None
                 state.trail_peak = None

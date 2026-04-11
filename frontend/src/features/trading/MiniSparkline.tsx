@@ -13,7 +13,7 @@ export default function MiniSparkline({ equityData }: { equityData: { time: stri
       grid: { vertLines: { visible: false }, horzLines: { visible: false } },
       leftPriceScale: { visible: false },
       rightPriceScale: { visible: false },
-      timeScale: { visible: false },
+      timeScale: { visible: false, timeVisible: true, secondsVisible: true },
       crosshair: { horzLine: { visible: false }, vertLine: { visible: false } },
       handleScroll: false,
       handleScale: false,
@@ -29,12 +29,17 @@ export default function MiniSparkline({ equityData }: { equityData: { time: stri
       lineWidth: 1,
       priceScaleId: 'right',
     })
-    const mapped = equityData.map((d, i) => ({ time: i + 1, value: d.value })) as any
+    const mapped = equityData
+      .map(d => ({ time: Math.floor(new Date(d.time).getTime() / 1000), value: d.value }))
+      .sort((a, b) => a.time - b.time)
+      .filter((d, i, arr) => i === 0 || d.time > arr[i - 1].time) as any
     series.setData(mapped)
     chart.timeScale().fitContent()
 
     const ro = new ResizeObserver(() => {
-      if (ref.current) chart.applyOptions({ width: ref.current.clientWidth })
+      if (!ref.current) return
+      chart.applyOptions({ width: ref.current.clientWidth })
+      chart.timeScale().fitContent()
     })
     ro.observe(ref.current)
 

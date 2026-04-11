@@ -22,7 +22,7 @@ from models import TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, 
 from routes.backtest import run_backtest
 from signal_engine import Rule
 from shared import _fetch, get_trading_client
-from journal import _log_trade
+from journal import _log_trade, compute_realized_pnl
 from bot_runner import BotRunner
 
 # ---------------------------------------------------------------------------
@@ -306,7 +306,7 @@ class BotManager:
         price = float(df["Close"].iloc[-1])
 
         # Calculate qty
-        current_capital = config.allocated_capital + state.total_pnl
+        current_capital = config.allocated_capital + compute_realized_pnl(config.symbol, config.direction)
         effective_size = max(current_capital, 0) * config.position_size
         qty = math.floor(effective_size / price)
         if qty < 1:
@@ -372,7 +372,7 @@ class BotManager:
                 "allocated_capital": config.allocated_capital,
                 "status": state.status,
                 "trades_count": state.trades_count,
-                "total_pnl": round(state.total_pnl, 2),
+                "total_pnl": round(compute_realized_pnl(config.symbol, config.direction), 2),
                 "backtest_summary": state.backtest_result.get("summary") if state.backtest_result else None,
                 "data_source": config.data_source,
                 "direction": config.direction,

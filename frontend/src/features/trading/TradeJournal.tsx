@@ -41,20 +41,29 @@ export default function TradeJournal() {
     ? trades.filter(t => t.symbol.toLowerCase().includes(filter.toLowerCase()))
     : trades
 
-  // Build entry price lookup: for each exit, find the most recent entry for the same symbol
+  // Pair exits with most-recent entry of the same (symbol, direction, source).
+  // Mirrors bot state.total_pnl: only bot fills count, entries are consumed on exit
+  // (so duplicate/phantom exits can't reuse stale entry prices), and long/short on the
+  // same symbol don't clobber each other.
   const exitPnl = new Map<string, number>()  // trade id → pnl
-  const lastEntry = new Map<string, number>() // symbol → entry price
+  const lastEntry = new Map<string, { price: number; qty: number }>()
   for (const t of trades) {
+    if (t.source !== 'bot') continue
+    if (t.price == null || !t.qty) continue
     const isEntry = t.side === 'buy' || t.side === 'short'
-    if (isEntry && t.price != null) {
-      lastEntry.set(t.symbol, t.price)
-    } else if (!isEntry && t.price != null) {
-      const entry = lastEntry.get(t.symbol)
+    const dir = t.side === 'buy' || t.side === 'sell' ? 'long' : 'short'
+    const key = `${t.symbol}:${dir}`
+    if (isEntry) {
+      lastEntry.set(key, { price: t.price, qty: t.qty })
+    } else {
+      const entry = lastEntry.get(key)
       if (entry != null) {
-        const pnl = t.side === 'cover'
-          ? (entry - t.price) * (t.qty || 1)  // short: profit when price drops
-          : (t.price - entry) * (t.qty || 1)   // long: profit when price rises
+        const qty = Math.min(entry.qty, t.qty)
+        const pnl = dir === 'short'
+          ? (entry.price - t.price) * qty
+          : (t.price - entry.price) * qty
         exitPnl.set(t.id, pnl)
+        lastEntry.delete(key)
       }
     }
   }

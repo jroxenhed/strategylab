@@ -9,6 +9,51 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 JOURNAL_PATH = DATA_DIR / "trade_journal.json"
 
 
+def compute_realized_pnl(symbol: str, direction: str = "long") -> float:
+    """Sum realized P&L for bot-sourced trades of a given (symbol, direction).
+
+    Pairs entries with exits in chronological order (LIFO: each exit consumes
+    the most recent open entry). Mirrors the TradeJournal frontend column so
+    the bot card and journal column always agree.
+    """
+    if not JOURNAL_PATH.exists():
+        return 0.0
+    try:
+        trades = json.loads(JOURNAL_PATH.read_text()).get("trades", [])
+    except (json.JSONDecodeError, OSError):
+        return 0.0
+
+    total = 0.0
+    open_entry: dict | None = None  # {"price": float, "qty": float}
+    for t in trades:
+        if t.get("source") != "bot":
+            continue
+        if t.get("symbol", "").upper() != symbol.upper():
+            continue
+        side = t.get("side")
+        price = t.get("price")
+        qty = t.get("qty")
+        if price is None or not qty:
+            continue
+
+        is_entry = side in ("buy", "short")
+        row_dir = "long" if side in ("buy", "sell") else "short"
+        if row_dir != direction:
+            continue
+
+        if is_entry:
+            open_entry = {"price": price, "qty": qty}
+        elif open_entry is not None:
+            pair_qty = min(open_entry["qty"], qty)
+            if direction == "short":
+                total += (open_entry["price"] - price) * pair_qty
+            else:
+                total += (price - open_entry["price"]) * pair_qty
+            open_entry = None
+
+    return total
+
+
 def _log_trade(symbol: str, side: str, qty: float, price: float | None,
                source: str, stop_loss_price: float | None = None,
                reason: str | None = None, expected_price: float | None = None,
