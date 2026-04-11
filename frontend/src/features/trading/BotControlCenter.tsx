@@ -159,7 +159,7 @@ export default function BotControlCenter() {
     try {
       const r = await startAllBots()
       await loadBots()
-      if (r.failed.length) setError(`Started ${r.started.length}, ${r.failed.length} failed`)
+      setError(r.failed.length ? `Started ${r.started.length}, ${r.failed.length} failed` : '')
     } catch (e: any) {
       setError(e?.response?.data?.detail ?? 'Failed to start all bots')
     }
@@ -169,7 +169,7 @@ export default function BotControlCenter() {
     try {
       const r = await stopAllBots()
       await loadBots()
-      if (r.failed.length) setError(`Stopped ${r.stopped.length}, ${r.failed.length} failed`)
+      setError(r.failed.length ? `Stopped ${r.stopped.length}, ${r.failed.length} failed` : '')
     } catch (e: any) {
       setError(e?.response?.data?.detail ?? 'Failed to stop all bots')
     }
@@ -184,7 +184,7 @@ export default function BotControlCenter() {
     try {
       const r = await stopAndCloseAllBots()
       await loadBots()
-      if (r.failed.length) setError(`Closed ${r.closed.length}, ${r.failed.length} failed`)
+      setError(r.failed.length ? `Closed ${r.closed.length}, ${r.failed.length} failed` : '')
     } catch (e: any) {
       setError(e?.response?.data?.detail ?? 'Failed to stop and close all bots')
     }
