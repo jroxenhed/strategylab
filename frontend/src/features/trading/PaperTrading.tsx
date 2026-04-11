@@ -1,8 +1,6 @@
 import AccountBar from './AccountBar'
 import BotControlCenter from './BotControlCenter'
 import PositionsTable from './PositionsTable'
-import SignalScanner from './SignalScanner'
-import PerformanceComparison from './PerformanceComparison'
 import TradeJournal from './TradeJournal'
 import OrderHistory from './OrderHistory'
 
@@ -12,8 +10,6 @@ export default function PaperTrading() {
       <AccountBar />
       <BotControlCenter />
       <PositionsTable />
-      <SignalScanner />
-      <PerformanceComparison />
       <TradeJournal />
       <OrderHistory />
     </div>

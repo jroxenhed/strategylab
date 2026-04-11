@@ -8,8 +8,9 @@ import Chart from './features/chart/Chart'
 import StrategyBuilder from './features/strategy/StrategyBuilder'
 import Results from './features/strategy/Results'
 import PaperTrading from './features/trading/PaperTrading'
+import Discovery from './features/discovery/Discovery'
 
-type AppTab = 'chart' | 'trading'
+type AppTab = 'chart' | 'trading' | 'discovery'
 
 const STORAGE_KEY = 'strategylab-settings'
 const EMPTY_OHLCV: never[] = []
@@ -72,13 +73,13 @@ export default function App() {
       <header style={styles.header}>
         <span style={styles.logo}>StrategyLab</span>
         <div style={styles.tabs}>
-          {(['chart', 'trading'] as const).map(tab => (
+          {(['chart', 'trading', 'discovery'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
               style={{ ...styles.tab, ...(activeTab === tab ? styles.tabActive : {}) }}
             >
-              {tab === 'chart' ? 'Chart' : 'Paper Trading'}
+              {tab === 'chart' ? 'Chart' : tab === 'trading' ? 'Paper Trading' : 'Discovery'}
             </button>
           ))}
         </div>
@@ -194,6 +195,9 @@ export default function App() {
         </div>
         <div style={{ height: '100%', display: activeTab === 'trading' ? 'block' : 'none' }}>
           <PaperTrading />
+        </div>
+        <div style={{ height: '100%', display: activeTab === 'discovery' ? 'block' : 'none' }}>
+          <Discovery />
         </div>
       </div>
     </div>
