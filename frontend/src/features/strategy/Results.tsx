@@ -138,17 +138,17 @@ export default function Results({ result, mainChart }: Props) {
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           <div style={styles.metricsGrid}>
             {[
-              { label: 'Return', value: `${summary.total_return_pct > 0 ? '+' : ''}${summary.total_return_pct}%`, color: summary.total_return_pct >= 0 ? '#26a641' : '#f85149' },
-              { label: 'B&H Return', value: `${summary.buy_hold_return_pct > 0 ? '+' : ''}${summary.buy_hold_return_pct}%`, color: '#8b949e' },
-              { label: 'Final Value', value: `$${summary.final_value.toLocaleString()}`, color: '#e6edf3' },
-              { label: 'Trades', value: summary.num_trades, color: '#e6edf3' },
-              { label: 'Win Rate', value: `${summary.win_rate_pct}%`, color: summary.win_rate_pct >= 50 ? '#26a641' : '#f85149' },
-              { label: 'Sharpe', value: summary.sharpe_ratio, color: summary.sharpe_ratio >= 1 ? '#26a641' : '#8b949e' },
-              { label: 'Max DD', value: `${summary.max_drawdown_pct}%`, color: '#f85149' },
-            ].map(({ label, value, color }) => (
-              <div key={label} style={styles.metric}>
+              { label: 'Return', value: `${summary.total_return_pct > 0 ? '+' : ''}${summary.total_return_pct}%`, color: summary.total_return_pct >= 0 ? '#26a641' : '#f85149', primary: true },
+              { label: 'Final Value', value: `$${summary.final_value.toLocaleString()}`, color: '#e6edf3', primary: true },
+              { label: 'B&H Return', value: `${summary.buy_hold_return_pct > 0 ? '+' : ''}${summary.buy_hold_return_pct}%`, color: '#8b949e', primary: false },
+              { label: 'Trades', value: summary.num_trades, color: '#e6edf3', primary: false },
+              { label: 'Win Rate', value: `${summary.win_rate_pct}%`, color: summary.win_rate_pct >= 50 ? '#26a641' : '#f85149', primary: false },
+              { label: 'Sharpe', value: summary.sharpe_ratio, color: summary.sharpe_ratio >= 1 ? '#26a641' : '#8b949e', primary: false },
+              { label: 'Max DD', value: `${summary.max_drawdown_pct}%`, color: '#f85149', primary: false },
+            ].map(({ label, value, color, primary }) => (
+              <div key={label} style={{ ...styles.metric, minWidth: primary ? 140 : 90 }}>
                 <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>{label}</div>
-                <div style={{ fontSize: 16, fontWeight: 700, color }}>{value}</div>
+                <div style={{ fontSize: primary ? 22 : 13, fontWeight: 700, color }}>{value}</div>
               </div>
             ))}
           </div>
@@ -166,22 +166,12 @@ export default function Results({ result, mainChart }: Props) {
 
               <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start', marginTop: 12 }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 220 }}>
-                  <StatRow label="Max gain" value={summary.gain_stats?.max} color="#26a641" />
-                  <StatRow
-                    label="Avg gain"
-                    value={summary.gain_stats?.mean}
-                    color="#26a641"
-                    secondary={{ label: 'median', value: summary.gain_stats?.median }}
-                  />
-                  <StatRow label="Min gain" value={summary.gain_stats?.min} color="#26a641" />
-                  <StatRow label="Max loss" value={summary.loss_stats?.min} color="#f85149" />
-                  <StatRow
-                    label="Avg loss"
-                    value={summary.loss_stats?.mean}
-                    color="#f85149"
-                    secondary={{ label: 'median', value: summary.loss_stats?.median }}
-                  />
-                  <StatRow label="Min loss" value={summary.loss_stats?.max} color="#f85149" />
+                  <StatRow label="Biggest win" value={summary.gain_stats?.max} color="#26a641" />
+                  <StatRow label="Avg win" value={summary.gain_stats?.mean} color="#26a641" />
+                  <StatRow label="Smallest win" value={summary.gain_stats?.min} color="#26a641" />
+                  <StatRow label="Biggest loss" value={summary.loss_stats?.min} color="#f85149" />
+                  <StatRow label="Avg loss" value={summary.loss_stats?.mean} color="#f85149" />
+                  <StatRow label="Smallest loss" value={summary.loss_stats?.max} color="#f85149" />
                 </div>
                 <div style={{ flex: 1, minWidth: 280 }}>
                   <EvWaterfall
@@ -317,25 +307,18 @@ function StatRow({
   label,
   value,
   color,
-  secondary,
 }: {
   label: string
   value: number | null | undefined
   color: string
-  secondary?: { label: string; value: number | null | undefined }
 }) {
   const fmt = (v: number | null | undefined) =>
     v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}`
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, gap: 8 }}>
       <span style={{ color: '#8b949e' }}>{label}</span>
-      <span style={{ fontFamily: 'monospace', display: 'flex', gap: 6, alignItems: 'baseline' }}>
-        <span style={{ color: value == null ? '#484f58' : color }}>{fmt(value)}</span>
-        {secondary && (
-          <span style={{ color: '#6e7681', fontSize: 10 }}>
-            {secondary.label} {fmt(secondary.value)}
-          </span>
-        )}
+      <span style={{ fontFamily: 'monospace', color: value == null ? '#484f58' : color }}>
+        {fmt(value)}
       </span>
     </div>
   )
@@ -371,19 +354,15 @@ function EvPfHeader({
     pfText = profitFactor.toFixed(2)
   }
 
-  const suffix = <span style={{ fontSize: 10, color: '#8b949e', marginLeft: 4 }}>(mean)</span>
-
   return (
     <div style={{ display: 'flex', gap: 32, alignItems: 'baseline', marginBottom: 8 }}>
       <div>
         <span style={{ fontSize: 10, color: '#8b949e', marginRight: 6 }}>EV</span>
         <span style={{ fontSize: 16, fontWeight: 700, color: evColor }}>{evText}</span>
-        {suffix}
       </div>
       <div>
         <span style={{ fontSize: 10, color: '#8b949e', marginRight: 6 }}>PF</span>
         <span style={{ fontSize: 16, fontWeight: 700, color: pfColor }}>{pfText}</span>
-        {suffix}
       </div>
     </div>
   )

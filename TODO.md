@@ -26,9 +26,13 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 
 ## Strategy Summary & Analytics
 
-- [ ] Summary tab layout polish — deferred notes from EV/PF session: waterfall is functional but layout can be refined further (see Session 2026-04-12 memory for specific ideas)
+- [ ] Merge stat column into waterfall (replace left min/avg/max column with inline min↔max range indicator under each waterfall row)
+- [ ] Show B&H as alpha (single "Alpha vs B&H" metric instead of parallel Return / B&H Return)
+- [ ] Sharpe orange band for 0.5–1; dampen Max DD color when <10%
+- [ ] Histogram zero line + min/max tick labels
 
 ### Shipped
+- [x] Summary readability pass — dropped `(mean)` suffix on EV/PF, renamed Max/Min gain/loss → Biggest/Smallest win/loss, added size hierarchy to top metrics row (Return + Final Value 22px primary, rest 13px secondary), removed median secondary values from avg rows
 - [x] Expected value / trade + profit factor — EV + PF headline numbers, 3-row decomposition waterfall (Wins / Losses / Net) inline with StatRows + histogram, mean/median toggle dropped in favor of inline dual values
 - [x] Strategy summary: min/max/avg gain and loss
 
