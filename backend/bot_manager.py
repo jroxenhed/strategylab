@@ -22,7 +22,7 @@ from models import TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, 
 from routes.backtest import run_backtest
 from signal_engine import Rule
 from shared import _fetch, get_trading_client
-from journal import _log_trade, compute_realized_pnl
+from journal import _log_trade, compute_realized_pnl, first_bot_entry_time
 from bot_runner import BotRunner
 
 # ---------------------------------------------------------------------------
@@ -364,7 +364,9 @@ class BotManager:
     def list_bots(self) -> list[dict]:
         result = []
         for bot_id, (config, state) in self.bots.items():
-            first_trade_time = state.equity_snapshots[0]["time"] if state.equity_snapshots else None
+            first_trade_time = first_bot_entry_time(config.symbol, config.direction)
+            if first_trade_time is None and state.equity_snapshots:
+                first_trade_time = state.equity_snapshots[0]["time"]
             result.append({
                 "bot_id": bot_id,
                 "strategy_name": config.strategy_name,

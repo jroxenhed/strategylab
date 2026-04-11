@@ -54,6 +54,32 @@ def compute_realized_pnl(symbol: str, direction: str = "long") -> float:
     return total
 
 
+def first_bot_entry_time(symbol: str, direction: str = "long") -> str | None:
+    """Return ISO timestamp of the earliest bot entry for (symbol, direction).
+
+    Used so an open first position still contributes to the aligned sparkline
+    window — equity snapshots are only written on exits.
+    """
+    if not JOURNAL_PATH.exists():
+        return None
+    try:
+        trades = json.loads(JOURNAL_PATH.read_text()).get("trades", [])
+    except (json.JSONDecodeError, OSError):
+        return None
+    entry_sides = ("buy",) if direction == "long" else ("short",)
+    for t in trades:
+        if t.get("source") != "bot":
+            continue
+        if t.get("symbol", "").upper() != symbol.upper():
+            continue
+        if t.get("side") not in entry_sides:
+            continue
+        ts = t.get("timestamp")
+        if ts:
+            return ts
+    return None
+
+
 def _log_trade(symbol: str, side: str, qty: float, price: float | None,
                source: str, stop_loss_price: float | None = None,
                reason: str | None = None, expected_price: float | None = None,
