@@ -1,10 +1,37 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { fetchJournal, type JournalTrade } from '../../api/trading'
 import { fmtShortET } from '../../shared/utils/time'
+
+const DEFAULT_HEIGHT = 300
+const MIN_HEIGHT = 100
+const MAX_HEIGHT = 800
 
 export default function TradeJournal() {
   const [trades, setTrades] = useState<JournalTrade[]>([])
   const [filter, setFilter] = useState('')
+  const [tableHeight, setTableHeight] = useState(DEFAULT_HEIGHT)
+  const dragging = useRef(false)
+  const startY = useRef(0)
+  const startH = useRef(0)
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    dragging.current = true
+    startY.current = e.clientY
+    startH.current = tableHeight
+    e.preventDefault()
+  }, [tableHeight])
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!dragging.current) return
+      const newH = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startH.current + (e.clientY - startY.current)))
+      setTableHeight(newH)
+    }
+    const onMouseUp = () => { dragging.current = false }
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    return () => { window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp) }
+  }, [])
 
   const reload = () => fetchJournal().then(setTrades).catch(() => {})
 
@@ -53,7 +80,7 @@ export default function TradeJournal() {
       {filtered.length === 0 ? (
         <div style={styles.empty}>{filter ? 'No matching trades' : 'No trades logged yet'}</div>
       ) : (
-        <div style={styles.table}>
+        <div style={{ ...styles.table, maxHeight: tableHeight }}>
           <div style={styles.headRow}>
             {['Time', 'Symbol', 'Side', 'Qty', 'Price', 'P&L', 'Slippage', 'Source', 'Reason'].map(h => (
               <span key={h} style={styles.headCell}>{h}</span>
@@ -89,6 +116,9 @@ export default function TradeJournal() {
               </span>
             </div>
           ))}
+        </div>
+        <div onMouseDown={onMouseDown} style={styles.resizeHandle}>
+          <div style={styles.resizeGrip} />
         </div>
       )}
     </div>
@@ -158,7 +188,15 @@ const styles: Record<string, React.CSSProperties> = {
     outline: 'none', width: 120, marginLeft: 'auto',
   },
   empty: { padding: '16px', color: '#484f58', fontSize: 12 },
-  table: { overflowY: 'auto', maxHeight: 200 },
+  table: { overflowY: 'auto' },
+  resizeHandle: {
+    height: 6, cursor: 'row-resize', display: 'flex',
+    alignItems: 'center', justifyContent: 'center',
+    background: '#0d1117', borderTop: '1px solid #21262d',
+  },
+  resizeGrip: {
+    width: 40, height: 3, borderRadius: 2, background: '#30363d',
+  },
   headRow: {
     display: 'flex', gap: 4, padding: '4px 16px',
     borderBottom: '1px solid #21262d', position: 'sticky' as const, top: 0,
