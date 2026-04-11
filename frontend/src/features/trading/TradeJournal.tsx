@@ -14,6 +14,24 @@ export default function TradeJournal() {
     ? trades.filter(t => t.symbol.toLowerCase().includes(filter.toLowerCase()))
     : trades
 
+  // Build entry price lookup: for each exit, find the most recent entry for the same symbol
+  const exitPnl = new Map<string, number>()  // trade id → pnl
+  const lastEntry = new Map<string, number>() // symbol → entry price
+  for (const t of trades) {
+    const isEntry = t.side === 'buy' || t.side === 'short'
+    if (isEntry && t.price != null) {
+      lastEntry.set(t.symbol, t.price)
+    } else if (!isEntry && t.price != null) {
+      const entry = lastEntry.get(t.symbol)
+      if (entry != null) {
+        const pnl = t.side === 'cover'
+          ? (entry - t.price) * (t.qty || 1)  // short: profit when price drops
+          : (t.price - entry) * (t.qty || 1)   // long: profit when price rises
+        exitPnl.set(t.id, pnl)
+      }
+    }
+  }
+
   const fmtTime = (s: string) => {
     try { return fmtShortET(s) }
     catch { return s }
@@ -42,10 +60,10 @@ export default function TradeJournal() {
             ))}
           </div>
           {[...filtered].reverse().map(t => (
-            <div key={t.id} style={{ ...styles.row, background: rowBackground(t) }}>
+            <div key={t.id} style={{ ...styles.row, background: rowBackground(t, exitPnl) }}>
               <span style={styles.cell}>{fmtTime(t.timestamp)}</span>
               <span style={{ ...styles.cell, color: '#58a6ff', fontWeight: 600 }}>{t.symbol}</span>
-              <span style={{ ...styles.cell, color: sideColor(t) }}>
+              <span style={{ ...styles.cell, color: sideColor(t, exitPnl) }}>
                 {t.side.toUpperCase()}
               </span>
               <span style={styles.cell}>{t.qty || '—'}</span>
@@ -69,20 +87,26 @@ export default function TradeJournal() {
   )
 }
 
-const sideColor = (t: JournalTrade) => {
-  if (t.side === 'buy') return '#e5c07b'           // orange — entry (matches chart markers)
-  if (t.reason === 'stop_loss') return '#f85149'    // red — stop loss
-  if (t.reason === 'trailing_stop') return '#f85149' // red — trailing stop
-  if (t.reason === 'manual') return '#8b949e'       // grey — manual action
-  if (t.reason === 'signal') return '#58a6ff'       // blue — signal exit (P&L unknown in journal)
-  return '#e6edf3'                                  // default
+const exitColor = (t: JournalTrade, pnlMap: Map<string, number>) => {
+  const pnl = pnlMap.get(t.id)
+  if (pnl != null) return pnl >= 0 ? '#26a641' : '#f85149'  // green win, red loss
+  return '#8b949e'  // no entry found to compare
 }
 
-const rowBackground = (t: JournalTrade) => {
-  if (t.side === 'buy') return 'rgba(229, 192, 123, 0.06)'   // orange tint — entry
-  if (t.reason === 'stop_loss' || t.reason === 'trailing_stop') return 'rgba(248, 81, 73, 0.06)'  // red tint
+const sideColor = (t: JournalTrade, pnlMap: Map<string, number>) => {
+  const isEntry = t.side === 'buy' || t.side === 'short'
+  if (isEntry) return '#e5c07b'                    // orange — entry (matches chart markers)
+  if (t.reason === 'manual') return '#8b949e'      // grey — manual action
+  return exitColor(t, pnlMap)                      // green/red based on P&L
+}
+
+const rowBackground = (t: JournalTrade, pnlMap: Map<string, number>) => {
+  const isEntry = t.side === 'buy' || t.side === 'short'
+  if (isEntry) return 'rgba(229, 192, 123, 0.06)'             // orange tint — entry
   if (t.reason === 'manual') return 'rgba(139, 148, 158, 0.06)'  // grey tint
-  if (t.reason === 'signal') return 'rgba(88, 166, 255, 0.06)'   // blue tint — signal exit
+  const pnl = pnlMap.get(t.id)
+  if (pnl != null && pnl >= 0) return 'rgba(38, 166, 65, 0.06)'   // green tint — win
+  if (pnl != null && pnl < 0) return 'rgba(248, 81, 73, 0.06)'    // red tint — loss
   return 'transparent'
 }
 
