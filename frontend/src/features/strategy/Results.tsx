@@ -154,32 +154,43 @@ export default function Results({ result, mainChart }: Props) {
             ))}
           </div>
           {summary.num_trades > 0 && (summary.gain_stats || summary.loss_stats) && (
-            <div style={{ display: 'flex', gap: 24, padding: '12px 16px', borderTop: '1px solid #21262d', alignItems: 'flex-start' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 180 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase', letterSpacing: 0.5 }}>P&amp;L Distribution</span>
-                  <div style={{ display: 'flex', gap: 2, background: '#0d1117', border: '1px solid #21262d', borderRadius: 3, padding: 1 }}>
-                    {(['mean', 'median'] as const).map(m => (
-                      <button
-                        key={m}
-                        onClick={() => setAvgMode(m)}
-                        style={{
-                          fontSize: 9, padding: '1px 6px', border: 'none', cursor: 'pointer', borderRadius: 2,
-                          background: avgMode === m ? '#1e3a5f' : 'transparent',
-                          color: avgMode === m ? '#e6edf3' : '#8b949e',
-                        }}
-                      >{m}</button>
-                    ))}
-                  </div>
+            <div style={{ display: 'flex', flexDirection: 'column', padding: '12px 16px', borderTop: '1px solid #21262d' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase', letterSpacing: 0.5 }}>P&amp;L Distribution</span>
+                <div style={{ display: 'flex', gap: 2, background: '#0d1117', border: '1px solid #21262d', borderRadius: 3, padding: 1 }}>
+                  {(['mean', 'median'] as const).map(m => (
+                    <button
+                      key={m}
+                      onClick={() => setAvgMode(m)}
+                      style={{
+                        fontSize: 9, padding: '1px 6px', border: 'none', cursor: 'pointer', borderRadius: 2,
+                        background: avgMode === m ? '#1e3a5f' : 'transparent',
+                        color: avgMode === m ? '#e6edf3' : '#8b949e',
+                      }}
+                    >{m}</button>
+                  ))}
                 </div>
-                <StatRow label="Max gain" value={summary.gain_stats?.max} color="#26a641" />
-                <StatRow label={`Avg gain (${avgMode})`} value={summary.gain_stats?.[avgMode]} color="#26a641" />
-                <StatRow label="Min gain" value={summary.gain_stats?.min} color="#26a641" />
-                <StatRow label="Max loss" value={summary.loss_stats?.min} color="#f85149" />
-                <StatRow label={`Avg loss (${avgMode})`} value={summary.loss_stats?.[avgMode]} color="#f85149" />
-                <StatRow label="Min loss" value={summary.loss_stats?.max} color="#f85149" />
               </div>
-              <PnlHistogram values={summary.pnl_distribution ?? []} />
+
+              <EvPfHeader
+                evPerTrade={summary.ev_per_trade ?? null}
+                profitFactor={summary.profit_factor ?? null}
+                grossProfit={summary.gross_profit ?? 0}
+              />
+
+              {/* Waterfall component added in Task 6 */}
+
+              <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start', marginTop: 12 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 180 }}>
+                  <StatRow label="Max gain" value={summary.gain_stats?.max} color="#26a641" />
+                  <StatRow label={`Avg gain (${avgMode})`} value={summary.gain_stats?.[avgMode]} color="#26a641" />
+                  <StatRow label="Min gain" value={summary.gain_stats?.min} color="#26a641" />
+                  <StatRow label="Max loss" value={summary.loss_stats?.min} color="#f85149" />
+                  <StatRow label={`Avg loss (${avgMode})`} value={summary.loss_stats?.[avgMode]} color="#f85149" />
+                  <StatRow label="Min loss" value={summary.loss_stats?.max} color="#f85149" />
+                </div>
+                <PnlHistogram values={summary.pnl_distribution ?? []} />
+              </div>
             </div>
           )}
         </div>
@@ -304,6 +315,54 @@ function StatRow({ label, value, color }: { label: string; value: number | null 
       <span style={{ color: value == null ? '#484f58' : color, fontFamily: 'monospace' }}>
         {value == null ? '—' : `${value >= 0 ? '+' : ''}${value.toFixed(2)}`}
       </span>
+    </div>
+  )
+}
+
+function EvPfHeader({
+  evPerTrade,
+  profitFactor,
+  grossProfit,
+}: {
+  evPerTrade: number | null
+  profitFactor: number | null
+  grossProfit: number
+}) {
+  const evColor = evPerTrade == null ? '#8b949e' : evPerTrade > 0 ? '#26a641' : '#f85149'
+  const evText =
+    evPerTrade == null
+      ? '—'
+      : `${evPerTrade >= 0 ? '+' : ''}$${evPerTrade.toFixed(2)} / trade`
+
+  let pfColor: string
+  let pfText: string
+  if (profitFactor == null) {
+    if (grossProfit > 0) {
+      pfColor = '#26a641'
+      pfText = '∞'
+    } else {
+      pfColor = '#8b949e'
+      pfText = '—'
+    }
+  } else {
+    pfColor = profitFactor > 1 ? '#26a641' : '#f85149'
+    pfText = profitFactor.toFixed(2)
+  }
+
+  const suffix = <span style={{ fontSize: 10, color: '#8b949e', marginLeft: 4 }}>(mean)</span>
+
+  return (
+    <div style={{ display: 'flex', gap: 32, alignItems: 'baseline', marginBottom: 8 }}>
+      <div>
+        <span style={{ fontSize: 10, color: '#8b949e', marginRight: 6 }}>EV</span>
+        <span style={{ fontSize: 16, fontWeight: 700, color: evColor }}>{evText}</span>
+        {suffix}
+      </div>
+      <div>
+        <span style={{ fontSize: 10, color: '#8b949e', marginRight: 6 }}>PF</span>
+        <span style={{ fontSize: 16, fontWeight: 700, color: pfColor }}>{pfText}</span>
+        {suffix}
+      </div>
     </div>
   )
 }
