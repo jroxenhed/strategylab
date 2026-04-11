@@ -18,7 +18,29 @@
 - [x] Make allocation and strategy editable in-place on bot card (click when stopped)
 - [ ] Pre-market / extended hours option
 - [ ] Portfolio equity chart (combined P&L across bots)
-- [ ] Clean up bot page, move signal scanner to new page
+
+## Post-first-live-run notes (2026-04-11)
+
+### Group A — Quick wins (batch)
+- [ ] Bot sparkline: global toggle for local vs aligned timescale
+- [ ] Global start/stop all bots
+- [ ] Strategy summary: min/max/avg gain and loss
+- [ ] Backtest equity curve: baseline (buy & hold) overlay toggle
+
+### Group B — Needs its own small design each
+- [ ] Skip N trades after SL (+ dynamic sizing scale-back to 100% after N trades; open question: unify into one setting?)
+- [ ] Equity curve macro mode for long timescales / thousands of trades
+- [ ] Equity curve trend analysis (open-ended — define "trend" first)
+- [ ] Bot reordering/grouping (drag vs explicit groups vs tags)
+
+### Group C — Architectural (precursor to Discovery)
+- [ ] Clean up bot page, move signal scanner to new Discovery page
+
+### Group D — Discovery page (own multi-session research project)
+- [ ] Scan for good StrategyLab candidates (criteria TBD)
+- [ ] Batch backtesting (efficiency-critical)
+- [ ] AI/ML assisted parameter tweaking
+- [ ] Pipeline: present candidates → spawn bot army
 
 ## Bot P&L ground-truth refactor (follow-ups)
 - [ ] Bot lifecycle vs journal: decide whether deleting/recreating a bot should reset its displayed P&L (filter journal by `bot.created_at`)
@@ -30,7 +52,6 @@
 - [x] Implement shorting — direction field, backtest + bot runner, chart markers, bot card refresh
 - [x] Structural refactoring — extract models/journal/bot_runner, split BotControlCenter, shared utils, centralize API client
 - [ ] Borrow cost estimation (for live short positions on real accounts)
-- [ ] Multiple bots same ticker — grouping UI (long+short pairs run fine, visual grouping deferred)
 - [ ] Rename "Paper Trading" to something cool
 
 ## Planned Features
