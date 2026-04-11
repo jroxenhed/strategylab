@@ -32,6 +32,7 @@
 - [ ] Equity curve macro mode for long timescales / thousands of trades
 - [ ] Equity curve trend analysis (open-ended — define "trend" first)
 - [ ] Bot reordering/grouping (drag vs explicit groups vs tags)
+- [ ] Strategy summary: expected value / trade + profit factor — fixes "avg loss > avg win looks like losing" misread; waterfall or inline number beside distribution histogram
 
 ### Group C — Architectural (precursor to Discovery)
 - [x] Clean up bot page, move signal scanner to new Discovery page
