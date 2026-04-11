@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { BotSummary, BotFundStatus } from '../../shared/types'
 import {
   listBots, setBotFund, addBot,
@@ -154,7 +154,7 @@ export default function BotControlCenter() {
     catch (e: any) { setError(e?.response?.data?.detail ?? 'Failed to update bot') }
   }
 
-  const alignedRange = (() => {
+  const alignedRange = useMemo(() => {
     if (sparklineScale !== 'aligned') return undefined
     const times = bots
       .map(b => b.first_trade_time)
@@ -162,7 +162,7 @@ export default function BotControlCenter() {
       .map(t => Math.floor(new Date(t).getTime() / 1000))
     if (times.length === 0) return undefined
     return { from: Math.min(...times), to: Math.floor(Date.now() / 1000) }
-  })()
+  }, [bots, sparklineScale])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 0' }}>
