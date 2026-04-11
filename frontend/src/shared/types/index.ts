@@ -149,6 +149,10 @@ export interface BacktestResult {
     gain_stats?: SideStats
     loss_stats?: SideStats
     pnl_distribution?: number[]
+    gross_profit?: number
+    gross_loss?: number
+    ev_per_trade?: number | null
+    profit_factor?: number | null
   }
   trades: Trade[]
   equity_curve: TimeValue[]
