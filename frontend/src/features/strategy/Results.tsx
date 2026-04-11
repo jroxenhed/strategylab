@@ -178,7 +178,15 @@ export default function Results({ result, mainChart }: Props) {
                 grossProfit={summary.gross_profit ?? 0}
               />
 
-              {/* Waterfall component added in Task 6 */}
+              <EvWaterfall
+                winRatePct={summary.win_rate_pct}
+                avgGain={summary.gain_stats?.mean ?? 0}
+                avgLoss={Math.abs(summary.loss_stats?.mean ?? 0)}
+                grossProfit={summary.gross_profit ?? 0}
+                grossLoss={summary.gross_loss ?? 0}
+                numSells={summary.num_trades}
+                evPerTrade={summary.ev_per_trade ?? null}
+              />
 
               <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start', marginTop: 12 }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 180 }}>
@@ -363,6 +371,115 @@ function EvPfHeader({
         <span style={{ fontSize: 16, fontWeight: 700, color: pfColor }}>{pfText}</span>
         {suffix}
       </div>
+    </div>
+  )
+}
+
+function EvWaterfall({
+  winRatePct,
+  avgGain,
+  avgLoss,
+  grossProfit,
+  grossLoss,
+  numSells,
+  evPerTrade,
+}: {
+  winRatePct: number
+  avgGain: number
+  avgLoss: number
+  grossProfit: number
+  grossLoss: number
+  numSells: number
+  evPerTrade: number | null
+}) {
+  if (numSells <= 0) return null
+
+  const winContribution = grossProfit / numSells
+  const lossContribution = grossLoss / numSells
+  const netContribution = evPerTrade ?? 0
+  const lossRatePct = 100 - winRatePct
+
+  const showWins = grossProfit > 0
+  const showLosses = grossLoss > 0
+  const maxContribution = Math.max(winContribution, lossContribution, 0.0001)
+
+  const barFor = (value: number, max: number) => ({
+    width: `${Math.min(100, (Math.abs(value) / max) * 100)}%`,
+    height: 14,
+    borderRadius: 3,
+  })
+
+  const fmtSigned = (v: number) => `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`
+  const fmtUnsigned = (v: number) => `$${Math.abs(v).toFixed(2)}`
+  const netColor = netContribution > 0 ? '#26a641' : netContribution < 0 ? '#f85149' : '#8b949e'
+
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '55px 1fr auto auto',
+        columnGap: 12,
+        rowGap: 4,
+        alignItems: 'center',
+        marginTop: 4,
+        marginBottom: 4,
+        fontFamily: 'monospace',
+        fontSize: 11,
+      }}
+    >
+      {showWins && (
+        <>
+          <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase' }}>Wins</span>
+          <div style={{ ...barFor(winContribution, maxContribution), background: '#26a641' }} />
+          <span style={{ color: '#8b949e' }}>
+            {winRatePct.toFixed(1)}% × {fmtUnsigned(avgGain)} =
+          </span>
+          <span style={{ color: '#26a641', textAlign: 'right' }}>{fmtSigned(winContribution)}</span>
+        </>
+      )}
+
+      {showLosses && (
+        <>
+          <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase' }}>Losses</span>
+          <div style={{ ...barFor(lossContribution, maxContribution), background: '#f85149' }} />
+          <span style={{ color: '#8b949e' }}>
+            {lossRatePct.toFixed(1)}% × {fmtUnsigned(avgLoss)} =
+          </span>
+          <span style={{ color: '#f85149', textAlign: 'right' }}>{fmtSigned(-lossContribution)}</span>
+        </>
+      )}
+
+      <span
+        style={{
+          fontSize: 10,
+          color: '#8b949e',
+          textTransform: 'uppercase',
+          borderTop: '1px solid #30363d',
+          paddingTop: 4,
+          marginTop: 2,
+        }}
+      >
+        Net
+      </span>
+      <div
+        style={{
+          ...barFor(netContribution, maxContribution),
+          background: netColor,
+          marginTop: 6,
+        }}
+      />
+      <span style={{ borderTop: '1px solid #30363d', paddingTop: 4, marginTop: 2 }} />
+      <span
+        style={{
+          color: netColor,
+          textAlign: 'right',
+          borderTop: '1px solid #30363d',
+          paddingTop: 4,
+          marginTop: 2,
+        }}
+      >
+        {fmtSigned(netContribution)}
+      </span>
     </div>
   )
 }
