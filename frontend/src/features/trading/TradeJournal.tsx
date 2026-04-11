@@ -55,7 +55,7 @@ export default function TradeJournal() {
       ) : (
         <div style={styles.table}>
           <div style={styles.headRow}>
-            {['Time', 'Symbol', 'Side', 'Qty', 'Price', 'Slippage', 'Source', 'Reason'].map(h => (
+            {['Time', 'Symbol', 'Side', 'Qty', 'Price', 'P&L', 'Slippage', 'Source', 'Reason'].map(h => (
               <span key={h} style={styles.headCell}>{h}</span>
             ))}
           </div>
@@ -68,6 +68,14 @@ export default function TradeJournal() {
               </span>
               <span style={styles.cell}>{t.qty || '—'}</span>
               <span style={styles.cell}>{t.price != null ? `$${t.price.toFixed(2)}` : '—'}</span>
+              <span style={{ ...styles.cell, color: exitColor(t, exitPnl) }}>
+                {(() => {
+                  const pnl = exitPnl.get(t.id)
+                  if (pnl == null) return '—'
+                  const sign = pnl >= 0 ? '+' : '-'
+                  return `${sign}$${Math.abs(pnl).toFixed(2)}`
+                })()}
+              </span>
               <span style={{ ...styles.cell, color: slippageColor(t) }}>
                 {t.expected_price != null && t.price != null
                   ? `${((t.price - t.expected_price) / t.expected_price * 100).toFixed(3)}%`
