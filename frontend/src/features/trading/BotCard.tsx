@@ -56,6 +56,7 @@ function ActivityLog({ entries }: { entries: BotActivityEntry[] }) {
 export default function BotCard({
   summary,
   onStart, onStop, onBacktest, onDelete, onManualBuy, onUpdate,
+  alignedRange,
 }: {
   summary: BotSummary
   onStart: () => void
@@ -64,6 +65,7 @@ export default function BotCard({
   onDelete: () => void
   onManualBuy: () => void
   onUpdate: (updates: Record<string, unknown>) => void
+  alignedRange?: { from: number; to: number }
 }) {
   const [expanded, setExpanded] = useState(false)
   const [detail, setDetail] = useState<BotDetail | null>(null)
@@ -241,7 +243,7 @@ export default function BotCard({
 
         {/* Right column: mini chart */}
         <div style={{ flex: 1, minWidth: 120, minHeight: 60 }}>
-          <MiniSparkline equityData={detail?.state.equity_snapshots ?? []} />
+          <MiniSparkline equityData={detail?.state.equity_snapshots ?? []} alignedRange={alignedRange} />
         </div>
       </div>
 

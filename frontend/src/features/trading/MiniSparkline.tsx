@@ -1,7 +1,12 @@
 import { useEffect, useRef } from 'react'
 import { createChart, BaselineSeries } from 'lightweight-charts'
 
-export default function MiniSparkline({ equityData }: { equityData: { time: string; value: number }[] }) {
+interface Props {
+  equityData: { time: string; value: number }[]
+  alignedRange?: { from: number; to: number }
+}
+
+export default function MiniSparkline({ equityData, alignedRange }: Props) {
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -34,17 +39,28 @@ export default function MiniSparkline({ equityData }: { equityData: { time: stri
       .sort((a, b) => a.time - b.time)
       .filter((d, i, arr) => i === 0 || d.time > arr[i - 1].time) as any
     series.setData(mapped)
-    chart.timeScale().fitContent()
+
+    const applyRange = () => {
+      if (alignedRange && alignedRange.to > alignedRange.from) {
+        chart.timeScale().setVisibleRange({
+          from: alignedRange.from as any,
+          to: alignedRange.to as any,
+        })
+      } else {
+        chart.timeScale().fitContent()
+      }
+    }
+    applyRange()
 
     const ro = new ResizeObserver(() => {
       if (!ref.current) return
       chart.applyOptions({ width: ref.current.clientWidth })
-      chart.timeScale().fitContent()
+      applyRange()
     })
     ro.observe(ref.current)
 
     return () => { ro.disconnect(); chart.remove() }
-  }, [equityData])
+  }, [equityData, alignedRange?.from, alignedRange?.to])
 
   if (equityData.length < 2) return null
   return <div ref={ref} style={{ width: '100%', height: 60 }} />

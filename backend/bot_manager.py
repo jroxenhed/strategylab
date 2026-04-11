@@ -364,6 +364,7 @@ class BotManager:
     def list_bots(self) -> list[dict]:
         result = []
         for bot_id, (config, state) in self.bots.items():
+            first_trade_time = state.equity_snapshots[0]["time"] if state.equity_snapshots else None
             result.append({
                 "bot_id": bot_id,
                 "strategy_name": config.strategy_name,
@@ -378,6 +379,7 @@ class BotManager:
                 "direction": config.direction,
                 "avg_slippage_pct": round(sum(state.slippage_pcts) / len(state.slippage_pcts), 4) if state.slippage_pcts else None,
                 "has_position": state.entry_price is not None,
+                "first_trade_time": first_trade_time,
             })
         return result
 

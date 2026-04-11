@@ -249,6 +249,7 @@ export interface BotSummary {
   avg_slippage_pct?: number | null
   has_position?: boolean
   direction?: 'long' | 'short'
+  first_trade_time?: string | null
 }
 
 export interface BotDetail {

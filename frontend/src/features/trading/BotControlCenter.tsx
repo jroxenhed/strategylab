@@ -86,6 +86,13 @@ export default function BotControlCenter() {
   const [fund, setFund] = useState<BotFundStatus | null>(null)
   const [bots, setBots] = useState<BotSummary[]>([])
   const [error, setError] = useState('')
+  const [sparklineScale, setSparklineScale] = useState<'local' | 'aligned'>(() => {
+    const v = localStorage.getItem('sparklineScale')
+    return v === 'aligned' ? 'aligned' : 'local'
+  })
+  useEffect(() => {
+    localStorage.setItem('sparklineScale', sparklineScale)
+  }, [sparklineScale])
 
   const loadBots = async () => {
     try {
@@ -147,10 +154,38 @@ export default function BotControlCenter() {
     catch (e: any) { setError(e?.response?.data?.detail ?? 'Failed to update bot') }
   }
 
+  const alignedRange = (() => {
+    if (sparklineScale !== 'aligned') return undefined
+    const times = bots
+      .map(b => b.first_trade_time)
+      .filter((t): t is string => !!t)
+      .map(t => Math.floor(new Date(t).getTime() / 1000))
+    if (times.length === 0) return undefined
+    return { from: Math.min(...times), to: Math.floor(Date.now() / 1000) }
+  })()
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 0' }}>
-      <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 14, padding: '0 2px' }}>
-        Live Trading Bots
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 2px' }}>
+        <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 14 }}>
+          Live Trading Bots
+        </div>
+        <div style={{ flex: 1 }} />
+        <div style={{ display: 'flex', gap: 4, background: '#0d1117', border: '1px solid #1e2530', borderRadius: 4, padding: 2 }}>
+          {(['local', 'aligned'] as const).map(mode => (
+            <button
+              key={mode}
+              onClick={() => setSparklineScale(mode)}
+              style={{
+                fontSize: 11, padding: '3px 10px', borderRadius: 3, border: 'none', cursor: 'pointer',
+                background: sparklineScale === mode ? '#1e3a5f' : 'transparent',
+                color: sparklineScale === mode ? '#e6edf3' : '#8b949e',
+              }}
+            >
+              {mode === 'local' ? 'Local' : 'Aligned'}
+            </button>
+          ))}
+        </div>
       </div>
 
       {error && (
@@ -173,6 +208,7 @@ export default function BotControlCenter() {
         <BotCard
           key={bot.bot_id}
           summary={bot}
+          alignedRange={alignedRange}
           onStart={() => handleStart(bot.bot_id)}
           onStop={() => handleStop(bot.bot_id)}
           onBacktest={() => handleBacktest(bot.bot_id)}
