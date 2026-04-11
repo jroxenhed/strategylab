@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { createChart, BaselineSeries, ColorType } from 'lightweight-charts'
+import { createChart, BaselineSeries, LineSeries, ColorType } from 'lightweight-charts'
 import type { IChartApi } from 'lightweight-charts'
 import type { BacktestResult, SignalTraceEntry } from '../../shared/types'
 import { fmtDateTimeET } from '../../shared/utils/time'
@@ -19,6 +19,7 @@ interface Props {
 export default function Results({ result, mainChart }: Props) {
   const { summary, trades, equity_curve, signal_trace } = result
   const [activeTab, setActiveTab] = useState<Tab>('summary')
+  const [showBaseline, setShowBaseline] = useState(false)
   const chartRef = useRef<HTMLDivElement>(null)
   const sells = trades.filter(t => t.type === 'sell' || t.type === 'cover')
 
@@ -47,6 +48,21 @@ export default function Results({ result, mainChart }: Props) {
         .filter(d => d.value !== null)
         .map(d => ({ time: d.time as any, value: d.value as number }))
     )
+
+    if (showBaseline && result.baseline_curve && result.baseline_curve.length > 0) {
+      const baselineSeries = chart.addSeries(LineSeries, {
+        color: '#8b949e',
+        lineWidth: 1,
+        lineStyle: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      })
+      baselineSeries.setData(
+        result.baseline_curve
+          .filter(d => d.value !== null)
+          .map(d => ({ time: d.time as any, value: d.value as number }))
+      )
+    }
 
     // Initial alignment: match main chart's visible range, or fit content as fallback
     if (mainChart) {
@@ -101,7 +117,7 @@ export default function Results({ result, mainChart }: Props) {
       chart.remove()
       ro.disconnect()
     }
-  }, [activeTab, equity_curve, summary.total_return_pct, mainChart])
+  }, [activeTab, equity_curve, summary.total_return_pct, mainChart, showBaseline, result.baseline_curve])
 
   return (
     <div style={styles.container}>
@@ -137,7 +153,17 @@ export default function Results({ result, mainChart }: Props) {
       )}
 
       {activeTab === 'equity' && (
-        <div ref={chartRef} style={{ width: '100%', height: 200, minHeight: 100, maxHeight: 600, resize: 'vertical', overflow: 'hidden' }} />
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', fontSize: 11, color: '#8b949e', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={showBaseline}
+              onChange={e => setShowBaseline(e.target.checked)}
+            />
+            Show buy &amp; hold baseline
+          </label>
+          <div ref={chartRef} style={{ width: '100%', height: 200, minHeight: 100, maxHeight: 600, resize: 'vertical', overflow: 'hidden' }} />
+        </div>
       )}
 
       {activeTab === 'trades' && (

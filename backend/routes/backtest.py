@@ -283,6 +283,16 @@ def run_backtest(req: StrategyRequest):
                         "side": "buy",
                     })
 
+        # Buy & hold baseline curve (always long, even for short strategies)
+        first_close = float(close.iloc[0])
+        baseline_curve = [
+            {
+                "time": _format_time(df.index[i], req.interval),
+                "value": round(req.initial_capital * float(close.iloc[i]) / first_close, 2),
+            }
+            for i in range(len(df))
+        ]
+
         result = {
             "summary": {
                 "initial_capital": req.initial_capital,
@@ -296,6 +306,7 @@ def run_backtest(req: StrategyRequest):
             },
             "trades": trades,
             "equity_curve": equity,
+            "baseline_curve": baseline_curve,
         }
         if ema_overlays:
             result["ema_overlays"] = ema_overlays

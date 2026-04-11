@@ -149,6 +149,7 @@ export interface BacktestResult {
   }
   trades: Trade[]
   equity_curve: TimeValue[]
+  baseline_curve?: TimeValue[]
   ema_overlays?: EMAOverlay[]
   signal_trace?: SignalTraceEntry[]
 }
