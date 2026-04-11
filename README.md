@@ -26,6 +26,8 @@ Interactive trading strategy backtester and paper trading platform. Build strate
 - Slippage and commission modeling
 - Backtest metrics: total return, Sharpe ratio, max drawdown, win rate, trade log
 - Equity curve synced with main chart (baseline coloring: green above, red below initial capital)
+- Buy & hold baseline overlay toggle (dashed line over equity curve for quick benchmark comparison)
+- P&L distribution block: min/max/mean/median per side (gains vs losses), mean↔median toggle, inline histogram
 - Strategy save/load/delete (localStorage)
 - Chart disable toggle for lightweight backtesting of large datasets
 
@@ -35,8 +37,14 @@ Interactive trading strategy backtester and paper trading platform. Build strate
 - Trailing stop management, OTO bracket orders, stop-loss detection
 - Slippage tracking (expected vs actual fill price)
 - Bot cards with direction badges (LONG/SHORT), background tint, always-visible equity sparkline
+- Sparkline timescale toggle: local-per-card or aligned across all bots for cross-bot timing comparison
 - Manual entry button, in-place config editing (allocation, strategy, data source)
+- Bulk actions: Start All, Stop All, Stop and Close (with confirmation)
+
+### Discovery
 - Signal scanner: scan watchlist against strategy rules, one-click execution
+- Performance comparison across tickers
+- Dedicated page separated from live bot management (bot army pipeline planned)
 
 ### Manual Trading (Alpaca)
 - Account overview (equity, cash, buying power, PDT status)
@@ -92,6 +100,7 @@ frontend/src/
     chart/Chart.tsx    — three-pane chart (candlesticks, MACD, RSI)
     strategy/          — StrategyBuilder, Results
     trading/           — BotControlCenter, BotCard, AddBotBar, MiniSparkline
+    discovery/         — Discovery, SignalScanner, PerformanceComparison
     sidebar/Sidebar.tsx
   shared/
     hooks/             — useOHLCV, useLocalStorage
@@ -101,10 +110,10 @@ frontend/src/
 
 ## Planned
 
-- More indicators (ATR, Stochastic, VWAP) — chart display + backtest rules
-- More strategy rules — expand rule engine conditions
-- Chart timeframe buttons (1W / 1M / 3M / 1Y)
-- Watchlist — save/switch between tickers
-- Portfolio equity chart (combined P&L across bots)
-- Bot grouping by ticker
-- Borrow cost estimation for live short positions
+See `TODO.md` for the full themed roadmap. Highlights:
+
+- **Charts & Indicators** — portfolio equity chart (combined P&L across bots), equity curve macro mode, more indicators (ATR, Stochastic, VWAP), chart timeframe buttons, watchlist
+- **Strategy Engine** — skip N trades after SL, pre-market / extended hours, more rule conditions, borrow cost estimation for live shorts
+- **Strategy Summary** — expected value / trade + profit factor (avoids "avg loss > avg win looks like losing" misread)
+- **Bots** — browser-local timezone in bot log, bot reordering/grouping
+- **Discovery (research)** — candidate scanning, batch backtesting, AI-assisted parameter tuning, pipeline to spawn a bot army
