@@ -95,7 +95,7 @@ def set_fund(req: SetFundRequest):
 # ---------------------------------------------------------------------------
 
 @router.post("/start-all")
-def start_all_bots():
+async def start_all_bots():
     """Start every stopped bot. Silently skips bots in error state."""
     mgr = _get_manager()
     started: list[str] = []
