@@ -27,7 +27,7 @@ Interactive trading strategy backtester and paper trading platform. Build strate
 - Backtest metrics: total return, Sharpe ratio, max drawdown, win rate, trade log
 - Equity curve synced with main chart (baseline coloring: green above, red below initial capital)
 - Buy & hold baseline overlay toggle (dashed line over equity curve for quick benchmark comparison)
-- P&L distribution block: min/max/mean/median per side (gains vs losses), mean↔median toggle, inline histogram
+- P&L distribution block: EV/trade + profit factor headline numbers, 3-row decomposition waterfall (Wins / Losses / Net with proportional bars), min/max/avg per side with inline mean+median, inline histogram
 - Strategy save/load/delete (localStorage)
 - Chart disable toggle for lightweight backtesting of large datasets
 
@@ -114,6 +114,6 @@ See `TODO.md` for the full themed roadmap. Highlights:
 
 - **Charts & Indicators** — portfolio equity chart (combined P&L across bots), equity curve macro mode, more indicators (ATR, Stochastic, VWAP), chart timeframe buttons, watchlist
 - **Strategy Engine** — skip N trades after SL, pre-market / extended hours, more rule conditions, borrow cost estimation for live shorts
-- **Strategy Summary** — expected value / trade + profit factor (avoids "avg loss > avg win looks like losing" misread)
+- **Strategy Summary** — further Summary tab layout polish (EV/PF + waterfall shipped)
 - **Bots** — browser-local timezone in bot log, bot reordering/grouping
 - **Discovery (research)** — candidate scanning, batch backtesting, AI-assisted parameter tuning, pipeline to spawn a bot army

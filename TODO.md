@@ -26,9 +26,10 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 
 ## Strategy Summary & Analytics
 
-- [ ] Expected value / trade + profit factor — fixes "avg loss > avg win looks like losing" misread; waterfall or inline number beside distribution histogram
+- [ ] Summary tab layout polish — deferred notes from EV/PF session: waterfall is functional but layout can be refined further (see Session 2026-04-12 memory for specific ideas)
 
 ### Shipped
+- [x] Expected value / trade + profit factor — EV + PF headline numbers, 3-row decomposition waterfall (Wins / Losses / Net) inline with StatRows + histogram, mean/median toggle dropped in favor of inline dual values
 - [x] Strategy summary: min/max/avg gain and loss
 
 ## Bots (live trading)
