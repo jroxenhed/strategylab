@@ -50,3 +50,18 @@ export async function manualBuyBot(botId: string): Promise<{ qty: number; fill_p
 export async function deleteBot(botId: string): Promise<void> {
   await api.delete(`/api/bots/${botId}`)
 }
+
+export async function startAllBots(): Promise<{ started: string[]; skipped: string[]; failed: { bot_id: string; error: string }[] }> {
+  const res = await api.post('/api/bots/start-all')
+  return res.data
+}
+
+export async function stopAllBots(): Promise<{ stopped: string[]; failed: { bot_id: string; error: string }[] }> {
+  const res = await api.post('/api/bots/stop-all')
+  return res.data
+}
+
+export async function stopAndCloseAllBots(): Promise<{ closed: string[]; failed: { bot_id: string; error: string }[] }> {
+  const res = await api.post('/api/bots/stop-and-close-all')
+  return res.data
+}

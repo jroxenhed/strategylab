@@ -3,6 +3,7 @@ import type { BotSummary, BotFundStatus } from '../../shared/types'
 import {
   listBots, setBotFund, addBot,
   startBot, stopBot, backtestBot, deleteBot, manualBuyBot, updateBot,
+  startAllBots, stopAllBots, stopAndCloseAllBots,
 } from '../../api/bots'
 import { fmtUsd } from '../../shared/utils/format'
 import BotCard, { btnStyle } from './BotCard'
@@ -154,6 +155,41 @@ export default function BotControlCenter() {
     catch (e: any) { setError(e?.response?.data?.detail ?? 'Failed to update bot') }
   }
 
+  const handleStartAll = async () => {
+    try {
+      const r = await startAllBots()
+      await loadBots()
+      if (r.failed.length) setError(`Started ${r.started.length}, ${r.failed.length} failed`)
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Failed to start all bots')
+    }
+  }
+
+  const handleStopAll = async () => {
+    try {
+      const r = await stopAllBots()
+      await loadBots()
+      if (r.failed.length) setError(`Stopped ${r.stopped.length}, ${r.failed.length} failed`)
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Failed to stop all bots')
+    }
+  }
+
+  const handleStopAndCloseAll = async () => {
+    const openCount = bots.filter(b => b.has_position).length
+    const running = bots.filter(b => b.status === 'running').length
+    if (!window.confirm(`Close ${openCount} open position${openCount === 1 ? '' : 's'} at market and stop ${running} running bot${running === 1 ? '' : 's'}?`)) {
+      return
+    }
+    try {
+      const r = await stopAndCloseAllBots()
+      await loadBots()
+      if (r.failed.length) setError(`Closed ${r.closed.length}, ${r.failed.length} failed`)
+    } catch (e: any) {
+      setError(e?.response?.data?.detail ?? 'Failed to stop and close all bots')
+    }
+  }
+
   const alignedRange = useMemo(() => {
     if (sparklineScale !== 'aligned') return undefined
     const times = bots
@@ -166,9 +202,14 @@ export default function BotControlCenter() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 0' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 2px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 2px', flexWrap: 'wrap' }}>
         <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 14 }}>
           Live Trading Bots
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button onClick={handleStartAll} style={btnStyle('#1a3a2a')}>Start All</button>
+          <button onClick={handleStopAll} style={btnStyle('#3a1a1a')}>Stop All</button>
+          <button onClick={handleStopAndCloseAll} style={btnStyle('#5a1a1a')}>Stop and Close</button>
         </div>
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: 4, background: '#0d1117', border: '1px solid #1e2530', borderRadius: 4, padding: 2 }}>

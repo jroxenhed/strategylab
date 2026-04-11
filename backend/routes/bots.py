@@ -91,6 +91,63 @@ def set_fund(req: SetFundRequest):
 
 
 # ---------------------------------------------------------------------------
+# Bulk actions (must be before /{bot_id} routes)
+# ---------------------------------------------------------------------------
+
+@router.post("/start-all")
+def start_all_bots():
+    """Start every stopped bot. Silently skips bots in error state."""
+    mgr = _get_manager()
+    started: list[str] = []
+    skipped: list[str] = []
+    failed: list[dict] = []
+    for bot_id, (_, state) in list(mgr.bots.items()):
+        if state.status != "stopped":
+            skipped.append(bot_id)
+            continue
+        try:
+            mgr.start_bot(bot_id)
+            started.append(bot_id)
+        except Exception as e:
+            failed.append({"bot_id": bot_id, "error": str(e)})
+    return {"started": started, "skipped": skipped, "failed": failed}
+
+
+@router.post("/stop-all")
+def stop_all_bots():
+    """Stop every running bot. Leaves positions open."""
+    mgr = _get_manager()
+    stopped: list[str] = []
+    failed: list[dict] = []
+    for bot_id, (_, state) in list(mgr.bots.items()):
+        if state.status != "running":
+            continue
+        try:
+            mgr.stop_bot(bot_id, close_position=False)
+            stopped.append(bot_id)
+        except Exception as e:
+            failed.append({"bot_id": bot_id, "error": str(e)})
+    return {"stopped": stopped, "failed": failed}
+
+
+@router.post("/stop-and-close-all")
+def stop_and_close_all_bots():
+    """Stop every running bot AND flatten open positions at market."""
+    mgr = _get_manager()
+    closed: list[str] = []
+    failed: list[dict] = []
+    for bot_id, (_, state) in list(mgr.bots.items()):
+        if state.status != "running":
+            continue
+        try:
+            mgr.stop_bot(bot_id, close_position=True)
+            closed.append(bot_id)
+        except Exception as e:
+            failed.append({"bot_id": bot_id, "error": str(e)})
+    return {"closed": closed, "failed": failed}
+
+
+# ---------------------------------------------------------------------------
 # Bot CRUD
 # ---------------------------------------------------------------------------
 
