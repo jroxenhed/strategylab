@@ -21,7 +21,6 @@ export default function Results({ result, mainChart }: Props) {
   const { summary, trades, equity_curve, signal_trace } = result
   const [activeTab, setActiveTab] = useState<Tab>('summary')
   const [showBaseline, setShowBaseline] = useState(false)
-  const [avgMode, setAvgMode] = useState<'mean' | 'median'>('mean')
   const chartRef = useRef<HTMLDivElement>(null)
   const sells = trades.filter(t => t.type === 'sell' || t.type === 'cover')
 
@@ -155,21 +154,8 @@ export default function Results({ result, mainChart }: Props) {
           </div>
           {summary.num_trades > 0 && (summary.gain_stats || summary.loss_stats) && (
             <div style={{ display: 'flex', flexDirection: 'column', padding: '12px 16px', borderTop: '1px solid #21262d' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <div style={{ marginBottom: 8 }}>
                 <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase', letterSpacing: 0.5 }}>P&amp;L Distribution</span>
-                <div style={{ display: 'flex', gap: 2, background: '#0d1117', border: '1px solid #21262d', borderRadius: 3, padding: 1 }}>
-                  {(['mean', 'median'] as const).map(m => (
-                    <button
-                      key={m}
-                      onClick={() => setAvgMode(m)}
-                      style={{
-                        fontSize: 9, padding: '1px 6px', border: 'none', cursor: 'pointer', borderRadius: 2,
-                        background: avgMode === m ? '#1e3a5f' : 'transparent',
-                        color: avgMode === m ? '#e6edf3' : '#8b949e',
-                      }}
-                    >{m}</button>
-                  ))}
-                </div>
               </div>
 
               <EvPfHeader
@@ -178,24 +164,35 @@ export default function Results({ result, mainChart }: Props) {
                 grossProfit={summary.gross_profit ?? 0}
               />
 
-              <EvWaterfall
-                winRatePct={summary.win_rate_pct}
-                avgGain={summary.gain_stats?.mean ?? 0}
-                avgLoss={Math.abs(summary.loss_stats?.mean ?? 0)}
-                grossProfit={summary.gross_profit ?? 0}
-                grossLoss={summary.gross_loss ?? 0}
-                numSells={summary.num_trades}
-                evPerTrade={summary.ev_per_trade ?? null}
-              />
-
               <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start', marginTop: 12 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 180 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 220 }}>
                   <StatRow label="Max gain" value={summary.gain_stats?.max} color="#26a641" />
-                  <StatRow label={`Avg gain (${avgMode})`} value={summary.gain_stats?.[avgMode]} color="#26a641" />
+                  <StatRow
+                    label="Avg gain"
+                    value={summary.gain_stats?.mean}
+                    color="#26a641"
+                    secondary={{ label: 'median', value: summary.gain_stats?.median }}
+                  />
                   <StatRow label="Min gain" value={summary.gain_stats?.min} color="#26a641" />
                   <StatRow label="Max loss" value={summary.loss_stats?.min} color="#f85149" />
-                  <StatRow label={`Avg loss (${avgMode})`} value={summary.loss_stats?.[avgMode]} color="#f85149" />
+                  <StatRow
+                    label="Avg loss"
+                    value={summary.loss_stats?.mean}
+                    color="#f85149"
+                    secondary={{ label: 'median', value: summary.loss_stats?.median }}
+                  />
                   <StatRow label="Min loss" value={summary.loss_stats?.max} color="#f85149" />
+                </div>
+                <div style={{ flex: 1, minWidth: 280 }}>
+                  <EvWaterfall
+                    winRatePct={summary.win_rate_pct}
+                    avgGain={summary.gain_stats?.mean ?? 0}
+                    avgLoss={Math.abs(summary.loss_stats?.mean ?? 0)}
+                    grossProfit={summary.gross_profit ?? 0}
+                    grossLoss={summary.gross_loss ?? 0}
+                    numSells={summary.num_trades}
+                    evPerTrade={summary.ev_per_trade ?? null}
+                  />
                 </div>
                 <PnlHistogram values={summary.pnl_distribution ?? []} />
               </div>
@@ -316,12 +313,29 @@ export default function Results({ result, mainChart }: Props) {
   )
 }
 
-function StatRow({ label, value, color }: { label: string; value: number | null | undefined; color: string }) {
+function StatRow({
+  label,
+  value,
+  color,
+  secondary,
+}: {
+  label: string
+  value: number | null | undefined
+  color: string
+  secondary?: { label: string; value: number | null | undefined }
+}) {
+  const fmt = (v: number | null | undefined) =>
+    v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}`
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, gap: 8 }}>
       <span style={{ color: '#8b949e' }}>{label}</span>
-      <span style={{ color: value == null ? '#484f58' : color, fontFamily: 'monospace' }}>
-        {value == null ? '—' : `${value >= 0 ? '+' : ''}${value.toFixed(2)}`}
+      <span style={{ fontFamily: 'monospace', display: 'flex', gap: 6, alignItems: 'baseline' }}>
+        <span style={{ color: value == null ? '#484f58' : color }}>{fmt(value)}</span>
+        {secondary && (
+          <span style={{ color: '#6e7681', fontSize: 10 }}>
+            {secondary.label} {fmt(secondary.value)}
+          </span>
+        )}
       </span>
     </div>
   )
