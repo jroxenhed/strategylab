@@ -22,10 +22,10 @@
 ## Post-first-live-run notes (2026-04-11)
 
 ### Group A — Quick wins (batch)
-- [ ] Bot sparkline: global toggle for local vs aligned timescale
-- [ ] Global start/stop all bots
-- [ ] Strategy summary: min/max/avg gain and loss
-- [ ] Backtest equity curve: baseline (buy & hold) overlay toggle
+- [x] Bot sparkline: global toggle for local vs aligned timescale
+- [x] Global start/stop all bots
+- [x] Strategy summary: min/max/avg gain and loss
+- [x] Backtest equity curve: baseline (buy & hold) overlay toggle
 
 ### Group B — Needs its own small design each
 - [ ] Skip N trades after SL (+ dynamic sizing scale-back to 100% after N trades; open question: unify into one setting?)
@@ -34,7 +34,7 @@
 - [ ] Bot reordering/grouping (drag vs explicit groups vs tags)
 
 ### Group C — Architectural (precursor to Discovery)
-- [ ] Clean up bot page, move signal scanner to new Discovery page
+- [x] Clean up bot page, move signal scanner to new Discovery page
 
 ### Group D — Discovery page (own multi-session research project)
 - [ ] Scan for good StrategyLab candidates (criteria TBD)
