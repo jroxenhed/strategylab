@@ -146,12 +146,22 @@ export interface BacktestResult {
     win_rate_pct: number
     sharpe_ratio: number
     max_drawdown_pct: number
+    gain_stats?: SideStats
+    loss_stats?: SideStats
+    pnl_distribution?: number[]
   }
   trades: Trade[]
   equity_curve: TimeValue[]
   baseline_curve?: TimeValue[]
   ema_overlays?: EMAOverlay[]
   signal_trace?: SignalTraceEntry[]
+}
+
+export interface SideStats {
+  min: number | null
+  max: number | null
+  mean: number | null
+  median: number | null
 }
 
 export interface SignalTraceRule {

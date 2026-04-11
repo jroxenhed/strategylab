@@ -3,6 +3,7 @@ import { createChart, BaselineSeries, LineSeries, ColorType } from 'lightweight-
 import type { IChartApi } from 'lightweight-charts'
 import type { BacktestResult, SignalTraceEntry } from '../../shared/types'
 import { fmtDateTimeET } from '../../shared/utils/time'
+import PnlHistogram from './PnlHistogram'
 
 type Tab = 'summary' | 'equity' | 'trades' | 'trace'
 
@@ -20,6 +21,7 @@ export default function Results({ result, mainChart }: Props) {
   const { summary, trades, equity_curve, signal_trace } = result
   const [activeTab, setActiveTab] = useState<Tab>('summary')
   const [showBaseline, setShowBaseline] = useState(false)
+  const [avgMode, setAvgMode] = useState<'mean' | 'median'>('mean')
   const chartRef = useRef<HTMLDivElement>(null)
   const sells = trades.filter(t => t.type === 'sell' || t.type === 'cover')
 
@@ -134,21 +136,52 @@ export default function Results({ result, mainChart }: Props) {
       </div>
 
       {activeTab === 'summary' && (
-        <div style={styles.metricsGrid}>
-          {[
-            { label: 'Return', value: `${summary.total_return_pct > 0 ? '+' : ''}${summary.total_return_pct}%`, color: summary.total_return_pct >= 0 ? '#26a641' : '#f85149' },
-            { label: 'B&H Return', value: `${summary.buy_hold_return_pct > 0 ? '+' : ''}${summary.buy_hold_return_pct}%`, color: '#8b949e' },
-            { label: 'Final Value', value: `$${summary.final_value.toLocaleString()}`, color: '#e6edf3' },
-            { label: 'Trades', value: summary.num_trades, color: '#e6edf3' },
-            { label: 'Win Rate', value: `${summary.win_rate_pct}%`, color: summary.win_rate_pct >= 50 ? '#26a641' : '#f85149' },
-            { label: 'Sharpe', value: summary.sharpe_ratio, color: summary.sharpe_ratio >= 1 ? '#26a641' : '#8b949e' },
-            { label: 'Max DD', value: `${summary.max_drawdown_pct}%`, color: '#f85149' },
-          ].map(({ label, value, color }) => (
-            <div key={label} style={styles.metric}>
-              <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>{label}</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color }}>{value}</div>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <div style={styles.metricsGrid}>
+            {[
+              { label: 'Return', value: `${summary.total_return_pct > 0 ? '+' : ''}${summary.total_return_pct}%`, color: summary.total_return_pct >= 0 ? '#26a641' : '#f85149' },
+              { label: 'B&H Return', value: `${summary.buy_hold_return_pct > 0 ? '+' : ''}${summary.buy_hold_return_pct}%`, color: '#8b949e' },
+              { label: 'Final Value', value: `$${summary.final_value.toLocaleString()}`, color: '#e6edf3' },
+              { label: 'Trades', value: summary.num_trades, color: '#e6edf3' },
+              { label: 'Win Rate', value: `${summary.win_rate_pct}%`, color: summary.win_rate_pct >= 50 ? '#26a641' : '#f85149' },
+              { label: 'Sharpe', value: summary.sharpe_ratio, color: summary.sharpe_ratio >= 1 ? '#26a641' : '#8b949e' },
+              { label: 'Max DD', value: `${summary.max_drawdown_pct}%`, color: '#f85149' },
+            ].map(({ label, value, color }) => (
+              <div key={label} style={styles.metric}>
+                <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>{label}</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color }}>{value}</div>
+              </div>
+            ))}
+          </div>
+          {summary.num_trades > 0 && (summary.gain_stats || summary.loss_stats) && (
+            <div style={{ display: 'flex', gap: 24, padding: '12px 16px', borderTop: '1px solid #21262d', alignItems: 'flex-start' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 180 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase', letterSpacing: 0.5 }}>P&amp;L Distribution</span>
+                  <div style={{ display: 'flex', gap: 2, background: '#0d1117', border: '1px solid #21262d', borderRadius: 3, padding: 1 }}>
+                    {(['mean', 'median'] as const).map(m => (
+                      <button
+                        key={m}
+                        onClick={() => setAvgMode(m)}
+                        style={{
+                          fontSize: 9, padding: '1px 6px', border: 'none', cursor: 'pointer', borderRadius: 2,
+                          background: avgMode === m ? '#1e3a5f' : 'transparent',
+                          color: avgMode === m ? '#e6edf3' : '#8b949e',
+                        }}
+                      >{m}</button>
+                    ))}
+                  </div>
+                </div>
+                <StatRow label="Max gain" value={summary.gain_stats?.max} color="#26a641" />
+                <StatRow label={`Avg gain (${avgMode})`} value={summary.gain_stats?.[avgMode]} color="#26a641" />
+                <StatRow label="Min gain" value={summary.gain_stats?.min} color="#26a641" />
+                <StatRow label="Max loss" value={summary.loss_stats?.min} color="#f85149" />
+                <StatRow label={`Avg loss (${avgMode})`} value={summary.loss_stats?.[avgMode]} color="#f85149" />
+                <StatRow label="Min loss" value={summary.loss_stats?.max} color="#f85149" />
+              </div>
+              <PnlHistogram values={summary.pnl_distribution ?? []} />
             </div>
-          ))}
+          )}
         </div>
       )}
 
@@ -260,6 +293,17 @@ export default function Results({ result, mainChart }: Props) {
           </>)}
         </div>
       )}
+    </div>
+  )
+}
+
+function StatRow({ label, value, color }: { label: string; value: number | null | undefined; color: string }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+      <span style={{ color: '#8b949e' }}>{label}</span>
+      <span style={{ color: value == null ? '#484f58' : color, fontFamily: 'monospace' }}>
+        {value == null ? '—' : `${value >= 0 ? '+' : ''}${value.toFixed(2)}`}
+      </span>
     </div>
   )
 }

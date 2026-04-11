@@ -10,6 +10,19 @@ from models import TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, 
 router = APIRouter()
 
 
+def _side_stats(values: list[float]) -> dict:
+    """Min/max/mean/median for a list of floats. Empty list → all None."""
+    if not values:
+        return {"min": None, "max": None, "mean": None, "median": None}
+    import statistics
+    return {
+        "min": round(min(values), 2),
+        "max": round(max(values), 2),
+        "mean": round(sum(values) / len(values), 2),
+        "median": round(statistics.median(values), 2),
+    }
+
+
 @router.post("/api/backtest")
 def run_backtest(req: StrategyRequest):
     try:
@@ -258,6 +271,12 @@ def run_backtest(req: StrategyRequest):
         winning = [t for t in sell_trades if t.get("pnl", 0) > 0]
         win_rate = len(winning) / len(sell_trades) * 100 if sell_trades else 0
 
+        gains = [float(t["pnl"]) for t in sell_trades if t.get("pnl", 0) > 0]
+        losses = [float(t["pnl"]) for t in sell_trades if t.get("pnl", 0) < 0]
+        gain_stats = _side_stats(gains)
+        loss_stats = _side_stats(losses)
+        pnl_distribution = [round(float(t.get("pnl", 0)), 2) for t in sell_trades]
+
         # Build EMA overlay for rising_over/falling_over conditions in buy rules
         ema_overlays = []
         for rule in req.buy_rules:
@@ -303,6 +322,9 @@ def run_backtest(req: StrategyRequest):
                 "win_rate_pct": round(win_rate, 2),
                 "sharpe_ratio": round(sharpe, 3),
                 "max_drawdown_pct": round(max_drawdown, 2),
+                "gain_stats": gain_stats,
+                "loss_stats": loss_stats,
+                "pnl_distribution": pnl_distribution,
             },
             "trades": trades,
             "equity_curve": equity,
