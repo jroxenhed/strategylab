@@ -298,6 +298,7 @@ def run_backtest(req: StrategyRequest):
         gain_stats = _side_stats(gains)
         loss_stats = _side_stats(losses)
         pnl_distribution = [round(float(t.get("pnl", 0)), 2) for t in sell_trades]
+        edge_stats = _edge_stats(gains, losses, len(sell_trades))
 
         # Build EMA overlay for rising_over/falling_over conditions in buy rules
         ema_overlays = []
@@ -347,6 +348,7 @@ def run_backtest(req: StrategyRequest):
                 "gain_stats": gain_stats,
                 "loss_stats": loss_stats,
                 "pnl_distribution": pnl_distribution,
+                **edge_stats,
             },
             "trades": trades,
             "equity_curve": equity,
