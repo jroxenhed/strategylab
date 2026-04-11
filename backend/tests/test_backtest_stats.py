@@ -1,4 +1,4 @@
-from routes.backtest import _side_stats
+from routes.backtest import _side_stats, _edge_stats
 
 
 def test_side_stats_empty():
@@ -25,3 +25,15 @@ def test_side_stats_negatives():
     assert result["max"] == -10.0
     assert result["mean"] == -30.0
     assert result["median"] == -30.0
+
+
+def test_edge_stats_mixed():
+    # 10 wins averaging $100, 5 losses averaging -$50
+    gains = [100.0] * 10
+    losses = [-50.0] * 5
+    num_sells = 15
+    result = _edge_stats(gains, losses, num_sells)
+    assert result["gross_profit"] == 1000.0
+    assert result["gross_loss"] == 250.0
+    assert result["ev_per_trade"] == 50.0
+    assert result["profit_factor"] == 4.0

@@ -23,6 +23,28 @@ def _side_stats(values: list[float]) -> dict:
     }
 
 
+def _edge_stats(gains: list[float], losses: list[float], num_sells: int) -> dict:
+    """Expected value per trade + profit factor.
+
+    gross_profit = sum of winning P&Ls.
+    gross_loss   = absolute sum of losing P&Ls (always >= 0).
+    ev_per_trade = (gross_profit - gross_loss) / num_sells, or None if num_sells == 0.
+    profit_factor = gross_profit / gross_loss, or None if gross_loss == 0 (frontend renders
+                    this as ∞ when gross_profit > 0, or — when there are no trades at all).
+                    Python cannot serialize float('inf') to JSON, so None is the sentinel.
+    """
+    gross_profit = round(sum(gains), 2)
+    gross_loss = round(abs(sum(losses)), 2)
+    ev_per_trade = round((gross_profit - gross_loss) / num_sells, 2) if num_sells > 0 else None
+    profit_factor = round(gross_profit / gross_loss, 3) if gross_loss > 0 else None
+    return {
+        "gross_profit": gross_profit,
+        "gross_loss": gross_loss,
+        "ev_per_trade": ev_per_trade,
+        "profit_factor": profit_factor,
+    }
+
+
 @router.post("/api/backtest")
 def run_backtest(req: StrategyRequest):
     try:
