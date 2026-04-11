@@ -74,7 +74,7 @@ const sideColor = (t: JournalTrade) => {
   if (t.reason === 'stop_loss') return '#f85149'    // red — stop loss
   if (t.reason === 'trailing_stop') return '#f85149' // red — trailing stop
   if (t.reason === 'manual') return '#8b949e'       // grey — manual action
-  if (t.reason === 'signal') return '#26a641'       // green — signal exit
+  if (t.reason === 'signal') return '#58a6ff'       // blue — signal exit (P&L unknown in journal)
   return '#e6edf3'                                  // default
 }
 
@@ -82,7 +82,7 @@ const rowBackground = (t: JournalTrade) => {
   if (t.side === 'buy') return 'rgba(229, 192, 123, 0.06)'   // orange tint — entry
   if (t.reason === 'stop_loss' || t.reason === 'trailing_stop') return 'rgba(248, 81, 73, 0.06)'  // red tint
   if (t.reason === 'manual') return 'rgba(139, 148, 158, 0.06)'  // grey tint
-  if (t.reason === 'signal') return 'rgba(38, 166, 65, 0.06)'    // green tint
+  if (t.reason === 'signal') return 'rgba(88, 166, 255, 0.06)'   // blue tint — signal exit
   return 'transparent'
 }
 
