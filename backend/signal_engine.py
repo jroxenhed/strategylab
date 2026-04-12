@@ -217,17 +217,23 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
         lookback = int(rule.value) if rule.value is not None else 1
         if i < lookback + 1:
             return False
-        d_now = v_now - v_prev
-        d_past = s.iloc[i - lookback] - s.iloc[i - lookback - 1]
         # Dead zone only when S-G is active — filters causal micro-oscillations.
         # Raw MAs turn gradually and don't need it.
         sg_active = indicators.get("_sg_active", {})
         has_sg = sg_active.get(ind, True) if isinstance(sg_active, dict) else True
         eps = abs(v_now) * 3e-5 if has_sg else 0
         if cond == "turns_up":
-            return d_past < -eps and d_now >= eps
+            # Last `lookback` bars must all be rising, and bar before that falling
+            for k in range(lookback):
+                if s.iloc[i - k] - s.iloc[i - k - 1] < eps:
+                    return False
+            return s.iloc[i - lookback] - s.iloc[i - lookback - 1] < -eps
         else:
-            return d_past > eps and d_now <= -eps
+            # Last `lookback` bars must all be falling, and bar before that rising
+            for k in range(lookback):
+                if s.iloc[i - k] - s.iloc[i - k - 1] > -eps:
+                    return False
+            return s.iloc[i - lookback] - s.iloc[i - lookback - 1] > eps
     elif cond == "decelerating":
         if i < 2:
             return False
