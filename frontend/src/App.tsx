@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
-import type { BacktestResult, IndicatorKey, DataSource, MAType } from './shared/types'
+import type { BacktestResult, IndicatorKey, DataSource, MAType, StrategyRequest } from './shared/types'
 import type { IChartApi } from 'lightweight-charts'
 import { useOHLCV, useIndicators } from './shared/hooks/useOHLCV'
 import Sidebar from './features/sidebar/Sidebar'
@@ -57,6 +57,9 @@ export default function App() {
   const [showQqq, setShowQqq] = useState(saved?.showQqq ?? false)
   const [dataSource, setDataSource] = useState<DataSource>((saved?.dataSource as DataSource) ?? 'yahoo')
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null)
+  const [lastRequest, setLastRequest] = useState<StrategyRequest | null>(null)
+  const [resultsTab, setResultsTab] = useState<'summary' | 'equity' | 'trades' | 'trace'>('summary')
+  const [macroBucket, setMacroBucket] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<AppTab>('chart')
   const [mainChart, setMainChart] = useState<IChartApi | null>(null)
   const [chartEnabled, setChartEnabled] = useState(true)
@@ -199,12 +202,25 @@ export default function App() {
                         start={start}
                         end={end}
                         interval={interval}
-                        onResult={setBacktestResult}
+                        onResult={(result, req) => {
+                          setBacktestResult(result)
+                          if (req) setLastRequest(req)
+                        }}
                         dataSource={dataSource}
                         settingsPortalId="strategy-settings-portal"
                         maSettings={maSettings}
                       />
-                      {backtestResult && <Results result={backtestResult} mainChart={mainChart} />}
+                      {backtestResult && (
+                        <Results
+                          result={backtestResult}
+                          mainChart={mainChart}
+                          activeTab={resultsTab}
+                          onTabChange={setResultsTab}
+                          bucket={macroBucket}
+                          onBucketChange={setMacroBucket}
+                          lastRequest={lastRequest}
+                        />
+                      )}
                     </div>
                   </Panel>
 

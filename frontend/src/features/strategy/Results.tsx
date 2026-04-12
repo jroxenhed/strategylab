@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
-import { createChart, BaselineSeries, LineSeries, ColorType } from 'lightweight-charts'
+import { createChart, BaselineSeries, LineSeries, HistogramSeries, ColorType } from 'lightweight-charts'
 import type { IChartApi } from 'lightweight-charts'
-import type { BacktestResult, SignalTraceEntry } from '../../shared/types'
+import type { BacktestResult, SignalTraceEntry, StrategyRequest } from '../../shared/types'
+import { useMacro } from '../../shared/hooks/useMacro'
 import { fmtDateTimeET } from '../../shared/utils/time'
 import PnlHistogram from './PnlHistogram'
+import MacroEquityChart from './MacroEquityChart'
 
-type Tab = 'summary' | 'equity' | 'trades' | 'trace'
+export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace'
 
 function fmtDate(d: string | number | undefined): string {
   if (typeof d === 'number') return fmtDateTimeET(d)
@@ -15,17 +17,29 @@ function fmtDate(d: string | number | undefined): string {
 interface Props {
   result: BacktestResult
   mainChart?: IChartApi | null
+  activeTab: ResultsTab
+  onTabChange: (tab: ResultsTab) => void
+  bucket: string | null
+  onBucketChange: (bucket: string | null) => void
+  lastRequest: StrategyRequest | null
 }
 
-export default function Results({ result, mainChart }: Props) {
+function autoDefaultBucket(equityLength: number): string {
+  if (equityLength < 500) return 'W'
+  if (equityLength <= 5000) return 'D'
+  if (equityLength <= 50000) return 'W'
+  return 'M'
+}
+
+export default function Results({ result, mainChart, activeTab, onTabChange, bucket, onBucketChange, lastRequest }: Props) {
   const { summary, trades, equity_curve, signal_trace } = result
-  const [activeTab, setActiveTab] = useState<Tab>('summary')
   const [showBaseline, setShowBaseline] = useState(false)
   const chartRef = useRef<HTMLDivElement>(null)
   const sells = trades.filter(t => t.type === 'sell' || t.type === 'cover')
+  const { data: macroData, isLoading: macroLoading } = useMacro(lastRequest, bucket)
 
   useEffect(() => {
-    if (activeTab !== 'equity' || !chartRef.current || equity_curve.length === 0) return
+    if (activeTab !== 'equity' || bucket !== null || !chartRef.current || equity_curve.length === 0) return
     const chart = createChart(chartRef.current, {
       height: chartRef.current.clientHeight || 185,
       layout: { background: { type: ColorType.Solid, color: '#0d1117' }, textColor: '#8b949e' },
@@ -62,6 +76,34 @@ export default function Results({ result, mainChart }: Props) {
         result.baseline_curve
           .filter(d => d.value !== null)
           .map(d => ({ time: d.time as any, value: d.value as number }))
+      )
+    }
+
+    // Trade density ticks at exact bar positions
+    if (sells.length > 0) {
+      const maxPnl = Math.max(...sells.map(s => Math.abs(s.pnl ?? 0)), 1)
+      const tickSeries = chart.addSeries(HistogramSeries, {
+        priceScaleId: 'trade-ticks',
+        base: 0,
+        lastValueVisible: false,
+        priceLineVisible: false,
+      })
+      chart.priceScale('trade-ticks').applyOptions({
+        visible: false,
+        scaleMargins: { top: 0.92, bottom: 0 },
+      })
+      tickSeries.setData(
+        sells.map(s => {
+          const pnl = s.pnl ?? 0
+          const intensity = 0.3 + 0.7 * Math.min(1, Math.abs(pnl) / maxPnl)
+          return {
+            time: s.date as any,
+            value: 1,
+            color: pnl >= 0
+              ? `rgba(38, 166, 65, ${intensity})`
+              : `rgba(248, 81, 73, ${intensity})`,
+          }
+        })
       )
     }
 
@@ -118,40 +160,72 @@ export default function Results({ result, mainChart }: Props) {
       chart.remove()
       ro.disconnect()
     }
-  }, [activeTab, equity_curve, summary.total_return_pct, mainChart, showBaseline, result.baseline_curve])
+  }, [activeTab, bucket, equity_curve, summary.total_return_pct, mainChart, showBaseline, result.baseline_curve])
 
   return (
     <div style={styles.container}>
       <div style={styles.tabBar}>
-        {(['summary', 'equity', 'trades', ...(signal_trace ? ['trace'] : [])] as Tab[]).map(tab => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            style={{ ...styles.tab, ...(activeTab === tab ? styles.tabActive : {}) }}
-          >
-            {tab === 'summary' ? 'Summary' : tab === 'equity' ? 'Equity Curve' : tab === 'trades' ? `Trades (${sells.length})` : `Signal Trace (${signal_trace!.length})`}
-          </button>
-        ))}
+        <div style={{ display: 'flex' }}>
+          {(['summary', 'equity', 'trades', ...(signal_trace ? ['trace'] : [])] as ResultsTab[]).map(tab => (
+            <button
+              key={tab}
+              onClick={() => onTabChange(tab)}
+              style={{ ...styles.tab, ...(activeTab === tab ? styles.tabActive : {}) }}
+            >
+              {tab === 'summary' ? 'Summary' : tab === 'equity' ? 'Equity Curve' : tab === 'trades' ? `Trades (${sells.length})` : `Signal Trace (${signal_trace!.length})`}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', marginLeft: 'auto', gap: 2, alignItems: 'center' }}>
+          {(['Detail', 'D', 'W', 'M', 'Q', 'Y'] as const).map(b => {
+            const isDetail = b === 'Detail'
+            const isActive = isDetail ? bucket === null : bucket === b
+            const isRecommended = !isDetail && bucket === null && b === autoDefaultBucket(equity_curve.length)
+            return (
+              <button
+                key={b}
+                onClick={() => onBucketChange(isDetail ? null : b)}
+                style={{
+                  padding: '4px 8px',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: isActive ? '#58a6ff' : isRecommended ? '#58a6ff' : '#8b949e',
+                  background: isActive ? 'rgba(88, 166, 255, 0.1)' : 'none',
+                  border: 'none',
+                  borderBottom: isRecommended && !isActive ? '2px solid rgba(88, 166, 255, 0.3)' : '2px solid transparent',
+                  borderRadius: 3,
+                  cursor: 'pointer',
+                }}
+              >
+                {b}
+                {!isDetail && macroLoading && bucket === b && ' ...'}
+              </button>
+            )
+          })}
+        </div>
       </div>
 
+      {(activeTab === 'summary' || activeTab === 'equity') && (
+        <div style={styles.metricsGrid}>
+          {[
+            { label: 'Return', value: `${summary.total_return_pct > 0 ? '+' : ''}${summary.total_return_pct}%`, color: summary.total_return_pct >= 0 ? '#26a641' : '#f85149', primary: true },
+            { label: 'Final Value', value: `$${summary.final_value.toLocaleString()}`, color: '#e6edf3', primary: true },
+            { label: 'B&H Return', value: `${summary.buy_hold_return_pct > 0 ? '+' : ''}${summary.buy_hold_return_pct}%`, color: '#8b949e', primary: false },
+            { label: 'Trades', value: summary.num_trades, color: '#e6edf3', primary: false },
+            { label: 'Win Rate', value: `${summary.win_rate_pct}%`, color: summary.win_rate_pct >= 50 ? '#26a641' : '#f85149', primary: false },
+            { label: 'Sharpe', value: summary.sharpe_ratio, color: summary.sharpe_ratio >= 1 ? '#26a641' : '#8b949e', primary: false },
+            { label: 'Max DD', value: `${summary.max_drawdown_pct}%`, color: '#f85149', primary: false },
+          ].map(({ label, value, color, primary }) => (
+            <div key={label} style={{ ...styles.metric, minWidth: primary ? 140 : 90 }}>
+              <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>{label}</div>
+              <div style={{ fontSize: primary ? 22 : 13, fontWeight: 700, color }}>{value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {activeTab === 'summary' && (
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <div style={styles.metricsGrid}>
-            {[
-              { label: 'Return', value: `${summary.total_return_pct > 0 ? '+' : ''}${summary.total_return_pct}%`, color: summary.total_return_pct >= 0 ? '#26a641' : '#f85149', primary: true },
-              { label: 'Final Value', value: `$${summary.final_value.toLocaleString()}`, color: '#e6edf3', primary: true },
-              { label: 'B&H Return', value: `${summary.buy_hold_return_pct > 0 ? '+' : ''}${summary.buy_hold_return_pct}%`, color: '#8b949e', primary: false },
-              { label: 'Trades', value: summary.num_trades, color: '#e6edf3', primary: false },
-              { label: 'Win Rate', value: `${summary.win_rate_pct}%`, color: summary.win_rate_pct >= 50 ? '#26a641' : '#f85149', primary: false },
-              { label: 'Sharpe', value: summary.sharpe_ratio, color: summary.sharpe_ratio >= 1 ? '#26a641' : '#8b949e', primary: false },
-              { label: 'Max DD', value: `${summary.max_drawdown_pct}%`, color: '#f85149', primary: false },
-            ].map(({ label, value, color, primary }) => (
-              <div key={label} style={{ ...styles.metric, minWidth: primary ? 140 : 90 }}>
-                <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>{label}</div>
-                <div style={{ fontSize: primary ? 22 : 13, fontWeight: 700, color }}>{value}</div>
-              </div>
-            ))}
-          </div>
+        <div style={{ display: 'flex', flexDirection: 'column', height: 250, minHeight: 100, maxHeight: 600, resize: 'vertical', overflow: 'auto' }}>
           {summary.num_trades > 0 && (summary.gain_stats || summary.loss_stats) && (
             <div style={{ display: 'flex', flexDirection: 'column', padding: '12px 16px', borderTop: '1px solid #21262d' }}>
               <div style={{ marginBottom: 8 }}>
@@ -192,18 +266,56 @@ export default function Results({ result, mainChart }: Props) {
       )}
 
       {activeTab === 'equity' && (
-        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', fontSize: 11, color: '#8b949e', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={showBaseline}
-              onChange={e => setShowBaseline(e.target.checked)}
-            />
-            Show buy &amp; hold baseline
-          </label>
-          <div ref={chartRef} style={{ width: '100%', height: 200, minHeight: 100, maxHeight: 600, resize: 'vertical', overflow: 'hidden' }} />
-        </div>
+        bucket && macroData ? (
+          <MacroEquityChart
+            macroCurve={macroData.macro_curve}
+            initialCapital={summary.initial_capital}
+          />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', fontSize: 11, color: '#8b949e', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={showBaseline}
+                onChange={e => setShowBaseline(e.target.checked)}
+              />
+              Show buy &amp; hold baseline
+            </label>
+            <div ref={chartRef} style={{ width: '100%', height: 250, minHeight: 100, maxHeight: 600, resize: 'vertical', overflow: 'hidden' }} />
+          </div>
+        )
       )}
+
+      {(activeTab === 'summary' || activeTab === 'equity') && macroData?.period_stats && bucket && (() => {
+        const ps = macroData.period_stats
+        const periodName: Record<string, string> = { Daily: 'Day', Weekly: 'Week', Monthly: 'Month', Quarterly: 'Quarter', Yearly: 'Year' }
+        const pn = periodName[ps.label] ?? ps.label
+        return (
+          <div style={{
+            display: 'flex', flexWrap: 'wrap', gap: 0, padding: '10px 16px',
+            background: '#0d1117', borderTop: '1px solid #21262d', borderBottom: '1px solid #21262d',
+            flexShrink: 0,
+          }}>
+            <div style={{ width: '100%', marginBottom: 6 }}>
+              <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                {ps.label} Stats
+              </span>
+            </div>
+            {[
+              { label: `Winning ${pn}s`, value: `${ps.winning_pct}%`, color: ps.winning_pct >= 50 ? '#26a641' : '#f85149' },
+              { label: 'Avg Return', value: `${ps.avg_return_pct > 0 ? '+' : ''}${ps.avg_return_pct}%`, color: ps.avg_return_pct >= 0 ? '#26a641' : '#f85149' },
+              { label: `Best ${pn}`, value: `+${ps.best_return_pct}%`, color: '#26a641' },
+              { label: `Worst ${pn}`, value: `${ps.worst_return_pct}%`, color: '#f85149' },
+              { label: `Trades/${pn.charAt(0)}`, value: ps.avg_trades.toFixed(1), color: '#e6edf3' },
+            ].map(({ label, value, color }) => (
+              <div key={label} style={{ padding: '4px 20px 4px 0', minWidth: 100 }}>
+                <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>{label}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color }}>{value}</div>
+              </div>
+            ))}
+          </div>
+        )
+      })()}
 
       {activeTab === 'trades' && (
         <div style={styles.tradeList}>
@@ -489,7 +601,7 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'none', border: 'none', borderBottom: '2px solid transparent', cursor: 'pointer',
   },
   tabActive: { color: '#58a6ff', borderBottomColor: '#58a6ff' },
-  metricsGrid: { display: 'flex', flexWrap: 'wrap', padding: '12px 16px', gap: 0, alignContent: 'flex-start' },
+  metricsGrid: { display: 'flex', flexWrap: 'wrap', padding: '12px 16px', gap: 0, alignContent: 'flex-start', flexShrink: 0 },
   metric: { padding: '6px 20px 6px 0', minWidth: 110 },
   tradeList: { flex: 1, overflowY: 'auto', padding: '8px 12px' },
   tradeRow: { display: 'flex', gap: 4, alignItems: 'center', padding: '3px 0', borderBottom: '1px solid #21262d' },

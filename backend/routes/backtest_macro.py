@@ -1,5 +1,6 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 import pandas as pd
+from models import StrategyRequest
 
 router = APIRouter()
 
@@ -95,13 +96,9 @@ def aggregate_macro(equity_curve, trades, bucket, initial_capital):
         if trade_index is not None:
             for i, ti in enumerate(trade_index):
                 if bucket_start <= ti <= bucket_end:
-                    bucket_trades.append(sell_trades[i])
+                    bucket_trades.append({"pnl": sell_trades[i]["pnl"]})
 
-        # Time label: use ISO date string
-        if isinstance(times[0], (int, float)):
-            time_label = bucket_start.strftime("%Y-%m-%d")
-        else:
-            time_label = bucket_start.strftime("%Y-%m-%d")
+        time_label = bucket_start.strftime("%Y-%m-%d")
 
         macro_curve.append(
             {
@@ -147,3 +144,23 @@ def aggregate_macro(equity_curve, trades, bucket, initial_capital):
     }
 
     return {"bucket": bucket, "macro_curve": macro_curve, "period_stats": period_stats}
+
+
+@router.post("/api/backtest/macro")
+def macro_backtest(req: StrategyRequest, macro_bucket: str = "W"):
+    if macro_bucket not in _FREQ_MAP:
+        raise HTTPException(status_code=400, detail=f"Invalid bucket: {macro_bucket}. Must be one of D, W, M, Q, Y")
+
+    from routes.backtest import _backtest_cache, _request_hash
+
+    req_hash = _request_hash(req)
+
+    # Check cache — if miss, run full backtest to populate it
+    if _backtest_cache.get("hash") != req_hash:
+        from routes.backtest import run_backtest
+        run_backtest(req)
+
+    equity_curve = _backtest_cache["equity_curve"]
+    trades = _backtest_cache["trades"]
+
+    return aggregate_macro(equity_curve, trades, macro_bucket, req.initial_capital)

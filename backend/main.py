@@ -10,6 +10,7 @@ warnings.filterwarnings("ignore")
 from routes.data import router as data_router
 from routes.indicators import router as indicators_router
 from routes.backtest import router as backtest_router
+from routes.backtest_macro import router as backtest_macro_router
 from routes.search import router as search_router
 from routes.providers import router as providers_router
 from routes.trading import router as trading_router
@@ -39,6 +40,7 @@ app.add_middleware(
 app.include_router(data_router)
 app.include_router(indicators_router)
 app.include_router(backtest_router)
+app.include_router(backtest_macro_router)
 app.include_router(search_router)
 app.include_router(providers_router)
 app.include_router(trading_router)

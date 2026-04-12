@@ -1,4 +1,6 @@
 from fastapi import APIRouter, HTTPException
+import hashlib
+import json
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
@@ -8,6 +10,16 @@ from routes.indicators import _series_to_list
 from models import TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, StrategyRequest
 
 router = APIRouter()
+
+# Single-entry cache for macro endpoint re-aggregation.
+# Stores the most recent backtest's raw equity + trades, keyed by request hash.
+_backtest_cache: dict = {}
+
+
+def _request_hash(req) -> str:
+    """Deterministic hash of a StrategyRequest for cache keying."""
+    d = req.model_dump(exclude={"debug"})
+    return hashlib.sha256(json.dumps(d, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def _side_stats(values: list[float]) -> dict:
@@ -354,6 +366,14 @@ def run_backtest(req: StrategyRequest):
             }
             for i in range(len(df))
         ]
+
+        # Cache raw data for macro endpoint re-aggregation
+        _backtest_cache.clear()
+        _backtest_cache.update({
+            "hash": _request_hash(req),
+            "equity_curve": equity,
+            "trades": trades,
+        })
 
         result = {
             "summary": {

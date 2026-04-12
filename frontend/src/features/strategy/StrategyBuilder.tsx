@@ -11,7 +11,7 @@ interface Props {
   start: string
   end: string
   interval: string
-  onResult: (r: BacktestResult | null) => void
+  onResult: (r: BacktestResult | null, req?: StrategyRequest) => void
   dataSource: DataSource
   settingsPortalId?: string
   maSettings?: MASettings
@@ -155,7 +155,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         use_sg21: maSettings?.showSg21 ?? true,
       }
       const { data } = await api.post('/api/backtest', req)
-      onResult(data)
+      onResult(data, req)
     } catch (e: any) {
       setError(e.response?.data?.detail || 'Backtest failed')
     } finally {

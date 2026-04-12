@@ -185,6 +185,31 @@ export interface BacktestResult {
   signal_trace?: SignalTraceEntry[]
 }
 
+export interface MacroCurvePoint {
+  time: string
+  open: number
+  high: number
+  low: number
+  close: number
+  drawdown_pct: number
+  trades: { pnl: number }[]
+}
+
+export interface PeriodStats {
+  label: string
+  winning_pct: number
+  avg_return_pct: number
+  best_return_pct: number
+  worst_return_pct: number
+  avg_trades: number
+}
+
+export interface MacroResponse {
+  macro_curve: MacroCurvePoint[]
+  bucket: string
+  period_stats: PeriodStats
+}
+
 export interface SideStats {
   min: number | null
   max: number | null
