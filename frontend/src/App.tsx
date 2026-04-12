@@ -20,11 +20,16 @@ export interface MASettings {
   sg21Poly: number
   showRaw8: boolean
   showRaw21: boolean
+  showSg8: boolean
+  showSg21: boolean
+  compensateLag: boolean
+  predictiveSg: boolean
 }
 
 const DEFAULT_MA_SETTINGS: MASettings = {
   type: 'ema', sg8Window: 7, sg8Poly: 2, sg21Window: 7, sg21Poly: 2,
-  showRaw8: true, showRaw21: true,
+  showRaw8: true, showRaw21: true, showSg8: true, showSg21: true,
+  compensateLag: false, predictiveSg: false,
 }
 
 const STORAGE_KEY = 'strategylab-settings'
@@ -174,6 +179,9 @@ export default function App() {
                           onChartReady={setMainChart}
                           maShowRaw8={maSettings.showRaw8}
                           maShowRaw21={maSettings.showRaw21}
+                          maShowSg8={maSettings.showSg8}
+                          maShowSg21={maSettings.showSg21}
+                          maCompensateLag={maSettings.compensateLag}
                         />
                       ) : (
                         <div style={styles.empty}>Loading {ticker}...</div>

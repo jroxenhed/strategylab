@@ -110,6 +110,7 @@ export interface StrategyRequest {
   sg8_poly?: number
   sg21_window?: number
   sg21_poly?: number
+  predictive_sg?: boolean
 }
 
 export interface SavedStrategy {

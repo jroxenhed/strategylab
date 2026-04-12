@@ -14,6 +14,46 @@ class Rule(BaseModel):
     negated: bool = False
 
 
+def _sg_predictive_coeffs(window: int, poly: int):
+    """Compute convolution coefficients for an extrapolating S-G filter.
+
+    Fits a polynomial of degree `poly` to the last `w` bars, then evaluates
+    it (w-1)//2 bars *ahead* of the most recent data point. This compensates
+    the causal filter's lag using only past data — genuine prediction, not
+    lookahead.  Returns (coefficients, adjusted_window).
+    """
+    w = max(window, poly + 1)
+    if w % 2 == 0:
+        w += 1
+    k = (w - 1) // 2
+    x = np.arange(w, dtype=float)
+    eval_pos = float(w - 1 + k)          # extrapolate k bars beyond window
+    V = np.vander(x, poly + 1, increasing=True)
+    pinv = np.linalg.pinv(V)
+    eval_vec = np.array([eval_pos ** p for p in range(poly + 1)])
+    return eval_vec @ pinv, w
+
+
+def _apply_sg_predictive(series: pd.Series, window: int, poly: int) -> pd.Series:
+    """S-G with forward extrapolation by (w-1)//2 bars.
+
+    Uses only past data but estimates where the smoothed value *would* be
+    at the current bar, compensating for the causal lag. Noisier than the
+    causal filter but fires turns earlier.
+    """
+    coeffs, w = _sg_predictive_coeffs(window, poly)
+    valid = series.dropna()
+    if len(valid) < w:
+        return pd.Series(np.nan, index=series.index)
+    vals = valid.values
+    conv = np.convolve(vals, coeffs[::-1], mode='full')
+    out = np.full(len(vals), np.nan)
+    out[w - 1:] = conv[w - 1: len(vals)]
+    result = pd.Series(np.nan, index=series.index)
+    result.loc[valid.index] = out
+    return result
+
+
 def _apply_sg(series: pd.Series, window: int, poly: int, causal: bool = False) -> pd.Series:
     """Apply Savitzky-Golay smoothing to a series, skipping NaN warmup.
 
@@ -37,7 +77,8 @@ def _apply_sg(series: pd.Series, window: int, poly: int, causal: bool = False) -
 
 def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series = None,
                        ma_type: str = "ema", sg8_window: int = 7, sg8_poly: int = 2,
-                       sg21_window: int = 7, sg21_poly: int = 2) -> dict[str, pd.Series]:
+                       sg21_window: int = 7, sg21_poly: int = 2,
+                       predictive_sg: bool = False) -> dict[str, pd.Series]:
     """Compute all indicators from a close price series. Returns dict of named series."""
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
@@ -87,8 +128,9 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
 
     result["ma8"] = ma8
     result["ma21"] = ma21
-    result["ma8_sg"] = _apply_sg(ma8, sg8_window, sg8_poly, causal=True)
-    result["ma21_sg"] = _apply_sg(ma21, sg21_window, sg21_poly, causal=True)
+    sg_fn = _apply_sg_predictive if predictive_sg else lambda s, w, p: _apply_sg(s, w, p, causal=True)
+    result["ma8_sg"] = sg_fn(ma8, sg8_window, sg8_poly)
+    result["ma21_sg"] = sg_fn(ma21, sg21_window, sg21_poly)
 
     return result
 

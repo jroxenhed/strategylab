@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 import numpy as np
 import pandas as pd
 from shared import _fetch, _format_time
-from signal_engine import compute_indicators, _apply_sg
+from signal_engine import compute_indicators, _apply_sg, _apply_sg_predictive
 
 router = APIRouter()
 
@@ -27,6 +27,7 @@ def get_indicators(
     sg8_poly: int = 2,
     sg21_window: int = 7,
     sg21_poly: int = 2,
+    predictive_sg: bool = False,
 ):
     try:
         df = _fetch(ticker, start, end, interval, source=source)
@@ -89,8 +90,12 @@ def get_indicators(
             sg21_w = max(sg21_window, sg21_poly + 1)
             if sg21_w % 2 == 0:
                 sg21_w += 1
-            ma8_sg = _apply_sg(ma8, sg8_window, sg8_poly, causal=True)
-            ma21_sg = _apply_sg(ma21, sg21_window, sg21_poly, causal=True)
+            if predictive_sg:
+                ma8_sg = _apply_sg_predictive(ma8, sg8_window, sg8_poly)
+                ma21_sg = _apply_sg_predictive(ma21, sg21_window, sg21_poly)
+            else:
+                ma8_sg = _apply_sg(ma8, sg8_window, sg8_poly, causal=True)
+                ma21_sg = _apply_sg(ma21, sg21_window, sg21_poly, causal=True)
 
             result["ma"] = {
                 "ma8": _series_to_list(df.index, interval, ma8),

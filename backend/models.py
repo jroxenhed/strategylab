@@ -51,6 +51,7 @@ class StrategyRequest(BaseModel):
     sg8_poly: int = 2
     sg21_window: int = 7
     sg21_poly: int = 2
+    predictive_sg: bool = False  # extrapolating S-G (compensate lag via prediction, not lookahead)
 
     @field_validator('position_size')
     @classmethod

@@ -243,6 +243,15 @@ export default function Sidebar({
                 >{t.toUpperCase()}</button>
               ))}
             </div>
+            {/* S-G display mode toggles */}
+            <label style={{ fontSize: 10, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }}>
+              <input type="checkbox" checked={maSettings.compensateLag} onChange={() => onMaSettingsChange({ ...maSettings, compensateLag: !maSettings.compensateLag, predictiveSg: false })} />
+              compensate S-G lag
+            </label>
+            <label style={{ fontSize: 10, color: maSettings.predictiveSg ? 'var(--accent-orange)' : 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }}>
+              <input type="checkbox" checked={maSettings.predictiveSg} onChange={() => onMaSettingsChange({ ...maSettings, predictiveSg: !maSettings.predictiveSg, compensateLag: false })} />
+              predictive S-G
+            </label>
             {/* MA8 settings */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -250,6 +259,10 @@ export default function Sidebar({
                 <label style={{ fontSize: 10, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }}>
                   <input type="checkbox" checked={maSettings.showRaw8} onChange={() => onMaSettingsChange({ ...maSettings, showRaw8: !maSettings.showRaw8 })} />
                   raw
+                </label>
+                <label style={{ fontSize: 10, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={maSettings.showSg8} onChange={() => onMaSettingsChange({ ...maSettings, showSg8: !maSettings.showSg8 })} />
+                  S-G
                 </label>
               </div>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 2 }}>
@@ -272,6 +285,10 @@ export default function Sidebar({
                 <label style={{ fontSize: 10, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }}>
                   <input type="checkbox" checked={maSettings.showRaw21} onChange={() => onMaSettingsChange({ ...maSettings, showRaw21: !maSettings.showRaw21 })} />
                   raw
+                </label>
+                <label style={{ fontSize: 10, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={maSettings.showSg21} onChange={() => onMaSettingsChange({ ...maSettings, showSg21: !maSettings.showSg21 })} />
+                  S-G
                 </label>
               </div>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 2 }}>

@@ -24,6 +24,9 @@ interface ChartProps {
   onChartReady?: (chart: IChartApi | null) => void
   maShowRaw8?: boolean
   maShowRaw21?: boolean
+  maShowSg8?: boolean
+  maShowSg21?: boolean
+  maCompensateLag?: boolean
 }
 
 const CHART_BG = '#0d1117'
@@ -88,7 +91,7 @@ function buildMarkers(trades: Array<{ type: string; date: string; price: number;
   })
 }
 
-export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq, indicatorData, activeIndicators, trades, emaOverlays, onChartReady, maShowRaw8 = true, maShowRaw21 = true }: ChartProps) {
+export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq, indicatorData, activeIndicators, trades, emaOverlays, onChartReady, maShowRaw8 = true, maShowRaw21 = true, maShowSg8 = true, maShowSg21 = true, maCompensateLag = false }: ChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const macdChartRef = useRef<IChartApi | null>(null)
@@ -193,11 +196,29 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
 
     // MA8 / MA21 / S-G smoothed versions
     if (activeIndicators.includes('ma') && indicatorData.ma) {
-      const { ma8, ma21, ma8_sg, ma21_sg } = indicatorData.ma
+      const { ma8, ma21, ma8_sg, ma21_sg, sg8_window, sg21_window } = indicatorData.ma
       if (maShowRaw8) chart.addSeries(LineSeries, { color: '#e8ab6a', lineWidth: 1, title: 'MA8', priceScaleId: 'right' }).setData(toLineData(ma8))
       if (maShowRaw21) chart.addSeries(LineSeries, { color: '#56d4c4', lineWidth: 1, title: 'MA21', priceScaleId: 'right' }).setData(toLineData(ma21))
-      chart.addSeries(LineSeries, { color: '#ffffff', lineWidth: 2, title: 'MA8-SG', priceScaleId: 'right', lineStyle: 2 }).setData(toLineData(ma8_sg))
-      chart.addSeries(LineSeries, { color: '#e8ab6a', lineWidth: 2, title: 'MA21-SG', priceScaleId: 'right', lineStyle: 2 }).setData(toLineData(ma21_sg))
+
+      // Compensate lag: shift S-G values backward by (window-1)/2 bars
+      // to reconstruct the centered view. Display-only — backtest stays causal.
+      let sg8Display = ma8_sg
+      let sg21Display = ma21_sg
+      if (maCompensateLag) {
+        const shift8 = Math.floor((sg8_window - 1) / 2)
+        const shift21 = Math.floor((sg21_window - 1) / 2)
+        sg8Display = ma8_sg.map((d, i) => ({
+          time: d.time,
+          value: i + shift8 < ma8_sg.length ? ma8_sg[i + shift8].value : null,
+        }))
+        sg21Display = ma21_sg.map((d, i) => ({
+          time: d.time,
+          value: i + shift21 < ma21_sg.length ? ma21_sg[i + shift21].value : null,
+        }))
+      }
+
+      if (maShowSg8) chart.addSeries(LineSeries, { color: '#ffffff', lineWidth: 2, title: 'MA8-SG', priceScaleId: 'right', lineStyle: 2 }).setData(toLineData(sg8Display))
+      if (maShowSg21) chart.addSeries(LineSeries, { color: '#e8ab6a', lineWidth: 2, title: 'MA21-SG', priceScaleId: 'right', lineStyle: 2 }).setData(toLineData(sg21Display))
     }
 
     // Trade markers
@@ -326,7 +347,7 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
       candleSeriesRef.current = null
       ro.disconnect()
     }
-  }, [data, spyLineData, qqqLineData, showSpy, showQqq, activeIndicators, indicatorData, trades, emaOverlays, maShowRaw8, maShowRaw21])
+  }, [data, spyLineData, qqqLineData, showSpy, showQqq, activeIndicators, indicatorData, trades, emaOverlays, maShowRaw8, maShowRaw21, maShowSg8, maShowSg21, maCompensateLag])
 
   // MACD chart
   useEffect(() => {
