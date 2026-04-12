@@ -194,6 +194,7 @@ export default function App() {
                         onResult={setBacktestResult}
                         dataSource={dataSource}
                         settingsPortalId="strategy-settings-portal"
+                        maSettings={maSettings}
                       />
                       {backtestResult && <Results result={backtestResult} mainChart={mainChart} />}
                     </div>

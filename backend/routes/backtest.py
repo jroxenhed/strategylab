@@ -53,7 +53,10 @@ def run_backtest(req: StrategyRequest):
         close = df["Close"]
         high = df["High"]
         low = df["Low"]
-        indicators = compute_indicators(close, high=high, low=low)
+        indicators = compute_indicators(close, high=high, low=low,
+                                        ma_type=req.ma_type, sg8_window=req.sg8_window,
+                                        sg8_poly=req.sg8_poly, sg21_window=req.sg21_window,
+                                        sg21_poly=req.sg21_poly)
 
         # Simulate
         capital = req.initial_capital
@@ -73,6 +76,18 @@ def run_backtest(req: StrategyRequest):
         consec_sl_count = 0  # track consecutive stop losses for dynamic sizing
         is_intraday = req.interval in _INTRADAY_INTERVALS
 
+        # Map rule indicator names to the actual series eval_rule uses
+        _trace_series_map = {
+            "macd": indicators["macd"],
+            "rsi": indicators["rsi"],
+            "price": indicators["close"],
+            "ema20": indicators["ema20"],
+            "ema50": indicators["ema50"],
+            "ema200": indicators["ema200"],
+            "ma8": indicators["ma8_sg"],
+            "ma21": indicators["ma21_sg"],
+        }
+
         def _trace_rules(rules, indicators, i, label):
             """Build per-rule evaluation detail for debug trace."""
             details = []
@@ -81,9 +96,9 @@ def run_backtest(req: StrategyRequest):
                     details.append({"rule": f"{r.indicator} {r.condition} {r.value if r.value is not None else ''}", "muted": True, "result": False})
                     continue
                 result = eval_rule(r, indicators, i)
-                ind_series = indicators.get(r.indicator, indicators.get("close"))
-                v_now = round(float(ind_series.iloc[i]), 4) if ind_series is not None else None
-                v_prev = round(float(ind_series.iloc[i - 1]), 4) if ind_series is not None and i > 0 else None
+                ind_series = _trace_series_map.get(r.indicator, indicators.get("close"))
+                v_now = round(float(ind_series.iloc[i]), 4) if ind_series is not None and pd.notna(ind_series.iloc[i]) else None
+                v_prev = round(float(ind_series.iloc[i - 1]), 4) if ind_series is not None and i > 0 and pd.notna(ind_series.iloc[i - 1]) else None
                 details.append({
                     "rule": f"{r.indicator} {r.condition} {r.value if r.value is not None else ''}",
                     "result": bool(result),

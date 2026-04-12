@@ -46,6 +46,11 @@ class StrategyRequest(BaseModel):
     source: str = "yahoo"
     direction: str = "long"  # "long" | "short"
     debug: bool = False
+    ma_type: str = "ema"     # "sma" | "ema" | "rma" — for MA8/MA21 rule conditions
+    sg8_window: int = 7
+    sg8_poly: int = 2
+    sg21_window: int = 7
+    sg21_poly: int = 2
 
     @field_validator('position_size')
     @classmethod

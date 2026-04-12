@@ -56,8 +56,8 @@ export interface IndicatorData {
 export type IndicatorKey = 'macd' | 'rsi' | 'ema' | 'bb' | 'ma' | 'volume'
 
 export interface Rule {
-  indicator: 'macd' | 'rsi' | 'price' | 'ema20' | 'ema50' | 'ema200'
-  condition: 'crossover_up' | 'crossover_down' | 'above' | 'below' | 'crosses_above' | 'crosses_below' | 'turns_up_below' | 'turns_down_above' | 'rising' | 'falling' | 'rising_over' | 'falling_over'
+  indicator: 'macd' | 'rsi' | 'price' | 'ema20' | 'ema50' | 'ema200' | 'ma8' | 'ma21'
+  condition: 'crossover_up' | 'crossover_down' | 'above' | 'below' | 'crosses_above' | 'crosses_below' | 'turns_up_below' | 'turns_down_above' | 'rising' | 'falling' | 'rising_over' | 'falling_over' | 'turns_up' | 'turns_down' | 'decelerating' | 'accelerating'
   value?: number
   param?: string
   muted?: boolean
@@ -105,6 +105,11 @@ export interface StrategyRequest {
   source: DataSource
   debug?: boolean
   direction?: 'long' | 'short'
+  ma_type?: string
+  sg8_window?: number
+  sg8_poly?: number
+  sg21_window?: number
+  sg21_poly?: number
 }
 
 export interface SavedStrategy {

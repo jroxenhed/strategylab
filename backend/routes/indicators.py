@@ -1,9 +1,8 @@
 from fastapi import APIRouter, HTTPException
 import numpy as np
 import pandas as pd
-from scipy.signal import savgol_filter
 from shared import _fetch, _format_time
-from signal_engine import compute_indicators
+from signal_engine import compute_indicators, _apply_sg
 
 router = APIRouter()
 
@@ -84,20 +83,14 @@ def get_indicators(
                 ma_type_lower = "ema"
 
             # Savitzky-Golay smoothed MA8 and MA21 (independent params)
-            def _apply_sg(series, window, poly):
-                w = max(window, poly + 1)
-                if w % 2 == 0:
-                    w += 1
-                valid = series.dropna()
-                if len(valid) >= w:
-                    vals = savgol_filter(valid.values, window_length=w, polyorder=poly, mode="nearest")
-                    out = pd.Series(np.nan, index=series.index)
-                    out.loc[valid.index] = vals
-                    return out, w
-                return pd.Series(np.nan, index=series.index), w
-
-            ma8_sg, sg8_w = _apply_sg(ma8, sg8_window, sg8_poly)
-            ma21_sg, sg21_w = _apply_sg(ma21, sg21_window, sg21_poly)
+            sg8_w = max(sg8_window, sg8_poly + 1)
+            if sg8_w % 2 == 0:
+                sg8_w += 1
+            sg21_w = max(sg21_window, sg21_poly + 1)
+            if sg21_w % 2 == 0:
+                sg21_w += 1
+            ma8_sg = _apply_sg(ma8, sg8_window, sg8_poly, causal=True)
+            ma21_sg = _apply_sg(ma21, sg21_window, sg21_poly, causal=True)
 
             result["ma"] = {
                 "ma8": _series_to_list(df.index, interval, ma8),

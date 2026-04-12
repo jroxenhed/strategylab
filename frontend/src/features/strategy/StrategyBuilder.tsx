@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Plus, Play } from 'lucide-react'
 import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, SavedStrategy } from '../../shared/types'
+import type { MASettings } from '../../App'
 import RuleRow, { emptyRule, validateRules } from './RuleRow'
 import { api } from '../../api/client'
 
@@ -13,6 +14,7 @@ interface Props {
   onResult: (r: BacktestResult | null) => void
   dataSource: DataSource
   settingsPortalId?: string
+  maSettings?: MASettings
 }
 
 const STRATEGY_STORAGE_KEY = 'strategylab-strategy'
@@ -36,7 +38,7 @@ function persistSavedStrategies(strategies: SavedStrategy[]) {
   localStorage.setItem(SAVED_STRATEGIES_KEY, JSON.stringify(strategies))
 }
 
-export default function StrategyBuilder({ ticker, start, end, interval, onResult, dataSource, settingsPortalId }: Props) {
+export default function StrategyBuilder({ ticker, start, end, interval, onResult, dataSource, settingsPortalId, maSettings }: Props) {
   const saved = useState(() => loadStrategy())[0]
   const [buyRules, setBuyRules] = useState<Rule[]>(saved?.buyRules ?? [{ indicator: 'macd', condition: 'crossover_up' }])
   const [sellRules, setSellRules] = useState<Rule[]>(saved?.sellRules ?? [{ indicator: 'macd', condition: 'crossover_down' }])
@@ -143,6 +145,11 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         slippage_pct: slippage !== '' && slippage > 0 ? slippage : undefined,
         commission_pct: commission !== '' && commission > 0 ? commission : undefined,
         source: dataSource, debug, direction,
+        ma_type: maSettings?.type,
+        sg8_window: maSettings?.sg8Window,
+        sg8_poly: maSettings?.sg8Poly,
+        sg21_window: maSettings?.sg21Window,
+        sg21_poly: maSettings?.sg21Poly,
       }
       const { data } = await api.post('/api/backtest', req)
       onResult(data)

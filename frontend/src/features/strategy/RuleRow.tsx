@@ -1,7 +1,7 @@
 import { Trash2, VolumeX, Volume2 } from 'lucide-react'
 import type { Rule } from '../../shared/types'
 
-export const INDICATORS = ['macd', 'rsi', 'price', 'ema20', 'ema50', 'ema200'] as const
+export const INDICATORS = ['macd', 'rsi', 'price', 'ema20', 'ema50', 'ema200', 'ma8', 'ma21'] as const
 export const CONDITIONS: Record<string, string[]> = {
   macd: ['crossover_up', 'crossover_down', 'crosses_above', 'crosses_below', 'above', 'below'],
   rsi: ['above', 'below', 'crosses_above', 'crosses_below', 'turns_up_below', 'turns_down_above'],
@@ -9,6 +9,8 @@ export const CONDITIONS: Record<string, string[]> = {
   ema20: ['above', 'below', 'rising', 'falling', 'rising_over', 'falling_over'],
   ema50: ['above', 'below', 'rising', 'falling', 'rising_over', 'falling_over'],
   ema200: ['above', 'below', 'rising', 'falling', 'rising_over', 'falling_over'],
+  ma8: ['turns_up', 'turns_down', 'decelerating', 'accelerating', 'rising', 'falling', 'above', 'below', 'crosses_above', 'crosses_below'],
+  ma21: ['turns_up', 'turns_down', 'decelerating', 'accelerating', 'rising', 'falling', 'above', 'below', 'crosses_above', 'crosses_below'],
 }
 export const CONDITION_LABELS: Record<string, string> = {
   crossover_up: 'Crosses above signal',
@@ -23,6 +25,10 @@ export const CONDITION_LABELS: Record<string, string> = {
   falling: 'Is falling',
   rising_over: 'Rising over N bars',
   falling_over: 'Falling over N bars',
+  turns_up: 'Turns up',
+  turns_down: 'Turns down',
+  decelerating: 'Decelerating',
+  accelerating: 'Accelerating',
 }
 export const NEEDS_VALUE = ['above', 'below', 'crosses_above', 'crosses_below', 'turns_up_below', 'turns_down_above', 'rising_over', 'falling_over']
 export const NEEDS_PARAM: Record<string, string[]> = {
@@ -33,11 +39,15 @@ export const CAN_USE_PARAM: Record<string, string[]> = {
   ema20: ['above', 'below', 'crosses_above', 'crosses_below'],
   ema50: ['above', 'below', 'crosses_above', 'crosses_below'],
   ema200: ['above', 'below', 'crosses_above', 'crosses_below'],
+  ma8: ['above', 'below', 'crosses_above', 'crosses_below'],
+  ma21: ['above', 'below', 'crosses_above', 'crosses_below'],
 }
 export const PARAM_OPTIONS = [
   { value: 'ema20', label: 'EMA 20' },
   { value: 'ema50', label: 'EMA 50' },
   { value: 'ema200', label: 'EMA 200' },
+  { value: 'ma8', label: 'MA 8' },
+  { value: 'ma21', label: 'MA 21' },
   { value: 'close', label: 'Price' },
 ]
 
