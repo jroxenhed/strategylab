@@ -16,7 +16,7 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 ## A — Charts & Indicators
 
 - [ ] **A1** Portfolio equity chart (combined P&L across bots)
-- [ ] **A2** Equity curve macro mode for long timescales / thousands of trades
+- [ ] **A2** Equity curve macro mode for long timescales / thousands of trades — **spec done** (`docs/superpowers/specs/2026-04-12-equity-curve-macro-mode-design.md`), needs implementation plan
 - [ ] **A3** Equity curve trend analysis (open-ended — define "trend" first)
 - [ ] **A4** More indicators — ATR, Stochastic, VWAP (chart display + backtest rules)
 - [ ] **A5** Chart timeframe buttons — 1W / 1M / 3M / 1Y quick selectors
