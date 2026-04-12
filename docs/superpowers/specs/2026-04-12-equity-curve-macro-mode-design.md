@@ -49,7 +49,15 @@ Each bucket in the response:
 {
     "macro_curve": [...],       # list of buckets
     "summary": {...},           # same summary stats as regular backtest
-    "bucket": "W"               # echo back the bucket size used
+    "bucket": "W",              # echo back the bucket size used
+    "period_stats": {
+        "label": "Weekly",              # human-readable period label
+        "winning_pct": 68.0,            # % of buckets with positive return
+        "avg_return_pct": 1.2,          # mean bucket return
+        "best_return_pct": 8.3,         # best single-bucket return
+        "worst_return_pct": -4.1,       # worst single-bucket return
+        "avg_trades": 7.2               # average trades per bucket
+    }
 }
 ```
 
@@ -62,19 +70,19 @@ Each bucket in the response:
 
 ## Frontend
 
-### Controls
+### Controls — shared bucket selector
 
-A button row in the equity curve tab, next to the existing baseline checkbox:
+The bucket selector lives in the tab bar, right-aligned, shared across all tabs:
 
 ```
-[Show buy & hold baseline]     Detail | D | W | M | Q | Y
+Summary | Equity Curve | Trades (1530)          Detail | D | W | M | Q | Y
 ```
 
-- **"Detail"** — current full-resolution behavior, synced to main chart
-- **D / W / M / Q / Y** — macro mode, decoupled from main chart
+- **"Detail"** — current behavior everywhere (equity curve synced to main chart, summary shows only global stats)
+- **D / W / M / Q / Y** — macro mode: equity curve shows aggregated macro chart (decoupled from main chart), summary tab gains a period stats section
 - Active button highlighted blue (same style as tab bar active state)
 - First click fires the macro endpoint; result is cached so switching back is instant
-- Switching back to "Detail" restores synced full-resolution view
+- Switching back to "Detail" restores synced full-resolution equity curve and hides period stats from summary
 
 ### Auto-default bucket
 
@@ -95,6 +103,22 @@ User can always override to any bucket size.
 - **Macro bucket selection** persists across backtests — if "W" was selected, the next backtest auto-fetches weekly macro
 
 Both are React state that lives above the Results component, not reset on new results.
+
+### Summary tab — period stats
+
+When a bucket is selected (anything other than "Detail"), the summary tab shows an additional stats strip between the global metrics and the P&L distribution section. Labeled with the active period (e.g. "Weekly"):
+
+| Metric | Example (W) | Description |
+|---|---|---|
+| Winning Weeks | 68% | % of buckets with positive return |
+| Avg Return | +1.2% | Mean return across all buckets |
+| Best Week | +8.3% | Highest single-bucket return |
+| Worst Week | -4.1% | Lowest single-bucket return |
+| Trades/Wk | 7.2 | Average trades per bucket |
+
+Labels adapt to the chosen bucket ("Winning Months", "Best Quarter", etc.). The strip has a slightly darker background (`#0d1117`) to visually separate it from the global stats above.
+
+These stats are computed from the same `macro_curve` response — no additional endpoint needed.
 
 ### Macro chart rendering
 
