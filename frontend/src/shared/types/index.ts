@@ -60,6 +60,7 @@ export interface Rule {
   condition: 'crossover_up' | 'crossover_down' | 'above' | 'below' | 'crosses_above' | 'crosses_below' | 'turns_up_below' | 'turns_down_above' | 'rising' | 'falling' | 'rising_over' | 'falling_over' | 'turns_up' | 'turns_down' | 'decelerating' | 'accelerating'
   value?: number
   param?: string
+  threshold?: number
   muted?: boolean
   negated?: boolean
 }

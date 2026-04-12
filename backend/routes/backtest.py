@@ -101,8 +101,11 @@ def run_backtest(req: StrategyRequest):
                 ind_series = _trace_series_map.get(r.indicator, indicators.get("close"))
                 v_now = round(float(ind_series.iloc[i]), 4) if ind_series is not None and pd.notna(ind_series.iloc[i]) else None
                 v_prev = round(float(ind_series.iloc[i - 1]), 4) if ind_series is not None and i > 0 and pd.notna(ind_series.iloc[i - 1]) else None
+                rule_desc = f"{r.indicator} {r.condition} {r.value if r.value is not None else ''}"
+                if r.threshold is not None:
+                    rule_desc += f" min {r.threshold}%"
                 details.append({
-                    "rule": f"{r.indicator} {r.condition} {r.value if r.value is not None else ''}",
+                    "rule": rule_desc,
                     "result": bool(result),
                     "v_now": v_now,
                     "v_prev": v_prev,

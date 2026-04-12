@@ -10,6 +10,7 @@ class Rule(BaseModel):
     condition: str       # "crossover_up", "crossover_down", "above", "below", "crosses_above", "crosses_below", "turns_up_below", "turns_down_above"
     value: Optional[float] = None   # threshold (e.g. RSI < 30)
     param: Optional[str] = None     # e.g. "signal", "ema20"
+    threshold: Optional[float] = None  # min move % for turns_up/turns_down
     muted: bool = False
     negated: bool = False
 
@@ -227,13 +228,31 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
             for k in range(lookback):
                 if s.iloc[i - k] - s.iloc[i - k - 1] < eps:
                     return False
-            return s.iloc[i - lookback] - s.iloc[i - lookback - 1] < -eps
+            if s.iloc[i - lookback] - s.iloc[i - lookback - 1] >= -eps:
+                return False
+            # Min move %: MA must have risen at least threshold% from turn point
+            if rule.threshold is not None and rule.threshold > 0:
+                trough = s.iloc[i - lookback]
+                if abs(trough) < 1e-12:
+                    return False
+                if (v_now - trough) / abs(trough) * 100 < rule.threshold:
+                    return False
+            return True
         else:
             # Last `lookback` bars must all be falling, and bar before that rising
             for k in range(lookback):
                 if s.iloc[i - k] - s.iloc[i - k - 1] > -eps:
                     return False
-            return s.iloc[i - lookback] - s.iloc[i - lookback - 1] > eps
+            if s.iloc[i - lookback] - s.iloc[i - lookback - 1] <= eps:
+                return False
+            # Min move %: MA must have fallen at least threshold% from turn point
+            if rule.threshold is not None and rule.threshold > 0:
+                peak = s.iloc[i - lookback]
+                if abs(peak) < 1e-12:
+                    return False
+                if (peak - v_now) / abs(peak) * 100 < rule.threshold:
+                    return False
+            return True
     elif cond == "decelerating":
         if i < 2:
             return False

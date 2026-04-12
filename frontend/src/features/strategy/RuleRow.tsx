@@ -128,18 +128,32 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
         />
       )}
       {optionalValue && (
-        <input
-          type="number"
-          value={rule.value ?? ''}
-          onChange={e => {
-            const v = e.target.value
-            onChange({ ...rule, value: v === '' ? undefined : parseInt(v, 10) })
-          }}
-          placeholder="N bars"
-          min={1}
-          step={1}
-          style={{ ...styles.ruleSelect, width: 62 }}
-        />
+        <>
+          <input
+            type="number"
+            value={rule.value ?? ''}
+            onChange={e => {
+              const v = e.target.value
+              onChange({ ...rule, value: v === '' ? undefined : parseInt(v, 10) })
+            }}
+            placeholder="N bars"
+            min={1}
+            step={1}
+            style={{ ...styles.ruleSelect, width: 62 }}
+          />
+          <input
+            type="number"
+            value={rule.threshold ?? ''}
+            onChange={e => {
+              const v = e.target.value
+              onChange({ ...rule, threshold: v === '' ? undefined : parseFloat(v) })
+            }}
+            placeholder="min %"
+            min={0}
+            step={0.01}
+            style={{ ...styles.ruleSelect, width: 58 }}
+          />
+        </>
       )}
       <button onClick={onDelete} style={{ color: '#f85149', padding: '4px 6px' }}><Trash2 size={13} /></button>
     </div>
