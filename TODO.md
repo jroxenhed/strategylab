@@ -7,6 +7,8 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 - [ ] Portfolio equity chart (combined P&L across bots)
 - [ ] Equity curve macro mode for long timescales / thousands of trades
 - [ ] Equity curve trend analysis (open-ended — define "trend" first)
+- [ ] MA8 / MA21 indicators with SMA/EMA/RMA type selector, toggleable in sidebar alongside existing EMAs
+- [ ] S-G Smoothed MA8 — savgol_filter on MA8 values (inherits MA type), separate toggleable chart line (lighter/dashed), configurable window length + polynomial order; always visible when on (not just during backtest). Requires scipy.
 - [ ] More indicators — ATR, Stochastic, VWAP (chart display + backtest rules)
 - [ ] Chart timeframe buttons — 1W / 1M / 3M / 1Y quick selectors
 - [ ] Watchlist — save/switch between tickers quickly
@@ -18,7 +20,8 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 
 - [ ] Skip N trades after SL (+ dynamic sizing scale-back to 100% after N trades; open question: unify into one setting?)
 - [ ] Pre-market / extended hours option
-- [ ] More strategy rules — expand rule engine conditions
+- [ ] New rule conditions: "MA21 turns up" (slope neg→pos), "MA8 turns down" (slope pos→neg), "MA8 decelerating" (S-G smoothed first derivative decreasing, i.e. second derivative negative; uses same S-G params as chart indicator). Target strategy: BUY when MA21 turns up AND NOT MA8 decelerating, SELL when MA8 turns down. Ensure crypto tickers work (BTC-USD via yfinance), test against BTC 2h.
+- [ ] Per-rule signal visualization toggles — eye icon on each rule row in strategy builder; when enabled, that rule's signals show as markers on the main chart during/after backtest. Replaces current hardcoded signal marker behavior. State stored with rule fields, persists with save/load. No global master toggle.
 - [ ] Borrow cost estimation (for live short positions on real accounts)
 
 ### Shipped
