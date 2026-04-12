@@ -14,13 +14,23 @@ export function useOHLCV(ticker: string, start: string, end: string, interval: s
   })
 }
 
-export function useIndicators(ticker: string, start: string, end: string, interval: string, indicators: string[], source: DataSource = 'yahoo') {
+export function useIndicators(
+  ticker: string, start: string, end: string, interval: string,
+  indicators: string[], source: DataSource = 'yahoo',
+  maSettings?: { type: string; sg8Window: number; sg8Poly: number; sg21Window: number; sg21Poly: number },
+) {
   return useQuery({
-    queryKey: ['indicators', ticker, start, end, interval, indicators.join(','), source],
+    queryKey: ['indicators', ticker, start, end, interval, indicators.join(','), source, maSettings],
     queryFn: async () => {
-      const { data } = await api.get(`/api/indicators/${ticker}`, {
-        params: { start, end, interval, indicators: indicators.join(','), source }
-      })
+      const params: Record<string, string | number> = { start, end, interval, indicators: indicators.join(','), source }
+      if (maSettings) {
+        params.ma_type = maSettings.type
+        params.sg8_window = maSettings.sg8Window
+        params.sg8_poly = maSettings.sg8Poly
+        params.sg21_window = maSettings.sg21Window
+        params.sg21_poly = maSettings.sg21Poly
+      }
+      const { data } = await api.get(`/api/indicators/${ticker}`, { params })
       return data
     },
     enabled: !!ticker && indicators.length > 0,

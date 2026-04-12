@@ -1,5 +1,7 @@
 from fastapi import APIRouter, HTTPException
+import numpy as np
 import pandas as pd
+from scipy.signal import savgol_filter
 from shared import _fetch, _format_time
 from signal_engine import compute_indicators
 
@@ -21,6 +23,11 @@ def get_indicators(
     interval: str = "1d",
     indicators: str = "macd,rsi",
     source: str = "yahoo",
+    ma_type: str = "ema",
+    sg8_window: int = 7,
+    sg8_poly: int = 2,
+    sg21_window: int = 7,
+    sg21_poly: int = 2,
 ):
     try:
         df = _fetch(ticker, start, end, interval, source=source)
@@ -60,6 +67,48 @@ def get_indicators(
                 "upper": _series_to_list(df.index, interval,sma20 + 2 * std20),
                 "middle": _series_to_list(df.index, interval,sma20),
                 "lower": _series_to_list(df.index, interval,sma20 - 2 * std20),
+            }
+
+        if "ma" in requested:
+            # Compute MA8 and MA21 based on selected type
+            ma_type_lower = ma_type.lower()
+            if ma_type_lower == "sma":
+                ma8 = close.rolling(8).mean()
+                ma21 = close.rolling(21).mean()
+            elif ma_type_lower == "rma":
+                ma8 = close.ewm(alpha=1/8, adjust=False).mean()
+                ma21 = close.ewm(alpha=1/21, adjust=False).mean()
+            else:  # default ema
+                ma8 = close.ewm(span=8, adjust=False).mean()
+                ma21 = close.ewm(span=21, adjust=False).mean()
+                ma_type_lower = "ema"
+
+            # Savitzky-Golay smoothed MA8 and MA21 (independent params)
+            def _apply_sg(series, window, poly):
+                w = max(window, poly + 1)
+                if w % 2 == 0:
+                    w += 1
+                valid = series.dropna()
+                if len(valid) >= w:
+                    vals = savgol_filter(valid.values, window_length=w, polyorder=poly, mode="nearest")
+                    out = pd.Series(np.nan, index=series.index)
+                    out.loc[valid.index] = vals
+                    return out, w
+                return pd.Series(np.nan, index=series.index), w
+
+            ma8_sg, sg8_w = _apply_sg(ma8, sg8_window, sg8_poly)
+            ma21_sg, sg21_w = _apply_sg(ma21, sg21_window, sg21_poly)
+
+            result["ma"] = {
+                "ma8": _series_to_list(df.index, interval, ma8),
+                "ma21": _series_to_list(df.index, interval, ma21),
+                "ma8_sg": _series_to_list(df.index, interval, ma8_sg),
+                "ma21_sg": _series_to_list(df.index, interval, ma21_sg),
+                "ma_type": ma_type_lower,
+                "sg8_window": sg8_w,
+                "sg8_poly": sg8_poly,
+                "sg21_window": sg21_w,
+                "sg21_poly": sg21_poly,
             }
 
         if "orb" in requested:

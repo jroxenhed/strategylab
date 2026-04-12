@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { Search, X } from 'lucide-react'
 import { useSearch, useProviders } from '../../shared/hooks/useOHLCV'
-import type { IndicatorKey, DataSource } from '../../shared/types'
+import type { IndicatorKey, DataSource, MAType } from '../../shared/types'
+import type { MASettings } from '../../App'
 
 interface SidebarProps {
   ticker: string
@@ -20,6 +21,14 @@ interface SidebarProps {
   onToggleQqq: () => void
   dataSource: DataSource
   onDataSourceChange: (s: DataSource) => void
+  maSettings: MASettings
+  onMaSettingsChange: (s: MASettings) => void
+}
+
+const sgInputStyle: React.CSSProperties = {
+  width: 38, fontSize: 11, padding: '2px 4px',
+  background: 'var(--bg-input)', border: '1px solid var(--border-light)',
+  borderRadius: 4, color: 'var(--text-primary)', textAlign: 'center',
 }
 
 const ALL_INDICATORS: { key: IndicatorKey; label: string }[] = [
@@ -27,6 +36,7 @@ const ALL_INDICATORS: { key: IndicatorKey; label: string }[] = [
   { key: 'rsi', label: 'RSI' },
   { key: 'ema', label: 'EMA (20/50/200)' },
   { key: 'bb', label: 'Bollinger Bands' },
+  { key: 'ma', label: 'MA (8/21)' },
   { key: 'volume', label: 'Volume' },
 ]
 
@@ -43,6 +53,7 @@ export default function Sidebar({
   onTickerChange, onStartChange, onEndChange, onIntervalChange,
   onToggleIndicator, onToggleSpy, onToggleQqq,
   dataSource, onDataSourceChange,
+  maSettings, onMaSettingsChange,
 }: SidebarProps) {
   const daysDiff = Math.round(
     (new Date(end).getTime() - new Date(start).getTime()) / (1000 * 60 * 60 * 24)
@@ -216,6 +227,68 @@ export default function Sidebar({
             <span style={{ marginLeft: 8 }}>{label}</span>
           </label>
         ))}
+        {activeIndicators.includes('ma') && (
+          <div style={{ marginTop: 4, marginLeft: 24, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {/* MA type selector */}
+            <div style={{ display: 'flex', gap: 2, borderRadius: 'var(--radius-sm)', background: 'var(--bg-input)', padding: 2 }}>
+              {(['sma', 'ema', 'rma'] as MAType[]).map(t => (
+                <button
+                  key={t}
+                  onClick={() => onMaSettingsChange({ ...maSettings, type: t })}
+                  style={{
+                    flex: 1, padding: '3px 0', fontSize: 11, fontWeight: 600, border: 'none', borderRadius: 3, cursor: 'pointer',
+                    background: maSettings.type === t ? 'var(--bg-panel-hover)' : 'transparent',
+                    color: maSettings.type === t ? 'var(--text-primary)' : 'var(--text-muted)',
+                  }}
+                >{t.toUpperCase()}</button>
+              ))}
+            </div>
+            {/* MA8 settings */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: '#e8ab6a', minWidth: 32 }}>MA8</span>
+                <label style={{ fontSize: 10, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={maSettings.showRaw8} onChange={() => onMaSettingsChange({ ...maSettings, showRaw8: !maSettings.showRaw8 })} />
+                  raw
+                </label>
+              </div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 2 }}>
+                <label style={{ fontSize: 10, color: 'var(--text-muted)' }}>win</label>
+                <input type="number" min={3} step={2} value={maSettings.sg8Window}
+                  onChange={e => { let v = parseInt(e.target.value); if (!isNaN(v)) { if (v < 3) v = 3; if (v % 2 === 0) v += 1; onMaSettingsChange({ ...maSettings, sg8Window: v }) } }}
+                  style={sgInputStyle}
+                />
+                <label style={{ fontSize: 10, color: 'var(--text-muted)' }}>poly</label>
+                <input type="number" min={1} max={5} value={maSettings.sg8Poly}
+                  onChange={e => { const v = parseInt(e.target.value); if (!isNaN(v) && v >= 1 && v < maSettings.sg8Window) onMaSettingsChange({ ...maSettings, sg8Poly: v }) }}
+                  style={sgInputStyle}
+                />
+              </div>
+            </div>
+            {/* MA21 settings */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: '#56d4c4', minWidth: 32 }}>MA21</span>
+                <label style={{ fontSize: 10, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={maSettings.showRaw21} onChange={() => onMaSettingsChange({ ...maSettings, showRaw21: !maSettings.showRaw21 })} />
+                  raw
+                </label>
+              </div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 2 }}>
+                <label style={{ fontSize: 10, color: 'var(--text-muted)' }}>win</label>
+                <input type="number" min={3} step={2} value={maSettings.sg21Window}
+                  onChange={e => { let v = parseInt(e.target.value); if (!isNaN(v)) { if (v < 3) v = 3; if (v % 2 === 0) v += 1; onMaSettingsChange({ ...maSettings, sg21Window: v }) } }}
+                  style={sgInputStyle}
+                />
+                <label style={{ fontSize: 10, color: 'var(--text-muted)' }}>poly</label>
+                <input type="number" min={1} max={5} value={maSettings.sg21Poly}
+                  onChange={e => { const v = parseInt(e.target.value); if (!isNaN(v) && v >= 1 && v < maSettings.sg21Window) onMaSettingsChange({ ...maSettings, sg21Poly: v }) }}
+                  style={sgInputStyle}
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       <div style={styles.section}>

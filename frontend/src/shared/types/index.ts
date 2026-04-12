@@ -30,15 +30,30 @@ export interface EMAData {
   ema200: TimeValue[]
 }
 
+export type MAType = 'sma' | 'ema' | 'rma'
+
+export interface MAData {
+  ma8: TimeValue[]
+  ma21: TimeValue[]
+  ma8_sg: TimeValue[]
+  ma21_sg: TimeValue[]
+  ma_type: MAType
+  sg8_window: number
+  sg8_poly: number
+  sg21_window: number
+  sg21_poly: number
+}
+
 export interface IndicatorData {
   macd?: MACDData
   rsi?: TimeValue[]
   ema?: EMAData
   bb?: BBData
+  ma?: MAData
   volume?: TimeValue[]
 }
 
-export type IndicatorKey = 'macd' | 'rsi' | 'ema' | 'bb' | 'volume'
+export type IndicatorKey = 'macd' | 'rsi' | 'ema' | 'bb' | 'ma' | 'volume'
 
 export interface Rule {
   indicator: 'macd' | 'rsi' | 'price' | 'ema20' | 'ema50' | 'ema200'

@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
-import type { BacktestResult, IndicatorKey, DataSource } from './shared/types'
+import type { BacktestResult, IndicatorKey, DataSource, MAType } from './shared/types'
 import type { IChartApi } from 'lightweight-charts'
 import { useOHLCV, useIndicators } from './shared/hooks/useOHLCV'
 import Sidebar from './features/sidebar/Sidebar'
@@ -11,6 +11,21 @@ import PaperTrading from './features/trading/PaperTrading'
 import Discovery from './features/discovery/Discovery'
 
 type AppTab = 'chart' | 'trading' | 'discovery'
+
+export interface MASettings {
+  type: MAType
+  sg8Window: number
+  sg8Poly: number
+  sg21Window: number
+  sg21Poly: number
+  showRaw8: boolean
+  showRaw21: boolean
+}
+
+const DEFAULT_MA_SETTINGS: MASettings = {
+  type: 'ema', sg8Window: 7, sg8Poly: 2, sg21Window: 7, sg21Poly: 2,
+  showRaw8: true, showRaw21: true,
+}
 
 const STORAGE_KEY = 'strategylab-settings'
 const EMPTY_OHLCV: never[] = []
@@ -40,19 +55,21 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('chart')
   const [mainChart, setMainChart] = useState<IChartApi | null>(null)
   const [chartEnabled, setChartEnabled] = useState(true)
+  const [maSettings, setMaSettings] = useState<MASettings>({ ...DEFAULT_MA_SETTINGS, ...saved?.maSettings })
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      ticker, start, end, interval, activeIndicators, showSpy, showQqq, dataSource,
+      ticker, start, end, interval, activeIndicators, showSpy, showQqq, dataSource, maSettings,
     }))
-  }, [ticker, start, end, interval, activeIndicators, showSpy, showQqq, dataSource])
+  }, [ticker, start, end, interval, activeIndicators, showSpy, showQqq, dataSource, maSettings])
 
   const { data: ohlcv = EMPTY_OHLCV, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, interval, dataSource)
   const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', start, end, interval, dataSource)
   const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', start, end, interval, dataSource)
 
   const indicatorKeys = activeIndicators.filter(k => k !== 'volume')
-  const { data: indicatorData = EMPTY_INDICATORS, refetch: refetchIndicators } = useIndicators(ticker, start, end, interval, indicatorKeys, dataSource)
+  const maParams = activeIndicators.includes('ma') ? maSettings : undefined
+  const { data: indicatorData = EMPTY_INDICATORS, refetch: refetchIndicators } = useIndicators(ticker, start, end, interval, indicatorKeys, dataSource, maParams)
 
   const refreshChart = useCallback(() => {
     refetchOhlcv(); refetchIndicators(); refetchSpy(); refetchQqq()
@@ -122,6 +139,8 @@ export default function App() {
                 onToggleQqq={() => setShowQqq(v => !v)}
                 dataSource={dataSource}
                 onDataSourceChange={setDataSource}
+                maSettings={maSettings}
+                onMaSettingsChange={setMaSettings}
               />
             </Panel>
 
@@ -153,6 +172,8 @@ export default function App() {
                           trades={trades}
                           emaOverlays={emaOverlays}
                           onChartReady={setMainChart}
+                          maShowRaw8={maSettings.showRaw8}
+                          maShowRaw21={maSettings.showRaw21}
                         />
                       ) : (
                         <div style={styles.empty}>Loading {ticker}...</div>

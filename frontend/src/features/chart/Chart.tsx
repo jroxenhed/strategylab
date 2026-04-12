@@ -22,6 +22,8 @@ interface ChartProps {
   trades?: Array<{ type: string; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean; trailing_stop?: boolean }>
   emaOverlays?: EMAOverlay[]
   onChartReady?: (chart: IChartApi | null) => void
+  maShowRaw8?: boolean
+  maShowRaw21?: boolean
 }
 
 const CHART_BG = '#0d1117'
@@ -86,7 +88,7 @@ function buildMarkers(trades: Array<{ type: string; date: string; price: number;
   })
 }
 
-export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq, indicatorData, activeIndicators, trades, emaOverlays, onChartReady }: ChartProps) {
+export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq, indicatorData, activeIndicators, trades, emaOverlays, onChartReady, maShowRaw8 = true, maShowRaw21 = true }: ChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const macdChartRef = useRef<IChartApi | null>(null)
@@ -187,6 +189,15 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
       chart.addSeries(LineSeries, { color: '#30363d', lineWidth: 1, title: 'BB Upper', priceScaleId: 'right' }).setData(toLineData(upper))
       chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'BB Mid', priceScaleId: 'right' }).setData(toLineData(middle))
       chart.addSeries(LineSeries, { color: '#30363d', lineWidth: 1, title: 'BB Lower', priceScaleId: 'right' }).setData(toLineData(lower))
+    }
+
+    // MA8 / MA21 / S-G smoothed versions
+    if (activeIndicators.includes('ma') && indicatorData.ma) {
+      const { ma8, ma21, ma8_sg, ma21_sg } = indicatorData.ma
+      if (maShowRaw8) chart.addSeries(LineSeries, { color: '#e8ab6a', lineWidth: 1, title: 'MA8', priceScaleId: 'right' }).setData(toLineData(ma8))
+      if (maShowRaw21) chart.addSeries(LineSeries, { color: '#56d4c4', lineWidth: 1, title: 'MA21', priceScaleId: 'right' }).setData(toLineData(ma21))
+      chart.addSeries(LineSeries, { color: '#ffffff', lineWidth: 2, title: 'MA8-SG', priceScaleId: 'right', lineStyle: 2 }).setData(toLineData(ma8_sg))
+      chart.addSeries(LineSeries, { color: '#e8ab6a', lineWidth: 2, title: 'MA21-SG', priceScaleId: 'right', lineStyle: 2 }).setData(toLineData(ma21_sg))
     }
 
     // Trade markers
@@ -315,7 +326,7 @@ export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq
       candleSeriesRef.current = null
       ro.disconnect()
     }
-  }, [data, spyLineData, qqqLineData, showSpy, showQqq, activeIndicators, indicatorData, trades, emaOverlays])
+  }, [data, spyLineData, qqqLineData, showSpy, showQqq, activeIndicators, indicatorData, trades, emaOverlays, maShowRaw8, maShowRaw21])
 
   // MACD chart
   useEffect(() => {

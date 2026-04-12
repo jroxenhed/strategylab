@@ -7,13 +7,12 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 - [ ] Portfolio equity chart (combined P&L across bots)
 - [ ] Equity curve macro mode for long timescales / thousands of trades
 - [ ] Equity curve trend analysis (open-ended — define "trend" first)
-- [ ] MA8 / MA21 indicators with SMA/EMA/RMA type selector, toggleable in sidebar alongside existing EMAs
-- [ ] S-G Smoothed MA8 — savgol_filter on MA8 values (inherits MA type), separate toggleable chart line (lighter/dashed), configurable window length + polynomial order; always visible when on (not just during backtest). Requires scipy.
 - [ ] More indicators — ATR, Stochastic, VWAP (chart display + backtest rules)
 - [ ] Chart timeframe buttons — 1W / 1M / 3M / 1Y quick selectors
 - [ ] Watchlist — save/switch between tickers quickly
 
 ### Shipped
+- [x] MA8 / MA21 with SMA/EMA/RMA type selector + S-G smoothed variants (independent window/poly per MA, raw curve toggles, dashed S-G lines)
 - [x] Backtest equity curve: baseline (buy & hold) overlay toggle
 
 ## Strategy Engine & Rules
