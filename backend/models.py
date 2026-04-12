@@ -52,6 +52,8 @@ class StrategyRequest(BaseModel):
     sg21_window: int = 7
     sg21_poly: int = 2
     predictive_sg: bool = False  # extrapolating S-G (compensate lag via prediction, not lookahead)
+    use_sg8: bool = True   # when False, MA8 rules use raw MA instead of S-G smoothed
+    use_sg21: bool = True  # when False, MA21 rules use raw MA instead of S-G smoothed
 
     @field_validator('position_size')
     @classmethod

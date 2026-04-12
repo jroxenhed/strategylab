@@ -78,7 +78,8 @@ def _apply_sg(series: pd.Series, window: int, poly: int, causal: bool = False) -
 def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series = None,
                        ma_type: str = "ema", sg8_window: int = 7, sg8_poly: int = 2,
                        sg21_window: int = 7, sg21_poly: int = 2,
-                       predictive_sg: bool = False) -> dict[str, pd.Series]:
+                       predictive_sg: bool = False,
+                       use_sg8: bool = True, use_sg21: bool = True) -> dict[str, pd.Series]:
     """Compute all indicators from a close price series. Returns dict of named series."""
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
@@ -129,8 +130,9 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
     result["ma8"] = ma8
     result["ma21"] = ma21
     sg_fn = _apply_sg_predictive if predictive_sg else lambda s, w, p: _apply_sg(s, w, p, causal=True)
-    result["ma8_sg"] = sg_fn(ma8, sg8_window, sg8_poly)
-    result["ma21_sg"] = sg_fn(ma21, sg21_window, sg21_poly)
+    result["ma8_sg"] = sg_fn(ma8, sg8_window, sg8_poly) if use_sg8 else ma8
+    result["ma21_sg"] = sg_fn(ma21, sg21_window, sg21_poly) if use_sg21 else ma21
+    result["_sg_active"] = {"ma8": use_sg8, "ma21": use_sg21}
 
     return result
 
@@ -212,17 +214,20 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
         if rule.value is not None:
             return v_prev > rule.value and v_now < v_prev
     elif cond in ("turns_up", "turns_down"):
-        if i < 2:
+        lookback = int(rule.value) if rule.value is not None else 1
+        if i < lookback + 1:
             return False
         d_now = v_now - v_prev
-        d_prev = v_prev - s.iloc[i - 2]
-        # Dead zone: ignore slope changes smaller than 0.003% of value
-        # to filter out causal S-G micro-oscillations
-        eps = abs(v_now) * 3e-5
+        d_past = s.iloc[i - lookback] - s.iloc[i - lookback - 1]
+        # Dead zone only when S-G is active — filters causal micro-oscillations.
+        # Raw MAs turn gradually and don't need it.
+        sg_active = indicators.get("_sg_active", {})
+        has_sg = sg_active.get(ind, True) if isinstance(sg_active, dict) else True
+        eps = abs(v_now) * 3e-5 if has_sg else 0
         if cond == "turns_up":
-            return d_prev < -eps and d_now >= eps
+            return d_past < -eps and d_now >= eps
         else:
-            return d_prev > eps and d_now <= -eps
+            return d_past > eps and d_now <= -eps
     elif cond == "decelerating":
         if i < 2:
             return False

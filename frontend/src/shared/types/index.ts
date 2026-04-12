@@ -111,6 +111,8 @@ export interface StrategyRequest {
   sg21_window?: number
   sg21_poly?: number
   predictive_sg?: boolean
+  use_sg8?: boolean
+  use_sg21?: boolean
 }
 
 export interface SavedStrategy {

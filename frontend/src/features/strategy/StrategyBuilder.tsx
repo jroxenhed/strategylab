@@ -151,6 +151,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         sg21_window: maSettings?.sg21Window,
         sg21_poly: maSettings?.sg21Poly,
         predictive_sg: maSettings?.predictiveSg,
+        use_sg8: maSettings?.showSg8 ?? true,
+        use_sg21: maSettings?.showSg21 ?? true,
       }
       const { data } = await api.post('/api/backtest', req)
       onResult(data)

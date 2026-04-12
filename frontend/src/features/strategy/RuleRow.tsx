@@ -31,6 +31,7 @@ export const CONDITION_LABELS: Record<string, string> = {
   accelerating: 'Accelerating',
 }
 export const NEEDS_VALUE = ['above', 'below', 'crosses_above', 'crosses_below', 'turns_up_below', 'turns_down_above', 'rising_over', 'falling_over']
+export const OPTIONAL_VALUE = ['turns_up', 'turns_down']
 export const NEEDS_PARAM: Record<string, string[]> = {
   macd: ['crossover_up', 'crossover_down'],
 }
@@ -71,6 +72,7 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
   const hasParam = canParam && !!rule.param
   const forcedParam = NEEDS_PARAM[rule.indicator]?.includes(rule.condition)
   const needsValue = NEEDS_VALUE.includes(rule.condition) && !forcedParam && !hasParam
+  const optionalValue = OPTIONAL_VALUE.includes(rule.condition)
 
   const paramOptions = PARAM_OPTIONS.filter(p => {
     if (rule.indicator === 'price' && p.value === 'close') return false
@@ -123,6 +125,20 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
           onChange={e => onChange({ ...rule, value: parseFloat(e.target.value) })}
           placeholder="Value"
           style={{ ...styles.ruleSelect, width: 70 }}
+        />
+      )}
+      {optionalValue && (
+        <input
+          type="number"
+          value={rule.value ?? ''}
+          onChange={e => {
+            const v = e.target.value
+            onChange({ ...rule, value: v === '' ? undefined : parseInt(v, 10) })
+          }}
+          placeholder="N bars"
+          min={1}
+          step={1}
+          style={{ ...styles.ruleSelect, width: 62 }}
         />
       )}
       <button onClick={onDelete} style={{ color: '#f85149', padding: '4px 6px' }}><Trash2 size={13} /></button>

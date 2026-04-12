@@ -57,7 +57,8 @@ def run_backtest(req: StrategyRequest):
                                         ma_type=req.ma_type, sg8_window=req.sg8_window,
                                         sg8_poly=req.sg8_poly, sg21_window=req.sg21_window,
                                         sg21_poly=req.sg21_poly,
-                                        predictive_sg=req.predictive_sg)
+                                        predictive_sg=req.predictive_sg,
+                                        use_sg8=req.use_sg8, use_sg21=req.use_sg21)
 
         # Simulate
         capital = req.initial_capital
