@@ -120,6 +120,10 @@ Labels adapt to the chosen bucket ("Winning Months", "Best Quarter", etc.). The 
 
 These stats are computed from the same `macro_curve` response — no additional endpoint needed.
 
+### Detail mode — trade density ticks
+
+The existing "Detail" equity curve gains trade density ticks along the bottom edge, same as macro mode but without aggregation. Each trade is plotted at its exact bar, colored by P&L (green = win, red = loss, intensity = magnitude). No band or other macro-only features in detail mode.
+
 ### Macro chart rendering
 
 **Close line:**
