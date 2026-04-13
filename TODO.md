@@ -16,7 +16,7 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 ## A — Charts & Indicators
 
 - [ ] **A1** Portfolio equity chart (combined P&L across bots)
-- [ ] **A2** Equity curve macro mode for long timescales / thousands of trades — **spec done** (`docs/superpowers/specs/2026-04-12-equity-curve-macro-mode-design.md`), needs implementation plan
+- [ ] **A2** Equity curve macro mode for long timescales / thousands of trades — **implemented** on `feat/a2-equity-curve-macro-mode`, not yet merged
 - [ ] **A3** Equity curve trend analysis (open-ended — define "trend" first)
 - [ ] **A4** More indicators — ATR, Stochastic, VWAP (chart display + backtest rules)
 - [ ] **A5** Chart timeframe buttons — 1W / 1M / 3M / 1Y quick selectors
@@ -56,6 +56,8 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 - [ ] **D3** Bot lifecycle vs journal: decide whether deleting/recreating a bot should reset its displayed P&L (filter journal by `bot.created_at`)
 - [ ] **D4** Clean up dead `BotState.total_pnl` field once migration is safe (currently kept for legacy `bots.json` deserialization)
 - [ ] **D5** Journal helper call frequency — runs on bot tick (for sizing) and on summary fetch. Journal is JSON-parsed each time. Fine for now, but if it gets slow (thousands of entries) add an mtime-based cache.
+
+- [ ] **D6** Paper trading polish — **implemented** on `feat/a2-equity-curve-macro-mode`, not yet merged. Journal: reason colors fixed, Expected/Gain% columns, summary row, filter relocated, auto-refresh 5s, CSV export. Bot cards: heartbeat dot. Positions: 5s poll, Opened/Side columns.
 
 ### Shipped
 - [x] Verify allocation logic — was position_size=10.0, added validator to clamp 0.01–1.0
