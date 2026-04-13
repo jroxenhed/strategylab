@@ -80,7 +80,7 @@ No new API call — `last_tick` arrives via the existing `fetchBotDetail` poll (
 
 `PositionsTable.tsx`: change `setInterval(load, 30_000)` to `setInterval(load, 5_000)`. Matches journal refresh cadence.
 
-Add a small "Updated Xs ago" text in the section header (next to the count badge). Tracks time since last successful fetch, updates every second via a separate `setInterval`. Shows seconds when < 60s, minutes otherwise.
+**Opened-at column** — new first column "Opened" showing when each position was entered. Alpaca's Position model has no timestamp field, so PositionsTable fetches the journal and cross-references: for each position symbol, find the most recent entry (buy/short) and display its timestamp using `fmtShortET()`. Column order becomes: **Opened**, Symbol, Qty, Avg Entry, Current, Mkt Value, P&L, P&L %, (close button).
 
 ## Files affected
 
@@ -88,7 +88,7 @@ Add a small "Updated Xs ago" text in the section header (next to the count badge
 |---|---|
 | `frontend/src/features/trading/TradeJournal.tsx` | New columns (Expected, Gain %), reason color fix, summary row, filter relocation, auto-refresh, CSV export button |
 | `frontend/src/features/trading/BotCard.tsx` | Heartbeat dot using `last_tick` from detail |
-| `frontend/src/features/trading/PositionsTable.tsx` | Poll interval 30s → 5s, "Updated Xs ago" indicator |
+| `frontend/src/features/trading/PositionsTable.tsx` | Poll interval 30s → 5s, "Opened" column via journal cross-reference |
 | `frontend/src/api/trading.ts` | No changes — `JournalTrade` already has `expected_price` |
 | `backend/bot_runner.py` | Update `last_tick` each loop iteration |
 | `backend/bot_manager.py` | Add `last_tick: str | None = None` to `BotState` (line 75) |
