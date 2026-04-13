@@ -34,6 +34,7 @@ function autoDefaultBucket(equityLength: number): string {
 export default function Results({ result, mainChart, activeTab, onTabChange, bucket, onBucketChange, lastRequest }: Props) {
   const { summary, trades, equity_curve, signal_trace } = result
   const [showBaseline, setShowBaseline] = useState(false)
+  const [logScale, setLogScale] = useState(false)
   const chartRef = useRef<HTMLDivElement>(null)
   const sells = trades.filter(t => t.type === 'sell' || t.type === 'cover')
   const { data: macroData, isLoading: macroLoading } = useMacro(lastRequest, bucket)
@@ -164,7 +165,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
 
   return (
     <div style={styles.container}>
-      <div style={styles.tabBar}>
+      <div style={{ ...styles.tabBar, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex' }}>
           {(['summary', 'equity', 'trades', ...(signal_trace ? ['trace'] : [])] as ResultsTab[]).map(tab => (
             <button
@@ -202,6 +203,41 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
               </button>
             )
           })}
+          {activeTab === 'equity' && (
+            <>
+              <div style={{ width: 1, height: 16, background: '#30363d', margin: '0 6px' }} />
+              <button
+                onClick={() => setShowBaseline(v => !v)}
+                style={{
+                  padding: '4px 8px',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: showBaseline ? '#58a6ff' : '#8b949e',
+                  background: showBaseline ? 'rgba(88, 166, 255, 0.1)' : 'none',
+                  border: 'none',
+                  borderRadius: 3,
+                  cursor: 'pointer',
+                }}
+              >
+                B&amp;H
+              </button>
+              <button
+                onClick={() => setLogScale(v => !v)}
+                style={{
+                  padding: '4px 8px',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: logScale ? '#58a6ff' : '#8b949e',
+                  background: logScale ? 'rgba(88, 166, 255, 0.1)' : 'none',
+                  border: 'none',
+                  borderRadius: 3,
+                  cursor: 'pointer',
+                }}
+              >
+                Log
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -273,14 +309,6 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
           />
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', fontSize: 11, color: '#8b949e', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={showBaseline}
-                onChange={e => setShowBaseline(e.target.checked)}
-              />
-              Show buy &amp; hold baseline
-            </label>
             <div ref={chartRef} style={{ width: '100%', height: 250, minHeight: 100, maxHeight: 600, resize: 'vertical', overflow: 'hidden' }} />
           </div>
         )
