@@ -95,6 +95,7 @@ class BotRunner:
         is_short = cfg.direction == "short"
         loop = asyncio.get_event_loop()
 
+        state.last_tick = datetime.now(timezone.utc).isoformat()
         state.last_scan_at = datetime.now(timezone.utc).isoformat()
         state.scans_count += 1
 

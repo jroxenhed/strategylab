@@ -76,6 +76,7 @@ class BotState:
     status: str = "stopped"           # stopped | backtesting | running | error
     started_at: Optional[str] = None
     last_scan_at: Optional[str] = None
+    last_tick: Optional[str] = None
     last_bar_time: Optional[str] = None
     last_signal: str = "none"
     last_price: float = 0.0
@@ -105,6 +106,7 @@ class BotState:
             "status": self.status,
             "started_at": self.started_at,
             "last_scan_at": self.last_scan_at,
+            "last_tick": self.last_tick,
             "last_bar_time": self.last_bar_time,
             "last_signal": self.last_signal,
             "last_price": self.last_price,
