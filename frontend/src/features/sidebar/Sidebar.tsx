@@ -80,6 +80,11 @@ function computePresetStart(end: string, preset: DatePreset): string {
   return startDate.toISOString().slice(0, 10)
 }
 
+function clampToLastDay(d: Date): void {
+  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
+  if (d.getDate() > lastDay) d.setDate(lastDay)
+}
+
 function stepRange(
   start: string, end: string, preset: DatePreset, direction: 1 | -1
 ): { start: string; end: string } {
@@ -95,14 +100,20 @@ function stepRange(
     s.setDate(s.getDate() + 7 * direction)
     e.setDate(e.getDate() + 7 * direction)
   } else if (preset === 'M') {
-    s.setMonth(s.getMonth() + 1 * direction)
-    e.setMonth(e.getMonth() + 1 * direction)
+    s.setMonth(s.getMonth() + direction)
+    clampToLastDay(s)
+    e.setMonth(e.getMonth() + direction)
+    clampToLastDay(e)
   } else if (preset === 'Q') {
     s.setMonth(s.getMonth() + 3 * direction)
+    clampToLastDay(s)
     e.setMonth(e.getMonth() + 3 * direction)
+    clampToLastDay(e)
   } else if (preset === 'Y') {
-    s.setFullYear(s.getFullYear() + 1 * direction)
-    e.setFullYear(e.getFullYear() + 1 * direction)
+    s.setFullYear(s.getFullYear() + direction)
+    clampToLastDay(s)
+    e.setFullYear(e.getFullYear() + direction)
+    clampToLastDay(e)
   }
 
   return {
