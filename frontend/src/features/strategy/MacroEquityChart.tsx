@@ -5,9 +5,32 @@ import type { MacroCurvePoint } from '../../shared/types'
 interface Props {
   macroCurve: MacroCurvePoint[]
   initialCapital: number
+  showBaseline: boolean
+  logScale: boolean
+  baselineCurve?: { time: string | number; value: number | null }[]
 }
 
-export default function MacroEquityChart({ macroCurve, initialCapital }: Props) {
+function normaliseToPercent(data: { time: any; value: number }[]): { time: any; value: number; dollar: number }[] {
+  if (data.length === 0) return []
+  const first = data[0].value
+  if (first === 0) return data.map(d => ({ time: d.time, value: 0, dollar: d.value }))
+  return data.map(d => ({
+    time: d.time,
+    value: ((d.value - first) / first) * 100,
+    dollar: d.value,
+  }))
+}
+
+function applyLog(data: { time: any; value: number; dollar?: number }[], isNormalised: boolean): { time: any; value: number; dollar?: number }[] {
+  return data.map(d => ({
+    ...d,
+    value: isNormalised
+      ? Math.log10(Math.max(100 + d.value, 0.01))
+      : Math.log10(Math.max(d.value, 0.01)),
+  }))
+}
+
+export default function MacroEquityChart({ macroCurve, initialCapital, showBaseline, logScale, baselineCurve }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const tooltipRef = useRef<HTMLDivElement>(null)
 
@@ -23,9 +46,62 @@ export default function MacroEquityChart({ macroCurve, initialCapital }: Props) 
       crosshair: { mode: 0 },
     })
 
-    // 1. Close line — BaselineSeries (green above initial capital, red below)
+    // Prepare close data
+    let closeData: { time: any; value: number; dollar?: number }[] = macroCurve.map(b => ({ time: b.time as any, value: b.close }))
+    let baseValue = initialCapital
+
+    let macroBaselineData: { time: any; value: number; dollar?: number }[] | null = null
+
+    if (showBaseline) {
+      closeData = normaliseToPercent(closeData as { time: any; value: number }[])
+      baseValue = 0
+
+      if (baselineCurve && baselineCurve.length > 0) {
+        // Resample baseline to macro bucket boundaries by picking the value at each macro time
+        const baselineMap = new Map(
+          baselineCurve
+            .filter(d => d.value !== null)
+            .map(d => [String(d.time), d.value as number])
+        )
+        // For macro, use the first bar's time to find initial baseline value, then use last available
+        const macroBaselineRaw: { time: any; value: number }[] = []
+        let lastBaselineValue = initialCapital
+        for (const b of macroCurve) {
+          const v = baselineMap.get(b.time) ?? lastBaselineValue
+          lastBaselineValue = v
+          macroBaselineRaw.push({ time: b.time as any, value: v })
+        }
+        macroBaselineData = normaliseToPercent(macroBaselineRaw)
+      }
+    }
+
+    if (logScale) {
+      closeData = applyLog(closeData, showBaseline)
+      if (macroBaselineData) macroBaselineData = applyLog(macroBaselineData, showBaseline)
+      baseValue = showBaseline ? Math.log10(100) : Math.log10(Math.max(baseValue, 0.01))
+    }
+
+    const priceFormat = logScale
+      ? {
+          type: 'custom' as const,
+          formatter: (price: number) => {
+            if (showBaseline) {
+              const pct = Math.pow(10, price) - 100
+              return `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`
+            }
+            return `$${Math.pow(10, price).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+          },
+        }
+      : showBaseline
+        ? {
+            type: 'custom' as const,
+            formatter: (price: number) => `${price >= 0 ? '+' : ''}${price.toFixed(1)}%`,
+          }
+        : undefined
+
+    // 1. Close line — BaselineSeries
     const closeSeries = chart.addSeries(BaselineSeries, {
-      baseValue: { type: 'price', price: initialCapital },
+      baseValue: { type: 'price', price: baseValue },
       topLineColor: '#26a641',
       bottomLineColor: '#f85149',
       topFillColor1: 'rgba(38, 166, 65, 0.1)',
@@ -34,43 +110,64 @@ export default function MacroEquityChart({ macroCurve, initialCapital }: Props) 
       bottomFillColor2: 'rgba(248, 81, 73, 0.1)',
       lineWidth: 2,
       priceScaleId: 'right',
+      ...(priceFormat ? { priceFormat } : {}),
     })
-    closeSeries.setData(
-      macroCurve.map(b => ({ time: b.time as any, value: b.close }))
-    )
+    closeSeries.setData(closeData.map(d => ({ time: d.time, value: d.value })))
 
-    // 2. High/low stepped lines with drawdown-based coloring
-    const ddColor = (pct: number): string => {
-      const severity = Math.min(1, Math.abs(pct) / 20)
-      const r = Math.round(88 + (248 - 88) * severity)
-      const g = Math.round(166 + (81 - 166) * severity)
-      const bVal = Math.round(255 + (73 - 255) * severity)
-      return `rgba(${r}, ${g}, ${bVal}, 0.5)`
+    // Baseline line (only when B&H is on)
+    if (showBaseline && macroBaselineData) {
+      const baselineSeries = chart.addSeries(LineSeries, {
+        color: '#8b949e',
+        lineWidth: 1,
+        lineStyle: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        priceScaleId: 'right',
+        ...(priceFormat ? { priceFormat } : {}),
+      })
+      baselineSeries.setData(macroBaselineData.map(d => ({ time: d.time, value: d.value })))
     }
 
-    const highSeries = chart.addSeries(LineSeries, {
-      lineWidth: 1,
-      lineType: LineType.WithSteps,
-      priceScaleId: 'right',
-      lastValueVisible: false,
-      priceLineVisible: false,
-      crosshairMarkerVisible: false,
-    })
-    highSeries.setData(
-      macroCurve.map(b => ({ time: b.time as any, value: b.high, color: ddColor(b.drawdown_pct) }))
-    )
+    // 2. High/low stepped lines (skip in normalised mode — OHLC doesn't apply to % view)
+    if (!showBaseline) {
+      const ddColor = (pct: number): string => {
+        const severity = Math.min(1, Math.abs(pct) / 20)
+        const r = Math.round(88 + (248 - 88) * severity)
+        const g = Math.round(166 + (81 - 166) * severity)
+        const bVal = Math.round(255 + (73 - 255) * severity)
+        return `rgba(${r}, ${g}, ${bVal}, 0.5)`
+      }
 
-    const lowSeries = chart.addSeries(LineSeries, {
-      lineWidth: 1,
-      lineType: LineType.WithSteps,
-      priceScaleId: 'right',
-      lastValueVisible: false,
-      priceLineVisible: false,
-      crosshairMarkerVisible: false,
-    })
-    lowSeries.setData(
-      macroCurve.map(b => ({ time: b.time as any, value: b.low, color: ddColor(b.drawdown_pct) }))
-    )
+      let highData = macroCurve.map(b => ({ time: b.time as any, value: b.high, color: ddColor(b.drawdown_pct) }))
+      let lowData = macroCurve.map(b => ({ time: b.time as any, value: b.low, color: ddColor(b.drawdown_pct) }))
+
+      if (logScale) {
+        highData = highData.map(d => ({ ...d, value: Math.log10(Math.max(d.value, 0.01)) }))
+        lowData = lowData.map(d => ({ ...d, value: Math.log10(Math.max(d.value, 0.01)) }))
+      }
+
+      const highSeries = chart.addSeries(LineSeries, {
+        lineWidth: 1,
+        lineType: LineType.WithSteps,
+        priceScaleId: 'right',
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+        ...(priceFormat ? { priceFormat } : {}),
+      })
+      highSeries.setData(highData)
+
+      const lowSeries = chart.addSeries(LineSeries, {
+        lineWidth: 1,
+        lineType: LineType.WithSteps,
+        priceScaleId: 'right',
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+        ...(priceFormat ? { priceFormat } : {}),
+      })
+      lowSeries.setData(lowData)
+    }
 
     // 3. Trade density ticks — histogram at chart bottom
     const allPnls = macroCurve.flatMap(b => b.trades.map(t => t.pnl))
@@ -155,7 +252,7 @@ export default function MacroEquityChart({ macroCurve, initialCapital }: Props) 
       chart.remove()
       ro.disconnect()
     }
-  }, [macroCurve, initialCapital])
+  }, [macroCurve, initialCapital, showBaseline, logScale, baselineCurve])
 
   return (
     <div style={{ position: 'relative', width: '100%', height: 250, minHeight: 100, maxHeight: 600, resize: 'vertical', overflow: 'hidden' }}>
