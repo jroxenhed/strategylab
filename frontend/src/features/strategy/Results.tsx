@@ -66,7 +66,10 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       layout: { background: { type: ColorType.Solid, color: '#0d1117' }, textColor: '#8b949e' },
       grid: { vertLines: { color: '#1c2128' }, horzLines: { color: '#1c2128' } },
       timeScale: { borderColor: '#30363d' },
-      rightPriceScale: { borderColor: '#30363d' },
+      rightPriceScale: {
+        borderColor: '#30363d',
+        mode: logScale && !showBaseline ? 1 : 0, // 1 = logarithmic (native), 0 = normal
+      },
     })
 
     // Prepare equity data
@@ -89,34 +92,33 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
           .map(d => ({ time: d.time as any, value: d.value as number }))
         baselineData = normaliseToPercent(rawBaseline)
       }
+
+      // For B&H + log: manually transform percentages (native log can't handle negatives)
+      if (logScale) {
+        equityData = applyLog(equityData, true)
+        if (baselineData) baselineData = applyLog(baselineData, true)
+        baseValue = Math.log10(100)
+      }
     } else {
       equityData = rawEquity
       baseValue = equity_curve.length > 0 && equity_curve[0].value !== null ? equity_curve[0].value : 10000
+      // Non-B&H log: native logarithmic price scale handles it (no data transform needed)
     }
 
-    if (logScale) {
-      equityData = applyLog(equityData, showBaseline)
-      if (baselineData) baselineData = applyLog(baselineData, showBaseline)
-      baseValue = showBaseline ? Math.log10(100) : Math.log10(Math.max(baseValue, 0.01))
-    }
-
-    const priceFormat = logScale
-      ? {
-          type: 'custom' as const,
-          formatter: (price: number) => {
-            if (showBaseline) {
+    const priceFormat = showBaseline
+      ? logScale
+        ? {
+            type: 'custom' as const,
+            formatter: (price: number) => {
               const pct = Math.pow(10, price) - 100
               return `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`
-            }
-            return `$${Math.pow(10, price).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
-          },
-        }
-      : showBaseline
-        ? {
+            },
+          }
+        : {
             type: 'custom' as const,
             formatter: (price: number) => `${price >= 0 ? '+' : ''}${price.toFixed(1)}%`,
           }
-        : undefined
+      : undefined
 
     const series = chart.addSeries(BaselineSeries, {
       baseValue: { type: 'price', price: baseValue },

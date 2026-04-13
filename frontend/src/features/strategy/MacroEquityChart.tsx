@@ -42,7 +42,10 @@ export default function MacroEquityChart({ macroCurve, initialCapital, showBasel
       layout: { background: { type: ColorType.Solid, color: '#0d1117' }, textColor: '#8b949e' },
       grid: { vertLines: { color: '#1c2128' }, horzLines: { color: '#1c2128' } },
       timeScale: { borderColor: '#30363d' },
-      rightPriceScale: { borderColor: '#30363d' },
+      rightPriceScale: {
+        borderColor: '#30363d',
+        mode: logScale && !showBaseline ? 1 : 0, // 1 = logarithmic (native), 0 = normal
+      },
       crosshair: { mode: 0 },
     })
 
@@ -78,31 +81,30 @@ export default function MacroEquityChart({ macroCurve, initialCapital, showBasel
           macroBaselineData = normaliseToPercent(macroBaselineRaw)
         }
       }
-    }
 
-    if (logScale) {
-      closeData = applyLog(closeData, showBaseline)
-      if (macroBaselineData) macroBaselineData = applyLog(macroBaselineData, showBaseline)
-      baseValue = showBaseline ? Math.log10(100) : Math.log10(Math.max(baseValue, 0.01))
+      // For B&H + log: manually transform percentages (native log can't handle negatives)
+      if (logScale) {
+        closeData = applyLog(closeData, true)
+        if (macroBaselineData) macroBaselineData = applyLog(macroBaselineData, true)
+        baseValue = Math.log10(100)
+      }
     }
+    // Non-B&H log: native logarithmic price scale handles it (no data transform needed)
 
-    const priceFormat = logScale
-      ? {
-          type: 'custom' as const,
-          formatter: (price: number) => {
-            if (showBaseline) {
+    const priceFormat = showBaseline
+      ? logScale
+        ? {
+            type: 'custom' as const,
+            formatter: (price: number) => {
               const pct = Math.pow(10, price) - 100
               return `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`
-            }
-            return `$${Math.pow(10, price).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
-          },
-        }
-      : showBaseline
-        ? {
+            },
+          }
+        : {
             type: 'custom' as const,
             formatter: (price: number) => `${price >= 0 ? '+' : ''}${price.toFixed(1)}%`,
           }
-        : undefined
+      : undefined
 
     // 1. Close line — BaselineSeries
     const closeSeries = chart.addSeries(BaselineSeries, {
@@ -143,13 +145,9 @@ export default function MacroEquityChart({ macroCurve, initialCapital, showBasel
         return `rgba(${r}, ${g}, ${bVal}, 0.5)`
       }
 
-      let highData = macroCurve.map(b => ({ time: b.time as any, value: b.high, color: ddColor(b.drawdown_pct) }))
-      let lowData = macroCurve.map(b => ({ time: b.time as any, value: b.low, color: ddColor(b.drawdown_pct) }))
-
-      if (logScale) {
-        highData = highData.map(d => ({ ...d, value: Math.log10(Math.max(d.value, 0.01)) }))
-        lowData = lowData.map(d => ({ ...d, value: Math.log10(Math.max(d.value, 0.01)) }))
-      }
+      const highData = macroCurve.map(b => ({ time: b.time as any, value: b.high, color: ddColor(b.drawdown_pct) }))
+      const lowData = macroCurve.map(b => ({ time: b.time as any, value: b.low, color: ddColor(b.drawdown_pct) }))
+      // Native logarithmic price scale handles log transform for high/low automatically
 
       const highSeries = chart.addSeries(LineSeries, {
         lineWidth: 1,
@@ -158,7 +156,6 @@ export default function MacroEquityChart({ macroCurve, initialCapital, showBasel
         lastValueVisible: false,
         priceLineVisible: false,
         crosshairMarkerVisible: false,
-        ...(priceFormat ? { priceFormat } : {}),
       })
       highSeries.setData(highData)
 
@@ -169,7 +166,6 @@ export default function MacroEquityChart({ macroCurve, initialCapital, showBasel
         lastValueVisible: false,
         priceLineVisible: false,
         crosshairMarkerVisible: false,
-        ...(priceFormat ? { priceFormat } : {}),
       })
       lowSeries.setData(lowData)
     }

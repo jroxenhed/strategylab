@@ -276,8 +276,32 @@ export default function Sidebar({
       <div style={styles.section}>
         <div style={styles.sectionTitle}>Date Range</div>
 
-        {/* Preset row with arrows */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginBottom: 12 }}>
+        {/* Preset selector */}
+        <div style={{ display: 'flex', gap: 2, background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', padding: 2, marginBottom: 8 }}>
+          {(['D', 'W', 'M', 'Q', 'Y', 'custom'] as DatePreset[]).map(p => (
+            <button
+              key={p}
+              onClick={() => handlePresetChange(p)}
+              style={{
+                flex: 1,
+                padding: '5px 0',
+                fontSize: 11,
+                fontWeight: 600,
+                border: 'none',
+                borderRadius: 3,
+                cursor: 'pointer',
+                background: datePreset === p ? 'var(--bg-panel-hover)' : 'transparent',
+                color: datePreset === p ? 'var(--text-primary)' : 'var(--text-muted)',
+                transition: 'all 0.15s',
+              }}
+            >
+              {p === 'custom' ? '⚙' : p}
+            </button>
+          ))}
+        </div>
+
+        {/* Stepping arrows */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginBottom: 8 }}>
           <button
             onClick={() => handleStep(-1, 5)}
             style={styles.arrowBtn}
@@ -292,28 +316,7 @@ export default function Sidebar({
           >
             ‹
           </button>
-          <div style={{ display: 'flex', flex: 1, gap: 2, background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', padding: 2 }}>
-            {(['D', 'W', 'M', 'Q', 'Y', 'custom'] as DatePreset[]).map(p => (
-              <button
-                key={p}
-                onClick={() => handlePresetChange(p)}
-                style={{
-                  flex: 1,
-                  padding: '5px 0',
-                  fontSize: 11,
-                  fontWeight: 600,
-                  border: 'none',
-                  borderRadius: 3,
-                  cursor: 'pointer',
-                  background: datePreset === p ? 'var(--bg-panel-hover)' : 'transparent',
-                  color: datePreset === p ? 'var(--text-primary)' : 'var(--text-muted)',
-                  transition: 'all 0.15s',
-                }}
-              >
-                {p === 'custom' ? '⚙' : p}
-              </button>
-            ))}
-          </div>
+          <div style={{ flex: 1 }} />
           <button
             onClick={() => handleStep(1)}
             disabled={forwardDisabled}
@@ -332,29 +335,25 @@ export default function Sidebar({
           </button>
         </div>
 
-        {/* Custom From/To — only visible when custom preset */}
-        {datePreset === 'custom' && (
-          <>
-            <div style={styles.field}>
-              <label style={styles.label}>From</label>
-              <input
-                type="date" value={localStart} style={styles.dateInput}
-                onChange={e => setLocalStart(e.target.value)}
-                onBlur={e => onStartChange(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && onStartChange((e.target as HTMLInputElement).value)}
-              />
-            </div>
-            <div style={styles.field}>
-              <label style={styles.label}>To</label>
-              <input
-                type="date" value={localEnd} style={styles.dateInput}
-                onChange={e => setLocalEnd(e.target.value)}
-                onBlur={e => onEndChange(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && onEndChange((e.target as HTMLInputElement).value)}
-              />
-            </div>
-          </>
-        )}
+        {/* From/To — always visible */}
+        <div style={styles.field}>
+          <label style={styles.label}>From</label>
+          <input
+            type="date" value={localStart} style={styles.dateInput}
+            onChange={e => setLocalStart(e.target.value)}
+            onBlur={e => onStartChange(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && onStartChange((e.target as HTMLInputElement).value)}
+          />
+        </div>
+        <div style={styles.field}>
+          <label style={styles.label}>To</label>
+          <input
+            type="date" value={localEnd} style={styles.dateInput}
+            onChange={e => setLocalEnd(e.target.value)}
+            onBlur={e => onEndChange(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && onEndChange((e.target as HTMLInputElement).value)}
+          />
+        </div>
 
         {/* Interval — always visible */}
         <div style={styles.field}>
