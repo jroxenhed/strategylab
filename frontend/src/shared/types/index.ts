@@ -246,6 +246,8 @@ export interface AppState {
 
 export type DataSource = 'yahoo' | 'alpaca' | 'alpaca-iex'
 
+export type DatePreset = 'D' | 'W' | 'M' | 'Q' | 'Y' | 'custom'
+
 // ---------------------------------------------------------------------------
 // Bot types
 // ---------------------------------------------------------------------------

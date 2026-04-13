@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
-import type { BacktestResult, IndicatorKey, DataSource, MAType, StrategyRequest } from './shared/types'
+import type { BacktestResult, IndicatorKey, DataSource, MAType, StrategyRequest, DatePreset } from './shared/types'
 import type { IChartApi } from 'lightweight-charts'
 import { useOHLCV, useIndicators } from './shared/hooks/useOHLCV'
 import Sidebar from './features/sidebar/Sidebar'
@@ -64,12 +64,13 @@ export default function App() {
   const [mainChart, setMainChart] = useState<IChartApi | null>(null)
   const [chartEnabled, setChartEnabled] = useState(true)
   const [maSettings, setMaSettings] = useState<MASettings>({ ...DEFAULT_MA_SETTINGS, ...saved?.maSettings })
+  const [datePreset, setDatePreset] = useState<DatePreset>((saved?.datePreset as DatePreset) ?? 'Y')
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      ticker, start, end, interval, activeIndicators, showSpy, showQqq, dataSource, maSettings,
+      ticker, start, end, interval, activeIndicators, showSpy, showQqq, dataSource, maSettings, datePreset,
     }))
-  }, [ticker, start, end, interval, activeIndicators, showSpy, showQqq, dataSource, maSettings])
+  }, [ticker, start, end, interval, activeIndicators, showSpy, showQqq, dataSource, maSettings, datePreset])
 
   const { data: ohlcv = EMPTY_OHLCV, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, interval, dataSource)
   const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', start, end, interval, dataSource)
@@ -149,6 +150,8 @@ export default function App() {
                 onDataSourceChange={setDataSource}
                 maSettings={maSettings}
                 onMaSettingsChange={setMaSettings}
+                datePreset={datePreset}
+                onDatePresetChange={setDatePreset}
               />
             </Panel>
 
