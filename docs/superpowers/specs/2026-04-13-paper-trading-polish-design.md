@@ -80,13 +80,15 @@ No new API call — `last_tick` arrives via the existing `fetchBotDetail` poll (
 
 `PositionsTable.tsx`: change `setInterval(load, 30_000)` to `setInterval(load, 5_000)`. Matches journal refresh cadence.
 
+Add a small "Updated Xs ago" text in the section header (next to the count badge). Tracks time since last successful fetch, updates every second via a separate `setInterval`. Shows seconds when < 60s, minutes otherwise.
+
 ## Files affected
 
 | File | Changes |
 |---|---|
 | `frontend/src/features/trading/TradeJournal.tsx` | New columns (Expected, Gain %), reason color fix, summary row, filter relocation, auto-refresh, CSV export button |
 | `frontend/src/features/trading/BotCard.tsx` | Heartbeat dot using `last_tick` from detail |
-| `frontend/src/features/trading/PositionsTable.tsx` | Poll interval 30s → 5s |
+| `frontend/src/features/trading/PositionsTable.tsx` | Poll interval 30s → 5s, "Updated Xs ago" indicator |
 | `frontend/src/api/trading.ts` | No changes — `JournalTrade` already has `expected_price` |
 | `backend/bot_runner.py` | Update `last_tick` each loop iteration |
 | `backend/bot_manager.py` | Add `last_tick: str | None = None` to `BotState` (line 75) |
@@ -95,5 +97,4 @@ No new API call — `last_tick` arrives via the existing `fetchBotDetail` poll (
 ## Out of scope
 
 - Sparkline after 1 round-trip (user will wait for more trades)
-- Positions timestamp indicator (already handled)
 - Backend journal enrichment (P&L pairing stays client-side)
