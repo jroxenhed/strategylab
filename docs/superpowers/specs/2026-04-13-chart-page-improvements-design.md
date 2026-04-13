@@ -12,14 +12,14 @@ The sidebar Date Range section replaces the always-visible From/To inputs with a
 
 ```
 DATE RANGE
-┌────────────────────────────┐
-│  < │ D W M Q Y Custom │ >  │
-└────────────────────────────┘
+┌──────────────────────────────────┐
+│ « ‹ │ D W M Q Y Custom │ › »    │
+└──────────────────────────────────┘
 Interval: [1d ▾]
 ```
 
 - **Preset row**: segmented toggle — D / W / M / Q / Y / Custom
-- **Arrow buttons** `<` `>` flank the preset row
+- **Arrow buttons** `«` `‹` `›` `»` flank the preset row (single = 1 period, double = 5 periods)
 - Selecting a **preset** computes the range relative to the current `end` date:
   - D = 1 calendar day
   - W = 7 days

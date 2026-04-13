@@ -19,7 +19,8 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 - [ ] **A2** Equity curve macro mode for long timescales / thousands of trades — **implemented** on `feat/a2-equity-curve-macro-mode`, not yet merged
 - [ ] **A3** Equity curve trend analysis (open-ended — define "trend" first)
 - [ ] **A4** More indicators — ATR, Stochastic, VWAP (chart display + backtest rules)
-- [ ] **A5** Chart timeframe buttons — 1W / 1M / 3M / 1Y quick selectors
+- [ ] **A5** Date range presets (D/W/M/Q/Y) + period stepping arrows (‹ › single, « » 5x skip) — [spec](docs/superpowers/specs/2026-04-13-chart-page-improvements-design.md), [plan](docs/superpowers/plans/2026-04-13-chart-page-improvements.md)
+- [ ] **A7** Equity curve: normalised B&H comparison toggle + log scale toggle — same spec/plan as A5
 - [ ] **A6** Watchlist — save/switch between tickers quickly
 
 ### Shipped
