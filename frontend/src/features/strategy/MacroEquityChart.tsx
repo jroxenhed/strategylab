@@ -57,21 +57,26 @@ export default function MacroEquityChart({ macroCurve, initialCapital, showBasel
       baseValue = 0
 
       if (baselineCurve && baselineCurve.length > 0) {
-        // Resample baseline to macro bucket boundaries by picking the value at each macro time
-        const baselineMap = new Map(
-          baselineCurve
-            .filter(d => d.value !== null)
-            .map(d => [String(d.time), d.value as number])
-        )
-        // For macro, use the first bar's time to find initial baseline value, then use last available
-        const macroBaselineRaw: { time: any; value: number }[] = []
-        let lastBaselineValue = initialCapital
-        for (const b of macroCurve) {
-          const v = baselineMap.get(b.time) ?? lastBaselineValue
-          lastBaselineValue = v
-          macroBaselineRaw.push({ time: b.time as any, value: v })
+        // Skip baseline in macro view if baseline uses intraday timestamps (numeric)
+        // — macro buckets use date strings, so the time formats would never match
+        const firstTime = baselineCurve[0]?.time
+        const baselineIsIntraday = typeof firstTime === 'number'
+        if (!baselineIsIntraday) {
+          // Resample baseline to macro bucket boundaries by picking the value at each macro time
+          const baselineMap = new Map(
+            baselineCurve
+              .filter(d => d.value !== null)
+              .map(d => [String(d.time), d.value as number])
+          )
+          const macroBaselineRaw: { time: any; value: number }[] = []
+          let lastBaselineValue = initialCapital
+          for (const b of macroCurve) {
+            const v = baselineMap.get(b.time) ?? lastBaselineValue
+            lastBaselineValue = v
+            macroBaselineRaw.push({ time: b.time as any, value: v })
+          }
+          macroBaselineData = normaliseToPercent(macroBaselineRaw)
         }
-        macroBaselineData = normaliseToPercent(macroBaselineRaw)
       }
     }
 
