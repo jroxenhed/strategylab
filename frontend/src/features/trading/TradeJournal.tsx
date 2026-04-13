@@ -70,6 +70,33 @@ export default function TradeJournal() {
     }
   }
 
+  const summaryStats = (() => {
+    let totalQty = 0
+    let totalPnl = 0
+    let gainPcts: number[] = []
+    let slippages: number[] = []
+    for (const t of filtered) {
+      totalQty += t.qty || 0
+      const pnl = exitPnl.get(t.id)
+      if (pnl != null) {
+        totalPnl += pnl
+        const entryPx = exitEntryPrice.get(t.id)
+        if (entryPx != null && t.qty) {
+          gainPcts.push((pnl / (entryPx * t.qty)) * 100)
+        }
+      }
+      if (t.expected_price != null && t.price != null) {
+        slippages.push((t.price - t.expected_price) / t.expected_price * 100)
+      }
+    }
+    return {
+      totalQty,
+      totalPnl,
+      avgGainPct: gainPcts.length > 0 ? gainPcts.reduce((a, b) => a + b, 0) / gainPcts.length : null,
+      avgSlippage: slippages.length > 0 ? slippages.reduce((a, b) => a + b, 0) / slippages.length : null,
+    }
+  })()
+
   const fmtTime = (s: string) => {
     try { return fmtShortET(s) }
     catch { return s }
@@ -96,6 +123,25 @@ export default function TradeJournal() {
             {['Time', 'Symbol', 'Side', 'Qty', 'Expected', 'Price', 'P&L', 'Gain %', 'Slippage', 'Source', 'Reason'].map(h => (
               <span key={h} style={styles.headCell}>{h}</span>
             ))}
+          </div>
+          <div style={{ ...styles.row, borderBottom: '1px solid #21262d', background: '#0d1117' }}>
+            <span style={styles.summaryCell} />  {/* Time */}
+            <span style={styles.summaryCell} />  {/* Symbol */}
+            <span style={styles.summaryCell} />  {/* Side */}
+            <span style={styles.summaryCell}>{summaryStats.totalQty || ''}</span>
+            <span style={styles.summaryCell} />  {/* Expected */}
+            <span style={styles.summaryCell} />  {/* Price */}
+            <span style={{ ...styles.summaryCell, color: summaryStats.totalPnl >= 0 ? '#26a641' : '#f85149' }}>
+              {summaryStats.totalPnl !== 0 ? `${summaryStats.totalPnl >= 0 ? '+' : '-'}$${Math.abs(summaryStats.totalPnl).toFixed(2)}` : ''}
+            </span>
+            <span style={{ ...styles.summaryCell, color: summaryStats.avgGainPct != null ? (summaryStats.avgGainPct >= 0 ? '#26a641' : '#f85149') : '#8b949e' }}>
+              {summaryStats.avgGainPct != null ? `${summaryStats.avgGainPct >= 0 ? '+' : ''}${summaryStats.avgGainPct.toFixed(2)}%` : ''}
+            </span>
+            <span style={{ ...styles.summaryCell, color: '#8b949e' }}>
+              {summaryStats.avgSlippage != null ? `${summaryStats.avgSlippage.toFixed(3)}%` : ''}
+            </span>
+            <span style={styles.summaryCell} />  {/* Source */}
+            <span style={styles.summaryCell} />  {/* Reason */}
           </div>
           {[...filtered].reverse().map(t => (
             <div key={t.id} style={{ ...styles.row, background: rowBackground(t, exitPnl) }}>
@@ -238,4 +284,8 @@ const styles: Record<string, React.CSSProperties> = {
     borderBottom: '1px solid #161b22',
   },
   cell: { fontSize: 12, color: '#e6edf3', width: 90, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
+  summaryCell: {
+    fontSize: 11, color: '#8b949e', width: 90, flexShrink: 0,
+    fontStyle: 'italic' as const,
+  },
 }
