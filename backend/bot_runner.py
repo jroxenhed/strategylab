@@ -151,6 +151,10 @@ class BotRunner:
             positions = await self._run_with_retry(client.get_all_positions)
             for pos in positions:
                 if pos.symbol == cfg.symbol.upper():
+                    # Only claim positions whose side matches this bot's direction
+                    pos_side = getattr(pos.side, 'value', str(pos.side)).lower()
+                    if pos_side != cfg.direction:
+                        continue
                     has_position = True
                     alpaca_qty = abs(float(pos.qty))
                     # Resume tracking if re-started with open position
@@ -238,6 +242,21 @@ class BotRunner:
             )
 
             if buy_signal:
+                # Safety: skip entry if opposite-direction position exists on Alpaca
+                # (prevents long BUY from netting against short bot's position)
+                try:
+                    _client = await self._run_in_executor(get_trading_client)
+                    _positions = await self._run_with_retry(_client.get_all_positions)
+                    for _pos in _positions:
+                        if _pos.symbol == cfg.symbol.upper():
+                            _ps = getattr(_pos.side, 'value', str(_pos.side)).lower()
+                            if _ps != cfg.direction:
+                                self._log("WARN", f"Skipping entry — opposite position ({_ps}) exists")
+                                return
+                            break
+                except Exception:
+                    pass  # if check fails, proceed cautiously
+
                 # Compute effective position size (compounds P&L like backtest)
                 current_capital = cfg.allocated_capital + compute_realized_pnl(cfg.symbol, cfg.direction)
                 effective_size = max(current_capital, 0) * cfg.position_size
@@ -401,6 +420,27 @@ class BotRunner:
             if exit_reason:
                 try:
                     client = await self._run_in_executor(get_trading_client)
+                    # Safety: verify Alpaca position side matches bot direction
+                    # (prevents long bot from closing short bot's position)
+                    try:
+                        positions = await self._run_with_retry(client.get_all_positions)
+                        pos_match = False
+                        for pos in positions:
+                            if pos.symbol == cfg.symbol.upper():
+                                pos_side = getattr(pos.side, 'value', str(pos.side)).lower()
+                                if pos_side == cfg.direction:
+                                    pos_match = True
+                                break
+                        if not pos_match:
+                            self._log("WARN", f"Position side mismatch — clearing stale state")
+                            state.entry_price = None
+                            state.trail_peak = None
+                            state.trail_stop_price = None
+                            self.manager.save()
+                            return
+                    except Exception as e:
+                        self._log("WARN", f"Position verify failed: {e}")
+                        return
                     # Cancel pending stop-loss orders for this symbol first
                     # (OTO bracket legs hold shares, blocking close_position)
                     try:
