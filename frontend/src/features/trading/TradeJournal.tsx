@@ -45,7 +45,8 @@ export default function TradeJournal() {
   // Mirrors bot state.total_pnl: only bot fills count, entries are consumed on exit
   // (so duplicate/phantom exits can't reuse stale entry prices), and long/short on the
   // same symbol don't clobber each other.
-  const exitPnl = new Map<string, number>()  // trade id → pnl
+  const exitPnl = new Map<string, number>()        // trade id → pnl
+  const exitEntryPrice = new Map<string, number>()  // trade id → entry price
   const lastEntry = new Map<string, { price: number; qty: number }>()
   for (const t of trades) {
     if (t.source !== 'bot') continue
@@ -63,6 +64,7 @@ export default function TradeJournal() {
           ? (entry.price - t.price) * qty
           : (t.price - entry.price) * qty
         exitPnl.set(t.id, pnl)
+        exitEntryPrice.set(t.id, entry.price)
         lastEntry.delete(key)
       }
     }
@@ -91,7 +93,7 @@ export default function TradeJournal() {
       ) : (<>
         <div style={{ ...styles.table, maxHeight: tableHeight }}>
           <div style={styles.headRow}>
-            {['Time', 'Symbol', 'Side', 'Qty', 'Price', 'P&L', 'Slippage', 'Source', 'Reason'].map(h => (
+            {['Time', 'Symbol', 'Side', 'Qty', 'Expected', 'Price', 'P&L', 'Gain %', 'Slippage', 'Source', 'Reason'].map(h => (
               <span key={h} style={styles.headCell}>{h}</span>
             ))}
           </div>
@@ -103,6 +105,9 @@ export default function TradeJournal() {
                 {t.side.toUpperCase()}
               </span>
               <span style={styles.cell}>{t.qty || '—'}</span>
+              <span style={styles.cell}>
+                {t.expected_price != null ? `$${t.expected_price.toFixed(2)}` : '—'}
+              </span>
               <span style={styles.cell}>{t.price != null ? `$${t.price.toFixed(2)}` : '—'}</span>
               <span style={{ ...styles.cell, color: exitColor(t, exitPnl) }}>
                 {(() => {
@@ -110,6 +115,16 @@ export default function TradeJournal() {
                   if (pnl == null) return '—'
                   const sign = pnl >= 0 ? '+' : '-'
                   return `${sign}$${Math.abs(pnl).toFixed(2)}`
+                })()}
+              </span>
+              <span style={{ ...styles.cell, color: exitColor(t, exitPnl) }}>
+                {(() => {
+                  const pnl = exitPnl.get(t.id)
+                  const entryPx = exitEntryPrice.get(t.id)
+                  if (pnl == null || entryPx == null || !t.qty) return '—'
+                  const pct = (pnl / (entryPx * t.qty)) * 100
+                  const sign = pct >= 0 ? '+' : ''
+                  return `${sign}${pct.toFixed(2)}%`
                 })()}
               </span>
               <span style={{ ...styles.cell, color: slippageColor(t) }}>
