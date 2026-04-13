@@ -16,6 +16,9 @@ frontend/dist/
 # Claude Code
 .claude/
 
+# Git worktrees
+.worktrees/
+
 # Runtime data (user-specific, not code)
 backend/data/bots.json
 backend/data/trade_journal.json
