@@ -51,24 +51,7 @@ class UpdateBotRequest(BaseModel):
     sell_logic: Optional[str] = None
     data_source: Optional[str] = None
     direction: Optional[str] = None
-
-
-class AddBotRequest(BaseModel):
-    strategy_name: str
-    symbol: str
-    interval: str
-    buy_rules: list
-    sell_rules: list
-    buy_logic: str = "AND"
-    sell_logic: str = "AND"
-    allocated_capital: float
-    position_size: float = 1.0
-    stop_loss_pct: Optional[float] = None
-    trailing_stop: Optional[dict] = None
-    dynamic_sizing: Optional[dict] = None
-    trading_hours: Optional[dict] = None
-    slippage_pct: float = 0.0
-    direction: str = "long"
+    broker: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -152,10 +135,12 @@ def stop_and_close_all_bots():
 # ---------------------------------------------------------------------------
 
 @router.post("")
-def add_bot(req: AddBotRequest):
+def add_bot(config: BotConfig):
+    """Create a bot. Uses BotConfig directly as the request schema to avoid
+    field drift — any new BotConfig field is accepted automatically."""
     mgr = _get_manager()
     try:
-        config = BotConfig(**req.model_dump())
+        config.bot_id = ""  # server assigns the id
         bot_id = mgr.add_bot(config)
     except (ValueError, Exception) as e:
         raise HTTPException(status_code=400, detail=str(e))

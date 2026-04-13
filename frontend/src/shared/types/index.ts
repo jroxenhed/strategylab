@@ -244,7 +244,7 @@ export interface AppState {
   showQqq: boolean
 }
 
-export type DataSource = 'yahoo' | 'alpaca' | 'alpaca-iex'
+export type DataSource = 'yahoo' | 'alpaca' | 'alpaca-iex' | 'ibkr'
 
 export type DatePreset = 'D' | 'W' | 'M' | 'Q' | 'Y' | 'custom'
 
@@ -270,6 +270,7 @@ export interface BotConfig {
   slippage_pct?: number
   data_source?: string
   direction?: 'long' | 'short'
+  broker?: string
 }
 
 export interface BotFundStatus {
@@ -316,6 +317,7 @@ export interface BotSummary {
   avg_slippage_pct?: number | null
   has_position?: boolean
   direction?: 'long' | 'short'
+  broker?: string
   first_trade_time?: string | null
 }
 

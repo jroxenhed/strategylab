@@ -21,6 +21,8 @@ from bot_manager import BotManager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from shared import init_ibkr
+    await init_ibkr()
     manager = BotManager()
     manager.load()
     bots_module.bot_manager = manager

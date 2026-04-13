@@ -123,6 +123,98 @@ class AlpacaProvider:
         return df
 
 
+# ---------------------------------------------------------------------------
+# IBKR data provider
+# ---------------------------------------------------------------------------
+
+_IBKR_INTERVAL_MAP = {
+    "1m": "1 min", "5m": "5 mins", "15m": "15 mins", "30m": "30 mins",
+    "1h": "1 hour", "1d": "1 day", "1wk": "1 week", "1mo": "1 month",
+}
+
+_IBKR_UNSUPPORTED = {"2m", "60m", "90m"}
+
+
+class IBKRDataProvider:
+    """DataProvider backed by ib_insync reqHistoricalDataAsync.
+
+    Sync FastAPI route handlers run in AnyIO worker threads where there is no
+    running event loop. ib_insync requires the main loop, so we schedule the
+    async call onto it via run_coroutine_threadsafe.
+    """
+
+    def __init__(self, ib, loop):
+        self._ib = ib
+        self._loop = loop
+
+    def fetch(self, ticker: str, start: str, end: str, interval: str) -> pd.DataFrame:
+        if interval in _IBKR_UNSUPPORTED:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Interval {interval} not supported by IBKR"
+            )
+
+        bar_size = _IBKR_INTERVAL_MAP.get(interval)
+        if bar_size is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Interval {interval} not supported by IBKR"
+            )
+
+        import asyncio
+        from ib_insync import Stock
+        from datetime import datetime
+
+        contract = Stock(ticker, "SMART", "USD")
+        end_dt = datetime.strptime(end, "%Y-%m-%d")
+
+        # Calculate duration string from start/end
+        start_dt = datetime.strptime(start, "%Y-%m-%d")
+        days = (end_dt - start_dt).days
+        if days <= 1:
+            duration = "1 D"
+        elif days <= 365:
+            duration = f"{days} D"
+        else:
+            years = max(1, days // 365)
+            duration = f"{years} Y"
+
+        if not self._ib.isConnected():
+            raise HTTPException(status_code=503, detail="IBKR Gateway not connected")
+
+        coro = self._ib.reqHistoricalDataAsync(
+            contract,
+            endDateTime=end_dt.strftime("%Y%m%d %H:%M:%S"),
+            durationStr=duration,
+            barSizeSetting=bar_size,
+            whatToShow="TRADES",
+            useRTH=True,
+        )
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        try:
+            bars = future.result(timeout=30)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"IBKR fetch failed: {e}")
+
+        if not bars:
+            raise HTTPException(status_code=404, detail=f"No IBKR data for {ticker}")
+
+        rows = []
+        for bar in bars:
+            rows.append({
+                "Open": bar.open,
+                "High": bar.high,
+                "Low": bar.low,
+                "Close": bar.close,
+                "Volume": int(bar.volume),
+                "timestamp": bar.date,
+            })
+
+        df = pd.DataFrame(rows)
+        df.index = pd.to_datetime(df.pop("timestamp"))
+        return df
+
+
 def _create_alpaca_client():
     """Create an Alpaca StockHistoricalDataClient from env vars. Returns None if no keys."""
     api_key = os.environ.get("ALPACA_API_KEY", "").strip()
@@ -133,24 +225,6 @@ def _create_alpaca_client():
     return StockHistoricalDataClient(api_key, secret_key)
 
 
-def _create_trading_client():
-    """Create an Alpaca TradingClient for paper trading. Returns None if no keys."""
-    api_key = os.environ.get("ALPACA_API_KEY", "").strip()
-    secret_key = os.environ.get("ALPACA_SECRET_KEY", "").strip()
-    if not api_key or not secret_key:
-        return None
-    from alpaca.trading.client import TradingClient
-    return TradingClient(api_key, secret_key, paper=True)
-
-
-_trading_client = _create_trading_client()
-
-
-def get_trading_client():
-    if _trading_client is None:
-        raise HTTPException(status_code=503, detail="Alpaca trading not configured")
-    return _trading_client
-
 
 # Provider registry
 _providers: dict[str, DataProvider] = {"yahoo": YahooProvider()}
@@ -159,6 +233,78 @@ _alpaca_client = _create_alpaca_client()
 if _alpaca_client is not None:
     _providers["alpaca"] = AlpacaProvider(_alpaca_client, feed='sip')
     _providers["alpaca-iex"] = AlpacaProvider(_alpaca_client, feed='iex')
+
+
+# Register Alpaca as a trading provider
+if _alpaca_client is not None:
+    _alpaca_api_key = os.environ.get("ALPACA_API_KEY", "").strip()
+    _alpaca_secret_key = os.environ.get("ALPACA_SECRET_KEY", "").strip()
+    if _alpaca_api_key and _alpaca_secret_key:
+        try:
+            from alpaca.trading.client import TradingClient
+            _alpaca_trading_client = TradingClient(_alpaca_api_key, _alpaca_secret_key, paper=True)
+            from broker import AlpacaTradingProvider, register_trading_provider
+            register_trading_provider("alpaca", AlpacaTradingProvider(_alpaca_trading_client, _alpaca_client))
+        except Exception as e:
+            print(f"[Alpaca] Trading provider registration failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# IBKR connection (shared between data + trading providers)
+# ---------------------------------------------------------------------------
+
+_ibkr_ib = None  # ib_insync.IB instance, set if Gateway is reachable
+_ibkr_loop = None  # asyncio loop ib_insync is bound to (FastAPI's main loop)
+
+
+async def _create_ibkr_connection():
+    """Connect to IBKR Gateway. Returns IB instance or None if unavailable."""
+    host = os.environ.get("IBKR_HOST", "").strip()
+    port = os.environ.get("IBKR_PORT", "").strip()
+    # Only attempt if at least one IBKR env var is explicitly set
+    if not host and not port:
+        return None
+    host = host or "127.0.0.1"
+    port = int(port or "4002")
+    client_id = int(os.environ.get("IBKR_CLIENT_ID", "1"))
+    try:
+        import asyncio
+        # ib_insync's getLoop() returns the policy's default loop, not the
+        # running loop — bind them so Futures get attached to FastAPI's loop.
+        asyncio.set_event_loop(asyncio.get_running_loop())
+        from ib_insync import IB
+        ib = IB()
+        await ib.connectAsync(host, port, clientId=client_id)
+        print(f"[IBKR] Connected to Gateway at {host}:{port}")
+        return ib
+    except Exception as e:
+        print(f"[IBKR] Gateway not available ({host}:{port}): {e}")
+        return None
+
+
+def get_ibkr_connection():
+    """Return the shared IB instance (may be None)."""
+    return _ibkr_ib
+
+
+def get_ibkr_loop():
+    """Return the asyncio loop ib_insync is bound to (FastAPI's main loop)."""
+    return _ibkr_loop
+
+
+async def init_ibkr():
+    """Initialize IBKR connection and register providers. Called from main.py lifespan."""
+    global _ibkr_ib, _ibkr_loop
+    import asyncio
+    _ibkr_loop = asyncio.get_running_loop()
+    _ibkr_ib = await _create_ibkr_connection()
+    if _ibkr_ib is not None:
+        # Register data provider
+        _providers["ibkr"] = IBKRDataProvider(_ibkr_ib, _ibkr_loop)
+        # Register trading provider
+        from broker import IBKRTradingProvider, register_trading_provider
+        register_trading_provider("ibkr", IBKRTradingProvider(_ibkr_ib, _ibkr_loop))
+        print(f"[IBKR] Data + trading providers registered")
 
 
 def register_provider(name: str, provider: DataProvider) -> None:

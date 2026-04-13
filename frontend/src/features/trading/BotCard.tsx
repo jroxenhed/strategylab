@@ -174,6 +174,10 @@ export default function BotCard({
             </span>
             <span style={{ color: '#888', fontSize: 12 }}>
               {summary.symbol} · {summary.interval} · {summary.data_source ?? 'alpaca-iex'}
+              {' · '}
+              <span style={{ color: (summary.broker ?? 'alpaca') === 'ibkr' ? '#f0b74e' : '#58a6ff' }}>
+                via {(summary.broker ?? 'alpaca') === 'ibkr' ? 'IBKR' : 'Alpaca'}
+              </span>
             </span>
           </div>
 

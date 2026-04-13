@@ -50,7 +50,7 @@ frontend/src/
       PerformanceComparison.tsx — compare strategy performance across tickers
   shared/
     hooks/
-      useOHLCV.ts        — useOHLCV, useIndicators, useProviders, useSearch
+      useOHLCV.ts        — useOHLCV, useIndicators, useProviders, useSearch, useBroker
       useLocalStorage.ts — persistent state hook
       useMacro.ts        — macro equity chart data hook
     types/index.ts       — all shared TypeScript types
@@ -60,8 +60,9 @@ frontend/src/
       colors.ts          — shared color constants
 
 backend/
-  main.py              — FastAPI app setup, lifespan (BotManager), CORS, routers (~54 lines)
-  shared.py            — DataProvider protocol, providers (Yahoo/Alpaca), _fetch() + TTL cache
+  main.py              — FastAPI app setup, lifespan (BotManager + IBKR init), CORS, routers
+  shared.py            — DataProvider protocol, providers (Yahoo/Alpaca/IBKR), _fetch() + TTL cache
+  broker.py            — TradingProvider protocol, AlpacaTradingProvider, IBKRTradingProvider, broker registry
   models.py            — StrategyRequest, TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig
   signal_engine.py     — Rule model, eval_rules(), S-G filters (causal/centered/predictive)
   bot_manager.py       — BotConfig, BotState, BotManager singleton, bot persistence
@@ -73,7 +74,7 @@ backend/
     backtest.py        — POST /api/backtest + trade simulation engine
     backtest_macro.py  — POST /api/backtest/macro — resampled equity (D/W/M/Q/Y)
     search.py          — GET /api/search
-    providers.py       — GET /api/providers
+    providers.py       — GET /api/providers, GET/PUT /api/broker
     trading.py         — trading endpoints (account, positions, orders, buy, sell, scan)
     bots.py            — bot CRUD, delegates to BotManager
   tests/
@@ -128,10 +129,11 @@ Fetched in App.tsx always (even when hidden) to avoid loading delay. Passed to C
 
 ### Data providers
 
-Three providers are registered in `shared.py`:
+Four providers can be registered in `shared.py`:
 - `yahoo` — yfinance, always available
 - `alpaca` — Alpaca SIP feed (requires `ALPACA_API_KEY` + `ALPACA_SECRET_KEY` in `backend/.env`), paid subscription for recent intraday
 - `alpaca-iex` — Alpaca IEX feed, real-time, free tier, narrower coverage (no OTC)
+- `ibkr` — IBKR via `ib_insync` (requires `IBKR_HOST` + `IBKR_PORT` env vars and running IB Gateway)
 
 Both Alpaca providers use `Adjustment.SPLIT` so historical prices are always split-adjusted.
 
@@ -184,6 +186,8 @@ Parameters per MA: `sg8_window`, `sg8_poly`, `sg21_window`, `sg21_poly`, `predic
 - **Commission**: percentage of trade value, deducted from capital on both entry and exit
 - Both tracked per-trade in the trade list (`slippage` and `commission` fields)
 
+A full realistic cost model is planned (D8) covering per-share IBKR tiered commission, stock borrow cost, margin interest, and FX conversion. Not yet implemented.
+
 ## Short Selling (direction field)
 
 `StrategyRequest` and `BotConfig` both have `direction: str = "long"` (accepts `"long"` or `"short"`, defaults to `"long"` for backwards compatibility).
@@ -211,17 +215,49 @@ Frontend: direction toggle in strategy builder (labels swap to "Entry Rules" / "
 ### Architecture
 
 - `bot_manager.py` — `BotManager` singleton manages lifecycle. `BotConfig` (Pydantic) for settings, `BotState` (dataclass) for runtime. Persists to `backend/data/bots.json`. Loaded at startup via FastAPI lifespan.
-- `bot_runner.py` — async `_tick()` loop per bot. Evaluates strategy rules against live bars, manages entry/exit, polls for fills, handles stop-losses. Currently Alpaca-coupled (direct SDK imports).
-- `journal.py` — trade journal stored as JSON at `backend/data/trade_journal.json`. `_log_trade()` records entries/exits with fill prices, slippage, timestamps. `compute_realized_pnl()` calculates running P&L.
+- `bot_runner.py` — async `_tick()` loop per bot. Evaluates strategy rules against live bars, manages entry/exit, polls for fills, handles stop-losses. Uses `TradingProvider` abstraction (broker-agnostic).
+- `journal.py` — trade journal stored as JSON at `backend/data/trade_journal.json`. `_log_trade()` records entries/exits with fill prices, slippage, timestamps, and `bot_id`. `compute_realized_pnl(symbol, direction, bot_id)` and `first_bot_entry_time(...)` scope results to a specific bot — deleting a bot and recreating on the same symbol+direction starts with a clean P&L; legacy trades (no `bot_id`) are excluded from every bot's aggregation.
 - `routes/bots.py` — CRUD API, delegates to BotManager. No direct broker imports.
-- `routes/trading.py` — account/positions/orders endpoints, buy/sell actions, signal scan. Currently Alpaca-coupled with `_alpaca_call()` retry wrapper.
+- `routes/trading.py` — account/positions/orders endpoints, buy/sell actions, signal scan. Uses `TradingProvider` abstraction (broker-agnostic).
 
 ### Bot runner details
 
 - Allocation compounds: `allocated_capital + total_pnl`, matching backtest behavior
 - Position size hardcoded to 100% of allocation
 - Trailing stops polled every tick (no server-side OTO for shorts)
-- Fill detection: polls Alpaca fill price, logs expected vs actual slippage in journal
+- Fill detection: polls broker fill price via `TradingProvider`, logs expected vs actual slippage in journal
+
+## IBKR Broker Integration (D7 — implemented)
+
+Spec at `docs/superpowers/specs/2026-04-13-ibkr-broker-integration-design.md`.
+
+### ib_insync wiring
+- Gateway must have Read-Only API unchecked (Configure → Settings → API) — otherwise Error 321 on order submission
+- `asyncio.set_event_loop(asyncio.get_running_loop())` required before the first ib_insync import to bind it to FastAPI's running loop (not the policy default)
+- Always use async methods: `connectAsync()`, `reqHistoricalDataAsync()`, `accountSummaryAsync()`, `reqAllOpenOrdersAsync()` etc.
+- ib_insync runs its own event loop — don't mix with `asyncio.run()`
+- Sync FastAPI routes run in AnyIO worker threads with no event loop — both providers capture the main loop at startup and use `asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=...)` via a `_run()` helper to marshal calls back onto it
+- Reconnection: wrap calls in try/except, call `ib.connectAsync()` on disconnect
+- Error 162 "different IP address": IBKR single-session — usually caused by a concurrent mobile or browser login, not a code bug
+
+### Architecture
+- `broker.py` — `TradingProvider` protocol, `OrderRequest`/`OrderResult` dataclasses, `AlpacaTradingProvider`, `IBKRTradingProvider`, broker registry
+- `OrderRequest` has optional `account_id: str | None` for future ISK vs margin routing within IBKR
+- Single shared `ib_insync.IB()` instance for both trading and data, initialized in FastAPI lifespan (`init_ibkr()` in `shared.py`, `await`ed from `main.py`)
+- IBKR connects to IB Gateway: `IBKR_HOST:IBKR_PORT` (default 127.0.0.1:4002) — only attempts connection if env vars are set
+- Stop-losses managed via polling for all IBKR trades (no OTO brackets)
+- All consumers (`bot_runner.py`, `routes/trading.py`, `bot_manager.py`) use `get_trading_provider(name)` — no direct Alpaca SDK imports
+
+### Per-bot broker selection
+Each bot picks its own broker at creation — enables e.g. long bot on IBKR ISK + short bot on IBKR margin for the same ticker.
+
+- `BotConfig.broker: str = "alpaca"` persisted to `bots.json`; AddBotBar has a `via Alpaca` / `via IBKR` dropdown
+- `get_trading_provider(name: str | None = None)` — bots pass their own `config.broker`; AccountBar/trading routes fall back to the globally active broker (`ACTIVE_BROKER` env or `PUT /api/broker`)
+- `BotCard` displays the broker in amber (`via IBKR`) or blue (`via Alpaca`) after the data source
+- Broker is **immutable after creation** — editing it mid-life would orphan the bot from its existing positions/journal rows. Delete & recreate to "change" brokers.
+
+### AddBotRequest deprecation
+`routes/bots.py POST /api/bots` originally had a hand-written `AddBotRequest` Pydantic model that mirrored `BotConfig` fields. Any field added to `BotConfig` but forgotten in `AddBotRequest` was silently dropped by Pydantic's default `extra="ignore"`, falling back to the `BotConfig` default — `data_source` and `broker` both had this bug historically. **Fix: the route now takes `BotConfig` directly**, so any new field on `BotConfig` is accepted without route changes. `UpdateBotRequest` for PATCH stays hand-written because partial-update semantics need every field Optional.
 
 ## Discovery Page
 
@@ -237,6 +273,9 @@ These document **why** certain patterns exist in the code:
 - **S-G lookahead bias**: centered S-G filter was being used in backtests, seeing future data. Fixed by adding causal mode (`_apply_sg(causal=True)`) that only uses past bars.
 - **S-G dead zone**: S-G smoothed flat curves triggered false turns_up/turns_down signals. Fixed with `eps = abs(v_now) * 3e-5` threshold.
 - **yf.download() concurrency**: `yfinance.download()` shares global state, returns wrong data under concurrent requests. All code uses `yf.Ticker(symbol).history()` via `_fetch()`.
+- **Signal trace wrong series**: backtest signal visualization was using raw MA values instead of S-G smoothed series. Fixed by using same `series_map` lookup as `eval_rule` in `backtest.py`.
+- **Bot P&L leak across recreations**: `compute_realized_pnl` filtered journal rows by `(symbol, direction)` only, so a new bot on the same symbol inherited the old (deleted) bot's P&L and sizing. Fixed by tagging every `_log_trade` with `bot_id` and filtering by it.
+- **Silent drop of bot config fields**: `AddBotRequest` in `routes/bots.py` duplicated `BotConfig` fields; any field missing from the duplicate was silently dropped by Pydantic's `extra="ignore"` default and replaced by the `BotConfig` default. Fixed by using `BotConfig` directly as the POST body schema.
 
 ## Running
 

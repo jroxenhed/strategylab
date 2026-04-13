@@ -34,6 +34,7 @@ export default function AddBotBar({
   const [interval, setInterval] = useState('15m')
   const [allocation, setAllocation] = useState('')
   const [dataSource, setDataSource] = useState('alpaca-iex')
+  const [broker, setBroker] = useState<'alpaca' | 'ibkr'>('alpaca')
   const [direction, setDirection] = useState<'long' | 'short'>('long')
   const [error, setError] = useState('')
 
@@ -82,6 +83,7 @@ export default function AddBotBar({
         slippage_pct: typeof s.slippage === 'number' ? s.slippage : 0,
         data_source: dataSource,
         direction,
+        broker,
       })
       setAllocation('')
     } catch (e: any) {
@@ -118,11 +120,28 @@ export default function AddBotBar({
           {INTERVALS.map(v => <option key={v} value={v}>{v}</option>)}
         </select>
 
-        {/* Data source */}
-        <select value={dataSource} onChange={e => setDataSource(e.target.value)} style={inputStyle}>
-          <option value="alpaca-iex">IEX</option>
-          <option value="alpaca">Alpaca SIP</option>
-          <option value="yahoo">Yahoo</option>
+        {/* Data source — where OHLCV bars come from for signal evaluation */}
+        <select
+          value={dataSource}
+          onChange={e => setDataSource(e.target.value)}
+          style={inputStyle}
+          title="Data source — where the bot fetches price bars to evaluate its rules"
+        >
+          <option value="alpaca-iex">data: IEX</option>
+          <option value="alpaca">data: Alpaca SIP</option>
+          <option value="ibkr">data: IBKR</option>
+          <option value="yahoo">data: Yahoo</option>
+        </select>
+
+        {/* Broker (executes orders) */}
+        <select
+          value={broker}
+          onChange={e => setBroker(e.target.value as 'alpaca' | 'ibkr')}
+          style={inputStyle}
+          title="Broker — which account executes the trades"
+        >
+          <option value="alpaca">via Alpaca</option>
+          <option value="ibkr">via IBKR</option>
         </select>
 
         {/* Direction */}

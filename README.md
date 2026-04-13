@@ -1,12 +1,12 @@
 # StrategyLab
 
-Interactive trading strategy backtester and paper trading platform. Build strategies with technical indicators, backtest against historical data, and execute trades via Alpaca paper trading.
+Interactive trading strategy backtester and paper trading platform. Build strategies with technical indicators, backtest against historical data, and execute trades via Alpaca or Interactive Brokers paper trading.
 
 ## Stack
 
 - **Frontend**: React + TypeScript + Vite, lightweight-charts v5 (TradingView), TanStack Query
 - **Backend**: Python FastAPI, yfinance, pandas, numpy
-- **Trading**: Alpaca API (paper trading)
+- **Trading**: Alpaca API + Interactive Brokers (via `ib_insync`), paper trading
 
 ## Features
 
@@ -31,12 +31,15 @@ Interactive trading strategy backtester and paper trading platform. Build strate
 - Strategy save/load/delete (localStorage)
 - Chart disable toggle for lightweight backtesting of large datasets
 
-### Live Trading Bots (Alpaca)
+### Live Trading Bots (Alpaca + IBKR)
 - Automated strategy execution with fund management and per-bot capital allocation
+- **Per-bot broker selection** — each bot picks Alpaca or IBKR at creation (can run different bots on different brokers simultaneously, e.g. long bot on IBKR ISK + short bot on IBKR margin)
+- **Per-bot data source selection** — bot rules evaluate on the selected feed (IEX / Alpaca SIP / IBKR / Yahoo), independent from the broker that executes orders
 - **Long and short bots** — run both directions on the same ticker simultaneously
-- Trailing stop management, OTO bracket orders, stop-loss detection
+- Trailing stop management, OTO bracket orders (Alpaca long only), stop-loss polling (shorts + all IBKR trades)
 - Slippage tracking (expected vs actual fill price)
-- Bot cards with direction badges (LONG/SHORT), background tint, always-visible equity sparkline
+- Per-bot P&L scoping — trade journal tags each trade with `bot_id`; deleting a bot and recreating on the same symbol starts fresh
+- Bot cards with direction badges (LONG/SHORT), broker badge (`via Alpaca` / `via IBKR`), always-visible equity sparkline
 - Sparkline timescale toggle: local-per-card or aligned across all bots for cross-bot timing comparison
 - Manual entry button, in-place config editing (allocation, strategy, data source)
 - Bulk actions: Start All, Stop All, Stop and Close (with confirmation)
@@ -46,15 +49,16 @@ Interactive trading strategy backtester and paper trading platform. Build strate
 - Performance comparison across tickers
 - Dedicated page separated from live bot management (bot army pipeline planned)
 
-### Manual Trading (Alpaca)
-- Account overview (equity, cash, buying power, PDT status)
-- Manual buy/sell with OTO bracket orders (stop loss)
+### Manual Trading (Alpaca + IBKR)
+- Account overview (equity, cash, buying power, PDT status) — toggle between Alpaca/IBKR in the AccountBar
+- Manual buy/sell with OTO bracket orders on Alpaca; polled stop-loss management on IBKR
 - Positions table, order history, trade journal
 
 ### Data Providers
 - **Yahoo Finance** — always available, free
 - **Alpaca SIP** — paid real-time feed (requires API keys)
 - **Alpaca IEX** — free real-time feed, narrower coverage
+- **IBKR** — via `ib_insync` / IB Gateway (requires `IBKR_HOST`, `IBKR_PORT` env vars)
 - In-memory TTL cache (2 min for live intraday, 1 hour for historical)
 
 ## Running
@@ -72,14 +76,24 @@ ALPACA_API_KEY=your_key
 ALPACA_SECRET_KEY=your_secret
 ```
 
+For IBKR, run IB Gateway (paper account) and set:
+```
+IBKR_HOST=127.0.0.1
+IBKR_PORT=4002
+IBKR_CLIENT_ID=1
+ACTIVE_BROKER=alpaca        # default broker for AccountBar; each bot picks its own
+```
+Uncheck **Read-Only API** in Gateway → Configure → Settings → API, otherwise order submission returns Error 321.
+
 ## Project Structure
 
 ```
 backend/
   main.py              — app setup, CORS, mounts routers
-  shared.py            — _fetch(), data providers, TTL cache
+  shared.py            — _fetch(), data providers (Yahoo/Alpaca/IBKR), TTL cache
+  broker.py            — TradingProvider protocol + Alpaca/IBKR implementations, broker registry
   models.py            — shared Pydantic models (StrategyRequest, etc.)
-  journal.py           — trade journal logger
+  journal.py           — trade journal logger (bot_id-scoped P&L)
   signal_engine.py     — indicator computation, rule evaluation
   bot_manager.py       — bot lifecycle (add/start/stop/delete)
   bot_runner.py        — bot execution loop (polling, orders, stops)

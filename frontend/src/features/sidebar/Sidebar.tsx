@@ -234,7 +234,7 @@ export default function Sidebar({
       <div style={styles.section}>
         <div style={styles.sectionTitle}>Data Source</div>
         <div style={styles.segmentedToggle}>
-          {(['yahoo', 'alpaca'] as const).map(src => {
+          {(['yahoo', 'alpaca', 'ibkr'] as const).map(src => {
             const available = providers.includes(src)
             const active = dataSource === src || (src === 'alpaca' && dataSource === 'alpaca-iex')
             return (

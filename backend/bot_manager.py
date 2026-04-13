@@ -21,19 +21,11 @@ from pydantic import BaseModel, field_validator
 from models import TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, StrategyRequest
 from routes.backtest import run_backtest
 from signal_engine import Rule
-from shared import _fetch, get_trading_client
+from shared import _fetch
+from broker import get_trading_provider, OrderRequest as BrokerOrderRequest
 from journal import _log_trade, compute_realized_pnl, first_bot_entry_time
 from bot_runner import BotRunner
 
-# ---------------------------------------------------------------------------
-# Alpaca order helpers (imported lazily to avoid hard dep if Alpaca not set up)
-# ---------------------------------------------------------------------------
-try:
-    from alpaca.trading.requests import MarketOrderRequest
-    from alpaca.trading.enums import OrderSide, TimeInForce
-    _ALPACA_AVAILABLE = True
-except ImportError:
-    _ALPACA_AVAILABLE = False
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "bots.json")
 
@@ -63,8 +55,9 @@ class BotConfig(BaseModel):
     dynamic_sizing: Optional[DynamicSizingConfig] = None
     trading_hours: Optional[TradingHoursConfig] = None
     slippage_pct: float = 0.0
-    data_source: str = "alpaca-iex"    # yahoo | alpaca | alpaca-iex
+    data_source: str = "alpaca-iex"    # yahoo | alpaca | alpaca-iex | ibkr
     direction: str = "long"            # "long" | "short"
+    broker: str = "alpaca"             # "alpaca" | "ibkr" — which broker executes orders
 
 
 # ---------------------------------------------------------------------------
@@ -217,8 +210,8 @@ class BotManager:
 
         if close_position:
             try:
-                client = get_trading_client()
-                client.close_position(config.symbol.upper())
+                provider = get_trading_provider(config.broker)
+                provider.close_position(config.symbol.upper())
             except Exception:
                 pass
 
@@ -297,10 +290,9 @@ class BotManager:
         if state.status != "running":
             raise ValueError("Bot must be running to place a manual buy")
 
-        client = get_trading_client()
+        provider = get_trading_provider(config.broker)
 
         # Get current price
-        from shared import _fetch
         from datetime import date, timedelta
         end_date = date.today().isoformat()
         start_date = (date.today() - timedelta(days=5)).isoformat()
@@ -308,7 +300,7 @@ class BotManager:
         price = float(df["Close"].iloc[-1])
 
         # Calculate qty
-        current_capital = config.allocated_capital + compute_realized_pnl(config.symbol, config.direction)
+        current_capital = config.allocated_capital + compute_realized_pnl(config.symbol, config.direction, bot_id=config.bot_id)
         effective_size = max(current_capital, 0) * config.position_size
         qty = math.floor(effective_size / price)
         if qty < 1:
@@ -316,11 +308,10 @@ class BotManager:
 
         # Submit order
         is_short = config.direction == "short"
-        order = client.submit_order(MarketOrderRequest(
+        result = provider.submit_order(BrokerOrderRequest(
             symbol=config.symbol.upper(),
             qty=qty,
-            side=OrderSide.SELL if is_short else OrderSide.BUY,
-            time_in_force=TimeInForce.DAY,
+            side="sell" if is_short else "buy",
         ))
 
         # Get fill price (blocking poll)
@@ -329,9 +320,9 @@ class BotManager:
         for _ in range(5):
             time.sleep(0.5)
             try:
-                o = client.get_order_by_id(str(order.id))
+                o = provider.get_order(result.order_id)
                 if o.filled_avg_price is not None:
-                    fill_price = float(o.filled_avg_price)
+                    fill_price = o.filled_avg_price
                     break
             except Exception:
                 break
@@ -356,7 +347,7 @@ class BotManager:
         try:
             _log_trade(config.symbol, "short" if is_short else "buy", qty, fill_price,
                        source="bot", reason="manual_entry", expected_price=price,
-                       direction=config.direction)
+                       direction=config.direction, bot_id=config.bot_id)
         except Exception:
             pass
 
@@ -366,7 +357,7 @@ class BotManager:
     def list_bots(self) -> list[dict]:
         result = []
         for bot_id, (config, state) in self.bots.items():
-            first_trade_time = first_bot_entry_time(config.symbol, config.direction)
+            first_trade_time = first_bot_entry_time(config.symbol, config.direction, bot_id=bot_id)
             if first_trade_time is None and state.equity_snapshots:
                 first_trade_time = state.equity_snapshots[0]["time"]
             result.append({
@@ -377,10 +368,11 @@ class BotManager:
                 "allocated_capital": config.allocated_capital,
                 "status": state.status,
                 "trades_count": state.trades_count,
-                "total_pnl": round(compute_realized_pnl(config.symbol, config.direction), 2),
+                "total_pnl": round(compute_realized_pnl(config.symbol, config.direction, bot_id=bot_id), 2),
                 "backtest_summary": state.backtest_result.get("summary") if state.backtest_result else None,
                 "data_source": config.data_source,
                 "direction": config.direction,
+                "broker": config.broker,
                 "avg_slippage_pct": round(sum(state.slippage_pcts) / len(state.slippage_pcts), 4) if state.slippage_pcts else None,
                 "has_position": state.entry_price is not None,
                 "first_trade_time": first_trade_time,

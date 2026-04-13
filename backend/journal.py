@@ -9,12 +9,13 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 JOURNAL_PATH = DATA_DIR / "trade_journal.json"
 
 
-def compute_realized_pnl(symbol: str, direction: str = "long") -> float:
-    """Sum realized P&L for bot-sourced trades of a given (symbol, direction).
+def compute_realized_pnl(symbol: str, direction: str = "long", bot_id: str | None = None) -> float:
+    """Sum realized P&L for bot-sourced trades of a given (symbol, direction, bot_id).
 
     Pairs entries with exits in chronological order (LIFO: each exit consumes
-    the most recent open entry). Mirrors the TradeJournal frontend column so
-    the bot card and journal column always agree.
+    the most recent open entry). When `bot_id` is given, only trades tagged to
+    that bot count — so deleting a bot and spinning up a new one on the same
+    symbol doesn't inherit the old bot's realized P&L or skew sizing.
     """
     if not JOURNAL_PATH.exists():
         return 0.0
@@ -29,6 +30,8 @@ def compute_realized_pnl(symbol: str, direction: str = "long") -> float:
         if t.get("source") != "bot":
             continue
         if t.get("symbol", "").upper() != symbol.upper():
+            continue
+        if bot_id is not None and t.get("bot_id") != bot_id:
             continue
         side = t.get("side")
         price = t.get("price")
@@ -54,8 +57,8 @@ def compute_realized_pnl(symbol: str, direction: str = "long") -> float:
     return total
 
 
-def first_bot_entry_time(symbol: str, direction: str = "long") -> str | None:
-    """Return ISO timestamp of the earliest bot entry for (symbol, direction).
+def first_bot_entry_time(symbol: str, direction: str = "long", bot_id: str | None = None) -> str | None:
+    """Return ISO timestamp of the earliest bot entry for (symbol, direction, bot_id).
 
     Used so an open first position still contributes to the aligned sparkline
     window — equity snapshots are only written on exits.
@@ -72,6 +75,8 @@ def first_bot_entry_time(symbol: str, direction: str = "long") -> str | None:
             continue
         if t.get("symbol", "").upper() != symbol.upper():
             continue
+        if bot_id is not None and t.get("bot_id") != bot_id:
+            continue
         if t.get("side") not in entry_sides:
             continue
         ts = t.get("timestamp")
@@ -83,8 +88,12 @@ def first_bot_entry_time(symbol: str, direction: str = "long") -> str | None:
 def _log_trade(symbol: str, side: str, qty: float, price: float | None,
                source: str, stop_loss_price: float | None = None,
                reason: str | None = None, expected_price: float | None = None,
-               direction: str = "long"):
-    """Append a trade entry to the journal."""
+               direction: str = "long", bot_id: str | None = None):
+    """Append a trade entry to the journal.
+
+    `bot_id` is required for bot-sourced trades so that P&L can be scoped to
+    the specific bot (see `compute_realized_pnl`). Manual routes pass None.
+    """
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if JOURNAL_PATH.exists():
         journal = json.loads(JOURNAL_PATH.read_text())
@@ -102,5 +111,6 @@ def _log_trade(symbol: str, side: str, qty: float, price: float | None,
         "reason": reason,
         "expected_price": expected_price,
         "direction": direction,
+        "bot_id": bot_id,
     })
     JOURNAL_PATH.write_text(json.dumps(journal, indent=2))

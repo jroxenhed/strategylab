@@ -1,5 +1,6 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../api/client'
+import { fetchBroker, setBroker as setBrokerApi, type BrokerInfo } from '../../api/trading'
 import type { OHLCVBar, DataSource } from '../types'
 
 export function useOHLCV(ticker: string, start: string, end: string, interval: string, source: DataSource = 'yahoo') {
@@ -60,4 +61,30 @@ export function useSearch(q: string) {
     enabled: q.length > 1,
     staleTime: 60 * 1000,
   })
+}
+
+export function useBroker() {
+  const queryClient = useQueryClient()
+
+  const query = useQuery<BrokerInfo>({
+    queryKey: ['broker'],
+    queryFn: fetchBroker,
+    staleTime: 30_000,
+  })
+
+  const switchBroker = async (broker: string) => {
+    const result = await setBrokerApi(broker)
+    queryClient.setQueryData(['broker'], result)
+    queryClient.invalidateQueries({ queryKey: ['account'] })
+    queryClient.invalidateQueries({ queryKey: ['positions'] })
+    queryClient.invalidateQueries({ queryKey: ['orders'] })
+    return result
+  }
+
+  return {
+    broker: query.data?.active ?? 'alpaca',
+    available: query.data?.available ?? [],
+    isLoading: query.isLoading,
+    switchBroker,
+  }
 }

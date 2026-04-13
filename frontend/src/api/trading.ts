@@ -183,3 +183,20 @@ export async function fetchPerformance(req: PerformanceRequest): Promise<Perform
   const { data } = await api.post('/api/trading/performance', req)
   return data
 }
+
+// --- Broker ---
+
+export interface BrokerInfo {
+  active: string
+  available: string[]
+}
+
+export async function fetchBroker(): Promise<BrokerInfo> {
+  const { data } = await api.get('/api/broker')
+  return data
+}
+
+export async function setBroker(broker: string): Promise<BrokerInfo> {
+  const { data } = await api.put('/api/broker', { broker })
+  return data
+}

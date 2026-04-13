@@ -10,3 +10,4 @@ pytest==9.0.2
 alpaca-py==0.43.2
 python-dotenv==1.2.2
 scipy==1.15.3
+ib_insync==0.9.86

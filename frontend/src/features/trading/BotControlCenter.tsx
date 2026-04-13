@@ -100,6 +100,7 @@ export default function BotControlCenter() {
       const data = await listBots()
       setFund(data.fund)
       setBots(data.bots)
+      setError('')
     } catch {
       setError('Could not reach bot API')
     }

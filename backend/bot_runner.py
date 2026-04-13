@@ -16,16 +16,9 @@ if TYPE_CHECKING:
     from bot_manager import BotConfig, BotState, BotManager
 
 from signal_engine import compute_indicators, eval_rules
-from shared import _fetch, get_trading_client, is_retryable_error
+from shared import _fetch
+from broker import get_trading_provider, OrderRequest as BrokerOrderRequest, OrderResult
 from journal import _log_trade, compute_realized_pnl
-
-# Alpaca order helpers (imported lazily to avoid hard dep if Alpaca not set up)
-try:
-    from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, OrderRequest
-    from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass, OrderType
-    _ALPACA_AVAILABLE = True
-except ImportError:
-    _ALPACA_AVAILABLE = False
 
 # Poll interval per bar cadence (seconds)
 POLL_INTERVALS = {"1m": 10, "5m": 15, "15m": 20, "30m": 30, "1h": 60}
@@ -66,28 +59,17 @@ class BotRunner:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, fn, *args)
 
-    async def _run_with_retry(self, fn, *args):
-        """Run in executor, retrying once on stale connection errors."""
-        try:
-            return await self._run_in_executor(fn, *args)
-        except Exception as e:
-            if is_retryable_error(e):
-                return await self._run_in_executor(fn, *args)
-            raise
-
-    async def _get_fill_price(self, client, order_id, fallback: float) -> float:
-        """Poll Alpaca order briefly to get the actual fill price."""
-        if not order_id:
-            return fallback
+    async def _get_fill_price_provider(self, provider, order_id: str, expected: float) -> float:
+        """Poll provider for fill price, fall back to expected."""
         for _ in range(5):
             await asyncio.sleep(0.5)
             try:
-                order = await self._run_in_executor(client.get_order_by_id, str(order_id))
-                if order.filled_avg_price is not None:
-                    return float(order.filled_avg_price)
+                result = await self._run_in_executor(provider.get_order, order_id)
+                if result.filled_avg_price is not None:
+                    return result.filled_avg_price
             except Exception:
                 break
-        return fallback
+        return expected
 
     async def _tick(self):
         cfg = self.config
@@ -143,58 +125,50 @@ class BotRunner:
         price = float(df["Close"].iloc[-1])
         state.last_price = price
 
-        # 5. Check Alpaca for existing position (source of truth)
+        # 5. Check broker for existing position (source of truth)
         has_position = False
-        alpaca_qty = 0
+        broker_qty = 0
         try:
-            client = await self._run_in_executor(get_trading_client)
-            positions = await self._run_with_retry(client.get_all_positions)
+            provider = get_trading_provider(cfg.broker)
+            positions = await self._run_in_executor(provider.get_positions)
             for pos in positions:
-                if pos.symbol == cfg.symbol.upper():
-                    # Only claim positions whose side matches this bot's direction
-                    pos_side = getattr(pos.side, 'value', str(pos.side)).lower()
-                    if pos_side != cfg.direction:
+                if pos["symbol"] == cfg.symbol.upper():
+                    if pos["side"] != cfg.direction:
                         continue
                     has_position = True
-                    alpaca_qty = abs(float(pos.qty))
-                    # Resume tracking if re-started with open position
+                    broker_qty = pos["qty"]
                     if state.entry_price is None:
-                        state.entry_price = float(pos.avg_entry_price)
+                        state.entry_price = pos["avg_entry"]
                         state.trail_peak = price
                         self._log("INFO", f"Resumed tracking position: entry={state.entry_price:.2f}")
                     break
         except Exception as e:
-            self._log("WARN", f"Alpaca positions check failed: {e}")
+            self._log("WARN", f"Position check failed: {e}")
             return
 
         # ---------------------------------------------------------------
         # 6. No position → evaluate buy rules
         # ---------------------------------------------------------------
         if not has_position:
-            # Detect externally-closed position (e.g. Alpaca SL fill)
+            # Detect externally-closed position (e.g. broker SL fill)
             if state.entry_price is not None:
                 exit_price = price  # fallback to current price
                 exit_qty = 0
                 exit_reason = "external"
                 try:
-                    from alpaca.trading.requests import GetOrdersRequest
-                    from alpaca.trading.enums import QueryOrderStatus
-                    filled_orders = await self._run_with_retry(
-                        client.get_orders,
-                        GetOrdersRequest(
-                            status=QueryOrderStatus.CLOSED,
-                            symbols=[cfg.symbol.upper()],
-                            limit=5,
-                        ),
+                    provider = get_trading_provider(cfg.broker)
+                    filled_orders = await self._run_in_executor(
+                        provider.get_orders, "closed", [cfg.symbol.upper()], 5
                     )
-                    close_side = OrderSide.BUY if is_short else OrderSide.SELL
+                    close_side = "buy" if is_short else "sell"
                     for o in filled_orders:
-                        if o.side == close_side and o.filled_avg_price is not None:
-                            exit_price = float(o.filled_avg_price)
-                            exit_qty = float(o.filled_qty)
-                            if o.type in (OrderType.STOP, OrderType.STOP_LIMIT):
+                        if o["side"] == close_side and o.get("filled_avg_price"):
+                            exit_price = float(o["filled_avg_price"])
+                            exit_qty = float(o.get("qty", 0))
+                            order_type = o.get("type", "")
+                            if order_type in ("stop", "stop_limit"):
                                 exit_reason = "stop_loss"
-                            elif o.type == OrderType.TRAILING_STOP:
+                            elif order_type == "trailing_stop":
                                 exit_reason = "trailing_stop"
                             else:
                                 exit_reason = "external"
@@ -202,7 +176,7 @@ class BotRunner:
                 except Exception as e:
                     self._log("WARN", f"Failed to query filled orders: {e}")
 
-                sell_qty = exit_qty or alpaca_qty or 0
+                sell_qty = exit_qty or broker_qty or 0
                 if is_short:
                     pnl = (state.entry_price - exit_price) * sell_qty if sell_qty else 0
                 else:
@@ -218,13 +192,14 @@ class BotRunner:
 
                 try:
                     _log_trade(cfg.symbol, "cover" if is_short else "sell", sell_qty, exit_price,
-                               source="bot", reason=exit_reason, direction=cfg.direction)
+                               source="bot", reason=exit_reason, direction=cfg.direction,
+                               bot_id=cfg.bot_id)
                 except Exception:
                     pass
 
                 state.equity_snapshots.append({
                     "time": datetime.now(timezone.utc).isoformat(),
-                    "value": round(compute_realized_pnl(cfg.symbol, cfg.direction), 2),
+                    "value": round(compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id), 2),
                 })
 
                 self.manager.save()
@@ -242,23 +217,22 @@ class BotRunner:
             )
 
             if buy_signal:
-                # Safety: skip entry if opposite-direction position exists on Alpaca
+                # Safety: skip entry if opposite-direction position exists
                 # (prevents long BUY from netting against short bot's position)
                 try:
-                    _client = await self._run_in_executor(get_trading_client)
-                    _positions = await self._run_with_retry(_client.get_all_positions)
+                    provider = get_trading_provider(cfg.broker)
+                    _positions = await self._run_in_executor(provider.get_positions)
                     for _pos in _positions:
-                        if _pos.symbol == cfg.symbol.upper():
-                            _ps = getattr(_pos.side, 'value', str(_pos.side)).lower()
-                            if _ps != cfg.direction:
-                                self._log("WARN", f"Skipping entry — opposite position ({_ps}) exists")
+                        if _pos["symbol"] == cfg.symbol.upper():
+                            if _pos["side"] != cfg.direction:
+                                self._log("WARN", f"Skipping entry — opposite position ({_pos['side']}) exists")
                                 return
                             break
                 except Exception:
                     pass  # if check fails, proceed cautiously
 
                 # Compute effective position size (compounds P&L like backtest)
-                current_capital = cfg.allocated_capital + compute_realized_pnl(cfg.symbol, cfg.direction)
+                current_capital = cfg.allocated_capital + compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id)
                 effective_size = max(current_capital, 0) * cfg.position_size
                 if cfg.dynamic_sizing and cfg.dynamic_sizing.enabled:
                     if state.consec_sl_count >= cfg.dynamic_sizing.consec_sls:
@@ -271,63 +245,38 @@ class BotRunner:
                     return
 
                 try:
-                    client = await self._run_in_executor(get_trading_client)
+                    provider = get_trading_provider(cfg.broker)
 
                     if is_short:
-                        # Short: plain market sell, bot manages all stops via polling
-                        order_req = MarketOrderRequest(
+                        order_req = BrokerOrderRequest(
                             symbol=cfg.symbol.upper(),
                             qty=qty,
-                            side=OrderSide.SELL,
-                            time_in_force=TimeInForce.DAY,
+                            side="sell",
                         )
-                    elif cfg.trailing_stop and cfg.stop_loss_pct:
-                        # Both trailing stop AND fixed stop: place OTO bracket as hard floor
-                        # (server-side safety if bot dies), bot still manages trailing exit via polling
+                    elif cfg.stop_loss_pct and not cfg.trailing_stop:
+                        # OTO bracket: provider handles if supported (Alpaca), else plain market
                         stop_price = round(price * (1 - cfg.stop_loss_pct / 100), 2)
-                        order_req = MarketOrderRequest(
+                        order_req = BrokerOrderRequest(
                             symbol=cfg.symbol.upper(),
                             qty=qty,
-                            side=OrderSide.BUY,
-                            time_in_force=TimeInForce.DAY,
-                            order_class=OrderClass.OTO,
-                            stop_loss=StopLossRequest(stop_price=stop_price),
-                        )
-                    elif cfg.trailing_stop:
-                        # Trailing stop only — plain market order, bot manages exit via polling
-                        order_req = MarketOrderRequest(
-                            symbol=cfg.symbol.upper(),
-                            qty=qty,
-                            side=OrderSide.BUY,
-                            time_in_force=TimeInForce.DAY,
-                        )
-                    elif cfg.stop_loss_pct:
-                        # OTO bracket: Alpaca watches the stop server-side
-                        stop_price = round(price * (1 - cfg.stop_loss_pct / 100), 2)
-                        order_req = MarketOrderRequest(
-                            symbol=cfg.symbol.upper(),
-                            qty=qty,
-                            side=OrderSide.BUY,
-                            time_in_force=TimeInForce.DAY,
-                            order_class=OrderClass.OTO,
-                            stop_loss=StopLossRequest(stop_price=stop_price),
+                            side="buy",
+                            order_type="stop",
+                            stop_price=stop_price,
                         )
                     else:
-                        order_req = MarketOrderRequest(
+                        order_req = BrokerOrderRequest(
                             symbol=cfg.symbol.upper(),
                             qty=qty,
-                            side=OrderSide.BUY,
-                            time_in_force=TimeInForce.DAY,
+                            side="buy",
                         )
 
-                    order = await self._run_in_executor(client.submit_order, order_req)
-
+                    result = await self._run_in_executor(provider.submit_order, order_req)
                 except Exception as e:
                     self._log("ERROR", f"Buy order failed: {e}")
                     return
 
-                # Get actual fill price from Alpaca
-                fill_price = await self._get_fill_price(client, order.id, price)
+                # Get actual fill price
+                fill_price = await self._get_fill_price_provider(provider, result.order_id, price)
 
                 state.entry_price = fill_price
                 state.trail_peak = fill_price
@@ -346,7 +295,7 @@ class BotRunner:
                 try:
                     _log_trade(cfg.symbol, "short" if is_short else "buy", qty, fill_price,
                                source="bot", reason="entry", expected_price=price,
-                               direction=cfg.direction)
+                               direction=cfg.direction, bot_id=cfg.bot_id)
                 except Exception:
                     pass
 
@@ -419,16 +368,14 @@ class BotRunner:
 
             if exit_reason:
                 try:
-                    client = await self._run_in_executor(get_trading_client)
-                    # Safety: verify Alpaca position side matches bot direction
-                    # (prevents long bot from closing short bot's position)
+                    provider = get_trading_provider(cfg.broker)
+                    # Safety: verify position side matches bot direction
                     try:
-                        positions = await self._run_with_retry(client.get_all_positions)
+                        positions = await self._run_in_executor(provider.get_positions)
                         pos_match = False
                         for pos in positions:
-                            if pos.symbol == cfg.symbol.upper():
-                                pos_side = getattr(pos.side, 'value', str(pos.side)).lower()
-                                if pos_side == cfg.direction:
+                            if pos["symbol"] == cfg.symbol.upper():
+                                if pos["side"] == cfg.direction:
                                     pos_match = True
                                 break
                         if not pos_match:
@@ -441,35 +388,33 @@ class BotRunner:
                     except Exception as e:
                         self._log("WARN", f"Position verify failed: {e}")
                         return
+
                     # Cancel pending stop-loss orders for this symbol first
-                    # (OTO bracket legs hold shares, blocking close_position)
                     try:
-                        from alpaca.trading.requests import GetOrdersRequest
-                        from alpaca.trading.enums import QueryOrderStatus
-                        orders = await self._run_with_retry(
-                            client.get_orders,
-                            GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[cfg.symbol.upper()]),
+                        orders = await self._run_in_executor(
+                            provider.get_orders, "open", [cfg.symbol.upper()], 50
                         )
-                        cancel_side = OrderSide.BUY if is_short else OrderSide.SELL
+                        cancel_side = "buy" if is_short else "sell"
                         for o in orders:
-                            if o.side == cancel_side:
-                                await self._run_with_retry(client.cancel_order_by_id, o.id)
-                                self._log("INFO", f"Cancelled pending {o.type.value} order {o.id}")
+                            if o["side"] == cancel_side:
+                                await self._run_in_executor(provider.cancel_order, o["id"])
+                                self._log("INFO", f"Cancelled pending {o['type']} order {o['id']}")
                     except Exception as e:
                         self._log("WARN", f"Cancel orders failed: {e}")
-                    close_resp = await self._run_with_retry(client.close_position, cfg.symbol.upper())
+
+                    close_result = await self._run_in_executor(provider.close_position, cfg.symbol.upper())
                 except Exception as e:
                     self._log("ERROR", f"Close position failed: {e}")
                     return
 
                 # Get actual fill price
-                order_id = getattr(close_resp, 'id', None) or (close_resp.get('id') if isinstance(close_resp, dict) else None)
-                sell_fill = await self._get_fill_price(client, order_id, price) if order_id else price
+                order_id = close_result.order_id
+                sell_fill = await self._get_fill_price_provider(provider, order_id, price) if order_id else price
 
                 if is_short:
-                    pnl = (state.entry_price - sell_fill) * alpaca_qty if state.entry_price else 0
+                    pnl = (state.entry_price - sell_fill) * broker_qty if state.entry_price else 0
                 else:
-                    pnl = (sell_fill - state.entry_price) * alpaca_qty if state.entry_price else 0
+                    pnl = (sell_fill - state.entry_price) * broker_qty if state.entry_price else 0
                 exit_label = "COVER" if is_short else "SELL"
                 state.last_signal = f"{exit_label} ({exit_reason})"
 
@@ -488,15 +433,15 @@ class BotRunner:
                 self._log("TRADE", f"{exit_label} {cfg.symbol} @ {sell_fill:.2f} | PnL={pnl:+.2f} | reason={exit_reason} (expected={price:.2f}, slippage={slippage_pct:+.4f}%)")
 
                 try:
-                    _log_trade(cfg.symbol, "cover" if is_short else "sell", alpaca_qty, sell_fill,
+                    _log_trade(cfg.symbol, "cover" if is_short else "sell", broker_qty, sell_fill,
                                source="bot", reason=exit_reason, expected_price=price,
-                               direction=cfg.direction)
+                               direction=cfg.direction, bot_id=cfg.bot_id)
                 except Exception:
                     pass
 
                 state.equity_snapshots.append({
                     "time": datetime.now(timezone.utc).isoformat(),
-                    "value": round(compute_realized_pnl(cfg.symbol, cfg.direction), 2),
+                    "value": round(compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id), 2),
                 })
 
                 state.entry_price = None
