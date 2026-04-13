@@ -120,7 +120,7 @@ export default function TradeJournal() {
               <span style={{ ...styles.cell, color: t.source === 'auto' ? '#e5c07b' : '#8b949e' }}>
                 {t.source}
               </span>
-              <span style={{ ...styles.cell, color: reasonColor(t.reason) }}>
+              <span style={{ ...styles.cell, color: reasonColor(t.reason, exitPnl.get(t.id)) }}>
                 {t.reason || '—'}
               </span>
             </div>
@@ -166,12 +166,15 @@ const slippageColor = (t: JournalTrade) => {
   return isBad ? '#f85149' : '#26a641'
 }
 
-const reasonColor = (r: string | null) => {
+const reasonColor = (r: string | null, pnl?: number | null) => {
   if (!r) return '#8b949e'
-  if (r === 'stop_loss') return '#f85149'
-  if (r === 'trailing_stop') return '#d29922'
-  if (r === 'signal') return '#58a6ff'
-  if (r === 'entry') return '#26a641'
+  if (r === 'entry') return '#e5c07b'             // orange — matches Side column
+  if (r === 'stop_loss') return '#f85149'          // red
+  if (r === 'trailing_stop') return '#d29922'      // amber
+  if (r === 'signal') {
+    if (pnl != null) return pnl >= 0 ? '#26a641' : '#f85149'  // green win, red loss
+    return '#8b949e'  // no P&L context
+  }
   if (r === 'manual') return '#8b949e'
   return '#8b949e'
 }
