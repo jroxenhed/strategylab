@@ -9,6 +9,26 @@ import MacroEquityChart from './MacroEquityChart'
 
 export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace'
 
+function normaliseToPercent(data: { time: any; value: number }[]): { time: any; value: number; dollar: number }[] {
+  if (data.length === 0) return []
+  const first = data[0].value
+  if (first === 0) return data.map(d => ({ time: d.time, value: 0, dollar: d.value }))
+  return data.map(d => ({
+    time: d.time,
+    value: ((d.value - first) / first) * 100,
+    dollar: d.value,
+  }))
+}
+
+function applyLog(data: { time: any; value: number; dollar?: number }[], isNormalised: boolean): { time: any; value: number; dollar?: number }[] {
+  return data.map(d => ({
+    ...d,
+    value: isNormalised
+      ? Math.log10(Math.max(100 + d.value, 0.01))  // offset pct by 100 to avoid log(negative)
+      : Math.log10(Math.max(d.value, 0.01)),
+  }))
+}
+
 function fmtDate(d: string | number | undefined): string {
   if (typeof d === 'number') return fmtDateTimeET(d)
   return d ?? '—'
@@ -48,9 +68,58 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       timeScale: { borderColor: '#30363d' },
       rightPriceScale: { borderColor: '#30363d' },
     })
-    const initialCapital = equity_curve.length > 0 && equity_curve[0].value !== null ? equity_curve[0].value : 10000
+
+    // Prepare equity data
+    const rawEquity = equity_curve
+      .filter(d => d.value !== null)
+      .map(d => ({ time: d.time as any, value: d.value as number }))
+
+    let equityData: { time: any; value: number; dollar?: number }[]
+    let baselineData: { time: any; value: number; dollar?: number }[] | null = null
+    let baseValue: number
+
+    if (showBaseline) {
+      // Normalise to percentage
+      equityData = normaliseToPercent(rawEquity)
+      baseValue = 0
+
+      if (result.baseline_curve && result.baseline_curve.length > 0) {
+        const rawBaseline = result.baseline_curve
+          .filter(d => d.value !== null)
+          .map(d => ({ time: d.time as any, value: d.value as number }))
+        baselineData = normaliseToPercent(rawBaseline)
+      }
+    } else {
+      equityData = rawEquity
+      baseValue = equity_curve.length > 0 && equity_curve[0].value !== null ? equity_curve[0].value : 10000
+    }
+
+    if (logScale) {
+      equityData = applyLog(equityData, showBaseline)
+      if (baselineData) baselineData = applyLog(baselineData, showBaseline)
+      baseValue = showBaseline ? Math.log10(100) : Math.log10(Math.max(baseValue, 0.01))
+    }
+
+    const priceFormat = logScale
+      ? {
+          type: 'custom' as const,
+          formatter: (price: number) => {
+            if (showBaseline) {
+              const pct = Math.pow(10, price) - 100
+              return `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`
+            }
+            return `$${Math.pow(10, price).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+          },
+        }
+      : showBaseline
+        ? {
+            type: 'custom' as const,
+            formatter: (price: number) => `${price >= 0 ? '+' : ''}${price.toFixed(1)}%`,
+          }
+        : undefined
+
     const series = chart.addSeries(BaselineSeries, {
-      baseValue: { type: 'price', price: initialCapital as number },
+      baseValue: { type: 'price', price: baseValue },
       topLineColor: '#26a641',
       bottomLineColor: '#f85149',
       topFillColor1: 'rgba(38, 166, 65, 0.1)',
@@ -58,26 +127,20 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       bottomFillColor1: 'rgba(248, 81, 73, 0)',
       bottomFillColor2: 'rgba(248, 81, 73, 0.1)',
       lineWidth: 2,
+      ...(priceFormat ? { priceFormat } : {}),
     })
-    series.setData(
-      equity_curve
-        .filter(d => d.value !== null)
-        .map(d => ({ time: d.time as any, value: d.value as number }))
-    )
+    series.setData(equityData.map(d => ({ time: d.time, value: d.value })))
 
-    if (showBaseline && result.baseline_curve && result.baseline_curve.length > 0) {
+    if (showBaseline && baselineData) {
       const baselineSeries = chart.addSeries(LineSeries, {
         color: '#8b949e',
         lineWidth: 1,
         lineStyle: 2,
         priceLineVisible: false,
         lastValueVisible: false,
+        ...(priceFormat ? { priceFormat } : {}),
       })
-      baselineSeries.setData(
-        result.baseline_curve
-          .filter(d => d.value !== null)
-          .map(d => ({ time: d.time as any, value: d.value as number }))
-      )
+      baselineSeries.setData(baselineData.map(d => ({ time: d.time, value: d.value })))
     }
 
     // Trade density ticks at exact bar positions
@@ -161,7 +224,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       chart.remove()
       ro.disconnect()
     }
-  }, [activeTab, bucket, equity_curve, summary.total_return_pct, mainChart, showBaseline, result.baseline_curve])
+  }, [activeTab, bucket, equity_curve, summary.total_return_pct, mainChart, showBaseline, result.baseline_curve, logScale])
 
   return (
     <div style={styles.container}>
@@ -306,11 +369,12 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
           <MacroEquityChart
             macroCurve={macroData.macro_curve}
             initialCapital={summary.initial_capital}
+            showBaseline={showBaseline}
+            logScale={logScale}
+            baselineCurve={result.baseline_curve}
           />
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <div ref={chartRef} style={{ width: '100%', height: 250, minHeight: 100, maxHeight: 600, resize: 'vertical', overflow: 'hidden' }} />
-          </div>
+          <div ref={chartRef} style={{ width: '100%', height: 250, minHeight: 100, maxHeight: 600, resize: 'vertical', overflow: 'hidden' }} />
         )
       )}
 
