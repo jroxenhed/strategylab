@@ -8,6 +8,8 @@ import MiniSparkline from './MiniSparkline'
 
 const SAVED_KEY = 'strategylab-saved-strategies'
 
+const POLL_SECONDS: Record<string, number> = { '1m': 10, '5m': 15, '15m': 20, '30m': 30, '1h': 60 }
+
 // ---------------------------------------------------------------------------
 // Shared button style
 // ---------------------------------------------------------------------------
@@ -47,6 +49,14 @@ function ActivityLog({ entries }: { entries: BotActivityEntry[] }) {
       ))}
     </div>
   )
+}
+
+function heartbeatColor(summary: BotSummary, detail: BotDetail | null): string {
+  if (summary.status === 'stopped') return '#484f58'  // grey
+  if (!detail?.state.last_tick) return '#484f58'
+  const elapsed = (Date.now() - new Date(detail.state.last_tick).getTime()) / 1000
+  const interval = POLL_SECONDS[summary.interval] ?? 60
+  return elapsed <= interval * 2 ? '#26a641' : '#f85149'  // green or red
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +123,15 @@ export default function BotCard({
               background: statusColor(summary.status),
               boxShadow: running ? `0 0 6px ${statusColor(summary.status)}` : 'none',
             }} />
+            {/* Heartbeat dot */}
+            <div
+              title={detail?.state.last_tick ? `Last tick: ${fmtTimeET(detail.state.last_tick)}` : 'No tick yet'}
+              style={{
+                width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                background: heartbeatColor(summary, detail),
+                marginLeft: -4,
+              }}
+            />
             <span style={{ color: '#e6edf3', fontWeight: 600, flex: 1 }}>
               {editingStrategy ? (
                 <select

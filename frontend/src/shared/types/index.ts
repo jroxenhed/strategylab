@@ -286,6 +286,7 @@ export interface BotState {
   status: 'stopped' | 'backtesting' | 'running' | 'error'
   started_at?: string
   last_scan_at?: string
+  last_tick?: string
   last_signal?: string
   last_price?: number
   trades_count: number
