@@ -117,19 +117,13 @@ export default function BotCard({
         <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
           {/* Header row */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {/* Status dot */}
-            <div style={{
-              width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-              background: statusColor(summary.status),
-              boxShadow: running ? `0 0 6px ${statusColor(summary.status)}` : 'none',
-            }} />
             {/* Heartbeat dot */}
             <div
               title={detail?.state.last_tick ? `Last tick: ${fmtTimeET(detail.state.last_tick)}` : 'No tick yet'}
               style={{
-                width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
                 background: heartbeatColor(summary, detail),
-                marginLeft: -4,
+                boxShadow: running ? `0 0 6px ${heartbeatColor(summary, detail)}` : 'none',
               }}
             />
             <span style={{ color: '#e6edf3', fontWeight: 600, flex: 1 }}>

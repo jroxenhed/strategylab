@@ -45,7 +45,7 @@ export default function PositionsTable() {
       ) : (
         <div style={styles.table}>
           <div style={styles.headRow}>
-            {['Opened', 'Symbol', 'Qty', 'Avg Entry', 'Current', 'Mkt Value', 'P&L', 'P&L %', ''].map(h => (
+            {['Opened', 'Symbol', 'Side', 'Qty', 'Avg Entry', 'Current', 'Mkt Value', 'P&L', 'P&L %', ''].map(h => (
               <span key={h} style={styles.headCell}>{h}</span>
             ))}
           </div>
@@ -57,6 +57,7 @@ export default function PositionsTable() {
                   {entryTimeMap.get(p.symbol) ? fmtShortET(entryTimeMap.get(p.symbol)!) : '—'}
                 </span>
                 <span style={{ ...styles.cell, color: '#58a6ff', fontWeight: 600 }}>{p.symbol}</span>
+                <span style={{ ...styles.cell, color: p.side === 'short' ? '#ef5350' : '#26a69a', textTransform: 'uppercase' as const, fontSize: 10, fontWeight: 700 }}>{p.side}</span>
                 <span style={styles.cell}>{p.qty}</span>
                 <span style={styles.cell}>${p.avg_entry.toFixed(2)}</span>
                 <span style={styles.cell}>${p.current_price.toFixed(2)}</span>
