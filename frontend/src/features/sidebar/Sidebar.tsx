@@ -50,76 +50,77 @@ const INTERVAL_LIMITS: Record<string, number> = {
   '1h': 730,
 }
 
-function computePresetStart(end: string, preset: DatePreset): string {
-  const endDate = new Date(end + 'T00:00:00')
-  let startDate: Date
+/** Return the calendar-aligned period start containing `date` for a given preset.
+ *  D = same day, W = Monday of that week, M = 1st of month, Q = quarter start, Y = Jan 1 */
+function periodStart(date: Date, preset: DatePreset): Date {
+  const y = date.getFullYear(), m = date.getMonth(), d = date.getDate()
   switch (preset) {
-    case 'D':
-      startDate = new Date(endDate)
-      startDate.setDate(startDate.getDate() - 1)
-      break
-    case 'W':
-      startDate = new Date(endDate)
-      startDate.setDate(startDate.getDate() - 7)
-      break
-    case 'M':
-      startDate = new Date(endDate)
-      startDate.setMonth(startDate.getMonth() - 1)
-      break
-    case 'Q':
-      startDate = new Date(endDate)
-      startDate.setMonth(startDate.getMonth() - 3)
-      break
-    case 'Y':
-      startDate = new Date(endDate)
-      startDate.setFullYear(startDate.getFullYear() - 1)
-      break
-    default:
-      return end // custom — no computation
+    case 'D': return new Date(y, m, d)
+    case 'W': {
+      const dow = date.getDay() // 0=Sun
+      const mon = d - ((dow + 6) % 7) // shift so Mon=0
+      return new Date(y, m, mon)
+    }
+    case 'M': return new Date(y, m, 1)
+    case 'Q': return new Date(y, m - (m % 3), 1)
+    case 'Y': return new Date(y, 0, 1)
+    default: return new Date(y, m, d)
   }
-  return startDate.toISOString().slice(0, 10)
 }
 
-function clampToLastDay(d: Date): void {
-  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
-  if (d.getDate() > lastDay) d.setDate(lastDay)
+/** Return the calendar-aligned period end (exclusive → last day of period) for a given preset. */
+function periodEnd(startDate: Date, preset: DatePreset): Date {
+  const y = startDate.getFullYear(), m = startDate.getMonth(), d = startDate.getDate()
+  switch (preset) {
+    case 'D': return new Date(y, m, d) // same day
+    case 'W': return new Date(y, m, d + 6) // Mon–Sun
+    case 'M': return new Date(y, m + 1, 0) // last day of month
+    case 'Q': return new Date(y, m + 3, 0) // last day of quarter
+    case 'Y': return new Date(y, 11, 31)
+    default: return new Date(y, m, d)
+  }
+}
+
+function fmt(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+function computePresetRange(end: string, preset: DatePreset): { start: string; end: string } {
+  if (preset === 'custom') return { start: end, end }
+  const endDate = new Date(end + 'T00:00:00')
+  const ps = periodStart(endDate, preset)
+  const pe = periodEnd(ps, preset)
+  return { start: fmt(ps), end: fmt(pe) }
 }
 
 function stepRange(
-  start: string, end: string, preset: DatePreset, direction: 1 | -1
+  start: string, _end: string, preset: DatePreset, direction: 1 | -1
 ): { start: string; end: string } {
   const s = new Date(start + 'T00:00:00')
-  const e = new Date(end + 'T00:00:00')
 
-  if (preset === 'custom' || preset === 'D') {
-    // For custom, shift by the range's duration in days; for D, shift by 1 day
-    const days = preset === 'D' ? 1 : Math.round((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24))
+  if (preset === 'custom') {
+    const e = new Date(_end + 'T00:00:00')
+    const days = Math.round((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24))
     s.setDate(s.getDate() + days * direction)
     e.setDate(e.getDate() + days * direction)
-  } else if (preset === 'W') {
-    s.setDate(s.getDate() + 7 * direction)
-    e.setDate(e.getDate() + 7 * direction)
-  } else if (preset === 'M') {
-    s.setMonth(s.getMonth() + direction)
-    clampToLastDay(s)
-    e.setMonth(e.getMonth() + direction)
-    clampToLastDay(e)
-  } else if (preset === 'Q') {
-    s.setMonth(s.getMonth() + 3 * direction)
-    clampToLastDay(s)
-    e.setMonth(e.getMonth() + 3 * direction)
-    clampToLastDay(e)
-  } else if (preset === 'Y') {
-    s.setFullYear(s.getFullYear() + direction)
-    clampToLastDay(s)
-    e.setFullYear(e.getFullYear() + direction)
-    clampToLastDay(e)
+    return { start: fmt(s), end: fmt(e) }
   }
 
-  return {
-    start: s.toISOString().slice(0, 10),
-    end: e.toISOString().slice(0, 10),
+  // Step to the next/prev aligned period from the current period start
+  let newStart: Date
+  switch (preset) {
+    case 'D': newStart = new Date(s.getFullYear(), s.getMonth(), s.getDate() + direction); break
+    case 'W': newStart = new Date(s.getFullYear(), s.getMonth(), s.getDate() + 7 * direction); break
+    case 'M': newStart = new Date(s.getFullYear(), s.getMonth() + direction, 1); break
+    case 'Q': newStart = new Date(s.getFullYear(), s.getMonth() + 3 * direction, 1); break
+    case 'Y': newStart = new Date(s.getFullYear() + direction, 0, 1); break
+    default: newStart = s
   }
+
+  return { start: fmt(newStart), end: fmt(periodEnd(newStart, preset)) }
 }
 
 export default function Sidebar({
@@ -146,8 +147,9 @@ export default function Sidebar({
   const handlePresetChange = (preset: DatePreset) => {
     onDatePresetChange(preset)
     if (preset !== 'custom') {
-      const newStart = computePresetStart(end, preset)
-      onStartChange(newStart)
+      const range = computePresetRange(end, preset)
+      onStartChange(range.start)
+      onEndChange(range.end)
     }
   }
 

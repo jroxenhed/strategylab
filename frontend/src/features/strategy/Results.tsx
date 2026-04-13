@@ -129,6 +129,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       bottomFillColor1: 'rgba(248, 81, 73, 0)',
       bottomFillColor2: 'rgba(248, 81, 73, 0.1)',
       lineWidth: 2,
+      priceScaleId: 'right',
       ...(priceFormat ? { priceFormat } : {}),
     })
     series.setData(equityData.map(d => ({ time: d.time, value: d.value })))
@@ -140,6 +141,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
         lineStyle: 2,
         priceLineVisible: false,
         lastValueVisible: false,
+        priceScaleId: 'right',
         ...(priceFormat ? { priceFormat } : {}),
       })
       baselineSeries.setData(baselineData.map(d => ({ time: d.time, value: d.value })))

@@ -22,6 +22,7 @@ class OrderRequest:
     time_in_force: str     # "day" | "gtc"
     order_type: str        # "market" | "stop"
     stop_price: float | None = None
+    account_id: str | None = None  # None = use default account
 
 @dataclass
 class OrderResult:
@@ -120,6 +121,19 @@ IBKR doesn't have Alpaca's OTO bracket class. Stop-losses are placed as separate
 - **Chart page sidebar** — add IBKR to existing "Data Source" toggle (Yahoo / Alpaca / IBKR). Controls chart and backtest data source. Already exists, just extend.
 - **Bot page AccountBar** — add "Broker" selector (Alpaca / IBKR). Controls where orders are placed. Calls `PUT /api/broker`. Account metrics (Equity, Cash, etc.) re-fetch from the newly selected broker on change.
 
+## Account ID Routing (ISK vs Margin)
+
+IBKR supports multiple sub-accounts. `OrderRequest.account_id` allows routing orders to specific accounts (e.g. long bots → ISK, short bots → margin account). When `None`, uses the default/primary account.
+
+Configuration via env vars:
+- `IBKR_DEFAULT_ACCOUNT` — fallback account ID (optional, uses Gateway's default if unset)
+- `IBKR_ISK_ACCOUNT` — ISK account ID (optional, for future auto-routing)
+- `IBKR_MARGIN_ACCOUNT` — margin account ID (optional, for future auto-routing)
+
+For now, the bot runner passes `account_id=None` (default account). The field is wired through the abstraction so that per-direction routing can be added later without changing the protocol.
+
+The `IBKRTradingProvider` passes `account_id` to `ib.placeOrder()` when set. `get_positions()` and `get_account()` also accept an optional `account_id` parameter for filtering.
+
 ## IBKR-Specific Notes
 
 - **Position side:** positive qty = long, negative qty = short. Provider normalizes.
@@ -135,6 +149,9 @@ All via `backend/.env`:
 IBKR_HOST=127.0.0.1
 IBKR_PORT=4002
 IBKR_CLIENT_ID=1
+IBKR_DEFAULT_ACCOUNT=
+IBKR_ISK_ACCOUNT=
+IBKR_MARGIN_ACCOUNT=
 ACTIVE_BROKER=alpaca
 ```
 
