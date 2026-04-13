@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Search, X } from 'lucide-react'
 import { useSearch, useProviders } from '../../shared/hooks/useOHLCV'
-import type { IndicatorKey, DataSource, MAType } from '../../shared/types'
+import type { IndicatorKey, DataSource, MAType, DatePreset } from '../../shared/types'
 import type { MASettings } from '../../App'
 
 interface SidebarProps {
@@ -23,6 +23,8 @@ interface SidebarProps {
   onDataSourceChange: (s: DataSource) => void
   maSettings: MASettings
   onMaSettingsChange: (s: MASettings) => void
+  datePreset: DatePreset
+  onDatePresetChange: (preset: DatePreset) => void
 }
 
 const sgInputStyle: React.CSSProperties = {
@@ -48,12 +50,74 @@ const INTERVAL_LIMITS: Record<string, number> = {
   '1h': 730,
 }
 
+function computePresetStart(end: string, preset: DatePreset): string {
+  const endDate = new Date(end + 'T00:00:00')
+  let startDate: Date
+  switch (preset) {
+    case 'D':
+      startDate = new Date(endDate)
+      startDate.setDate(startDate.getDate() - 1)
+      break
+    case 'W':
+      startDate = new Date(endDate)
+      startDate.setDate(startDate.getDate() - 7)
+      break
+    case 'M':
+      startDate = new Date(endDate)
+      startDate.setMonth(startDate.getMonth() - 1)
+      break
+    case 'Q':
+      startDate = new Date(endDate)
+      startDate.setMonth(startDate.getMonth() - 3)
+      break
+    case 'Y':
+      startDate = new Date(endDate)
+      startDate.setFullYear(startDate.getFullYear() - 1)
+      break
+    default:
+      return end // custom — no computation
+  }
+  return startDate.toISOString().slice(0, 10)
+}
+
+function stepRange(
+  start: string, end: string, preset: DatePreset, direction: 1 | -1
+): { start: string; end: string } {
+  const s = new Date(start + 'T00:00:00')
+  const e = new Date(end + 'T00:00:00')
+
+  if (preset === 'custom' || preset === 'D') {
+    // For custom, shift by the range's duration in days; for D, shift by 1 day
+    const days = preset === 'D' ? 1 : Math.round((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24))
+    s.setDate(s.getDate() + days * direction)
+    e.setDate(e.getDate() + days * direction)
+  } else if (preset === 'W') {
+    s.setDate(s.getDate() + 7 * direction)
+    e.setDate(e.getDate() + 7 * direction)
+  } else if (preset === 'M') {
+    s.setMonth(s.getMonth() + 1 * direction)
+    e.setMonth(e.getMonth() + 1 * direction)
+  } else if (preset === 'Q') {
+    s.setMonth(s.getMonth() + 3 * direction)
+    e.setMonth(e.getMonth() + 3 * direction)
+  } else if (preset === 'Y') {
+    s.setFullYear(s.getFullYear() + 1 * direction)
+    e.setFullYear(e.getFullYear() + 1 * direction)
+  }
+
+  return {
+    start: s.toISOString().slice(0, 10),
+    end: e.toISOString().slice(0, 10),
+  }
+}
+
 export default function Sidebar({
   ticker, start, end, interval, activeIndicators, showSpy, showQqq,
   onTickerChange, onStartChange, onEndChange, onIntervalChange,
   onToggleIndicator, onToggleSpy, onToggleQqq,
   dataSource, onDataSourceChange,
   maSettings, onMaSettingsChange,
+  datePreset, onDatePresetChange,
 }: SidebarProps) {
   const daysDiff = Math.round(
     (new Date(end).getTime() - new Date(start).getTime()) / (1000 * 60 * 60 * 24)
@@ -67,6 +131,29 @@ export default function Sidebar({
   const [localEnd, setLocalEnd] = useState(end)
   useEffect(() => setLocalStart(start), [start])
   useEffect(() => setLocalEnd(end), [end])
+
+  const handlePresetChange = (preset: DatePreset) => {
+    onDatePresetChange(preset)
+    if (preset !== 'custom') {
+      const newStart = computePresetStart(end, preset)
+      onStartChange(newStart)
+    }
+  }
+
+  const handleStep = (direction: 1 | -1, multiplier: number = 1) => {
+    let newStart = start
+    let newEnd = end
+    for (let i = 0; i < multiplier; i++) {
+      const stepped = stepRange(newStart, newEnd, datePreset, direction)
+      newStart = stepped.start
+      newEnd = stepped.end
+    }
+    onStartChange(newStart)
+    onEndChange(newEnd)
+  }
+
+  const today = new Date().toISOString().slice(0, 10)
+  const forwardDisabled = end >= today
 
   const [query, setQuery] = useState('')
   const [showDropdown, setShowDropdown] = useState(false)
@@ -177,24 +264,88 @@ export default function Sidebar({
 
       <div style={styles.section}>
         <div style={styles.sectionTitle}>Date Range</div>
-        <div style={styles.field}>
-          <label style={styles.label}>From</label>
-          <input
-            type="date" value={localStart} style={styles.dateInput}
-            onChange={e => setLocalStart(e.target.value)}
-            onBlur={e => onStartChange(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && onStartChange((e.target as HTMLInputElement).value)}
-          />
+
+        {/* Preset row with arrows */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginBottom: 12 }}>
+          <button
+            onClick={() => handleStep(-1, 5)}
+            style={styles.arrowBtn}
+            title="Back 5 periods"
+          >
+            «
+          </button>
+          <button
+            onClick={() => handleStep(-1)}
+            style={styles.arrowBtn}
+            title="Previous period"
+          >
+            ‹
+          </button>
+          <div style={{ display: 'flex', flex: 1, gap: 2, background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', padding: 2 }}>
+            {(['D', 'W', 'M', 'Q', 'Y', 'custom'] as DatePreset[]).map(p => (
+              <button
+                key={p}
+                onClick={() => handlePresetChange(p)}
+                style={{
+                  flex: 1,
+                  padding: '5px 0',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  border: 'none',
+                  borderRadius: 3,
+                  cursor: 'pointer',
+                  background: datePreset === p ? 'var(--bg-panel-hover)' : 'transparent',
+                  color: datePreset === p ? 'var(--text-primary)' : 'var(--text-muted)',
+                  transition: 'all 0.15s',
+                }}
+              >
+                {p === 'custom' ? '⚙' : p}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => handleStep(1)}
+            disabled={forwardDisabled}
+            style={{ ...styles.arrowBtn, opacity: forwardDisabled ? 0.3 : 1, cursor: forwardDisabled ? 'not-allowed' : 'pointer' }}
+            title="Next period"
+          >
+            ›
+          </button>
+          <button
+            onClick={() => handleStep(1, 5)}
+            disabled={forwardDisabled}
+            style={{ ...styles.arrowBtn, opacity: forwardDisabled ? 0.3 : 1, cursor: forwardDisabled ? 'not-allowed' : 'pointer' }}
+            title="Forward 5 periods"
+          >
+            »
+          </button>
         </div>
-        <div style={styles.field}>
-          <label style={styles.label}>To</label>
-          <input
-            type="date" value={localEnd} style={styles.dateInput}
-            onChange={e => setLocalEnd(e.target.value)}
-            onBlur={e => onEndChange(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && onEndChange((e.target as HTMLInputElement).value)}
-          />
-        </div>
+
+        {/* Custom From/To — only visible when custom preset */}
+        {datePreset === 'custom' && (
+          <>
+            <div style={styles.field}>
+              <label style={styles.label}>From</label>
+              <input
+                type="date" value={localStart} style={styles.dateInput}
+                onChange={e => setLocalStart(e.target.value)}
+                onBlur={e => onStartChange(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && onStartChange((e.target as HTMLInputElement).value)}
+              />
+            </div>
+            <div style={styles.field}>
+              <label style={styles.label}>To</label>
+              <input
+                type="date" value={localEnd} style={styles.dateInput}
+                onChange={e => setLocalEnd(e.target.value)}
+                onBlur={e => onEndChange(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && onEndChange((e.target as HTMLInputElement).value)}
+              />
+            </div>
+          </>
+        )}
+
+        {/* Interval — always visible */}
         <div style={styles.field}>
           <label style={styles.label}>Interval</label>
           <select value={interval} onChange={e => onIntervalChange(e.target.value)} style={styles.dateInput}>
@@ -347,4 +498,12 @@ const styles: Record<string, React.CSSProperties> = {
   label: { display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6, fontWeight: 500 },
   dateInput: { width: '100%', fontSize: 13, padding: '8px 12px' },
   checkRow: { display: 'flex', alignItems: 'center', marginBottom: 10, cursor: 'pointer', fontSize: 13, color: 'var(--text-primary)' },
+  arrowBtn: {
+    width: 28, height: 28,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: 14, fontWeight: 700,
+    background: 'var(--bg-input)', border: '1px solid var(--border-light)',
+    borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)',
+    cursor: 'pointer', flexShrink: 0,
+  },
 }
