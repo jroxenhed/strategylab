@@ -58,7 +58,7 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 - [ ] **D4** Clean up dead `BotState.total_pnl` field once migration is safe (currently kept for legacy `bots.json` deserialization)
 - [ ] **D5** Journal helper call frequency — runs on bot tick (for sizing) and on summary fetch. Journal is JSON-parsed each time. Fine for now, but if it gets slow (thousands of entries) add an mtime-based cache.
 
-- [ ] **D7** IBKR broker support — enables simultaneous long+short positions on same symbol (Alpaca nets positions, IBKR supports hedge/reverse). Bot architecture already assumes independent long+short bots per symbol.
+- [ ] **D7** IBKR broker integration — full data + trading provider via `ib_insync`. TradingProvider protocol abstracts Alpaca/IBKR behind unified interface. Global broker selector (data source stays per-request). Enables simultaneous long+short on same symbol. [spec](docs/superpowers/specs/2026-04-13-ibkr-broker-integration-design.md)
 
 - [ ] **D6** Paper trading polish — **implemented** on `feat/a2-equity-curve-macro-mode`, not yet merged. Journal: reason colors fixed, Expected/Gain% columns, summary row, filter relocated, auto-refresh 5s, CSV export. Bot cards: heartbeat dot. Positions: 5s poll, Opened/Side columns.
 
