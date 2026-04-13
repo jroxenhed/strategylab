@@ -1,17 +1,29 @@
 import { useEffect, useState } from 'react'
-import { fetchPositions, placeSell, type Position } from '../../api/trading'
+import { fetchPositions, placeSell, fetchJournal, type Position, type JournalTrade } from '../../api/trading'
+import { fmtShortET } from '../../shared/utils/time'
 
 export default function PositionsTable() {
   const [positions, setPositions] = useState<Position[]>([])
+  const [journal, setJournal] = useState<JournalTrade[]>([])
   const [closing, setClosing] = useState<string | null>(null)
 
-  const load = () => { fetchPositions().then(setPositions).catch(() => {}) }
+  const load = () => {
+    fetchPositions().then(setPositions).catch(() => {})
+    fetchJournal().then(setJournal).catch(() => {})
+  }
 
   useEffect(() => {
     load()
-    const id = window.setInterval(load, 30_000)
+    const id = window.setInterval(load, 5_000)
     return () => clearInterval(id)
   }, [])
+
+  const entryTimeMap = new Map<string, string>()
+  for (const t of journal) {
+    if (t.source !== 'bot') continue
+    const isEntry = t.side === 'buy' || t.side === 'short'
+    if (isEntry) entryTimeMap.set(t.symbol, t.timestamp)
+  }
 
   const handleClose = async (symbol: string) => {
     setClosing(symbol)
@@ -33,7 +45,7 @@ export default function PositionsTable() {
       ) : (
         <div style={styles.table}>
           <div style={styles.headRow}>
-            {['Symbol', 'Qty', 'Avg Entry', 'Current', 'Mkt Value', 'P&L', 'P&L %', ''].map(h => (
+            {['Opened', 'Symbol', 'Qty', 'Avg Entry', 'Current', 'Mkt Value', 'P&L', 'P&L %', ''].map(h => (
               <span key={h} style={styles.headCell}>{h}</span>
             ))}
           </div>
@@ -41,6 +53,9 @@ export default function PositionsTable() {
             const plColor = p.unrealized_pl >= 0 ? '#26a641' : '#f85149'
             return (
               <div key={p.symbol} style={styles.row}>
+                <span style={styles.cell}>
+                  {entryTimeMap.get(p.symbol) ? fmtShortET(entryTimeMap.get(p.symbol)!) : '—'}
+                </span>
                 <span style={{ ...styles.cell, color: '#58a6ff', fontWeight: 600 }}>{p.symbol}</span>
                 <span style={styles.cell}>{p.qty}</span>
                 <span style={styles.cell}>${p.avg_entry.toFixed(2)}</span>
