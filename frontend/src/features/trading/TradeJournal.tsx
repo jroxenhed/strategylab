@@ -35,7 +35,11 @@ export default function TradeJournal() {
 
   const reload = () => fetchJournal().then(setTrades).catch(() => {})
 
-  useEffect(() => { reload() }, [])
+  useEffect(() => {
+    reload()
+    const id = setInterval(reload, 5000)
+    return () => clearInterval(id)
+  }, [])
 
   const filtered = filter
     ? trades.filter(t => t.symbol.toLowerCase().includes(filter.toLowerCase()))
@@ -102,6 +106,42 @@ export default function TradeJournal() {
     catch { return s }
   }
 
+  const exportCsv = () => {
+    const headers = ['Time', 'Symbol', 'Side', 'Qty', 'Expected', 'Price', 'P&L', 'Gain %', 'Slippage', 'Source', 'Reason']
+    const rows = [...filtered].reverse().map(t => {
+      const pnl = exitPnl.get(t.id)
+      const entryPx = exitEntryPrice.get(t.id)
+      const gainPct = (pnl != null && entryPx != null && t.qty)
+        ? ((pnl / (entryPx * t.qty)) * 100).toFixed(2) + '%'
+        : ''
+      const slippage = (t.expected_price != null && t.price != null)
+        ? ((t.price - t.expected_price) / t.expected_price * 100).toFixed(3) + '%'
+        : ''
+      return [
+        fmtTime(t.timestamp),
+        t.symbol,
+        t.side.toUpperCase(),
+        t.qty || '',
+        t.expected_price != null ? t.expected_price.toFixed(2) : '',
+        t.price != null ? t.price.toFixed(2) : '',
+        pnl != null ? pnl.toFixed(2) : '',
+        gainPct,
+        slippage,
+        t.source,
+        t.reason || '',
+      ].join(',')
+    })
+    const csv = [headers.join(','), ...rows].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const dateStr = new Date().toISOString().slice(0, 10)
+    a.download = `trades-${filter || 'all'}-${dateStr}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div style={styles.section}>
       <div style={styles.header}>
@@ -114,6 +154,7 @@ export default function TradeJournal() {
           value={filter}
           onChange={e => setFilter(e.target.value)}
         />
+        <button onClick={exportCsv} style={{ ...styles.reload, marginLeft: 'auto' }} title="Export CSV">⬇</button>
       </div>
       {filtered.length === 0 ? (
         <div style={styles.empty}>{filter ? 'No matching trades' : 'No trades logged yet'}</div>
@@ -258,7 +299,7 @@ const styles: Record<string, React.CSSProperties> = {
   filter: {
     fontSize: 12, padding: '3px 8px', borderRadius: 4,
     background: '#161b22', color: '#e6edf3', border: '1px solid #30363d',
-    outline: 'none', width: 120, marginLeft: 'auto',
+    outline: 'none', width: 120,
   },
   empty: { padding: '16px', color: '#484f58', fontSize: 12 },
   table: { overflowY: 'auto' },
