@@ -7,7 +7,8 @@ from pydantic import BaseModel
 from typing import Optional
 import pandas as pd
 from shared import _fetch
-from broker import get_trading_provider, OrderRequest as BrokerOrderRequest
+from broker import get_trading_provider, OrderRequest as BrokerOrderRequest, _trading_providers
+from broker_aggregate import aggregate_from_brokers
 from signal_engine import Rule, compute_indicators, eval_rules
 from journal import _log_trade, DATA_DIR, JOURNAL_PATH
 from models import StrategyRequest
@@ -57,25 +58,15 @@ def get_account():
 
 
 @router.get("/positions")
-def get_positions():
-    from fastapi import HTTPException as _HTTPException
-    try:
-        provider = get_trading_provider()
-        return provider.get_positions()
-    except Exception as e:
-        print(f"[Broker ERROR] get_positions: {type(e).__name__}: {e}")
-        raise _HTTPException(status_code=502, detail=f"Broker API error: {e}")
+async def get_positions(broker: str = "all"):
+    result = await aggregate_from_brokers(_trading_providers, "get_positions", broker)
+    return {"positions": result["rows"], "stale_brokers": result["stale_brokers"]}
 
 
 @router.get("/orders")
-def get_orders():
-    from fastapi import HTTPException as _HTTPException
-    try:
-        provider = get_trading_provider()
-        return provider.get_orders()
-    except Exception as e:
-        print(f"[Broker ERROR] get_orders: {type(e).__name__}: {e}")
-        raise _HTTPException(status_code=502, detail=f"Broker API error: {e}")
+async def get_orders(broker: str = "all"):
+    result = await aggregate_from_brokers(_trading_providers, "get_orders", broker)
+    return {"orders": result["rows"], "stale_brokers": result["stale_brokers"]}
 
 
 @router.post("/buy")
