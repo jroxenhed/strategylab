@@ -388,13 +388,15 @@ def get_performance(req: PerformanceRequest):
 
 
 @router.get("/journal")
-def get_journal(symbol: Optional[str] = None):
+def get_journal(symbol: Optional[str] = None, broker: str = "all"):
     if not JOURNAL_PATH.exists():
         return {"trades": []}
     journal = json.loads(JOURNAL_PATH.read_text())
     trades = journal.get("trades", [])
     if symbol:
         trades = [t for t in trades if t["symbol"].upper() == symbol.upper()]
+    if broker != "all":
+        trades = [t for t in trades if t.get("broker") == broker]
     return {"trades": trades}
 
 

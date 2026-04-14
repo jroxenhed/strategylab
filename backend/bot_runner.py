@@ -199,7 +199,7 @@ class BotRunner:
                 try:
                     _log_trade(cfg.symbol, "cover" if is_short else "sell", sell_qty, exit_price,
                                source="bot", reason=exit_reason, direction=cfg.direction,
-                               bot_id=cfg.bot_id)
+                               bot_id=cfg.bot_id, broker=cfg.broker)
                 except Exception:
                     pass
 
@@ -305,7 +305,7 @@ class BotRunner:
                 try:
                     _log_trade(cfg.symbol, "short" if is_short else "buy", qty, fill_price,
                                source="bot", reason="entry", expected_price=price,
-                               direction=cfg.direction, bot_id=cfg.bot_id)
+                               direction=cfg.direction, bot_id=cfg.bot_id, broker=cfg.broker)
                 except Exception:
                     pass
 
@@ -450,7 +450,7 @@ class BotRunner:
                 try:
                     _log_trade(cfg.symbol, "cover" if is_short else "sell", broker_qty, sell_fill,
                                source="bot", reason=exit_reason, expected_price=price,
-                               direction=cfg.direction, bot_id=cfg.bot_id)
+                               direction=cfg.direction, bot_id=cfg.bot_id, broker=cfg.broker)
                 except Exception:
                     pass
 
