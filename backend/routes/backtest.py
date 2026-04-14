@@ -92,6 +92,7 @@ def run_backtest(req: StrategyRequest):
         capital = req.initial_capital
         position = 0.0
         entry_price = 0.0
+        entry_ts = None
         trail_peak = 0.0
         trail_stop_price = None
         trades = []
@@ -175,9 +176,10 @@ def run_backtest(req: StrategyRequest):
                 else:
                     fill_price = price * (1 + req.slippage_pct / 100)
                 shares = (capital * effective_size) / fill_price
-                commission = shares * fill_price * req.commission_pct / 100
+                commission = per_leg_commission(shares, req)
                 position = shares
                 entry_price = fill_price
+                entry_ts = df.index[i]
                 capital -= shares * fill_price + commission
                 trail_peak = fill_price
                 trail_stop_price = None
@@ -252,13 +254,14 @@ def run_backtest(req: StrategyRequest):
                 sell_fired = eval_rules(req.sell_rules, req.sell_logic, indicators, i)
                 if stop_hit or trail_hit or sell_fired:
                     exit_slippage = abs(position * (raw_exit - exit_price))
+                    commission = per_leg_commission(position, req)
+                    bcost = borrow_cost(position, entry_price, entry_ts, df.index[i],
+                                        req.direction, req)
                     if is_short:
-                        commission = position * exit_price * req.commission_pct / 100
-                        pnl = position * (entry_price - exit_price) - commission
+                        pnl = position * (entry_price - exit_price) - commission - bcost
                         capital += position * entry_price + pnl
                     else:
                         proceeds = position * exit_price
-                        commission = proceeds * req.commission_pct / 100
                         pnl = (proceeds - commission) - position * entry_price
                         capital += proceeds - commission
                     exit_type = "cover" if is_short else "sell"
@@ -274,8 +277,10 @@ def run_backtest(req: StrategyRequest):
                         "trailing_stop": exit_reason == "trailing_stop",
                         "slippage": round(exit_slippage, 2),
                         "commission": round(commission, 2),
+                        "borrow_cost": round(bcost, 2),
                     })
                     position = 0.0
+                    entry_ts = None
                     trail_peak = 0.0
                     trail_stop_price = None
                     if exit_reason == "stop_loss":
