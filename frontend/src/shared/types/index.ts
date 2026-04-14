@@ -103,6 +103,9 @@ export interface StrategyRequest {
   trading_hours?: TradingHoursConfig
   slippage_pct?: number
   commission_pct?: number
+  per_share_rate?: number
+  min_per_order?: number
+  borrow_rate_annual?: number
   source: DataSource
   debug?: boolean
   direction?: 'long' | 'short'
@@ -134,6 +137,9 @@ export interface SavedStrategy {
   tradingHours: TradingHoursConfig
   slippage: number | ''
   commission: number | ''
+  perShareRate?: number
+  minPerOrder?: number
+  borrowRateAnnual?: number
   direction: 'long' | 'short'
 }
 
@@ -148,6 +154,7 @@ export interface Trade {
   trailing_stop?: boolean
   slippage?: number
   commission?: number
+  borrow_cost?: number
   direction?: 'long' | 'short'
 }
 
