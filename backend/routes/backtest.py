@@ -9,6 +9,22 @@ from signal_engine import Rule, compute_indicators, eval_rules, eval_rule
 from routes.indicators import _series_to_list
 from models import TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, StrategyRequest
 
+
+def per_leg_commission(shares: float, req) -> float:
+    """IBKR Fixed per-share commission with min-per-order floor."""
+    return max(shares * req.per_share_rate, req.min_per_order)
+
+
+def borrow_cost(shares: float, entry_price: float, entry_ts, exit_ts,
+                direction: str, req) -> float:
+    """Short-borrow cost for the holding period. Zero for longs or rate=0."""
+    if direction != "short" or req.borrow_rate_annual <= 0:
+        return 0.0
+    hold_days = (exit_ts - entry_ts).total_seconds() / 86400
+    position_value = shares * entry_price
+    return position_value * (req.borrow_rate_annual / 100 / 365) * hold_days
+
+
 router = APIRouter()
 
 # Single-entry cache for macro endpoint re-aggregation.
