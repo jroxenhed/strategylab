@@ -21,9 +21,9 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 - [ ] **A6** Watchlist — save/switch between tickers quickly
 
 ### Shipped
-- [x] **A2** Equity curve macro mode for long timescales / thousands of trades — resampled equity chart (D/W/M/Q/Y) via `MacroEquityChart.tsx` + `/api/backtest/macro`
-- [x] **A5** Date range presets (D/W/M/Q/Y) + period stepping arrows (‹ › single, « » 5x skip)
-- [x] **A7** Equity curve: normalised B&H comparison toggle + log scale toggle
+- [x] Equity curve macro mode for long timescales / thousands of trades — resampled equity chart (D/W/M/Q/Y) via `MacroEquityChart.tsx` + `/api/backtest/macro`
+- [x] Date range presets (D/W/M/Q/Y) + period stepping arrows (‹ › single, « » 5x skip)
+- [x] Equity curve: normalised B&H comparison toggle + log scale toggle
 - [x] MA8 / MA21 with SMA/EMA/RMA type selector + S-G smoothed variants (independent window/poly per MA, raw curve toggles, dashed S-G lines)
 - [x] Backtest equity curve: baseline (buy & hold) overlay toggle
 
@@ -65,8 +65,8 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 - [ ] **D5** Journal helper call frequency — runs on bot tick (for sizing) and on summary fetch. Journal is JSON-parsed each time. Fine for now, but if it gets slow (thousands of entries) add an mtime-based cache.
 
 ### Shipped
-- [x] **D7** IBKR broker integration — full data + trading provider via `ib_insync`. TradingProvider protocol abstracts Alpaca/IBKR behind unified interface. Global broker selector (data source stays per-request). Enables simultaneous long+short on same symbol. [spec](docs/superpowers/specs/2026-04-13-ibkr-broker-integration-design.md)
-- [x] **D6** Paper trading polish — Journal: reason colors fixed, Expected/Gain% columns, summary row, filter relocated, auto-refresh 5s, CSV export. Bot cards: heartbeat dot. Positions: 5s poll, Opened/Side columns.
+- [x] IBKR broker integration — full data + trading provider via `ib_insync`. TradingProvider protocol abstracts Alpaca/IBKR behind unified interface. Global broker selector (data source stays per-request). Enables simultaneous long+short on same symbol. [spec](docs/superpowers/specs/2026-04-13-ibkr-broker-integration-design.md)
+- [x] Paper trading polish — Journal: reason colors fixed, Expected/Gain% columns, summary row, filter relocated, auto-refresh 5s, CSV export. Bot cards: heartbeat dot. Positions: 5s poll, Opened/Side columns.
 - [x] Verify allocation logic — was position_size=10.0, added validator to clamp 0.01–1.0
 - [x] Verify SL fill detection — code verified, will confirm on next live SL trigger
 - [x] Does algo wait for candle close? — No, and that's fine. OTO SL is server-side (instant), trailing stop benefits from frequent checks
