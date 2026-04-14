@@ -8,6 +8,7 @@ from shared import _fetch, _format_time, _INTRADAY_INTERVALS
 from signal_engine import Rule, compute_indicators, eval_rules, eval_rule
 from routes.indicators import _series_to_list
 from models import TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, StrategyRequest
+from post_loss import is_post_loss_trigger
 
 
 def per_leg_commission(shares: float, req) -> float:
@@ -105,6 +106,8 @@ def run_backtest(req: StrategyRequest):
         ds = req.dynamic_sizing
         th = req.trading_hours
         consec_sl_count = 0  # track consecutive stop losses for dynamic sizing
+        sas = req.skip_after_stop
+        skip_remaining = 0  # entries still to skip after a qualifying stop
         is_intraday = req.interval in _INTRADAY_INTERVALS
 
         # Map rule indicator names to the actual series eval_rule uses
@@ -164,7 +167,17 @@ def run_backtest(req: StrategyRequest):
                             hour_ok = False
                             break
 
-            if position == 0 and hour_ok and eval_rules(req.buy_rules, req.buy_logic, indicators, i):
+            buy_fires = position == 0 and hour_ok and eval_rules(req.buy_rules, req.buy_logic, indicators, i)
+            if buy_fires and skip_remaining > 0:
+                skip_remaining -= 1
+                if signal_trace is not None:
+                    signal_trace.append({
+                        "date": date, "price": round(price, 4), "position": "flat",
+                        "action": f"SKIPPED (post-stop, {skip_remaining} left)",
+                    })
+                buy_fires = False
+
+            if buy_fires:
                 # Dynamic sizing: reduce position after consecutive stop losses
                 effective_size = req.position_size
                 if ds and ds.enabled and consec_sl_count >= ds.consec_sls:
@@ -283,10 +296,14 @@ def run_backtest(req: StrategyRequest):
                     entry_ts = None
                     trail_peak = 0.0
                     trail_stop_price = None
-                    if exit_reason == "stop_loss":
+                    ds_trigger = ds.trigger if ds else "sl"
+                    if is_post_loss_trigger(exit_reason, ds_trigger):
                         consec_sl_count += 1
                     else:
                         consec_sl_count = 0
+
+                    if sas and sas.enabled and is_post_loss_trigger(exit_reason, sas.trigger):
+                        skip_remaining = sas.count
                     if signal_trace is not None:
                         action = "STOP_LOSS" if exit_reason == "stop_loss" else "TRAIL_STOP" if exit_reason == "trailing_stop" else ("COVER" if is_short else "SELL")
                         signal_trace.append({

@@ -19,6 +19,7 @@ from signal_engine import compute_indicators, eval_rules
 from shared import _fetch
 from broker import get_trading_provider, OrderRequest as BrokerOrderRequest, OrderResult
 from journal import _log_trade, compute_realized_pnl
+from post_loss import is_post_loss_trigger
 
 # Poll interval per bar cadence (seconds)
 POLL_INTERVALS = {"1m": 10, "5m": 15, "15m": 20, "30m": 30, "1h": 60}
@@ -182,10 +183,15 @@ class BotRunner:
                 else:
                     pnl = (exit_price - state.entry_price) * sell_qty if sell_qty else 0
 
-                if exit_reason in ("stop_loss", "trailing_stop"):
+                ds_trigger = cfg.dynamic_sizing.trigger if cfg.dynamic_sizing else "sl"
+                if is_post_loss_trigger(exit_reason, ds_trigger):
                     state.consec_sl_count += 1
                 else:
                     state.consec_sl_count = 0
+
+                if cfg.skip_after_stop and cfg.skip_after_stop.enabled and \
+                        is_post_loss_trigger(exit_reason, cfg.skip_after_stop.trigger):
+                    state.skip_remaining = cfg.skip_after_stop.count
 
                 side_label = "COVER" if is_short else "SELL"
                 self._log("TRADE", f"{side_label} {cfg.symbol} @ {exit_price:.2f} | PnL={pnl:+.2f} | reason={exit_reason} (detected)")
@@ -217,6 +223,10 @@ class BotRunner:
             )
 
             if buy_signal:
+                if state.skip_remaining > 0:
+                    state.skip_remaining -= 1
+                    self._log("INFO", f"Skipping entry (post-stop cooldown, {state.skip_remaining} left)")
+                    return
                 # Safety: skip entry if opposite-direction position exists
                 # (prevents long BUY from netting against short bot's position)
                 try:
@@ -418,11 +428,16 @@ class BotRunner:
                 exit_label = "COVER" if is_short else "SELL"
                 state.last_signal = f"{exit_label} ({exit_reason})"
 
-                # Update dynamic sizing counter
-                if exit_reason in ("stop_loss", "trailing_stop"):
+                # Update dynamic sizing counter + skip-after-stop
+                ds_trigger = cfg.dynamic_sizing.trigger if cfg.dynamic_sizing else "sl"
+                if is_post_loss_trigger(exit_reason, ds_trigger):
                     state.consec_sl_count += 1
                 else:
                     state.consec_sl_count = 0
+
+                if cfg.skip_after_stop and cfg.skip_after_stop.enabled and \
+                        is_post_loss_trigger(exit_reason, cfg.skip_after_stop.trigger):
+                    state.skip_remaining = cfg.skip_after_stop.count
 
                 if is_short:
                     slippage = sell_fill - price  # higher cover fill is worse

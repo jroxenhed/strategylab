@@ -15,8 +15,15 @@ class TrailingStopConfig(BaseModel):
 
 class DynamicSizingConfig(BaseModel):
     enabled: bool = False
-    consec_sls: int = 2             # number of consecutive stop losses before reducing size
+    consec_sls: int = 2             # number of consecutive qualifying stops before reducing size
     reduced_pct: float = 25.0       # position size % to use when triggered
+    trigger: str = "sl"             # "sl" | "tsl" | "both" — which exit reason(s) increment the counter
+
+
+class SkipAfterStopConfig(BaseModel):
+    enabled: bool = False
+    count: int = 1                  # number of entries to skip after a qualifying stop
+    trigger: str = "sl"             # "sl" | "tsl" | "both"
 
 
 class TradingHoursConfig(BaseModel):
@@ -45,6 +52,7 @@ class StrategyRequest(BaseModel):
     min_per_order: float = 0.35      # IBKR Fixed minimum per order
     borrow_rate_annual: float = 0.5  # % per year, only applied when direction == "short"
     dynamic_sizing: Optional[DynamicSizingConfig] = None
+    skip_after_stop: Optional[SkipAfterStopConfig] = None
     trading_hours: Optional[TradingHoursConfig] = None
     source: str = "yahoo"
     direction: str = "long"  # "long" | "short"

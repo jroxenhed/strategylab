@@ -79,6 +79,7 @@ export default function AddBotBar({
         stop_loss_pct: typeof s.stopLoss === 'number' ? s.stopLoss : null,
         trailing_stop: s.trailingEnabled ? s.trailingConfig : null,
         dynamic_sizing: s.dynamicSizing ?? null,
+        skip_after_stop: s.skipAfterStop ?? null,
         trading_hours: s.tradingHours ?? null,
         slippage_pct: typeof s.slippage === 'number' ? s.slippage : 0,
         data_source: dataSource,
