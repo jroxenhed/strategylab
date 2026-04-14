@@ -1,22 +1,35 @@
 import { useEffect, useState } from 'react'
-import { fetchPositions, placeSell, fetchJournal, type Position, type JournalTrade } from '../../api/trading'
+import { fetchPositions, placeSell, fetchJournal, type Position, type JournalTrade, type BrokerHealth } from '../../api/trading'
 import { fmtShortET } from '../../shared/utils/time'
+import { BrokerTag } from './BrokerTag'
 
-export default function PositionsTable() {
+interface Props {
+  brokerFilter: string
+  onBrokerFilterChange: (v: string) => void
+  availableBrokers: string[]
+  health: Record<string, BrokerHealth>
+  heartbeatWarmup: boolean
+  onStale: (list: string[]) => void
+}
+
+export default function PositionsTable({ brokerFilter, onBrokerFilterChange, availableBrokers, health, heartbeatWarmup, onStale }: Props) {
   const [positions, setPositions] = useState<Position[]>([])
   const [journal, setJournal] = useState<JournalTrade[]>([])
   const [closing, setClosing] = useState<string | null>(null)
 
   const load = () => {
-    fetchPositions().then(setPositions).catch(() => {})
-    fetchJournal().then(setJournal).catch(() => {})
+    fetchPositions(brokerFilter)
+      .then(r => { setPositions(r.rows); onStale(r.stale_brokers) })
+      .catch(() => {})
+    fetchJournal(undefined, brokerFilter).then(setJournal).catch(() => {})
   }
 
   useEffect(() => {
     load()
     const id = window.setInterval(load, 5_000)
     return () => clearInterval(id)
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brokerFilter])
 
   const entryTimeMap = new Map<string, string>()
   for (const t of journal) {
@@ -39,13 +52,23 @@ export default function PositionsTable() {
       <div style={styles.header}>
         <span style={styles.title}>Open Positions</span>
         <span style={styles.count}>{positions.length}</span>
+        <select
+          value={brokerFilter}
+          onChange={e => onBrokerFilterChange(e.target.value)}
+          style={styles.filter}
+        >
+          <option value="all">All brokers</option>
+          {availableBrokers.map(b => (
+            <option key={b} value={b}>{b.toUpperCase()}</option>
+          ))}
+        </select>
       </div>
       {positions.length === 0 ? (
         <div style={styles.empty}>No open positions</div>
       ) : (
         <div style={styles.table}>
           <div style={styles.headRow}>
-            {['Opened', 'Symbol', 'Side', 'Qty', 'Avg Entry', 'Current', 'Mkt Value', 'P&L', 'P&L %', ''].map(h => (
+            {['Opened', 'Symbol', 'Broker', 'Side', 'Qty', 'Avg Entry', 'Current', 'Mkt Value', 'P&L', 'P&L %', ''].map(h => (
               <span key={h} style={styles.headCell}>{h}</span>
             ))}
           </div>
@@ -57,6 +80,9 @@ export default function PositionsTable() {
                   {entryTimeMap.get(p.symbol) ? fmtShortET(entryTimeMap.get(p.symbol)!) : '—'}
                 </span>
                 <span style={{ ...styles.cell, color: '#58a6ff', fontWeight: 600 }}>{p.symbol}</span>
+                <span style={styles.cell}>
+                  <BrokerTag name={p.broker} health={health[p.broker]} warmingUp={heartbeatWarmup} />
+                </span>
                 <span style={{ ...styles.cell, color: p.side === 'short' ? '#ef5350' : '#26a69a', textTransform: 'uppercase' as const, fontSize: 10, fontWeight: 700 }}>{p.side}</span>
                 <span style={styles.cell}>{p.qty}</span>
                 <span style={styles.cell}>${p.avg_entry.toFixed(2)}</span>
@@ -98,6 +124,11 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '1px 6px', borderRadius: 10,
   },
   empty: { padding: '16px', color: '#484f58', fontSize: 12 },
+  filter: {
+    marginLeft: 'auto', fontSize: 11, padding: '2px 6px',
+    background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d',
+    borderRadius: 4,
+  },
   table: { overflowX: 'auto' },
   headRow: {
     display: 'flex', gap: 4, padding: '4px 16px',

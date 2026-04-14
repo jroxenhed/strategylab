@@ -1,12 +1,21 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { fetchJournal, type JournalTrade } from '../../api/trading'
+import { fetchJournal, type JournalTrade, type BrokerHealth } from '../../api/trading'
 import { fmtShortET } from '../../shared/utils/time'
+import { BrokerTag } from './BrokerTag'
 
 const DEFAULT_HEIGHT = 300
 const MIN_HEIGHT = 100
 const MAX_HEIGHT = 800
 
-export default function TradeJournal() {
+interface Props {
+  brokerFilter: string
+  onBrokerFilterChange: (v: string) => void
+  availableBrokers: string[]
+  health: Record<string, BrokerHealth>
+  heartbeatWarmup: boolean
+}
+
+export default function TradeJournal({ brokerFilter, onBrokerFilterChange, availableBrokers, health, heartbeatWarmup }: Props) {
   const [trades, setTrades] = useState<JournalTrade[]>([])
   const [filter, setFilter] = useState('')
   const [tableHeight, setTableHeight] = useState(DEFAULT_HEIGHT)
@@ -33,13 +42,14 @@ export default function TradeJournal() {
     return () => { window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp) }
   }, [])
 
-  const reload = () => fetchJournal().then(setTrades).catch(() => {})
+  const reload = () => fetchJournal(undefined, brokerFilter).then(setTrades).catch(() => {})
 
   useEffect(() => {
     reload()
     const id = setInterval(reload, 5000)
     return () => clearInterval(id)
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brokerFilter])
 
   const filtered = filter
     ? trades.filter(t => t.symbol.toLowerCase().includes(filter.toLowerCase()))
@@ -107,7 +117,7 @@ export default function TradeJournal() {
   }
 
   const exportCsv = () => {
-    const headers = ['Time', 'Symbol', 'Side', 'Qty', 'Expected', 'Price', 'P&L', 'Gain %', 'Slippage', 'Source', 'Reason']
+    const headers = ['Time', 'Symbol', 'Broker', 'Side', 'Qty', 'Expected', 'Price', 'P&L', 'Gain %', 'Slippage', 'Source', 'Reason']
     const rows = [...filtered].reverse().map(t => {
       const pnl = exitPnl.get(t.id)
       const entryPx = exitEntryPrice.get(t.id)
@@ -120,6 +130,7 @@ export default function TradeJournal() {
       return [
         fmtTime(t.timestamp),
         t.symbol,
+        t.broker || '',
         t.side.toUpperCase(),
         t.qty || '',
         t.expected_price != null ? t.expected_price.toFixed(2) : '',
@@ -148,6 +159,16 @@ export default function TradeJournal() {
         <span style={styles.title}>Trade Journal</span>
         <span style={styles.count}>{trades.length}</span>
         <button onClick={reload} style={styles.reload} title="Refresh">↻</button>
+        <select
+          value={brokerFilter}
+          onChange={e => onBrokerFilterChange(e.target.value)}
+          style={styles.brokerFilter}
+        >
+          <option value="all">All brokers</option>
+          {availableBrokers.map(b => (
+            <option key={b} value={b}>{b.toUpperCase()}</option>
+          ))}
+        </select>
         <input
           style={styles.filter}
           placeholder="Filter symbol..."
@@ -161,13 +182,14 @@ export default function TradeJournal() {
       ) : (<>
         <div style={{ ...styles.table, maxHeight: tableHeight }}>
           <div style={styles.headRow}>
-            {['Time', 'Symbol', 'Side', 'Qty', 'Expected', 'Price', 'P&L', 'Gain %', 'Slippage', 'Source', 'Reason'].map(h => (
+            {['Time', 'Symbol', 'Broker', 'Side', 'Qty', 'Expected', 'Price', 'P&L', 'Gain %', 'Slippage', 'Source', 'Reason'].map(h => (
               <span key={h} style={styles.headCell}>{h}</span>
             ))}
           </div>
           <div style={{ ...styles.row, borderBottom: '1px solid #21262d', background: '#0d1117' }}>
             <span style={styles.summaryCell} />  {/* Time */}
             <span style={styles.summaryCell} />  {/* Symbol */}
+            <span style={styles.summaryCell} />  {/* Broker */}
             <span style={styles.summaryCell} />  {/* Side */}
             <span style={styles.summaryCell}>{summaryStats.totalQty || ''}</span>
             <span style={styles.summaryCell} />  {/* Expected */}
@@ -188,6 +210,9 @@ export default function TradeJournal() {
             <div key={t.id} style={{ ...styles.row, background: rowBackground(t, exitPnl) }}>
               <span style={styles.cell}>{fmtTime(t.timestamp)}</span>
               <span style={{ ...styles.cell, color: '#58a6ff', fontWeight: 600 }}>{t.symbol}</span>
+              <span style={styles.cell}>
+                {t.broker ? <BrokerTag name={t.broker} health={health[t.broker]} warmingUp={heartbeatWarmup} /> : <span style={{ color: '#484f58' }}>—</span>}
+              </span>
               <span style={{ ...styles.cell, color: sideColor(t, exitPnl) }}>
                 {t.side.toUpperCase()}
               </span>
@@ -300,6 +325,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12, padding: '3px 8px', borderRadius: 4,
     background: '#161b22', color: '#e6edf3', border: '1px solid #30363d',
     outline: 'none', width: 120,
+  },
+  brokerFilter: {
+    fontSize: 11, padding: '2px 6px', borderRadius: 4,
+    background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d',
   },
   empty: { padding: '16px', color: '#484f58', fontSize: 12 },
   table: { overflowY: 'auto' },

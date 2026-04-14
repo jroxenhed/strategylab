@@ -1,18 +1,33 @@
 import { useEffect, useState } from 'react'
-import { fetchOrders, type Order } from '../../api/trading'
+import { fetchOrders, type Order, type BrokerHealth } from '../../api/trading'
 import { fmtShortET } from '../../shared/utils/time'
+import { BrokerTag } from './BrokerTag'
 
-export default function OrderHistory() {
+interface Props {
+  brokerFilter: string
+  onBrokerFilterChange: (v: string) => void
+  availableBrokers: string[]
+  health: Record<string, BrokerHealth>
+  heartbeatWarmup: boolean
+  onStale: (list: string[]) => void
+}
+
+export default function OrderHistory({ brokerFilter, onBrokerFilterChange, availableBrokers, health, heartbeatWarmup, onStale }: Props) {
   const [orders, setOrders] = useState<Order[]>([])
   const [filter, setFilter] = useState('')
 
-  const load = () => { fetchOrders().then(setOrders).catch(() => {}) }
+  const load = () => {
+    fetchOrders(brokerFilter)
+      .then(r => { setOrders(r.rows); onStale(r.stale_brokers) })
+      .catch(() => {})
+  }
 
   useEffect(() => {
     load()
     const id = window.setInterval(load, 30_000)
     return () => clearInterval(id)
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brokerFilter])
 
   const filtered = filter
     ? orders.filter(o => o.symbol.toLowerCase().includes(filter.toLowerCase()))
@@ -34,6 +49,16 @@ export default function OrderHistory() {
     <div style={styles.section}>
       <div style={styles.header}>
         <span style={styles.title}>Recent Orders</span>
+        <select
+          value={brokerFilter}
+          onChange={e => onBrokerFilterChange(e.target.value)}
+          style={styles.brokerFilter}
+        >
+          <option value="all">All brokers</option>
+          {availableBrokers.map(b => (
+            <option key={b} value={b}>{b.toUpperCase()}</option>
+          ))}
+        </select>
         <input
           style={styles.filter}
           placeholder="Filter symbol..."
@@ -46,13 +71,16 @@ export default function OrderHistory() {
       ) : (
         <div style={styles.table}>
           <div style={styles.headRow}>
-            {['Symbol', 'Side', 'Qty', 'Type', 'Status', 'Fill Price', 'Submitted', 'Filled'].map(h => (
+            {['Symbol', 'Broker', 'Side', 'Qty', 'Type', 'Status', 'Fill Price', 'Submitted', 'Filled'].map(h => (
               <span key={h} style={styles.headCell}>{h}</span>
             ))}
           </div>
           {filtered.map(o => (
             <div key={o.id} style={styles.row}>
               <span style={{ ...styles.cell, color: '#58a6ff', fontWeight: 600 }}>{o.symbol}</span>
+              <span style={styles.cell}>
+                <BrokerTag name={o.broker} health={health[o.broker]} warmingUp={heartbeatWarmup} />
+              </span>
               <span style={{ ...styles.cell, color: o.side === 'buy' ? '#26a641' : '#f85149' }}>
                 {o.side.toUpperCase()}
               </span>
@@ -77,6 +105,10 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '8px 16px', borderBottom: '1px solid #21262d', flexShrink: 0,
   },
   title: { fontSize: 13, fontWeight: 600, color: '#e6edf3' },
+  brokerFilter: {
+    fontSize: 11, padding: '2px 6px', borderRadius: 4,
+    background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d',
+  },
   filter: {
     fontSize: 12, padding: '3px 8px', borderRadius: 4,
     background: '#161b22', color: '#e6edf3', border: '1px solid #30363d',
