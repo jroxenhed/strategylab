@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Plus, Play } from 'lucide-react'
-import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, SavedStrategy } from '../../shared/types'
+import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, SavedStrategy } from '../../shared/types'
 import type { MASettings } from '../../App'
 import RuleRow, { emptyRule, validateRules } from './RuleRow'
 import { api } from '../../api/client'
@@ -63,7 +63,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [stopLoss, setStopLoss] = useState<number | ''>(saved?.stopLoss ?? '')
   const [trailingEnabled, setTrailingEnabled] = useState<boolean>(saved?.trailingEnabled ?? false)
   const [trailingConfig, setTrailingConfig] = useState<TrailingStopConfig>(saved?.trailingConfig ?? { type: 'pct', value: 5, source: 'high', activate_on_profit: false, activate_pct: 0 })
-  const [dynamicSizing, setDynamicSizing] = useState<DynamicSizingConfig>(saved?.dynamicSizing ?? { enabled: false, consec_sls: 2, reduced_pct: 25 })
+  const [dynamicSizing, setDynamicSizing] = useState<DynamicSizingConfig>(saved?.dynamicSizing ?? { enabled: false, consec_sls: 2, reduced_pct: 25, trigger: 'sl' })
+  const [skipAfterStop, setSkipAfterStop] = useState<SkipAfterStopConfig>(saved?.skipAfterStop ?? { enabled: false, count: 1, trigger: 'sl' })
   const [tradingHours, setTradingHours] = useState<TradingHoursConfig>(() => {
     const th = saved?.tradingHours
     if (!th) return { enabled: false, start_time: '08:30', end_time: '16:00', skip_ranges: [] }
@@ -106,7 +107,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
       ticker, interval,
       buyRules, sellRules, buyLogic, sellLogic,
       capital, posSize, stopLoss,
-      trailingEnabled, trailingConfig, dynamicSizing, tradingHours,
+      trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours,
       slippage, commission, direction,
       perShareRate, minPerOrder, borrowRateAnnual,
     }
@@ -127,7 +128,9 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     setBuyLogic(s.buyLogic); setSellLogic(s.sellLogic)
     setCapital(s.capital); setPosSize(s.posSize); setStopLoss(s.stopLoss)
     setTrailingEnabled(s.trailingEnabled); setTrailingConfig(s.trailingConfig)
-    setDynamicSizing(s.dynamicSizing); setTradingHours(s.tradingHours)
+    setDynamicSizing(s.dynamicSizing ?? { enabled: false, consec_sls: 2, reduced_pct: 25, trigger: 'sl' })
+    setSkipAfterStop(s.skipAfterStop ?? { enabled: false, count: 1, trigger: 'sl' })
+    setTradingHours(s.tradingHours)
     setSlippage(s.slippage); setCommission(s.commission)
     setPerShareRate(s.perShareRate ?? 0.0035)
     setMinPerOrder(s.minPerOrder ?? 0.35)
@@ -157,10 +160,10 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   useEffect(() => {
     localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({
       buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss,
-      trailingEnabled, trailingConfig, dynamicSizing, tradingHours, slippage, commission, direction,
+      trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours, slippage, commission, direction,
       perShareRate, minPerOrder, borrowRateAnnual,
     }))
-  }, [buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, trailingEnabled, trailingConfig, dynamicSizing, tradingHours, slippage, commission, direction,
+  }, [buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours, slippage, commission, direction,
       perShareRate, minPerOrder, borrowRateAnnual])
 
   async function runBacktest() {
@@ -178,6 +181,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         stop_loss_pct: stopLoss !== '' && stopLoss > 0 ? stopLoss : undefined,
         trailing_stop: trailingEnabled ? trailingConfig : undefined,
         dynamic_sizing: dynamicSizing.enabled ? dynamicSizing : undefined,
+        skip_after_stop: skipAfterStop.enabled ? skipAfterStop : undefined,
         trading_hours: tradingHours.enabled ? tradingHours : undefined,
         slippage_pct: slippage !== '' && slippage !== 0 ? slippage : undefined,
         per_share_rate: perShareRate,
@@ -326,6 +330,45 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
                 <label style={styles.settingsLabel}>Reduce to</label>
                 <input type="number" value={dynamicSizing.reduced_pct} step={5} min={5} max={100} onChange={e => setDynamicSizing(c => ({ ...c, reduced_pct: +e.target.value }))} style={{ ...styles.settingsInput, width: 48 }} />
                 <span style={{ fontSize: 11, color: '#8b949e' }}>% size</span>
+              </div>
+              <div style={styles.settingsRow}>
+                <label style={styles.settingsLabel}>Trigger</label>
+                <select
+                  value={dynamicSizing.trigger ?? 'sl'}
+                  onChange={e => setDynamicSizing(c => ({ ...c, trigger: e.target.value as 'sl' | 'tsl' | 'both' }))}
+                  style={{ ...styles.settingsInput, width: 80 }}
+                >
+                  <option value="sl">Hard SL</option>
+                  <option value="tsl">Trailing</option>
+                  <option value="both">Both</option>
+                </select>
+              </div>
+            </div>
+          )}
+          <div style={{ ...styles.settingsRow, marginTop: 4 }}>
+            <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+              <input type="checkbox" checked={skipAfterStop.enabled} onChange={e => setSkipAfterStop(c => ({ ...c, enabled: e.target.checked }))} />
+              Skip After Stop
+            </label>
+          </div>
+          {skipAfterStop.enabled && (
+            <div style={{ paddingLeft: 12, borderLeft: '2px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={styles.settingsRow}>
+                <label style={styles.settingsLabel}>Skip</label>
+                <input type="number" value={skipAfterStop.count} step={1} min={1} max={20} onChange={e => setSkipAfterStop(c => ({ ...c, count: +e.target.value }))} style={{ ...styles.settingsInput, width: 40 }} />
+                <span style={{ fontSize: 11, color: '#8b949e' }}>entries</span>
+              </div>
+              <div style={styles.settingsRow}>
+                <label style={styles.settingsLabel}>Trigger</label>
+                <select
+                  value={skipAfterStop.trigger}
+                  onChange={e => setSkipAfterStop(c => ({ ...c, trigger: e.target.value as 'sl' | 'tsl' | 'both' }))}
+                  style={{ ...styles.settingsInput, width: 80 }}
+                >
+                  <option value="sl">Hard SL</option>
+                  <option value="tsl">Trailing</option>
+                  <option value="both">Both</option>
+                </select>
               </div>
             </div>
           )}
