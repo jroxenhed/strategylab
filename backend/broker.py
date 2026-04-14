@@ -273,6 +273,11 @@ class IBKRTradingProvider:
         """
         await self._ib.reqCurrentTimeAsync()
 
+    async def reconnect(self) -> None:
+        """Invoked by HeartbeatMonitor after a failed ping. The shared IB
+        instance is reused, so both data and trading providers recover."""
+        await self._reconnect_async()
+
     def _run(self, coro, timeout: float = 30.0):
         """Schedule a coroutine on the main loop, block until done."""
         import asyncio

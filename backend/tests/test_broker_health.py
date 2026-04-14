@@ -93,6 +93,44 @@ async def test_tick_skips_providers_without_ping():
 
 
 @pytest.mark.asyncio
+async def test_tick_reconnects_on_ping_failure():
+    class DeadSocket:
+        name = "ibkr"
+        def __init__(self):
+            self.connected = False
+            self.reconnect_calls = 0
+        async def ping(self):
+            if not self.connected:
+                raise RuntimeError("socket dead")
+        async def reconnect(self):
+            self.reconnect_calls += 1
+            self.connected = True
+
+    p = DeadSocket()
+    mon = HeartbeatMonitor(registry={"ibkr": p}, interval=0.01, timeout=1.0)
+    await mon._tick()
+    h = mon.get_health("ibkr")
+    assert h["healthy"] is True
+    assert p.reconnect_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_tick_marks_unhealthy_when_reconnect_also_fails():
+    class HardDown:
+        name = "ibkr"
+        async def ping(self):
+            raise RuntimeError("socket dead")
+        async def reconnect(self):
+            raise RuntimeError("gateway down")
+
+    mon = HeartbeatMonitor(registry={"ibkr": HardDown()}, interval=0.01, timeout=1.0)
+    await mon._tick()
+    h = mon.get_health("ibkr")
+    assert h["healthy"] is False
+    assert "gateway down" in h["last_error"]
+
+
+@pytest.mark.asyncio
 async def test_run_loop_survives_tick_exception(monkeypatch):
     mon = HeartbeatMonitor(registry={}, interval=0.01, timeout=1.0, warmup=0.0)
     calls = {"n": 0}

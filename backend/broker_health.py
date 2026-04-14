@@ -50,19 +50,31 @@ class HeartbeatMonitor:
             ping = getattr(provider, "ping", None)
             if ping is None:
                 continue
+            err: Exception | None = None
             try:
                 await asyncio.wait_for(ping(), timeout=self._timeout)
+            except Exception as e:
+                err = e
+                reconnect = getattr(provider, "reconnect", None)
+                if reconnect is not None:
+                    try:
+                        await asyncio.wait_for(reconnect(), timeout=self._timeout)
+                        await asyncio.wait_for(ping(), timeout=self._timeout)
+                        err = None
+                    except Exception as e2:
+                        err = e2
+            if err is None:
                 self._health[name] = {
                     "healthy": True,
                     "last_ok_ts": int(time.time()),
                     "last_error": None,
                 }
-            except Exception as e:
+            else:
                 prev = self._health.get(name, {})
                 self._health[name] = {
                     "healthy": False,
                     "last_ok_ts": prev.get("last_ok_ts"),
-                    "last_error": f"{type(e).__name__}: {e}",
+                    "last_error": f"{type(err).__name__}: {err}",
                 }
 
     async def _run(self) -> None:
