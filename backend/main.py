@@ -15,6 +15,7 @@ from routes.search import router as search_router
 from routes.providers import router as providers_router
 from routes.trading import router as trading_router
 from routes.bots import router as bots_router
+from routes.slippage import router as slippage_router
 import routes.bots as bots_module
 from bot_manager import BotManager
 
@@ -47,6 +48,7 @@ app.include_router(search_router)
 app.include_router(providers_router)
 app.include_router(trading_router)
 app.include_router(bots_router)
+app.include_router(slippage_router)
 
 
 @app.get("/api/cache")
