@@ -365,6 +365,29 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
               </div>
             </div>
           )}
+          {(() => {
+            const buys = trades.filter(t => t.type === 'buy' || t.type === 'short')
+            const sellsList = trades.filter(t => t.type === 'sell' || t.type === 'cover')
+            const totalComm = [...buys, ...sellsList].reduce((s, t) => s + (t.commission ?? 0), 0)
+            const totalBorrow = sellsList.reduce((s, t) => s + (t.borrow_cost ?? 0), 0)
+            const totalSlip = [...buys, ...sellsList].reduce((s, t) => s + (t.slippage ?? 0), 0)
+            const totalAll = totalComm + totalBorrow + totalSlip
+            const dragPct = summary.initial_capital > 0 ? (totalAll / summary.initial_capital) * 100 : 0
+            const hasShorts = sellsList.some(t => t.type === 'cover')
+            if (summary.num_trades === 0) return null
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', padding: '12px 16px', borderTop: '1px solid #21262d', gap: 4 }}>
+                <div style={{ marginBottom: 4 }}>
+                  <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase', letterSpacing: 0.5 }}>Cost Breakdown</span>
+                </div>
+                <CostRow label="Total commission" value={totalComm} />
+                {hasShorts && <CostRow label="Total borrow cost" value={totalBorrow} />}
+                <CostRow label="Total slippage" value={totalSlip} />
+                <CostRow label="Total all-in costs" value={totalAll} bold />
+                <CostRow label="Cost drag" value={dragPct} suffix="%" color="#f0883e" bold />
+              </div>
+            )
+          })()}
         </div>
       )}
 
@@ -429,6 +452,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
               <span style={{ ...styles.tradeCell, width: 50, color: '#8b949e', fontSize: 10 }}>Return</span>
               <span style={{ ...styles.tradeCell, width: 50, color: '#8b949e', fontSize: 10 }}>Slip</span>
               <span style={{ ...styles.tradeCell, width: 50, color: '#8b949e', fontSize: 10 }}>Comm</span>
+              <span style={{ ...styles.tradeCell, width: 50, color: '#8b949e', fontSize: 10 }}>Borrow</span>
               <span style={{ ...styles.tradeCell, width: 40, color: '#8b949e', fontSize: 10 }}>Exit</span>
             </div>
             {sells.map((sell, i) => {
@@ -456,6 +480,9 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
                   </span>
                   <span style={{ ...styles.tradeCell, width: 50, color: totalComm > 0 ? '#f0883e' : '#484f58' }}>
                     {totalComm > 0 ? `$${totalComm.toFixed(2)}` : '—'}
+                  </span>
+                  <span style={{ ...styles.tradeCell, width: 50, color: (sell.borrow_cost ?? 0) > 0 ? '#f0883e' : '#484f58' }}>
+                    {(sell.borrow_cost ?? 0) > 0 ? `$${sell.borrow_cost!.toFixed(2)}` : '—'}
                   </span>
                   <span style={{ ...styles.tradeCell, width: 40, color: sell.stop_loss ? '#f0883e' : sell.trailing_stop ? '#f0883e' : '#8b949e', fontSize: 10 }}>
                     {sell.stop_loss ? 'SL' : sell.trailing_stop ? 'TSL' : 'Signal'}
@@ -507,6 +534,18 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
           </>)}
         </div>
       )}
+    </div>
+  )
+}
+
+function CostRow({ label, value, suffix, color, bold }: {
+  label: string; value: number; suffix?: string; color?: string; bold?: boolean
+}) {
+  const formatted = suffix === '%' ? `${value.toFixed(2)}%` : `$${value.toFixed(2)}`
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+      <span style={{ color: '#8b949e', fontWeight: bold ? 600 : 400 }}>{label}</span>
+      <span style={{ color: color ?? '#e6edf3', fontWeight: bold ? 700 : 500 }}>{formatted}</span>
     </div>
   )
 }
