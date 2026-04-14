@@ -23,12 +23,24 @@ from bot_manager import BotManager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from shared import init_ibkr
+    from broker import _trading_providers
+    from broker_health import HeartbeatMonitor
+    from broker_health_singleton import set_monitor
+
     await init_ibkr()
+
+    monitor = HeartbeatMonitor(registry=_trading_providers)
+    set_monitor(monitor)
+    monitor.start()
+
     manager = BotManager()
     manager.load()
     bots_module.bot_manager = manager
-    yield
-    await manager.shutdown()
+    try:
+        yield
+    finally:
+        await manager.shutdown()
+        await monitor.stop()
 
 
 app = FastAPI(lifespan=lifespan)

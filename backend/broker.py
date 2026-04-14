@@ -8,6 +8,7 @@ Global broker registry with runtime switching.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 from typing import Protocol
@@ -96,6 +97,8 @@ def set_active_broker(name: str) -> None:
 
 class AlpacaTradingProvider:
     """TradingProvider backed by Alpaca SDK."""
+
+    name = "alpaca"
 
     def __init__(self, trading_client, data_client=None):
         self._client = trading_client
@@ -254,10 +257,20 @@ class IBKRTradingProvider:
     marshal onto the main loop via run_coroutine_threadsafe.
     """
 
+    name = "ibkr"
+
     def __init__(self, ib, loop, default_account: str | None = None):
         self._ib = ib
         self._loop = loop
         self._default_account = default_account or os.environ.get("IBKR_DEFAULT_ACCOUNT", "").strip() or None
+
+    async def ping(self) -> None:
+        """Liveness probe for HeartbeatMonitor. Must not trigger reconnect —
+        a failed ping is the signal the monitor uses to mark us unhealthy."""
+        fut = asyncio.run_coroutine_threadsafe(
+            self._ib.reqCurrentTimeAsync(), self._loop
+        )
+        await asyncio.wrap_future(fut)
 
     def _run(self, coro, timeout: float = 30.0):
         """Schedule a coroutine on the main loop, block until done."""
