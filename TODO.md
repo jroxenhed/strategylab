@@ -34,7 +34,7 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 - [ ] **B3** New rule conditions: "MA21 turns up" (slope neg→pos), "MA8 turns down" (slope pos→neg), "MA8 decelerating" (S-G smoothed first derivative decreasing, i.e. second derivative negative; uses same S-G params as chart indicator). Target strategy: BUY when MA21 turns up AND NOT MA8 decelerating, SELL when MA8 turns down. Ensure crypto tickers work (BTC-USD via yfinance), test against BTC 2h.
 - [ ] **B4** Per-rule signal visualization toggles — eye icon on each rule row in strategy builder; when enabled, that rule's signals show as markers on the main chart during/after backtest. Replaces current hardcoded signal marker behavior. State stored with rule fields, persists with save/load. No global master toggle.
 - [ ] **B5** Borrow cost estimation (for live short positions on real accounts)
-- [ ] **B6** Realistic cost model in backtester — IBKR Fixed per-share commission, empirical per-symbol slippage from journal, short borrow cost. [spec](docs/superpowers/specs/2026-04-14-realistic-cost-model-design.md) approved, implementation plan pending.
+- [ ] **B6** Realistic cost model in backtester — IBKR Fixed per-share commission, empirical per-symbol slippage from journal, short borrow cost. [spec](docs/superpowers/specs/2026-04-14-realistic-cost-model-design.md), [plan](docs/superpowers/plans/2026-04-14-realistic-cost-model.md) — ready to execute.
   - Deferred (future enhancements, not part of v1):
     - Debit-balance-aware margin interest for shorts (charge margin rate only on days net cash is negative; v1 uses borrow-only)
     - IBKR Tiered pricing (exchange fees, SEC fee, FINRA TAF, clearing pass-throughs)

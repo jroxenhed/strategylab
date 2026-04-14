@@ -186,7 +186,7 @@ Parameters per MA: `sg8_window`, `sg8_poly`, `sg21_window`, `sg21_poly`, `predic
 - **Commission**: percentage of trade value, deducted from capital on both entry and exit
 - Both tracked per-trade in the trade list (`slippage` and `commission` fields)
 
-A full realistic cost model is planned (D8) covering per-share IBKR tiered commission, stock borrow cost, margin interest, and FX conversion. Not yet implemented.
+A realistic cost model is planned (TODO B6) covering IBKR Fixed per-share commission, empirical per-symbol slippage from the journal, and short borrow cost. Spec + implementation plan both written (see `docs/superpowers/plans/2026-04-14-realistic-cost-model.md`). Not yet executed.
 
 ## Short Selling (direction field)
 
