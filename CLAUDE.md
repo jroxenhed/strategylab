@@ -15,7 +15,7 @@ Interactive trading strategy backtester + live paper trading platform. Read this
 ## Stack
 
 - **Frontend**: React + TypeScript + Vite, lightweight-charts v5 (TradingView), TanStack Query
-- **Backend**: Python FastAPI, yfinance, pandas, numpy, scipy (S-G filters)
+- **Backend**: Python FastAPI, yfinance, pandas, numpy
 
 ```
 frontend/src/
@@ -66,7 +66,7 @@ backend/
   shared.py            — DataProvider protocol, providers (Yahoo/Alpaca/IBKR), _fetch() + TTL cache
   broker.py            — TradingProvider protocol, AlpacaTradingProvider, IBKRTradingProvider, broker registry
   models.py            — StrategyRequest, TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig
-  signal_engine.py     — Rule model, eval_rules(), S-G filters (causal/centered/predictive)
+  signal_engine.py     — Rule model, eval_rules()
   bot_manager.py       — BotConfig, BotState, BotManager singleton, bot persistence
   bot_runner.py        — async polling loop, entry/exit logic, position/fill management
   journal.py           — trade journal: log_trade(), compute_realized_pnl(), JSON storage
@@ -155,31 +155,15 @@ When Alpaca `end` date is today or future, the provider substitutes `now` so int
 
 lightweight-charts v5 has **no `localization.timeZone` support**. All unix timestamps are shifted to ET wall-clock time via `toET()` before being passed to any series. `toET()` uses `Intl.DateTimeFormat` with `America/New_York` to reconstruct the timestamp as UTC so the chart displays 9:30–16:00 for NYSE hours. Daily date strings pass through unchanged.
 
-## Signal Engine & S-G Filters
+## Signal Engine
 
-`signal_engine.py` — rule evaluation + Savitzky-Golay smoothing for MA indicators.
+`signal_engine.py` — rule evaluation for backtester + bot runner.
 
-### Rule model
+`Rule` fields: `indicator`, `condition`, `value`, `param`, `threshold`, `muted`, `negated`. Conditions include crossover, above/below, crosses_above/below, turns_up/turns_down (slope change detection).
 
-`Rule` has fields: `indicator`, `condition`, `value`, `param`, `threshold`, `muted`, `negated`. Conditions include crossover, above/below, crosses_above/below, turns_up/turns_down (slope change detection).
+**Rule negation (NOT):** `Rule.negated: bool`. Applied in `eval_rules()` — if `negated` and `i >= 1`, the rule result is inverted. Guard condition (`i < 1`) always returns False regardless of negation. UI: small **NOT** button on each rule row in RuleRow.tsx, orange when active.
 
-### Savitzky-Golay filters
-
-Three variants in `signal_engine.py`, all using `scipy.signal.savgol_filter`:
-
-- **Causal** (`_apply_sg(causal=True)`) — uses only past data, safe for backtesting. Each output bar is the S-G fit of the window ending at that bar.
-- **Centered** (`_apply_sg(causal=False)`) — symmetric window, for chart display only. Would cause lookahead bias in backtests.
-- **Predictive** (`_apply_sg_predictive()`) — fits polynomial to past `window` bars, evaluates it `(window-1)//2` bars ahead. Compensates causal lag using genuine prediction, not lookahead.
-
-Parameters per MA: `sg8_window`, `sg8_poly`, `sg21_window`, `sg21_poly`, `predictive_sg` (all on `StrategyRequest`).
-
-### Dead zone for turns_up/turns_down
-
-`eps = abs(v_now) * 3e-5` when S-G smoothing is active. Prevents micro-oscillations near flat regions from generating false slope-change signals. Without this, S-G smoothed curves that are nearly flat trigger spurious turns_up/turns_down.
-
-### Rule negation (NOT)
-
-`Rule.negated: bool`. Applied in `eval_rules()` — if `negated` and `i >= 1`, the rule result is inverted. Guard condition (`i < 1`) always returns False regardless of negation. UI: small **NOT** button on each rule row in RuleRow.tsx, orange when active.
+S-G (Savitzky-Golay) smoothing for MA8/MA21 exists but is experimental — revisit only on explicit request.
 
 ## Backtester Cost Model
 
@@ -222,10 +206,7 @@ Non-obvious bits:
 
 These document **why** certain patterns exist in the code:
 
-- **S-G lookahead bias**: centered S-G filter was being used in backtests, seeing future data. Fixed by adding causal mode (`_apply_sg(causal=True)`) that only uses past bars.
-- **S-G dead zone**: S-G smoothed flat curves triggered false turns_up/turns_down signals. Fixed with `eps = abs(v_now) * 3e-5` threshold.
 - **yf.download() concurrency**: `yfinance.download()` shares global state, returns wrong data under concurrent requests. All code uses `yf.Ticker(symbol).history()` via `_fetch()`.
-- **Signal trace wrong series**: backtest signal visualization was using raw MA values instead of S-G smoothed series. Fixed by using same `series_map` lookup as `eval_rule` in `backtest.py`.
 - **Bot P&L leak across recreations**: `compute_realized_pnl` filtered journal rows by `(symbol, direction)` only, so a new bot on the same symbol inherited the old (deleted) bot's P&L and sizing. Fixed by tagging every `_log_trade` with `bot_id` and filtering by it.
 - **Silent drop of bot config fields**: `AddBotRequest` in `routes/bots.py` duplicated `BotConfig` fields; any field missing from the duplicate was silently dropped by Pydantic's `extra="ignore"` default and replaced by the `BotConfig` default. Fixed by using `BotConfig` directly as the POST body schema.
 
