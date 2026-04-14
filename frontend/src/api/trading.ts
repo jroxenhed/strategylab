@@ -23,6 +23,7 @@ export interface Position {
   market_value: number
   unrealized_pl: number
   unrealized_pl_pct: number
+  broker: string
 }
 
 export interface Order {
@@ -35,6 +36,7 @@ export interface Order {
   filled_avg_price: string | null
   submitted_at: string
   filled_at: string | null
+  broker: string
 }
 
 export interface SignalResult {
@@ -85,6 +87,12 @@ export interface JournalTrade {
   source: string
   reason: string | null
   expected_price: number | null
+  broker: string | null
+}
+
+export interface StaleAware<T> {
+  rows: T[]
+  stale_brokers: string[]
 }
 
 export interface PerformanceRequest {
@@ -129,14 +137,14 @@ export async function fetchAccount(): Promise<Account> {
   return data
 }
 
-export async function fetchPositions(): Promise<Position[]> {
-  const { data } = await api.get('/api/trading/positions')
-  return data
+export async function fetchPositions(broker: string = 'all'): Promise<StaleAware<Position>> {
+  const { data } = await api.get('/api/trading/positions', { params: { broker } })
+  return { rows: data.positions ?? [], stale_brokers: data.stale_brokers ?? [] }
 }
 
-export async function fetchOrders(): Promise<Order[]> {
-  const { data } = await api.get('/api/trading/orders')
-  return data
+export async function fetchOrders(broker: string = 'all'): Promise<StaleAware<Order>> {
+  const { data } = await api.get('/api/trading/orders', { params: { broker } })
+  return { rows: data.orders ?? [], stale_brokers: data.stale_brokers ?? [] }
 }
 
 export async function placeBuy(symbol: string, qty: number, stop_loss_pct?: number) {
@@ -173,8 +181,9 @@ export async function saveWatchlist(symbols: string[]): Promise<void> {
   await api.post('/api/trading/watchlist', { symbols })
 }
 
-export async function fetchJournal(symbol?: string): Promise<JournalTrade[]> {
-  const params = symbol ? { symbol } : {}
+export async function fetchJournal(symbol?: string, broker: string = 'all'): Promise<JournalTrade[]> {
+  const params: Record<string, string> = { broker }
+  if (symbol) params.symbol = symbol
   const { data } = await api.get('/api/trading/journal', { params })
   return data.trades ?? []
 }
