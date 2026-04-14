@@ -32,12 +32,16 @@ export default function PositionsTable({ brokerFilter, onBrokerFilterChange, ava
   }, [brokerFilter])
 
   const entryTimeMap = new Map<string, string>()
+  const entryTimeFallback = new Map<string, string>()
   for (const t of journal) {
     if (t.source !== 'bot') continue
     const isEntry = t.side === 'buy' || t.side === 'short'
     if (!isEntry) continue
     const side = t.side === 'short' ? 'short' : 'long'
-    entryTimeMap.set(`${t.symbol}|${t.broker ?? ''}|${side}`, t.timestamp)
+    if (t.broker) {
+      entryTimeMap.set(`${t.symbol}|${t.broker}|${side}`, t.timestamp)
+    }
+    entryTimeFallback.set(`${t.symbol}|${side}`, t.timestamp)
   }
 
   const handleClose = async (symbol: string) => {
@@ -77,10 +81,11 @@ export default function PositionsTable({ brokerFilter, onBrokerFilterChange, ava
           {positions.map(p => {
             const plColor = p.unrealized_pl >= 0 ? '#26a641' : '#f85149'
             const entryKey = `${p.symbol}|${p.broker ?? ''}|${p.side}`
+            const opened = entryTimeMap.get(entryKey) ?? entryTimeFallback.get(`${p.symbol}|${p.side}`)
             return (
               <div key={entryKey} style={styles.row}>
                 <span style={styles.cell}>
-                  {entryTimeMap.get(entryKey) ? fmtShortET(entryTimeMap.get(entryKey)!) : '—'}
+                  {opened ? fmtShortET(opened) : '—'}
                 </span>
                 <span style={{ ...styles.cell, color: '#58a6ff', fontWeight: 600 }}>{p.symbol}</span>
                 <span style={styles.cell}>
