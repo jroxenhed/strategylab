@@ -41,6 +41,14 @@ async def lifespan(app: FastAPI):
     finally:
         await manager.shutdown()
         await monitor.stop()
+        from shared import get_ibkr_connection
+        ib = get_ibkr_connection()
+        if ib is not None:
+            try:
+                ib.disconnect()
+                print("[IBKR] Disconnected cleanly on shutdown")
+            except Exception as e:
+                print(f"[IBKR] Disconnect on shutdown failed: {e}")
 
 
 app = FastAPI(lifespan=lifespan)

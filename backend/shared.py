@@ -258,28 +258,45 @@ _ibkr_loop = None  # asyncio loop ib_insync is bound to (FastAPI's main loop)
 
 
 async def _create_ibkr_connection():
-    """Connect to IBKR Gateway. Returns IB instance or None if unavailable."""
+    """Connect to IBKR Gateway. Returns IB instance or None if unavailable.
+
+    If a prior process crashed without disconnecting, Gateway can still hold
+    the previous `clientId` for ~60s — reusing it raises Error 326 and
+    connectAsync hangs until timeout. Try a small range of ids so a cold
+    start survives an orphaned slot.
+    """
     host = os.environ.get("IBKR_HOST", "").strip()
     port = os.environ.get("IBKR_PORT", "").strip()
-    # Only attempt if at least one IBKR env var is explicitly set
     if not host and not port:
         return None
     host = host or "127.0.0.1"
     port = int(port or "4002")
-    client_id = int(os.environ.get("IBKR_CLIENT_ID", "1"))
-    try:
-        import asyncio
-        # ib_insync's getLoop() returns the policy's default loop, not the
-        # running loop — bind them so Futures get attached to FastAPI's loop.
-        asyncio.set_event_loop(asyncio.get_running_loop())
-        from ib_insync import IB
+    base_client_id = int(os.environ.get("IBKR_CLIENT_ID", "1"))
+
+    import asyncio
+    asyncio.set_event_loop(asyncio.get_running_loop())
+    from ib_insync import IB
+
+    last_err: Exception | None = None
+    for offset in range(8):
+        client_id = base_client_id + offset
         ib = IB()
-        await ib.connectAsync(host, port, clientId=client_id)
-        print(f"[IBKR] Connected to Gateway at {host}:{port}")
-        return ib
-    except Exception as e:
-        print(f"[IBKR] Gateway not available ({host}:{port}): {e}")
-        return None
+        try:
+            await asyncio.wait_for(
+                ib.connectAsync(host, port, clientId=client_id),
+                timeout=10.0,
+            )
+            print(f"[IBKR] Connected to Gateway at {host}:{port} (clientId={client_id})")
+            return ib
+        except Exception as e:
+            last_err = e
+            try:
+                ib.disconnect()
+            except Exception:
+                pass
+            print(f"[IBKR] clientId={client_id} failed ({type(e).__name__}: {e}); trying next")
+    print(f"[IBKR] Gateway not available ({host}:{port}): {last_err}")
+    return None
 
 
 def get_ibkr_connection():
