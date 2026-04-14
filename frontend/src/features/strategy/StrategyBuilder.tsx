@@ -5,6 +5,7 @@ import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopCon
 import type { MASettings } from '../../App'
 import RuleRow, { emptyRule, validateRules } from './RuleRow'
 import { api } from '../../api/client'
+import { useEmpiricalSlippage } from '../../shared/hooks/useEmpiricalSlippage'
 
 interface Props {
   ticker: string
@@ -40,6 +41,19 @@ function persistSavedStrategies(strategies: SavedStrategy[]) {
 
 export default function StrategyBuilder({ ticker, start, end, interval, onResult, dataSource, settingsPortalId, maSettings }: Props) {
   const saved = useState(() => loadStrategy())[0]
+
+  useEffect(() => {
+    const NOTIFY_KEY = 'commission_migration_notified'
+    if (localStorage.getItem(NOTIFY_KEY)) return
+    const legacy = saved && (saved.commission !== undefined) && saved.perShareRate === undefined
+    if (!legacy) return
+    alert(
+      'Commission model updated — now using IBKR per-share ($0.0035/share, $0.35 min). ' +
+      'Adjust in Settings if needed.'
+    )
+    localStorage.setItem(NOTIFY_KEY, '1')
+  }, [saved])
+
   const [buyRules, setBuyRules] = useState<Rule[]>(saved?.buyRules ?? [{ indicator: 'macd', condition: 'crossover_up' }])
   const [sellRules, setSellRules] = useState<Rule[]>(saved?.sellRules ?? [{ indicator: 'macd', condition: 'crossover_down' }])
   const [buyLogic, setBuyLogic] = useState<'AND' | 'OR'>(saved?.buyLogic ?? 'AND')
@@ -61,6 +75,11 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   })
   const [slippage, setSlippage] = useState<number | ''>(saved?.slippage ?? '')
   const [commission, setCommission] = useState<number | ''>(saved?.commission ?? '')
+  const [perShareRate, setPerShareRate] = useState<number>(saved?.perShareRate ?? 0.0035)
+  const [minPerOrder, setMinPerOrder] = useState<number>(saved?.minPerOrder ?? 0.35)
+  const [borrowRateAnnual, setBorrowRateAnnual] = useState<number>(saved?.borrowRateAnnual ?? 0.5)
+  const [slippageSource, setSlippageSource] = useState<'empirical' | 'default' | 'manual'>('default')
+  const { data: empiricalSlip } = useEmpiricalSlippage(ticker)
   const [direction, setDirection] = useState<'long' | 'short'>(saved?.direction ?? 'long')
   const [debug, setDebug] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -70,6 +89,17 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [showSaveAs, setShowSaveAs] = useState(false)
   const [saveAsName, setSaveAsName] = useState('')
 
+  useEffect(() => {
+    if (slippageSource === 'manual') return
+    if (empiricalSlip?.empirical_pct != null && empiricalSlip.fill_count > 0) {
+      setSlippage(empiricalSlip.empirical_pct)
+      setSlippageSource('empirical')
+    } else {
+      setSlippage(0.01)
+      setSlippageSource('default')
+    }
+  }, [empiricalSlip?.empirical_pct, empiricalSlip?.fill_count, slippageSource])
+
   function currentSnapshot(name: string): SavedStrategy {
     return {
       name, savedAt: new Date().toISOString(),
@@ -78,6 +108,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
       capital, posSize, stopLoss,
       trailingEnabled, trailingConfig, dynamicSizing, tradingHours,
       slippage, commission, direction,
+      perShareRate, minPerOrder, borrowRateAnnual,
     }
   }
 
@@ -98,6 +129,10 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     setTrailingEnabled(s.trailingEnabled); setTrailingConfig(s.trailingConfig)
     setDynamicSizing(s.dynamicSizing); setTradingHours(s.tradingHours)
     setSlippage(s.slippage); setCommission(s.commission)
+    setPerShareRate(s.perShareRate ?? 0.0035)
+    setMinPerOrder(s.minPerOrder ?? 0.35)
+    setBorrowRateAnnual(s.borrowRateAnnual ?? 0.5)
+    setSlippageSource('manual')
     setDirection(s.direction ?? 'long')
     setActiveStrategyName(s.name)
   }
@@ -123,8 +158,10 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({
       buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss,
       trailingEnabled, trailingConfig, dynamicSizing, tradingHours, slippage, commission, direction,
+      perShareRate, minPerOrder, borrowRateAnnual,
     }))
-  }, [buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, trailingEnabled, trailingConfig, dynamicSizing, tradingHours, slippage, commission, direction])
+  }, [buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, trailingEnabled, trailingConfig, dynamicSizing, tradingHours, slippage, commission, direction,
+      perShareRate, minPerOrder, borrowRateAnnual])
 
   async function runBacktest() {
     setLoading(true)
@@ -142,8 +179,10 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         trailing_stop: trailingEnabled ? trailingConfig : undefined,
         dynamic_sizing: dynamicSizing.enabled ? dynamicSizing : undefined,
         trading_hours: tradingHours.enabled ? tradingHours : undefined,
-        slippage_pct: slippage !== '' && slippage > 0 ? slippage : undefined,
-        commission_pct: commission !== '' && commission > 0 ? commission : undefined,
+        slippage_pct: slippage !== '' && slippage !== 0 ? slippage : undefined,
+        per_share_rate: perShareRate,
+        min_per_order: minPerOrder,
+        borrow_rate_annual: direction === 'short' ? borrowRateAnnual : 0,
         source: dataSource, debug, direction,
         ma_type: maSettings?.type,
         sg8_window: maSettings?.sg8Window,
@@ -182,12 +221,49 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
           </div>
           <div style={styles.settingsRow}>
             <label style={styles.settingsLabel}>Slippage (%)</label>
-            <input type="number" value={slippage} step={0.05} min={0} placeholder="0" onChange={e => setSlippage(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+            <input
+              type="number"
+              value={slippage}
+              step={0.005}
+              placeholder="0"
+              onChange={e => {
+                const v = e.target.value
+                if (v === '') {
+                  setSlippageSource('default')
+                  setSlippage(empiricalSlip?.empirical_pct ?? 0.01)
+                } else {
+                  setSlippage(+v)
+                  setSlippageSource('manual')
+                }
+              }}
+              style={styles.settingsInput}
+            />
+            <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 6 }}>
+              {slippageSource === 'empirical' && empiricalSlip
+                ? `empirical: ${empiricalSlip.fill_count} fills${(empiricalSlip.empirical_pct ?? 0) < 0 ? ' ⚠ favorable' : ''}`
+                : slippageSource === 'default'
+                ? 'default: 0.01%'
+                : 'manual'}
+            </span>
           </div>
           <div style={styles.settingsRow}>
-            <label style={styles.settingsLabel}>Commission (%)</label>
-            <input type="number" value={commission} step={0.05} min={0} placeholder="0" onChange={e => setCommission(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+            <label style={styles.settingsLabel}>Rate per share ($)</label>
+            <input type="number" value={perShareRate} step={0.0005} min={0} onChange={e => setPerShareRate(+e.target.value)} style={styles.settingsInput} />
           </div>
+          <div style={styles.settingsRow}>
+            <label style={styles.settingsLabel}>Min per order ($)</label>
+            <input type="number" value={minPerOrder} step={0.05} min={0} onChange={e => setMinPerOrder(+e.target.value)} style={styles.settingsInput} />
+          </div>
+
+          {direction === 'short' && (
+            <>
+              <div style={{ ...styles.groupTitle, marginTop: 12 }}>Short Costs</div>
+              <div style={styles.settingsRow}>
+                <label style={styles.settingsLabel}>Borrow rate (%/yr)</label>
+                <input type="number" value={borrowRateAnnual} step={0.1} min={0} onChange={e => setBorrowRateAnnual(+e.target.value)} style={styles.settingsInput} />
+              </div>
+            </>
+          )}
         </div>
 
         {/* Column 2: Risk Management */}
