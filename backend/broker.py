@@ -348,23 +348,36 @@ class IBKRTradingProvider:
     def get_positions(self, account_id: str | None = None) -> list[dict]:
         self._ensure_connected()
         acct = self._resolve_account(account_id)
-        # positions() reads cached state — safe to marshal via a no-op coro
+        # portfolio() returns PortfolioItems with marketPrice / marketValue /
+        # unrealizedPNL populated from Gateway's streaming portfolio
+        # subscription — positions() alone only gives contract+qty+avgCost.
         async def _get():
-            return self._ib.positions(acct) if acct else self._ib.positions()
-        positions = self._run(_get())
+            return self._ib.portfolio(acct) if acct else self._ib.portfolio()
+        items = self._run(_get())
         result = []
-        for p in positions:
+        for p in items:
             qty = float(p.position)
+            if qty == 0:
+                continue
             side = "long" if qty > 0 else "short"
+            # ib_insync reports avgCost per-contract (already share-scaled for
+            # stocks, multiplier-scaled for options). For stocks this is per
+            # share, matching Alpaca's avg_entry.
+            avg_entry = float(p.averageCost)
+            current = float(p.marketPrice or 0)
+            mkt_val = float(p.marketValue or 0)
+            upl = float(p.unrealizedPNL or 0)
+            cost_basis = avg_entry * abs(qty)
+            upl_pct = (upl / cost_basis * 100.0) if cost_basis else 0.0
             result.append({
                 "symbol": p.contract.symbol,
                 "qty": abs(qty),
                 "side": side,
-                "avg_entry": float(p.avgCost),
-                "current_price": 0.0,  # filled by caller if needed
-                "market_value": 0.0,
-                "unrealized_pl": 0.0,
-                "unrealized_pl_pct": 0.0,
+                "avg_entry": avg_entry,
+                "current_price": current,
+                "market_value": mkt_val,
+                "unrealized_pl": upl,
+                "unrealized_pl_pct": upl_pct,
             })
         return result
 
