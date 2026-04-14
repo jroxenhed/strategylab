@@ -4,11 +4,13 @@ Interactive trading strategy backtester + live paper trading platform. Read this
 
 ## Working Style
 
-- Work in small, focused steps. Report progress after each one.
-- Use Grep over Read when searching for a specific line or pattern.
+- **The task description IS the context.** Don't browse to "get oriented" — if the task is unclear, ask.
+- **No bulk reads.** No `cat`, no `ls *`, no reading full files to skim. Grep for the distinctive anchor, then Read only the small slice (±20 lines) around it.
+- **Grep over Read** whenever searching for a specific line, pattern, or symbol.
+- Work in small, focused steps. One-sentence narration before each. Commit per task, don't batch.
 - If hitting an error or blocker, STOP and report immediately — don't retry in a loop.
-- Narrate section-by-section during long writes — don't go silent for >60s.
-- Output reasoning progressively to avoid API stream idle timeouts.
+- Don't trust line numbers in docs/plans — they drift. Grep for the string anchor, then edit.
+- Output reasoning progressively to avoid API stream idle timeouts; never go silent for >60s.
 
 ## Stack
 
