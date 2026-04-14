@@ -41,6 +41,9 @@ class StrategyRequest(BaseModel):
     trailing_stop: Optional[TrailingStopConfig] = None
     slippage_pct: float = 0.0    # e.g. 0.1 means 0.1% worse fill on every trade
     commission_pct: float = 0.0  # e.g. 0.1 means 0.1% fee per trade
+    per_share_rate: float = 0.0035   # IBKR Fixed per-share commission
+    min_per_order: float = 0.35      # IBKR Fixed minimum per order
+    borrow_rate_annual: float = 0.5  # % per year, only applied when direction == "short"
     dynamic_sizing: Optional[DynamicSizingConfig] = None
     trading_hours: Optional[TradingHoursConfig] = None
     source: str = "yahoo"
