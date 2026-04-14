@@ -95,7 +95,7 @@ class BotRunner:
         start_date = (date.today() - timedelta(days=30)).isoformat()
 
         try:
-            df = await self._run_with_retry(
+            df = await self._run_in_executor(
                 _fetch, cfg.symbol, start_date, end_date, cfg.interval, cfg.data_source
             )
         except Exception as e:
