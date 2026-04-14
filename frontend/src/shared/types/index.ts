@@ -75,8 +75,15 @@ export interface TrailingStopConfig {
 
 export interface DynamicSizingConfig {
   enabled: boolean
-  consec_sls: number      // consecutive stop losses before reducing size
+  consec_sls: number      // consecutive qualifying stops before reducing size
   reduced_pct: number     // position size % to use when triggered
+  trigger?: 'sl' | 'tsl' | 'both'  // default 'sl'
+}
+
+export interface SkipAfterStopConfig {
+  enabled: boolean
+  count: number
+  trigger: 'sl' | 'tsl' | 'both'
 }
 
 export interface TradingHoursConfig {
@@ -100,6 +107,7 @@ export interface StrategyRequest {
   stop_loss_pct?: number
   trailing_stop?: TrailingStopConfig
   dynamic_sizing?: DynamicSizingConfig
+  skip_after_stop?: SkipAfterStopConfig
   trading_hours?: TradingHoursConfig
   slippage_pct?: number
   commission_pct?: number
@@ -134,6 +142,7 @@ export interface SavedStrategy {
   trailingEnabled: boolean
   trailingConfig: TrailingStopConfig
   dynamicSizing: DynamicSizingConfig
+  skipAfterStop?: SkipAfterStopConfig
   tradingHours: TradingHoursConfig
   slippage: number | ''
   commission: number | ''
@@ -273,6 +282,7 @@ export interface BotConfig {
   stop_loss_pct?: number
   trailing_stop?: TrailingStopConfig
   dynamic_sizing?: DynamicSizingConfig
+  skip_after_stop?: SkipAfterStopConfig
   trading_hours?: TradingHoursConfig
   slippage_pct?: number
   data_source?: string
