@@ -63,6 +63,7 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 - [ ] **D3** Bot lifecycle vs journal: decide whether deleting/recreating a bot should reset its displayed P&L (filter journal by `bot.created_at`)
 - [ ] **D4** Clean up dead `BotState.total_pnl` field once migration is safe (currently kept for legacy `bots.json` deserialization)
 - [ ] **D5** Journal helper call frequency — runs on bot tick (for sizing) and on summary fetch. Journal is JSON-parsed each time. Fine for now, but if it gets slow (thousands of entries) add an mtime-based cache.
+- [ ] **D7** Positions panel: union across all brokers by default — currently `/api/positions` only returns the globally-selected broker, so bots running on the non-selected broker are invisible. Aggregate positions from every registered provider, tag each row with its broker, add an optional broker filter. Same treatment probably wanted for Orders/Journal where applicable.
 - [ ] **D6** Active IBKR broker heartbeat — background task pings `reqCurrentTimeAsync` every ~30s, stores `last_broker_ok` timestamp, exposes via `/api/broker` so UI can show a colored dot next to the "via IBKR" badge. Complements the passive reconnect-on-stale-session already in `IBKRTradingProvider._ensure_connected` by giving pre-click visibility of connection health.
 
 ### Shipped
