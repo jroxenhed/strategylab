@@ -266,11 +266,12 @@ class IBKRTradingProvider:
 
     async def ping(self) -> None:
         """Liveness probe for HeartbeatMonitor. Must not trigger reconnect —
-        a failed ping is the signal the monitor uses to mark us unhealthy."""
-        fut = asyncio.run_coroutine_threadsafe(
-            self._ib.reqCurrentTimeAsync(), self._loop
-        )
-        await asyncio.wrap_future(fut)
+        a failed ping is the signal the monitor uses to mark us unhealthy.
+
+        Monitor runs on the same loop as `self._loop`, so we can await the
+        ib_insync Future directly; no cross-thread scheduling needed.
+        """
+        await self._ib.reqCurrentTimeAsync()
 
     def _run(self, coro, timeout: float = 30.0):
         """Schedule a coroutine on the main loop, block until done."""
