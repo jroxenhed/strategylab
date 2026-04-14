@@ -186,9 +186,17 @@ export async function fetchPerformance(req: PerformanceRequest): Promise<Perform
 
 // --- Broker ---
 
+export interface BrokerHealth {
+  healthy: boolean
+  last_ok_ts: number | null
+  last_error: string | null
+}
+
 export interface BrokerInfo {
   active: string
   available: string[]
+  health: Record<string, BrokerHealth>
+  heartbeat_warmup: boolean
 }
 
 export async function fetchBroker(): Promise<BrokerInfo> {

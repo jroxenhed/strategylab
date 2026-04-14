@@ -69,7 +69,8 @@ export function useBroker() {
   const query = useQuery<BrokerInfo>({
     queryKey: ['broker'],
     queryFn: fetchBroker,
-    staleTime: 30_000,
+    staleTime: 10_000,
+    refetchInterval: 10_000,
   })
 
   const switchBroker = async (broker: string) => {
@@ -84,6 +85,8 @@ export function useBroker() {
   return {
     broker: query.data?.active ?? 'alpaca',
     available: query.data?.available ?? [],
+    health: query.data?.health ?? {},
+    heartbeatWarmup: query.data?.heartbeat_warmup ?? false,
     isLoading: query.isLoading,
     switchBroker,
   }

@@ -6,7 +6,7 @@ export default function AccountBar() {
   const [account, setAccount] = useState<Account | null>(null)
   const [error, setError] = useState<string | null>(null)
   const hasLoaded = useState({ value: false })[0]
-  const { broker, available, switchBroker } = useBroker()
+  const { broker, available, health, heartbeatWarmup, switchBroker } = useBroker()
 
   useEffect(() => {
     const load = () => {
@@ -35,25 +35,50 @@ export default function AccountBar() {
         <div style={styles.brokerSelector}>
           <span style={styles.brokerLabel}>Broker</span>
           <div style={styles.brokerToggle}>
-            {available.map(b => (
-              <button
-                key={b}
-                onClick={() => switchBroker(b)}
-                style={{
-                  padding: '3px 10px',
-                  fontSize: 11,
-                  fontWeight: 600,
-                  background: broker === b ? '#30363d' : 'transparent',
-                  color: broker === b ? '#e6edf3' : '#8b949e',
-                  border: 'none',
-                  borderRadius: 4,
-                  cursor: 'pointer',
-                  textTransform: 'uppercase' as const,
-                }}
-              >
-                {b}
-              </button>
-            ))}
+            {available.map(b => {
+              const h = health[b]
+              const hasHealth = !!h
+              const dotColor = heartbeatWarmup
+                ? '#9ca3af'
+                : h?.healthy === true
+                  ? '#10b981'
+                  : hasHealth
+                    ? '#ef4444'
+                    : null
+              const title = heartbeatWarmup
+                ? 'Broker heartbeat warming up…'
+                : hasHealth
+                  ? h.healthy
+                    ? `${b.toUpperCase()} OK — last ping ${h.last_ok_ts ?? '—'}`
+                    : `${b.toUpperCase()} disconnected — ${h.last_error ?? 'unknown error'}`
+                  : undefined
+              return (
+                <button
+                  key={b}
+                  title={title}
+                  onClick={() => switchBroker(b)}
+                  style={{
+                    padding: '3px 10px',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    background: broker === b ? '#30363d' : 'transparent',
+                    color: broker === b ? '#e6edf3' : '#8b949e',
+                    border: 'none',
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                    textTransform: 'uppercase' as const,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                  }}
+                >
+                  {dotColor && (
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: dotColor }} />
+                  )}
+                  {b}
+                </button>
+              )
+            })}
           </div>
         </div>
       )}
