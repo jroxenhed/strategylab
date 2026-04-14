@@ -421,6 +421,24 @@ class BotRunner:
                 order_id = close_result.order_id
                 sell_fill = await self._get_fill_price_provider(provider, order_id, price) if order_id else price
 
+                # Verify the position actually closed before clearing state or journaling.
+                # IBKR placeOrder returns order_id synchronously; rejects/non-fills are async.
+                # Without this check, a rejected order yielded a phantom SELL row + cleared
+                # state, causing the bot to re-fire the close every tick while the real
+                # position stayed open.
+                try:
+                    post_positions = await self._run_in_executor(provider.get_positions)
+                    still_open = any(
+                        p["symbol"] == cfg.symbol.upper() and p["side"] == cfg.direction
+                        for p in post_positions
+                    )
+                except Exception as e:
+                    self._log("WARN", f"Post-close position check failed: {e}")
+                    return
+                if still_open:
+                    self._log("ERROR", f"Close order {order_id} did not reduce position — leaving state intact")
+                    return
+
                 if is_short:
                     pnl = (state.entry_price - sell_fill) * broker_qty if state.entry_price else 0
                 else:
