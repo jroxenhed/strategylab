@@ -181,12 +181,15 @@ Parameters per MA: `sg8_window`, `sg8_poly`, `sg21_window`, `sg21_poly`, `predic
 
 ## Backtester Cost Model
 
-`StrategyRequest` has `slippage_pct` and `commission_pct` (both default 0.0):
-- **Slippage**: applied directionally — longs fill higher on entry / lower on exit, shorts the inverse
-- **Commission**: percentage of trade value, deducted from capital on both entry and exit
-- Both tracked per-trade in the trade list (`slippage` and `commission` fields)
+`StrategyRequest` cost fields:
+- `slippage_pct` — signed % applied directionally (longs worse on entry, better on exit; shorts inverse). Negative values = favorable fills.
+- `per_share_rate` (default `0.0035`) + `min_per_order` (default `0.35`) — IBKR Fixed per-share commission, charged per leg via `per_leg_commission(shares, req)` in `routes/backtest.py`.
+- `borrow_rate_annual` (default `0.5` %) — annual short borrow rate. `borrow_cost(...)` computes `shares * entry_price * (rate/100/365) * hold_days` and deducts from short PnL. Zero for longs.
+- Each trade carries `slippage`, `commission`, and `borrow_cost` fields.
 
-A realistic cost model is planned (TODO B6) covering IBKR Fixed per-share commission, empirical per-symbol slippage from the journal, and short borrow cost. Spec + implementation plan both written (see `docs/superpowers/plans/2026-04-14-realistic-cost-model.md`). Not yet executed.
+Empirical slippage: `GET /api/slippage/{symbol}` returns `{empirical_pct, fill_count}` derived from the trade journal (signed by side — buy/cover worse if fill above expected, sell/short worse if below). Frontend hook: `useEmpiricalSlippage`. StrategyBuilder offers a manual/empirical toggle per symbol; Results has a Borrow column + a Cost Breakdown summary (commission / borrow / slippage / total drag %).
+
+Deferred to v2 (see TODO): debit-balance margin interest, IBKR Tiered pricing, hard-to-borrow dynamic rates, FX conversion.
 
 ## Short Selling (direction field)
 
