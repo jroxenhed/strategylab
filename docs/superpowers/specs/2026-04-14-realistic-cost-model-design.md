@@ -89,22 +89,23 @@ borrow_rate_annual: float = 0.5   # % per year
 ### New helper in `routes/backtest.py`
 
 ```python
-def calculate_trade_costs(shares, entry_price, direction, entry_ts, exit_ts, req):
-    entry_commission = max(shares * req.per_share_rate, req.min_per_order)
-    exit_commission  = max(shares * req.per_share_rate, req.min_per_order)
-    borrow = 0.0
-    if direction == "short" and req.borrow_rate_annual > 0:
-        hold_days = (exit_ts - entry_ts).total_seconds() / 86400
-        position_value = shares * entry_price
-        borrow = position_value * (req.borrow_rate_annual / 100 / 365) * hold_days
-    return {
-        "entry_commission": round(entry_commission, 4),
-        "exit_commission": round(exit_commission, 4),
-        "borrow_cost": round(borrow, 4),
-    }
+def per_leg_commission(shares, req):
+    return max(shares * req.per_share_rate, req.min_per_order)
+
+def borrow_cost(shares, entry_price, entry_ts, exit_ts, direction, req):
+    if direction != "short" or req.borrow_rate_annual <= 0:
+        return 0.0
+    hold_days = (exit_ts - entry_ts).total_seconds() / 86400
+    position_value = shares * entry_price
+    return position_value * (req.borrow_rate_annual / 100 / 365) * hold_days
 ```
 
-Integration: entry commission deducted from `capital` at entry time (replacing current flat-% line). Exit commission and borrow cost deducted at exit time from the trade's reported PnL (same pattern as existing commission handling: `pnl = gross_pnl - exit_commission - borrow_cost`). The trade record stores all three as separate fields (`entry_commission`, `exit_commission`, `borrow_cost`) plus the existing `slippage` field, so the Trades tab can show a per-row breakdown and the Summary can sum them independently.
+**Per-trade-leg field layout** (keeps existing schema, minimal diff):
+
+- Entry leg (`buy` / `short`): writes `commission` and `slippage` fields as today. Formula for `commission` changes from `shares × price × commission_pct` to `per_leg_commission(shares, req)`.
+- Exit leg (`sell` / `cover`): writes `commission` and `slippage` as today. Also writes a new `borrow_cost` field (0.0 for longs).
+
+Integration: entry commission deducted from `capital` at entry time. Exit commission + borrow cost deducted from trade PnL at exit time (`pnl = gross_pnl - exit_commission - borrow_cost`). No new `entry_commission` / `exit_commission` fields — the existing per-leg `commission` field already carries each leg's value and the Trades tab already sums `buy.commission + sell.commission` into its "Comm" column. Only a new `Borrow` column (and the `borrow_cost` type field) is added.
 
 ### New route `routes/backtest.py` (or new file): `GET /api/slippage/{symbol}`
 
@@ -121,8 +122,8 @@ Or `{"empirical_pct": null, "fill_count": 0}` when no data. O(n) over journal, j
 ### `shared/types/index.ts`
 
 - Add `per_share_rate: number`, `min_per_order: number`, `borrow_rate_annual: number` to `StrategyRequest`
-- Add `entry_commission`, `exit_commission`, `borrow_cost` to `Trade`
-- Keep existing `commission` and `slippage` trade fields (aggregated by caller for backward-compatible display)
+- Add `borrow_cost: number` to `Trade` (present on exit legs, 0.0 for longs)
+- Keep existing `commission` and `slippage` trade fields exactly as-is — the Trades tab's existing `buy.commission + sell.commission` sum logic continues to work unchanged; only the backend formula that populates `commission` changes
 
 ### `shared/hooks/` — new `useEmpiricalSlippage(symbol)`
 
@@ -160,7 +161,7 @@ Suppression flag stored in `localStorage` under `commission_migration_notified`.
 
 ### `features/strategy/Results.tsx`
 
-**Trades tab:** new columns — `Commission`, `Borrow`, `Slippage`, `Total Cost` per trade. Borrow column shows `—` for longs.
+**Trades tab:** existing `Slip` and `Comm` columns stay as-is (values change because backend formula changed, column logic unchanged). Add one new column `Borrow` showing `sell.borrow_cost` for shorts and `—` for longs.
 
 **Summary tab:** new "Cost Breakdown" block positioned near the existing P&L metrics:
 
