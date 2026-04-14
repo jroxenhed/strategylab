@@ -137,7 +137,7 @@ class BotRunner:
                     if pos["side"] != cfg.direction:
                         continue
                     has_position = True
-                    broker_qty = pos["qty"]
+                    broker_qty = abs(pos["qty"])
                     if state.entry_price is None:
                         state.entry_price = pos["avg_entry"]
                         state.trail_peak = price

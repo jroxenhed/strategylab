@@ -69,11 +69,11 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
     const dir = t.side === 'buy' || t.side === 'sell' ? 'long' : 'short'
     const key = `${t.symbol}:${dir}`
     if (isEntry) {
-      lastEntry.set(key, { price: t.price, qty: t.qty })
+      lastEntry.set(key, { price: t.price, qty: Math.abs(t.qty) })
     } else {
       const entry = lastEntry.get(key)
       if (entry != null) {
-        const qty = Math.min(entry.qty, t.qty)
+        const qty = Math.min(entry.qty, Math.abs(t.qty))
         const pnl = dir === 'short'
           ? (entry.price - t.price) * qty
           : (t.price - entry.price) * qty
