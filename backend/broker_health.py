@@ -58,7 +58,9 @@ class HeartbeatMonitor:
                 reconnect = getattr(provider, "reconnect", None)
                 if reconnect is not None:
                     try:
-                        await asyncio.wait_for(reconnect(), timeout=self._timeout)
+                        # Reconnect handshake can take longer than a ping —
+                        # IBKR connectAsync waits on Gateway auth.
+                        await asyncio.wait_for(reconnect(), timeout=self._timeout * 3)
                         await asyncio.wait_for(ping(), timeout=self._timeout)
                         err = None
                     except Exception as e2:

@@ -263,6 +263,8 @@ class IBKRTradingProvider:
         self._ib = ib
         self._loop = loop
         self._default_account = default_account or os.environ.get("IBKR_DEFAULT_ACCOUNT", "").strip() or None
+        self._base_client_id = int(os.environ.get("IBKR_CLIENT_ID", "1"))
+        self._client_id_offset = 0
 
     async def ping(self) -> None:
         """Liveness probe for HeartbeatMonitor. Must not trigger reconnect —
@@ -288,7 +290,11 @@ class IBKRTradingProvider:
         if not self._ib.isConnected():
             host = os.environ.get("IBKR_HOST", "127.0.0.1")
             port = int(os.environ.get("IBKR_PORT", "4002"))
-            client_id = int(os.environ.get("IBKR_CLIENT_ID", "1"))
+            # Gateway may still hold the prior clientId slot after a silent TCP
+            # drop — reusing it triggers Error 326. Rotate within a small range
+            # so each reconnect attempt looks like a new client.
+            client_id = self._base_client_id + (self._client_id_offset % 8)
+            self._client_id_offset += 1
             await self._ib.connectAsync(host, port, clientId=client_id)
 
     async def _reconnect_async(self):
