@@ -195,74 +195,21 @@ Deferred to v2 (see TODO): debit-balance margin interest, IBKR Tiered pricing, h
 
 ## Short Selling (direction field)
 
-`StrategyRequest` and `BotConfig` both have `direction: str = "long"` (accepts `"long"` or `"short"`, defaults to `"long"` for backwards compatibility).
+`StrategyRequest` and `BotConfig` have `direction: "long" | "short"` (defaults to `"long"`). The rule engine (`eval_rules`) is **direction-agnostic** — all inversion happens at execution boundaries.
 
-The rule engine (`eval_rules`) is **direction-agnostic**. All inversion happens at execution boundaries:
-
-- **Entry**: short fills lower (slippage against seller), `OrderSide.SELL` for Alpaca
-- **Stop-loss**: triggers above entry for shorts (`high >= entry * (1 + pct)`)
-- **Trailing stop**: tracks trough (lowest price) instead of peak; `source: "high"` maps to Low for shorts
-- **PnL**: `(entry - exit) * shares` for shorts
-- **Equity while holding**: `capital + shares * (entry - price)` unrealized
-- **Trade types**: `"short"` / `"cover"` instead of `"buy"` / `"sell"`
-- **Chart markers**: short entry = arrow down (above bar), cover = arrow up (below bar), same yellow/green/red colors
-
-Bot runner for shorts: **no OTO brackets** — all stops managed via polling (Alpaca OTO doesn't cleanly support stops above entry). Same-symbol guard allows one long + one short bot simultaneously.
-
-Frontend: direction toggle in strategy builder (labels swap to "Entry Rules" / "Exit Rules"), direction dropdown in AddBotBar, direction badge + subtle background tint on bot cards.
-
-### Trailing stop — profit activation threshold
-
-`TrailingStopConfig` has `activate_pct: float = 0.0`. When `activate_on_profit` is true, trailing only starts once `source_price >= entry_price * (1 + activate_pct / 100)`. Set to e.g. 2.0 to give a position room to breathe before the trailing stop starts following.
+Non-obvious bits:
+- Stop-loss for shorts triggers **above** entry (`high >= entry * (1 + pct)`); trailing stop tracks trough not peak.
+- PnL: `(entry - exit) * shares` for shorts; trade types are `"short"` / `"cover"`.
+- **No OTO brackets for shorts** — Alpaca OTO doesn't cleanly support stops above entry, so all short stops managed via polling. Same-symbol guard allows one long + one short bot simultaneously.
+- `TrailingStopConfig.activate_pct` — when `activate_on_profit` is true, trailing starts only once `source_price >= entry * (1 + activate_pct/100)`. Gives positions room to breathe.
 
 ## Bot System
 
-### Architecture
-
-- `bot_manager.py` — `BotManager` singleton manages lifecycle. `BotConfig` (Pydantic) for settings, `BotState` (dataclass) for runtime. Persists to `backend/data/bots.json`. Loaded at startup via FastAPI lifespan.
-- `bot_runner.py` — async `_tick()` loop per bot. Evaluates strategy rules against live bars, manages entry/exit, polls for fills, handles stop-losses. Uses `TradingProvider` abstraction (broker-agnostic).
-- `journal.py` — trade journal stored as JSON at `backend/data/trade_journal.json`. `_log_trade()` records entries/exits with fill prices, slippage, timestamps, and `bot_id`. `compute_realized_pnl(symbol, direction, bot_id)` and `first_bot_entry_time(...)` scope results to a specific bot — deleting a bot and recreating on the same symbol+direction starts with a clean P&L; legacy trades (no `bot_id`) are excluded from every bot's aggregation.
-- `routes/bots.py` — CRUD API, delegates to BotManager. No direct broker imports.
-- `routes/trading.py` — account/positions/orders endpoints, buy/sell actions, signal scan. Uses `TradingProvider` abstraction (broker-agnostic).
-
-### Bot runner details
-
-- Allocation compounds: `allocated_capital + total_pnl`, matching backtest behavior
-- Position size hardcoded to 100% of allocation
-- Trailing stops polled every tick (no server-side OTO for shorts)
-- Fill detection: polls broker fill price via `TradingProvider`, logs expected vs actual slippage in journal
-
-## IBKR Broker Integration (D7 — implemented)
-
-Spec at `docs/superpowers/specs/2026-04-13-ibkr-broker-integration-design.md`.
-
-### ib_insync wiring
-- Gateway must have Read-Only API unchecked (Configure → Settings → API) — otherwise Error 321 on order submission
-- `asyncio.set_event_loop(asyncio.get_running_loop())` required before the first ib_insync import to bind it to FastAPI's running loop (not the policy default)
-- Always use async methods: `connectAsync()`, `reqHistoricalDataAsync()`, `accountSummaryAsync()`, `reqAllOpenOrdersAsync()` etc.
-- ib_insync runs its own event loop — don't mix with `asyncio.run()`
-- Sync FastAPI routes run in AnyIO worker threads with no event loop — both providers capture the main loop at startup and use `asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=...)` via a `_run()` helper to marshal calls back onto it
-- Reconnection: wrap calls in try/except, call `ib.connectAsync()` on disconnect
-- Error 162 "different IP address": IBKR single-session — usually caused by a concurrent mobile or browser login, not a code bug
-
-### Architecture
-- `broker.py` — `TradingProvider` protocol, `OrderRequest`/`OrderResult` dataclasses, `AlpacaTradingProvider`, `IBKRTradingProvider`, broker registry
-- `OrderRequest` has optional `account_id: str | None` for future ISK vs margin routing within IBKR
-- Single shared `ib_insync.IB()` instance for both trading and data, initialized in FastAPI lifespan (`init_ibkr()` in `shared.py`, `await`ed from `main.py`)
-- IBKR connects to IB Gateway: `IBKR_HOST:IBKR_PORT` (default 127.0.0.1:4002) — only attempts connection if env vars are set
-- Stop-losses managed via polling for all IBKR trades (no OTO brackets)
-- All consumers (`bot_runner.py`, `routes/trading.py`, `bot_manager.py`) use `get_trading_provider(name)` — no direct Alpaca SDK imports
-
-### Per-bot broker selection
-Each bot picks its own broker at creation — enables e.g. long bot on IBKR ISK + short bot on IBKR margin for the same ticker.
-
-- `BotConfig.broker: str = "alpaca"` persisted to `bots.json`; AddBotBar has a `via Alpaca` / `via IBKR` dropdown
-- `get_trading_provider(name: str | None = None)` — bots pass their own `config.broker`; AccountBar/trading routes fall back to the globally active broker (`ACTIVE_BROKER` env or `PUT /api/broker`)
-- `BotCard` displays the broker in amber (`via IBKR`) or blue (`via Alpaca`) after the data source
-- Broker is **immutable after creation** — editing it mid-life would orphan the bot from its existing positions/journal rows. Delete & recreate to "change" brokers.
-
-### AddBotRequest deprecation
-`routes/bots.py POST /api/bots` originally had a hand-written `AddBotRequest` Pydantic model that mirrored `BotConfig` fields. Any field added to `BotConfig` but forgotten in `AddBotRequest` was silently dropped by Pydantic's default `extra="ignore"`, falling back to the `BotConfig` default — `data_source` and `broker` both had this bug historically. **Fix: the route now takes `BotConfig` directly**, so any new field on `BotConfig` is accepted without route changes. `UpdateBotRequest` for PATCH stays hand-written because partial-update semantics need every field Optional.
+- `BotManager` singleton persists to `backend/data/bots.json`, loaded at FastAPI lifespan.
+- `bot_runner._tick()` async loop per bot; uses `TradingProvider` abstraction — no direct broker SDK imports anywhere.
+- Allocation **compounds**: `allocated_capital + total_pnl` (matches backtest). Position size hardcoded 100%.
+- Journal rows tagged with `bot_id`; `compute_realized_pnl(symbol, direction, bot_id)` scopes per-bot so delete+recreate starts clean. Legacy untagged rows excluded.
+- **IBKR integration (D7) shipped** — details + operational gotchas (Read-Only mode, Error 162, ib_insync rules, Pydantic route-model trap) live in memory, not here.
 
 ## Discovery Page
 
