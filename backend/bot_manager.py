@@ -18,7 +18,7 @@ from typing import Optional
 
 from pydantic import BaseModel, field_validator
 
-from models import TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, StrategyRequest
+from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest
 from routes.backtest import run_backtest
 from signal_engine import Rule
 from shared import _fetch
@@ -53,6 +53,7 @@ class BotConfig(BaseModel):
     stop_loss_pct: Optional[float] = None
     trailing_stop: Optional[TrailingStopConfig] = None
     dynamic_sizing: Optional[DynamicSizingConfig] = None
+    skip_after_stop: Optional[SkipAfterStopConfig] = None
     trading_hours: Optional[TradingHoursConfig] = None
     slippage_pct: float = 0.0
     data_source: str = "alpaca-iex"    # yahoo | alpaca | alpaca-iex | ibkr
@@ -81,6 +82,7 @@ class BotState:
 
     # Dynamic sizing state
     consec_sl_count: int = 0
+    skip_remaining: int = 0           # entries remaining to skip after a qualifying stop
 
     # Aggregate stats
     scans_count: int = 0
@@ -107,6 +109,7 @@ class BotState:
             "trail_peak": self.trail_peak,
             "trail_stop_price": self.trail_stop_price,
             "consec_sl_count": self.consec_sl_count,
+            "skip_remaining": self.skip_remaining,
             "scans_count": self.scans_count,
             "trades_count": self.trades_count,
             "total_pnl": self.total_pnl,
@@ -243,6 +246,7 @@ class BotManager:
             stop_loss_pct=config.stop_loss_pct,
             trailing_stop=config.trailing_stop,
             dynamic_sizing=config.dynamic_sizing,
+            skip_after_stop=config.skip_after_stop,
             trading_hours=config.trading_hours,
             slippage_pct=config.slippage_pct,
             source=config.data_source,
