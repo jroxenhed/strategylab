@@ -272,10 +272,30 @@ class IBKRTradingProvider:
             client_id = int(os.environ.get("IBKR_CLIENT_ID", "1"))
             await self._ib.connectAsync(host, port, clientId=client_id)
 
+    async def _reconnect_async(self):
+        try:
+            if self._ib.isConnected():
+                self._ib.disconnect()
+        except Exception:
+            pass
+        await self._ensure_connected_async()
+
     def _ensure_connected(self):
-        """Reconnect if Gateway dropped the connection (marshals to main loop)."""
+        """Verify Gateway session is alive; reconnect if stale.
+
+        `ib_insync.isConnected()` can return True after the Gateway has silently
+        dropped the TCP session (common after long idle / overnight reauth). A
+        cheap `reqCurrentTime` ping on every call catches that case and forces a
+        reconnect before the real call hangs. Gateway is local so latency is
+        negligible.
+        """
         if not self._ib.isConnected():
-            self._run(self._ensure_connected_async())
+            self._run(self._reconnect_async())
+            return
+        try:
+            self._run(self._ib.reqCurrentTimeAsync(), timeout=5.0)
+        except Exception:
+            self._run(self._reconnect_async())
 
     def _contract(self, symbol: str):
         from ib_insync import Stock
