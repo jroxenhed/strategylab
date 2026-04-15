@@ -169,7 +169,11 @@ class BotRunner:
                             exit_price = float(o["filled_avg_price"])
                             exit_qty = float(o.get("qty", 0))
                             order_type = o.get("type", "")
-                            if order_type in ("stop", "stop_limit"):
+                            # If this fill matches the bot's own pending close,
+                            # recover the real reason instead of labelling it external.
+                            if state.pending_close_order_id and o.get("id") == state.pending_close_order_id and state.pending_close_reason:
+                                exit_reason = state.pending_close_reason
+                            elif order_type in ("stop", "stop_limit"):
                                 exit_reason = "stop_loss"
                             elif order_type == "trailing_stop":
                                 exit_reason = "trailing_stop"
@@ -222,6 +226,8 @@ class BotRunner:
             state.entry_price = None
             state.trail_peak = None
             state.trail_stop_price = None
+            state.pending_close_order_id = None
+            state.pending_close_reason = None
 
             if not in_hours:
                 self._log("INFO", "Outside trading hours — skipping entry")
@@ -430,24 +436,35 @@ class BotRunner:
 
                 # Get actual fill price
                 order_id = close_result.order_id
+                # Stash pending close so the next tick recognizes the fill as ours
+                # even if the broker hasn't dropped the position from get_positions yet.
+                state.pending_close_order_id = order_id
+                state.pending_close_reason = exit_reason
+                self.manager.save()
+
                 sell_fill = await self._get_fill_price_provider(provider, order_id, price) if order_id else price
 
                 # Verify the position actually closed before clearing state or journaling.
                 # IBKR placeOrder returns order_id synchronously; rejects/non-fills are async.
-                # Without this check, a rejected order yielded a phantom SELL row + cleared
-                # state, causing the bot to re-fire the close every tick while the real
-                # position stayed open.
-                try:
-                    post_positions = await self._run_in_executor(provider.get_positions)
-                    still_open = any(
-                        p["symbol"] == cfg.symbol.upper() and p["side"] == cfg.direction
-                        for p in post_positions
-                    )
-                except Exception as e:
-                    self._log("WARN", f"Post-close position check failed: {e}")
-                    return
+                # Alpaca also lags briefly between fill and position update — retry ~3s
+                # before giving up, otherwise the bot rediscovers its own sale next tick
+                # and labels it "external".
+                still_open = True
+                for _ in range(6):
+                    try:
+                        post_positions = await self._run_in_executor(provider.get_positions)
+                        still_open = any(
+                            p["symbol"] == cfg.symbol.upper() and p["side"] == cfg.direction
+                            for p in post_positions
+                        )
+                    except Exception as e:
+                        self._log("WARN", f"Post-close position check failed: {e}")
+                        return
+                    if not still_open:
+                        break
+                    await asyncio.sleep(0.5)
                 if still_open:
-                    self._log("ERROR", f"Close order {order_id} did not reduce position — leaving state intact")
+                    self._log("ERROR", f"Close order {order_id} did not reduce position after 3s — leaving state intact")
                     return
 
                 if is_short:
@@ -493,6 +510,8 @@ class BotRunner:
                 state.entry_price = None
                 state.trail_peak = None
                 state.trail_stop_price = None
+                state.pending_close_order_id = None
+                state.pending_close_reason = None
                 self.manager.save()
 
     async def run(self):

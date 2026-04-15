@@ -82,6 +82,12 @@ class BotState:
     trail_peak: Optional[float] = None
     trail_stop_price: Optional[float] = None
 
+    # Pending close: set when the bot submits an exit order, consumed once the
+    # fill is observed. Lets a later "externally-closed" tick recognize its own
+    # order and label it with the real reason instead of "external".
+    pending_close_order_id: Optional[str] = None
+    pending_close_reason: Optional[str] = None
+
     # Dynamic sizing state
     consec_sl_count: int = 0
     skip_remaining: int = 0           # entries remaining to skip after a qualifying stop
@@ -110,6 +116,8 @@ class BotState:
             "entry_price": self.entry_price,
             "trail_peak": self.trail_peak,
             "trail_stop_price": self.trail_stop_price,
+            "pending_close_order_id": self.pending_close_order_id,
+            "pending_close_reason": self.pending_close_reason,
             "consec_sl_count": self.consec_sl_count,
             "skip_remaining": self.skip_remaining,
             "scans_count": self.scans_count,
