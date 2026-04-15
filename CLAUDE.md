@@ -168,12 +168,12 @@ S-G (Savitzky-Golay) smoothing for MA8/MA21 exists but is experimental — revis
 ## Backtester Cost Model
 
 `StrategyRequest` cost fields:
-- `slippage_pct` — signed % applied directionally (longs worse on entry, better on exit; shorts inverse). Negative values = favorable fills.
+- `slippage_bps` — unsigned modeled cost per leg (≥ 0, default 2.0 bps). Applied as `price * (1 ± drag)` directionally (longs worse on entry / better on exit, shorts inverse). All sign/unit conventions live in `backend/slippage.py` — never reinvent them. Helpers: `slippage_cost_bps(side, expected, fill) → ≥0`, `fill_bias_bps(side, expected, fill) → signed` (positive = favorable), `decide_modeled_bps(symbol) → ModeledSlippage` (policy: empirical can only floor *up* from the 2 bps default — favorable empirical never makes the backtest cheaper).
 - `per_share_rate` (default `0.0035`) + `min_per_order` (default `0.35`) — IBKR Fixed per-share commission, charged per leg via `per_leg_commission(shares, req)` in `routes/backtest.py`.
 - `borrow_rate_annual` (default `0.5` %) — annual short borrow rate. `borrow_cost(...)` computes `shares * entry_price * (rate/100/365) * hold_days` and deducts from short PnL. Zero for longs.
-- Each trade carries `slippage`, `commission`, and `borrow_cost` fields.
+- Each trade carries `slippage`, `commission`, and `borrow_cost` fields. Journal rows additionally cache `slippage_bps` (unsigned cost) when `expected_price` is set.
 
-Empirical slippage: `GET /api/slippage/{symbol}` returns `{empirical_pct, fill_count}` derived from the trade journal (signed by side — buy/cover worse if fill above expected, sell/short worse if below). Frontend hook: `useEmpiricalSlippage`. StrategyBuilder offers a manual/empirical toggle per symbol; Results has a Borrow column + a Cost Breakdown summary (commission / borrow / slippage / total drag %).
+Slippage endpoint: `GET /api/slippage/{symbol}` returns `{modeled_bps, measured_bps, fill_bias_bps, fill_count, source}` where `source` is `'default' | 'empirical'`. Frontend hook: `useSlippage` (`shared/hooks/useSlippage.ts`). StrategyBuilder displays modeled bps with source label; TradeJournal shows unsigned per-fill cost in bps; BotCard surfaces `avg_cost_bps`. Results has a Borrow column + Cost Breakdown summary (commission / borrow / slippage / total drag %).
 
 Deferred to v2 (see TODO): debit-balance margin interest, IBKR Tiered pricing, hard-to-borrow dynamic rates, FX conversion.
 
