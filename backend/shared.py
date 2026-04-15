@@ -382,7 +382,15 @@ def _fetch(ticker: str, start: str, end: str, interval: str, source: str = "yaho
         return cached[1]
 
     print(f"[cache MISS] {ticker} {interval} {start}→{end} [{source}]", flush=True)
-    df = provider.fetch(ticker, start, end, interval)
+    # Alpaca HTTP keep-alive sockets go stale between bot polls; retry once on
+    # RemoteDisconnected / ConnectionAborted so a dead socket doesn't swallow a tick.
+    try:
+        df = provider.fetch(ticker, start, end, interval)
+    except Exception as e:
+        if is_retryable_error(e):
+            df = provider.fetch(ticker, start, end, interval)
+        else:
+            raise
 
     if len(_fetch_cache) >= _CACHE_MAX:
         _evict_cache()
