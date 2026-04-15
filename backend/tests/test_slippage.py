@@ -177,3 +177,33 @@ def test_policy_skips_rows_missing_expected_price(fake_journal):
     r = decide_modeled_bps("AAPL")
     assert r.fill_count == 1
     assert r.measured_bps == pytest.approx(3.0)
+
+
+def test_log_trade_caches_slippage_bps_on_row(fake_journal):
+    import journal
+    journal._log_trade(
+        symbol="AAPL", side="buy", qty=10, price=100.10,
+        source="bot", expected_price=100.0, direction="long", bot_id="b1",
+    )
+    rows = json.loads(fake_journal.read_text())["trades"]
+    assert rows[-1]["slippage_bps"] == pytest.approx(10.0)
+
+
+def test_log_trade_caches_zero_on_favorable_fill(fake_journal):
+    import journal
+    journal._log_trade(
+        symbol="AAPL", side="buy", qty=10, price=99.90,
+        source="bot", expected_price=100.0, direction="long", bot_id="b1",
+    )
+    rows = json.loads(fake_journal.read_text())["trades"]
+    assert rows[-1]["slippage_bps"] == 0.0
+
+
+def test_log_trade_caches_none_when_no_expected(fake_journal):
+    import journal
+    journal._log_trade(
+        symbol="AAPL", side="buy", qty=10, price=100.10,
+        source="bot", expected_price=None, direction="long", bot_id="b1",
+    )
+    rows = json.loads(fake_journal.read_text())["trades"]
+    assert rows[-1]["slippage_bps"] is None

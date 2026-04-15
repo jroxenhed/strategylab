@@ -100,6 +100,12 @@ def _log_trade(symbol: str, side: str, qty: float, price: float | None,
         journal = json.loads(JOURNAL_PATH.read_text())
     else:
         journal = {"trades": []}
+    from slippage import slippage_cost_bps  # lazy: slippage imports JOURNAL_PATH from us
+
+    cost_bps: float | None = None
+    if price is not None and expected_price is not None and side is not None:
+        cost_bps = round(slippage_cost_bps(side, expected_price, price), 2)
+
     journal["trades"].append({
         "id": str(uuid.uuid4()),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -111,6 +117,7 @@ def _log_trade(symbol: str, side: str, qty: float, price: float | None,
         "source": source,
         "reason": reason,
         "expected_price": expected_price,
+        "slippage_bps": cost_bps,
         "direction": direction,
         "bot_id": bot_id,
         "broker": broker,
