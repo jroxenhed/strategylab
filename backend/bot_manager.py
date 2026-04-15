@@ -16,7 +16,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
+
+from slippage import slippage_cost_bps, fill_bias_bps
 
 from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest
 from routes.backtest import run_backtest
@@ -55,7 +57,7 @@ class BotConfig(BaseModel):
     dynamic_sizing: Optional[DynamicSizingConfig] = None
     skip_after_stop: Optional[SkipAfterStopConfig] = None
     trading_hours: Optional[TradingHoursConfig] = None
-    slippage_pct: float = 0.0
+    slippage_bps: float = Field(default=2.0, ge=0.0)
     data_source: str = "alpaca-iex"    # yahoo | alpaca | alpaca-iex | ibkr
     direction: str = "long"            # "long" | "short"
     broker: str = "alpaca"             # "alpaca" | "ibkr" — which broker executes orders
@@ -88,7 +90,7 @@ class BotState:
     scans_count: int = 0
     trades_count: int = 0
     total_pnl: float = 0.0
-    slippage_pcts: list = field(default_factory=list)  # list of slippage % per fill
+    slippage_bps: list = field(default_factory=list)  # list of unsigned cost (bps) per fill
 
     # History
     equity_snapshots: list = field(default_factory=list)  # [{time, value}]
@@ -113,7 +115,7 @@ class BotState:
             "scans_count": self.scans_count,
             "trades_count": self.trades_count,
             "total_pnl": self.total_pnl,
-            "slippage_pcts": self.slippage_pcts,
+            "slippage_bps": self.slippage_bps,
             "equity_snapshots": self.equity_snapshots,
             "backtest_result": self.backtest_result,
             "activity_log": self.activity_log,
@@ -123,6 +125,11 @@ class BotState:
     @classmethod
     def from_dict(cls, d: dict) -> "BotState":
         s = cls()
+        # Lazy migration: legacy bots.json has slippage_pcts (signed %); scale to bps (unsigned).
+        # max(0, ...) retroactively applies the new "cost >= 0" rule to stored favorable values.
+        if "slippage_pcts" in d and "slippage_bps" not in d:
+            d = {**d, "slippage_bps": [max(0.0, v) * 100 for v in d["slippage_pcts"] or []]}
+            d.pop("slippage_pcts", None)
         for k, v in d.items():
             if hasattr(s, k):
                 setattr(s, k, v)
@@ -248,7 +255,7 @@ class BotManager:
             dynamic_sizing=config.dynamic_sizing,
             skip_after_stop=config.skip_after_stop,
             trading_hours=config.trading_hours,
-            slippage_bps=config.slippage_pct * 100,   # TEMP bridge — session 4 renames config field
+            slippage_bps=config.slippage_bps,
             source=config.data_source,
             direction=config.direction,
         )
@@ -332,12 +339,10 @@ class BotManager:
                 break
 
         # Update bot state
-        if is_short:
-            slippage = price - fill_price  # lower fill is worse for short seller
-        else:
-            slippage = fill_price - price  # higher fill is worse for buyer
-        slippage_pct = (slippage / price) * 100 if price else 0
-        state.slippage_pcts.append(round(slippage_pct, 4))
+        side_key = "short" if is_short else "buy"
+        cost_bps = slippage_cost_bps(side_key, expected=price, fill=fill_price)
+        bias_bps = fill_bias_bps(side_key, expected=price, fill=fill_price)
+        state.slippage_bps.append(round(cost_bps, 2))
         state.entry_price = fill_price
         state.trail_peak = fill_price
         state.trades_count += 1
@@ -346,7 +351,11 @@ class BotManager:
 
         # Log
         runner = BotRunner(config, state, self)
-        runner._log("TRADE", f"{side_label} {qty} {config.symbol} @ {fill_price:.2f} (manual, expected={price:.2f}, slippage={slippage_pct:+.4f}%)")
+        runner._log(
+            "TRADE",
+            f"{side_label} {qty} {config.symbol} @ {fill_price:.2f} "
+            f"(manual, expected={price:.2f}, cost={cost_bps:.1f}bps, bias={bias_bps:+.1f}bps)",
+        )
 
         try:
             _log_trade(config.symbol, "short" if is_short else "buy", qty, fill_price,
@@ -356,7 +365,7 @@ class BotManager:
             pass
 
         self.save()
-        return {"qty": qty, "fill_price": fill_price, "slippage_pct": round(slippage_pct, 4)}
+        return {"qty": qty, "fill_price": fill_price, "slippage_bps": round(cost_bps, 2)}
 
     def list_bots(self) -> list[dict]:
         result = []
@@ -377,7 +386,7 @@ class BotManager:
                 "data_source": config.data_source,
                 "direction": config.direction,
                 "broker": config.broker,
-                "avg_slippage_pct": round(sum(state.slippage_pcts) / len(state.slippage_pcts), 4) if state.slippage_pcts else None,
+                "avg_cost_bps": round(sum(state.slippage_bps) / len(state.slippage_bps), 2) if state.slippage_bps else None,
                 "has_position": state.entry_price is not None,
                 "first_trade_time": first_trade_time,
             })
@@ -414,7 +423,13 @@ class BotManager:
                 data = json.load(f)
             self.bot_fund = data.get("bot_fund", 0.0)
             for entry in data.get("bots", []):
-                config = BotConfig(**entry["config"])
+                cfg_dict = entry["config"]
+                # Lazy migration: old key 'slippage_pct' (percent) → 'slippage_bps' (bps).
+                # max(0, ...) retroactively applies the "cost >= 0" rule.
+                if "slippage_pct" in cfg_dict and "slippage_bps" not in cfg_dict:
+                    cfg_dict = {**cfg_dict, "slippage_bps": max(0.0, cfg_dict["slippage_pct"]) * 100}
+                    cfg_dict.pop("slippage_pct", None)
+                config = BotConfig(**cfg_dict)
                 state = BotState.from_dict(entry.get("state", {}))
                 state.status = "stopped"  # always start stopped after server restart
                 self.bots[config.bot_id] = (config, state)

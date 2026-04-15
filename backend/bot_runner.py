@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import math
 from datetime import datetime, timezone
+
+from slippage import slippage_cost_bps, fill_bias_bps
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -293,13 +295,15 @@ class BotRunner:
                 state.trades_count += 1
                 side_label = "SHORT" if is_short else "BUY"
                 state.last_signal = side_label
-                if is_short:
-                    slippage = price - fill_price  # lower fill is worse for short seller
-                else:
-                    slippage = fill_price - price  # higher fill is worse for buyer
-                slippage_pct = (slippage / price) * 100 if price else 0
-                state.slippage_pcts.append(round(slippage_pct, 4))
-                self._log("TRADE", f"{side_label} {qty} {cfg.symbol} @ {fill_price:.2f} (expected={price:.2f}, slippage={slippage_pct:+.4f}%)")
+                side_key = "short" if is_short else "buy"
+                cost_bps = slippage_cost_bps(side_key, expected=price, fill=fill_price)
+                bias_bps = fill_bias_bps(side_key, expected=price, fill=fill_price)
+                state.slippage_bps.append(round(cost_bps, 2))
+                self._log(
+                    "TRADE",
+                    f"{side_label} {qty} {cfg.symbol} @ {fill_price:.2f} "
+                    f"(expected={price:.2f}, cost={cost_bps:.1f}bps, bias={bias_bps:+.1f}bps)",
+                )
 
                 # Log to trade journal
                 try:
@@ -457,13 +461,15 @@ class BotRunner:
                         is_post_loss_trigger(exit_reason, cfg.skip_after_stop.trigger):
                     state.skip_remaining = cfg.skip_after_stop.count
 
-                if is_short:
-                    slippage = sell_fill - price  # higher cover fill is worse
-                else:
-                    slippage = sell_fill - price
-                slippage_pct = (slippage / price) * 100 if price else 0
-                state.slippage_pcts.append(round(slippage_pct, 4))
-                self._log("TRADE", f"{exit_label} {cfg.symbol} @ {sell_fill:.2f} | PnL={pnl:+.2f} | reason={exit_reason} (expected={price:.2f}, slippage={slippage_pct:+.4f}%)")
+                side_key = "cover" if is_short else "sell"
+                cost_bps = slippage_cost_bps(side_key, expected=price, fill=sell_fill)
+                bias_bps = fill_bias_bps(side_key, expected=price, fill=sell_fill)
+                state.slippage_bps.append(round(cost_bps, 2))
+                self._log(
+                    "TRADE",
+                    f"{exit_label} {cfg.symbol} @ {sell_fill:.2f} | PnL={pnl:+.2f} | reason={exit_reason} "
+                    f"(expected={price:.2f}, cost={cost_bps:.1f}bps, bias={bias_bps:+.1f}bps)",
+                )
 
                 try:
                     _log_trade(cfg.symbol, "cover" if is_short else "sell", broker_qty, sell_fill,
