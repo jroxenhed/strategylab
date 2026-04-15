@@ -256,6 +256,25 @@ class BotRunner:
                 except Exception:
                     pass  # if check fails, proceed cautiously
 
+                # Spread gate: skip entries when bid/ask spread exceeds the configured cap.
+                # Exits are never gated — once we want out, we go out regardless of spread.
+                if cfg.max_spread_bps is not None and cfg.max_spread_bps > 0:
+                    try:
+                        provider = get_trading_provider(cfg.broker)
+                        bid, ask = await self._run_in_executor(provider.get_latest_quote, cfg.symbol.upper())
+                        if bid > 0 and ask > 0 and ask >= bid:
+                            mid = (bid + ask) / 2
+                            spread_bps = (ask - bid) / mid * 10000
+                            if spread_bps > cfg.max_spread_bps:
+                                self._log("INFO", f"Skipping entry — spread {spread_bps:.1f}bps > cap {cfg.max_spread_bps:.1f}bps (bid={bid:.4f}, ask={ask:.4f})")
+                                return
+                        else:
+                            self._log("WARN", f"Skipping entry — invalid quote (bid={bid}, ask={ask})")
+                            return
+                    except Exception as e:
+                        self._log("WARN", f"Spread check failed ({e}) — skipping entry to stay conservative")
+                        return
+
                 # Compute effective position size (compounds P&L like backtest)
                 current_capital = cfg.allocated_capital + compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id)
                 effective_size = max(current_capital, 0) * cfg.position_size

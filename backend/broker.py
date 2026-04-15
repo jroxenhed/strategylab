@@ -47,6 +47,7 @@ class TradingProvider(Protocol):
     def close_all_positions(self) -> None: ...
     def cancel_all_orders(self) -> None: ...
     def get_latest_price(self, symbol: str) -> float: ...
+    def get_latest_quote(self, symbol: str) -> tuple[float, float]: ...  # (bid, ask)
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +244,16 @@ class AlpacaTradingProvider:
             StockLatestTradeRequest(symbol_or_symbols=symbol)
         )
         return float(latest[symbol].price)
+
+    def get_latest_quote(self, symbol: str) -> tuple[float, float]:
+        if self._data_client is None:
+            raise ValueError("Alpaca data client not configured")
+        from alpaca.data.requests import StockLatestQuoteRequest
+        latest = self._data_client.get_stock_latest_quote(
+            StockLatestQuoteRequest(symbol_or_symbols=symbol)
+        )
+        q = latest[symbol]
+        return float(q.bid_price), float(q.ask_price)
 
 
 # ---------------------------------------------------------------------------
@@ -537,3 +548,20 @@ class IBKRTradingProvider:
         if price != price:  # NaN check
             raise ValueError(f"No market data for {symbol}")
         return float(price)
+
+    def get_latest_quote(self, symbol: str) -> tuple[float, float]:
+        import asyncio as _aio
+        self._ensure_connected()
+        contract = self._contract(symbol)
+
+        async def _quote():
+            ticker = self._ib.reqMktData(contract, '', False, False)
+            await _aio.sleep(1)
+            bid, ask = ticker.bid, ticker.ask
+            self._ib.cancelMktData(contract)
+            return bid, ask
+
+        bid, ask = self._run(_quote())
+        if bid != bid or ask != ask or bid <= 0 or ask <= 0:
+            raise ValueError(f"No quote data for {symbol}")
+        return float(bid), float(ask)

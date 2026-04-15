@@ -58,6 +58,7 @@ class BotConfig(BaseModel):
     skip_after_stop: Optional[SkipAfterStopConfig] = None
     trading_hours: Optional[TradingHoursConfig] = None
     slippage_bps: float = Field(default=2.0, ge=0.0)
+    max_spread_bps: Optional[float] = None  # skip entries when bid/ask spread exceeds this; None = disabled
     data_source: str = "alpaca-iex"    # yahoo | alpaca | alpaca-iex | ibkr
     direction: str = "long"            # "long" | "short"
     broker: str = "alpaca"             # "alpaca" | "ibkr" — which broker executes orders

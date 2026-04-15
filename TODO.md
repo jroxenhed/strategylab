@@ -33,6 +33,7 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 - [ ] **B4** Per-rule signal visualization toggles — eye icon on each rule row in strategy builder; when enabled, that rule's signals show as markers on the main chart during/after backtest. Replaces current hardcoded signal marker behavior. State stored with rule fields, persists with save/load. No global master toggle.
 - [ ] **B5** Borrow cost estimation (for live short positions on real accounts)
 - [ ] **B8** Spread-derived slippage default (follow-up to B7) — pull live bid/ask spread from broker (Alpaca quote endpoint / IBKR market data) and default modeled slippage to half-spread for the symbol. More principled than global/empirical fallback, especially for illiquid names. Only viable providers that expose quotes.
+- [ ] **B10** Skip-on-wide-spread entry gate — frontend wiring. Backend shipped: `BotConfig.max_spread_bps` + pre-entry quote check in `bot_runner` (exits always execute, entries skip when spread exceeds cap). Expose as: (1) an input on bot creation (AddBotBar) with a sensible default, and/or (2) an editable field on BotCard (same affordance as allocation/strategy edit). Goal: change the cap without editing `bots.json`.
 - [ ] **B9** Cost model v2 (deferred from B6):
   - Debit-balance-aware margin interest for shorts (charge margin rate only on days net cash is negative)
   - IBKR Tiered pricing (exchange fees, SEC fee, FINRA TAF, clearing pass-throughs)
