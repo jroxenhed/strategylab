@@ -223,7 +223,7 @@ def scan_signals(req: ScanRequest):
             start = end - pd.Timedelta(days=30)
 
             df = _fetch(symbol, start.strftime('%Y-%m-%d'),
-                        end.strftime('%Y-%m-%d'), req.interval, source='alpaca')
+                        end.strftime('%Y-%m-%d'), req.interval, source='alpaca-iex')
 
             indicators = compute_indicators(df["Close"], high=df["High"], low=df["Low"])
             i = len(df) - 1
