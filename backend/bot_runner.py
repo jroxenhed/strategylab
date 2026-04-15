@@ -495,13 +495,22 @@ class BotRunner:
         self.manager.save()
 
         interval_secs = POLL_INTERVALS.get(self.config.interval, 30)
+        consec_errors = 0
+        MAX_CONSEC_ERRORS = 5
         while True:
             try:
                 await self._tick()
+                consec_errors = 0
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
-                self.state.status = "error"
-                self.state.error_message = str(e)
-                self._log("ERROR", f"Fatal error: {e}")
+                consec_errors += 1
+                self._log("WARN", f"Tick failed ({consec_errors}/{MAX_CONSEC_ERRORS}): {e}")
                 self.manager.save()
-                break
+                if consec_errors >= MAX_CONSEC_ERRORS:
+                    self.state.status = "error"
+                    self.state.error_message = str(e)
+                    self._log("ERROR", f"Fatal after {MAX_CONSEC_ERRORS} consecutive failures: {e}")
+                    self.manager.save()
+                    break
             await asyncio.sleep(interval_secs)
