@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { BotSummary, BotFundStatus } from '../../shared/types'
 import {
   listBots, setBotFund, addBot,
-  startBot, stopBot, backtestBot, deleteBot, manualBuyBot, updateBot,
+  startBot, stopBot, backtestBot, deleteBot, manualBuyBot, updateBot, resetBotPnl,
   startAllBots, stopAllBots, stopAndCloseAllBots,
 } from '../../api/bots'
 import { fmtUsd } from '../../shared/utils/format'
@@ -151,6 +151,11 @@ export default function BotControlCenter() {
     catch (e: any) { setError(e?.response?.data?.detail ?? 'Failed to place buy') }
   }
 
+  const handleResetPnl = async (botId: string) => {
+    try { await resetBotPnl(botId); await loadBots() }
+    catch (e: any) { setError(e?.response?.data?.detail ?? 'Failed to reset P&L') }
+  }
+
   const handleUpdate = async (botId: string, updates: Record<string, unknown>) => {
     try { await updateBot(botId, updates); await loadBots() }
     catch (e: any) { setError(e?.response?.data?.detail ?? 'Failed to update bot') }
@@ -257,6 +262,7 @@ export default function BotControlCenter() {
           onDelete={() => handleDelete(bot.bot_id)}
           onManualBuy={() => handleManualBuy(bot.bot_id)}
           onUpdate={(updates) => handleUpdate(bot.bot_id, updates)}
+          onResetPnl={() => handleResetPnl(bot.bot_id)}
         />
       ))}
     </div>

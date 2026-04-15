@@ -51,6 +51,11 @@ export async function deleteBot(botId: string): Promise<void> {
   await api.delete(`/api/bots/${botId}`)
 }
 
+export async function resetBotPnl(botId: string): Promise<{ ok: boolean; pnl_epoch: string }> {
+  const res = await api.post(`/api/bots/${botId}/reset-pnl`)
+  return res.data
+}
+
 export async function startAllBots(): Promise<{ started: string[]; skipped: string[]; failed: { bot_id: string; error: string }[] }> {
   const res = await api.post('/api/bots/start-all')
   return res.data

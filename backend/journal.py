@@ -9,13 +9,16 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 JOURNAL_PATH = DATA_DIR / "trade_journal.json"
 
 
-def compute_realized_pnl(symbol: str, direction: str = "long", bot_id: str | None = None) -> float:
+def compute_realized_pnl(symbol: str, direction: str = "long", bot_id: str | None = None,
+                         since: str | None = None) -> float:
     """Sum realized P&L for bot-sourced trades of a given (symbol, direction, bot_id).
 
     Pairs entries with exits in chronological order (LIFO: each exit consumes
     the most recent open entry). When `bot_id` is given, only trades tagged to
     that bot count — so deleting a bot and spinning up a new one on the same
-    symbol doesn't inherit the old bot's realized P&L or skew sizing.
+    symbol doesn't inherit the old bot's realized P&L or skew sizing. When
+    `since` (ISO timestamp) is given, only trades at or after it count —
+    supports the "Reset P&L" affordance without deleting the bot.
     """
     if not JOURNAL_PATH.exists():
         return 0.0
@@ -32,6 +35,8 @@ def compute_realized_pnl(symbol: str, direction: str = "long", bot_id: str | Non
         if t.get("symbol", "").upper() != symbol.upper():
             continue
         if bot_id is not None and t.get("bot_id") != bot_id:
+            continue
+        if since is not None and (t.get("timestamp") or "") < since:
             continue
         side = t.get("side")
         price = t.get("price")
@@ -57,7 +62,8 @@ def compute_realized_pnl(symbol: str, direction: str = "long", bot_id: str | Non
     return total
 
 
-def compute_bot_avg_cost_bps(symbol: str, bot_id: str | None = None) -> tuple[float | None, int]:
+def compute_bot_avg_cost_bps(symbol: str, bot_id: str | None = None,
+                             since: str | None = None) -> tuple[float | None, int]:
     """Average of per-fill unsigned slippage cost for this bot's trades.
 
     Reads the journal's cached `slippage_bps` (computed at log time with the
@@ -78,6 +84,8 @@ def compute_bot_avg_cost_bps(symbol: str, bot_id: str | None = None) -> tuple[fl
             continue
         if bot_id is not None and t.get("bot_id") != bot_id:
             continue
+        if since is not None and (t.get("timestamp") or "") < since:
+            continue
         s = t.get("slippage_bps")
         if s is None:
             continue
@@ -87,7 +95,8 @@ def compute_bot_avg_cost_bps(symbol: str, bot_id: str | None = None) -> tuple[fl
     return round(sum(vals) / len(vals), 2), len(vals)
 
 
-def first_bot_entry_time(symbol: str, direction: str = "long", bot_id: str | None = None) -> str | None:
+def first_bot_entry_time(symbol: str, direction: str = "long", bot_id: str | None = None,
+                         since: str | None = None) -> str | None:
     """Return ISO timestamp of the earliest bot entry for (symbol, direction, bot_id).
 
     Used so an open first position still contributes to the aligned sparkline
@@ -111,6 +120,8 @@ def first_bot_entry_time(symbol: str, direction: str = "long", bot_id: str | Non
             continue
         ts = t.get("timestamp")
         if ts:
+            if since is not None and ts < since:
+                continue
             return ts
     return None
 

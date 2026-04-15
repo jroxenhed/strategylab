@@ -231,6 +231,16 @@ def manual_buy(bot_id: str):
     return result
 
 
+@router.post("/{bot_id}/reset-pnl")
+def reset_bot_pnl(bot_id: str):
+    mgr = _get_manager()
+    try:
+        epoch = mgr.reset_pnl(bot_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True, "pnl_epoch": epoch}
+
+
 @router.post("/{bot_id}/backtest")
 def backtest_bot(bot_id: str, background_tasks: BackgroundTasks):
     mgr = _get_manager()

@@ -89,6 +89,8 @@ export interface JournalTrade {
   expected_price: number | null
   broker: string | null
   slippage_bps: number | null
+  bot_id: string | null
+  direction: string | null
 }
 
 export interface StaleAware<T> {

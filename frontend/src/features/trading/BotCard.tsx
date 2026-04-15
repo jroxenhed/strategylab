@@ -65,7 +65,7 @@ function heartbeatColor(summary: BotSummary, detail: BotDetail | null): string {
 
 export default function BotCard({
   summary,
-  onStart, onStop, onBacktest, onDelete, onManualBuy, onUpdate,
+  onStart, onStop, onBacktest, onDelete, onManualBuy, onUpdate, onResetPnl,
   alignedRange,
 }: {
   summary: BotSummary
@@ -75,6 +75,7 @@ export default function BotCard({
   onDelete: () => void
   onManualBuy: () => void
   onUpdate: (updates: Record<string, unknown>) => void
+  onResetPnl: () => void
   alignedRange?: { from: number; to: number }
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -252,6 +253,13 @@ export default function BotCard({
             >
               {expanded ? 'Hide Log' : 'Show Log'}
             </button>
+            <button
+              onClick={() => {
+                if (confirm('Reset P&L for this bot? Journal rows are kept; the display starts fresh from now.')) onResetPnl()
+              }}
+              style={btnStyle('#3a2e1a')}
+              title="Soft reset: marks an epoch so only trades from now on count toward P&L"
+            >Reset P&L</button>
             {stopped && (
               <button onClick={onDelete} style={btnStyle('#3a1a1a')}>Delete</button>
             )}

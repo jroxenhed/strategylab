@@ -218,7 +218,7 @@ class BotRunner:
 
                 state.equity_snapshots.append({
                     "time": datetime.now(timezone.utc).isoformat(),
-                    "value": round(compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id), 2),
+                    "value": round(compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id, since=cfg.pnl_epoch), 2),
                 })
 
                 self.manager.save()
@@ -276,7 +276,7 @@ class BotRunner:
                         return
 
                 # Compute effective position size (compounds P&L like backtest)
-                current_capital = cfg.allocated_capital + compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id)
+                current_capital = cfg.allocated_capital + compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id, since=cfg.pnl_epoch)
                 effective_size = max(current_capital, 0) * cfg.position_size
                 if cfg.dynamic_sizing and cfg.dynamic_sizing.enabled:
                     if state.consec_sl_count >= cfg.dynamic_sizing.consec_sls:
@@ -523,7 +523,7 @@ class BotRunner:
 
                 state.equity_snapshots.append({
                     "time": datetime.now(timezone.utc).isoformat(),
-                    "value": round(compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id), 2),
+                    "value": round(compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id, since=cfg.pnl_epoch), 2),
                 })
 
                 state.entry_price = None

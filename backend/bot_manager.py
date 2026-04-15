@@ -59,6 +59,7 @@ class BotConfig(BaseModel):
     trading_hours: Optional[TradingHoursConfig] = None
     slippage_bps: float = Field(default=2.0, ge=0.0)
     max_spread_bps: Optional[float] = None  # skip entries when bid/ask spread exceeds this; None = disabled
+    pnl_epoch: Optional[str] = None          # ISO timestamp; only journal rows >= this count toward displayed P&L
     data_source: str = "alpaca-iex"    # yahoo | alpaca | alpaca-iex | ibkr
     direction: str = "long"            # "long" | "short"
     broker: str = "alpaca"             # "alpaca" | "ibkr" — which broker executes orders
@@ -379,7 +380,8 @@ class BotManager:
     def list_bots(self) -> list[dict]:
         result = []
         for bot_id, (config, state) in self.bots.items():
-            first_trade_time = first_bot_entry_time(config.symbol, config.direction, bot_id=bot_id)
+            epoch = config.pnl_epoch
+            first_trade_time = first_bot_entry_time(config.symbol, config.direction, bot_id=bot_id, since=epoch)
             if first_trade_time is None and state.equity_snapshots:
                 first_trade_time = state.equity_snapshots[0]["time"]
             result.append({
@@ -390,16 +392,32 @@ class BotManager:
                 "allocated_capital": config.allocated_capital,
                 "status": state.status,
                 "trades_count": state.trades_count,
-                "total_pnl": round(compute_realized_pnl(config.symbol, config.direction, bot_id=bot_id), 2),
+                "total_pnl": round(compute_realized_pnl(config.symbol, config.direction, bot_id=bot_id, since=epoch), 2),
                 "backtest_summary": state.backtest_result.get("summary") if state.backtest_result else None,
                 "data_source": config.data_source,
                 "direction": config.direction,
                 "broker": config.broker,
-                "avg_cost_bps": compute_bot_avg_cost_bps(config.symbol, bot_id=bot_id)[0],
+                "avg_cost_bps": compute_bot_avg_cost_bps(config.symbol, bot_id=bot_id, since=epoch)[0],
                 "has_position": state.entry_price is not None,
                 "first_trade_time": first_trade_time,
+                "pnl_epoch": epoch,
             })
         return result
+
+    def reset_pnl(self, bot_id: str) -> str:
+        """Bump pnl_epoch to now so displayed P&L/trades/slippage start fresh.
+        Journal rows aren't touched — they remain for audit/export.
+        """
+        if bot_id not in self.bots:
+            raise KeyError(f"Bot {bot_id} not found")
+        config, state = self.bots[bot_id]
+        epoch = datetime.now(timezone.utc).isoformat()
+        config.pnl_epoch = epoch
+        state.trades_count = 0
+        state.slippage_bps = []
+        state.equity_snapshots = []
+        self.save()
+        return epoch
 
     def delete_bot(self, bot_id: str):
         if bot_id not in self.bots:

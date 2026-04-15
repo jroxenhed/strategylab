@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { fetchJournal, type JournalTrade, type BrokerHealth } from '../../api/trading'
+import { listBots } from '../../api/bots'
 import { fmtShortET } from '../../shared/utils/time'
 import { BrokerTag } from './BrokerTag'
 
@@ -17,6 +18,7 @@ interface Props {
 
 export default function TradeJournal({ brokerFilter, onBrokerFilterChange, availableBrokers, health, heartbeatWarmup }: Props) {
   const [trades, setTrades] = useState<JournalTrade[]>([])
+  const [knownBotIds, setKnownBotIds] = useState<Set<string> | null>(null)
   const [filter, setFilter] = useState('')
   const [tableHeight, setTableHeight] = useState(DEFAULT_HEIGHT)
   const dragging = useRef(false)
@@ -42,7 +44,13 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
     return () => { window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp) }
   }, [])
 
-  const reload = () => fetchJournal(undefined, brokerFilter).then(setTrades).catch(() => {})
+  const reload = () => {
+    fetchJournal(undefined, brokerFilter).then(setTrades).catch(() => {})
+    listBots().then(d => setKnownBotIds(new Set(d.bots.map(b => b.bot_id)))).catch(() => {})
+  }
+
+  const isOrphan = (t: JournalTrade) =>
+    knownBotIds !== null && t.source === 'bot' && (t.bot_id == null || !knownBotIds.has(t.bot_id))
 
   useEffect(() => {
     reload()
@@ -245,6 +253,16 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
               </span>
               <span style={{ ...styles.cell, color: t.source === 'auto' ? '#e5c07b' : '#8b949e' }}>
                 {t.source}
+                {isOrphan(t) && (
+                  <span
+                    title={t.bot_id ? `Bot ${t.bot_id} no longer exists` : 'Trade not tagged to any bot'}
+                    style={{
+                      marginLeft: 4, fontSize: 9, padding: '0 4px', borderRadius: 2,
+                      background: 'rgba(210, 153, 34, 0.15)', color: '#d29922',
+                      border: '1px solid rgba(210, 153, 34, 0.3)',
+                    }}
+                  >orphan</span>
+                )}
               </span>
               <span style={{ ...styles.cell, color: reasonColor(t.reason, exitPnl.get(t.id)) }}>
                 {t.reason || '—'}

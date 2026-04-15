@@ -63,7 +63,7 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 
 - [ ] **D1** Bot log timezone: shows ET, user is in Sweden — use browser local time
 - [ ] **D2** Bot reordering/grouping (drag vs explicit groups vs tags)
-- [ ] **D3** Bot lifecycle vs journal: decide whether deleting/recreating a bot should reset its displayed P&L (filter journal by `bot.created_at`)
+- [x] **D3** Bot lifecycle vs journal: soft reset via `BotConfig.pnl_epoch` — "Reset P&L" button on BotCard bumps epoch to now, journal untouched, displayed P&L/trades/slippage filter by `since=epoch`. TradeJournal marks bot rows with null/deleted `bot_id` as "orphan" so audit history stays visible.
 - [ ] **D4** Clean up dead `BotState.total_pnl` field once migration is safe (currently kept for legacy `bots.json` deserialization)
 - [ ] **D5** Journal helper call frequency — runs on bot tick (for sizing) and on summary fetch. Journal is JSON-parsed each time. Fine for now, but if it gets slow (thousands of entries) add an mtime-based cache.
 - [ ] **D8** IBKR silent order rejects — `placeOrder` returns an order_id even when IBKR rejects (Read-Only API, no permission, etc.); the reject arrives async on the error event stream and we never surface it. Post-close position re-check now prevents phantom SELL rows (`bot_runner.py:420`), but we should subscribe to `ib.errorEvent` and log rejects explicitly so the user knows *why* the close didn't go through.
