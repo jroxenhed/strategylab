@@ -153,11 +153,15 @@ export default function Sidebar({
     }
   }
 
+  const today = new Date().toISOString().slice(0, 10)
+
   const handleStep = (direction: 1 | -1, multiplier: number = 1) => {
     let newStart = start
     let newEnd = end
     for (let i = 0; i < multiplier; i++) {
       const stepped = stepRange(newStart, newEnd, datePreset, direction)
+      // Forward stepping stops once the next period starts past today
+      if (direction === 1 && stepped.start > today) break
       newStart = stepped.start
       newEnd = stepped.end
     }
@@ -165,8 +169,8 @@ export default function Sidebar({
     onEndChange(newEnd)
   }
 
-  const today = new Date().toISOString().slice(0, 10)
-  const forwardDisabled = end >= today
+  // Disable forward arrows when a single step would land past today
+  const forwardDisabled = stepRange(start, end, datePreset, 1).start > today
 
   const [query, setQuery] = useState('')
   const [showDropdown, setShowDropdown] = useState(false)
