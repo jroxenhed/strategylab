@@ -249,15 +249,32 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             </span>
           </div>
           <div style={styles.settingsRow}>
+            <label style={styles.settingsLabel}>Commission preset</label>
+            <select
+              value={
+                perShareRate === 0 && minPerOrder === 0 ? 'alpaca'
+                : perShareRate === 0.0035 && minPerOrder === 0.35 ? 'ibkr'
+                : 'custom'
+              }
+              onChange={e => {
+                const v = e.target.value
+                if (v === 'alpaca') { setPerShareRate(0); setMinPerOrder(0) }
+                else if (v === 'ibkr') { setPerShareRate(0.0035); setMinPerOrder(0.35) }
+              }}
+              style={styles.settingsInput}
+            >
+              <option value="alpaca">Alpaca (commission-free)</option>
+              <option value="ibkr">IBKR Fixed ($0.0035 / $0.35)</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div style={styles.settingsRow}>
             <label style={styles.settingsLabel}>Rate per share ($)</label>
             <input type="number" value={perShareRate} step={0.0005} min={0} onChange={e => setPerShareRate(+e.target.value)} style={styles.settingsInput} />
           </div>
           <div style={styles.settingsRow}>
             <label style={styles.settingsLabel}>Min per order ($)</label>
             <input type="number" value={minPerOrder} step={0.05} min={0} onChange={e => setMinPerOrder(+e.target.value)} style={styles.settingsInput} />
-          </div>
-          <div style={{ fontSize: 11, color: '#666', marginTop: -4, marginBottom: 4 }}>
-            0 = commission-free (Alpaca US equities). For IBKR Fixed: 0.0035 / 0.35.
           </div>
 
           {direction === 'short' && (
