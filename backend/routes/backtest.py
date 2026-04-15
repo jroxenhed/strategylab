@@ -100,6 +100,7 @@ def run_backtest(req: StrategyRequest):
         equity = []
 
         is_short = req.direction == "short"
+        drag = req.slippage_bps / 10_000.0   # bps → fractional
         ts = req.trailing_stop
         atr = indicators.get("atr")
         signal_trace = [] if req.debug else None
@@ -185,9 +186,9 @@ def run_backtest(req: StrategyRequest):
 
                 # Slippage: short entry fills lower (worse for seller), long fills higher (worse for buyer)
                 if is_short:
-                    fill_price = price * (1 - req.slippage_pct / 100)
+                    fill_price = price * (1 - drag)
                 else:
-                    fill_price = price * (1 + req.slippage_pct / 100)
+                    fill_price = price * (1 + drag)
                 shares = (capital * effective_size) / fill_price
                 commission = per_leg_commission(shares, req)
                 position = shares
@@ -261,9 +262,9 @@ def run_backtest(req: StrategyRequest):
 
                 # Slippage: short covers at higher price (worse), long sells at lower price (worse)
                 if is_short:
-                    exit_price = raw_exit * (1 + req.slippage_pct / 100)
+                    exit_price = raw_exit * (1 + drag)
                 else:
-                    exit_price = raw_exit * (1 - req.slippage_pct / 100)
+                    exit_price = raw_exit * (1 - drag)
                 sell_fired = eval_rules(req.sell_rules, req.sell_logic, indicators, i)
                 if stop_hit or trail_hit or sell_fired:
                     exit_slippage = abs(position * (raw_exit - exit_price))

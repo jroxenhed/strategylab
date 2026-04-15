@@ -248,7 +248,7 @@ class BotManager:
             dynamic_sizing=config.dynamic_sizing,
             skip_after_stop=config.skip_after_stop,
             trading_hours=config.trading_hours,
-            slippage_pct=config.slippage_pct,
+            slippage_bps=config.slippage_pct * 100,   # TEMP bridge — session 4 renames config field
             source=config.data_source,
             direction=config.direction,
         )

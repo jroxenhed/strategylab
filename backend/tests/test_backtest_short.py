@@ -91,7 +91,7 @@ def test_short_stop_loss_triggers_above_entry(mock_fetch):
 @patch("routes.backtest._fetch")
 def test_short_slippage_direction(mock_fetch):
     """Short entry fill should be lower (worse for seller), exit fill should be higher (worse for buyer)."""
-    req = _req_short(slippage_pct=1.0)
+    req = _req_short(slippage_bps=100.0)   # 100 bps = 1% — preserves original test magnitude
     mock_fetch.return_value = _make_df([100, 100, 90, 90])
     result = run_backtest(req)
     short_trade = [t for t in result["trades"] if t["type"] == "short"][0]

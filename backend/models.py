@@ -1,7 +1,7 @@
 """Shared Pydantic models used across backtest, bot_manager, and trading routes."""
 
 from typing import Optional
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from signal_engine import Rule
 
 
@@ -46,7 +46,7 @@ class StrategyRequest(BaseModel):
     position_size: float = 1.0   # fraction of capital per trade (0.01–1.0)
     stop_loss_pct: Optional[float] = None  # e.g. 5.0 means sell if price drops 5% from entry
     trailing_stop: Optional[TrailingStopConfig] = None
-    slippage_pct: float = 0.0    # e.g. 0.1 means 0.1% worse fill on every trade
+    slippage_bps: float = Field(default=2.0, ge=0.0)   # unsigned cost per leg, bps
     commission_pct: float = 0.0  # e.g. 0.1 means 0.1% fee per trade
     per_share_rate: float = 0.0035   # IBKR Fixed per-share commission
     min_per_order: float = 0.35      # IBKR Fixed minimum per order
