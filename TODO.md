@@ -93,6 +93,7 @@ Own multi-session research project. Needs its own design work before implementat
 - [ ] **E2** Batch backtesting (efficiency-critical)
 - [ ] **E3** AI/ML assisted parameter tweaking
 - [ ] **E4** Pipeline: present candidates → spawn bot army
+- [ ] **E5** Reframe SignalScanner as research, not execution. Current page duplicates bot logic (manual Buy/Sell, own position size + stop) and skips direction, slippage/cost model, trailing stops, journal scoping, broker/data-source choice. Replace with: pick a saved strategy (no inline rule editing), show live signal + mini backtest stats per ticker (return / Sharpe / win rate over configurable lookback), per-row action becomes **Spawn Bot** that pre-fills AddBotBar (symbol, strategy, broker, data source). Drop Position $ and Stop Loss % inputs entirely. Prereq for E4.
 
 ### Shipped
 - [x] Clean up bot page, move signal scanner to new Discovery page
