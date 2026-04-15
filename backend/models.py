@@ -48,8 +48,8 @@ class StrategyRequest(BaseModel):
     trailing_stop: Optional[TrailingStopConfig] = None
     slippage_bps: float = Field(default=2.0, ge=0.0)   # unsigned cost per leg, bps
     commission_pct: float = 0.0  # e.g. 0.1 means 0.1% fee per trade
-    per_share_rate: float = 0.0035   # IBKR Fixed per-share commission
-    min_per_order: float = 0.35      # IBKR Fixed minimum per order
+    per_share_rate: float = 0.0   # commission-free default (Alpaca US equities); set 0.0035 for IBKR Fixed
+    min_per_order: float = 0.0    # commission-free default (Alpaca US equities); set 0.35 for IBKR Fixed
     borrow_rate_annual: float = 0.5  # % per year, only applied when direction == "short"
     dynamic_sizing: Optional[DynamicSizingConfig] = None
     skip_after_stop: Optional[SkipAfterStopConfig] = None

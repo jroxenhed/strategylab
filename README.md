@@ -23,7 +23,7 @@ Interactive trading strategy backtester and paper trading platform. Build strate
 - Fixed stop loss and trailing stops (percentage or ATR-based, with profit activation threshold)
 - Dynamic position sizing (reduce size after consecutive stop losses)
 - Trading hours filter with skip ranges (e.g. skip lunch, last 15 min)
-- Realistic cost model — IBKR Fixed per-share commission (`$0.0035/share`, `$0.35` min), modeled slippage in bps (unsigned, default 2 bps; per-symbol empirical can floor *up* from the default but never below it), short borrow cost based on annual rate × hold days
+- Realistic cost model — commission-free by default (Alpaca US equities); IBKR Fixed per-share opt-in (`$0.0035/share`, `$0.35` min), modeled slippage in bps (unsigned, default 2 bps; per-symbol empirical can floor *up* from the default but never below it), short borrow cost based on annual rate × hold days
 - Backtest metrics: total return, Sharpe ratio, max drawdown, win rate, trade log
 - Equity curve synced with main chart (baseline coloring: green above, red below initial capital)
 - Buy & hold baseline overlay toggle (dashed line over equity curve for quick benchmark comparison)

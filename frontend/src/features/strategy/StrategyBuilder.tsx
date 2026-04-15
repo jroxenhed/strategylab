@@ -48,8 +48,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     const legacy = saved && (saved.commission !== undefined) && saved.perShareRate === undefined
     if (!legacy) return
     alert(
-      'Commission model updated — now using IBKR per-share ($0.0035/share, $0.35 min). ' +
-      'Adjust in Settings if needed.'
+      'Commission model updated — defaults to commission-free (Alpaca US equities). ' +
+      'For IBKR Fixed, set per-share to 0.0035 and min to 0.35 in Settings.'
     )
     localStorage.setItem(NOTIFY_KEY, '1')
   }, [saved])
@@ -76,8 +76,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   })
   const [slippageBps, setSlippageBps] = useState<number | ''>(saved?.slippageBps ?? '')
   const [commission, setCommission] = useState<number | ''>(saved?.commission ?? '')
-  const [perShareRate, setPerShareRate] = useState<number>(saved?.perShareRate ?? 0.0035)
-  const [minPerOrder, setMinPerOrder] = useState<number>(saved?.minPerOrder ?? 0.35)
+  const [perShareRate, setPerShareRate] = useState<number>(saved?.perShareRate ?? 0)
+  const [minPerOrder, setMinPerOrder] = useState<number>(saved?.minPerOrder ?? 0)
   const [borrowRateAnnual, setBorrowRateAnnual] = useState<number>(saved?.borrowRateAnnual ?? 0.5)
   const [slippageSource, setSlippageSource] = useState<'empirical' | 'default' | 'manual'>('default')
   const { data: slipInfo } = useSlippage(ticker)
@@ -129,8 +129,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     setSkipAfterStop(s.skipAfterStop ?? { enabled: false, count: 1, trigger: 'sl' })
     setTradingHours(s.tradingHours)
     setSlippageBps(s.slippageBps); setCommission(s.commission)
-    setPerShareRate(s.perShareRate ?? 0.0035)
-    setMinPerOrder(s.minPerOrder ?? 0.35)
+    setPerShareRate(s.perShareRate ?? 0)
+    setMinPerOrder(s.minPerOrder ?? 0)
     setBorrowRateAnnual(s.borrowRateAnnual ?? 0.5)
     setSlippageSource('manual')
     setDirection(s.direction ?? 'long')
@@ -255,6 +255,9 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
           <div style={styles.settingsRow}>
             <label style={styles.settingsLabel}>Min per order ($)</label>
             <input type="number" value={minPerOrder} step={0.05} min={0} onChange={e => setMinPerOrder(+e.target.value)} style={styles.settingsInput} />
+          </div>
+          <div style={{ fontSize: 11, color: '#666', marginTop: -4, marginBottom: 4 }}>
+            0 = commission-free (Alpaca US equities). For IBKR Fixed: 0.0035 / 0.35.
           </div>
 
           {direction === 'short' && (

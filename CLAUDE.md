@@ -169,7 +169,7 @@ S-G (Savitzky-Golay) smoothing for MA8/MA21 exists but is experimental — revis
 
 `StrategyRequest` cost fields:
 - `slippage_bps` — unsigned modeled cost per leg (≥ 0, default 2.0 bps). Applied as `price * (1 ± drag)` directionally (longs worse on entry / better on exit, shorts inverse). All sign/unit conventions live in `backend/slippage.py` — never reinvent them. Helpers: `slippage_cost_bps(side, expected, fill) → ≥0`, `fill_bias_bps(side, expected, fill) → signed` (positive = favorable), `decide_modeled_bps(symbol) → ModeledSlippage` (policy: empirical can only floor *up* from the 2 bps default — favorable empirical never makes the backtest cheaper).
-- `per_share_rate` (default `0.0035`) + `min_per_order` (default `0.35`) — IBKR Fixed per-share commission, charged per leg via `per_leg_commission(shares, req)` in `routes/backtest.py`.
+- `per_share_rate` + `min_per_order` — per-leg commission via `per_leg_commission(shares, req)` in `routes/backtest.py`. **Default `0.0` / `0.0`** (commission-free, matches Alpaca US equities). For IBKR Fixed, set `0.0035` / `0.35`.
 - `borrow_rate_annual` (default `0.5` %) — annual short borrow rate. `borrow_cost(...)` computes `shares * entry_price * (rate/100/365) * hold_days` and deducts from short PnL. Zero for longs.
 - Each trade carries `slippage`, `commission`, and `borrow_cost` fields. Journal rows additionally cache `slippage_bps` (unsigned cost) when `expected_price` is set.
 
