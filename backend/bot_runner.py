@@ -198,10 +198,17 @@ class BotRunner:
                 side_label = "COVER" if is_short else "SELL"
                 self._log("TRADE", f"{side_label} {cfg.symbol} @ {exit_price:.2f} | PnL={pnl:+.2f} | reason={exit_reason} (detected)")
 
+                expected_exit: float | None = None
+                if exit_reason == "stop_loss" and cfg.stop_loss_pct and state.entry_price:
+                    sl_mult = (1 + cfg.stop_loss_pct / 100) if is_short else (1 - cfg.stop_loss_pct / 100)
+                    expected_exit = state.entry_price * sl_mult
+                elif exit_reason == "trailing_stop" and state.trail_stop_price:
+                    expected_exit = state.trail_stop_price
+
                 try:
                     _log_trade(cfg.symbol, "cover" if is_short else "sell", sell_qty, exit_price,
-                               source="bot", reason=exit_reason, direction=cfg.direction,
-                               bot_id=cfg.bot_id, broker=cfg.broker)
+                               source="bot", reason=exit_reason, expected_price=expected_exit,
+                               direction=cfg.direction, bot_id=cfg.bot_id, broker=cfg.broker)
                 except Exception:
                     pass
 
