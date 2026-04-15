@@ -30,11 +30,10 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 ## B — Strategy Engine & Rules
 
 - [ ] **B2** Pre-market / extended hours option
-- [x] **B7** Slippage model redesign — separate *measured* slippage (diagnostics) from *modeled* slippage (backtest assumption). Always ≥ 0 everywhere it surfaces. Floor empirical at default, gate on minimum fill_count, single shared signed-cost helper. Fixes journal display (wrong sign for sells/shorts), bot runner log sign drift, and the "favorable empirical auto-carries into Capital & Fees" pitfall.
-- [ ] **B8** Spread-derived slippage default (follow-up to B7) — pull live bid/ask spread from broker (Alpaca quote endpoint / IBKR market data) and default modeled slippage to half-spread for the symbol. More principled than global/empirical fallback, especially for illiquid names. Only viable providers that expose quotes.
 - [ ] **B4** Per-rule signal visualization toggles — eye icon on each rule row in strategy builder; when enabled, that rule's signals show as markers on the main chart during/after backtest. Replaces current hardcoded signal marker behavior. State stored with rule fields, persists with save/load. No global master toggle.
 - [ ] **B5** Borrow cost estimation (for live short positions on real accounts)
-- [ ] Cost model v2 (deferred from B6):
+- [ ] **B8** Spread-derived slippage default (follow-up to B7) — pull live bid/ask spread from broker (Alpaca quote endpoint / IBKR market data) and default modeled slippage to half-spread for the symbol. More principled than global/empirical fallback, especially for illiquid names. Only viable providers that expose quotes.
+- [ ] **B9** Cost model v2 (deferred from B6):
   - Debit-balance-aware margin interest for shorts (charge margin rate only on days net cash is negative)
   - IBKR Tiered pricing (exchange fees, SEC fee, FINRA TAF, clearing pass-throughs)
   - Hard-to-borrow dynamic rate feed
@@ -43,7 +42,8 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 ### Shipped
 - [x] **B1** Skip N trades after SL + configurable DS trigger — `BotConfig.skip_after_stop` + `BotState.skip_remaining`, shared `is_post_loss_trigger` helper, honored by both backtester and bot runner; StrategyBuilder skip-after-stop block + DS trigger selector; AddBotBar passes through from preset.
 - [x] **B3** New rule conditions — MA8/MA21 slope (`turns_up`/`turns_down`) + `decelerating` via Savitzky-Golay second derivative; N-bar lookback for slope confirmation + min move % threshold; backtest respects sidebar S-G toggles.
-- [x] Realistic cost model in backtester — IBKR Fixed per-share commission (`per_share_rate` + `min_per_order`), empirical per-symbol slippage via `GET /api/slippage/{symbol}` + `useEmpiricalSlippage` hook, short borrow cost (`borrow_rate_annual`). Results shows Borrow column + Cost Breakdown block.
+- [x] **B6** Realistic cost model in backtester — IBKR Fixed per-share commission (`per_share_rate` + `min_per_order`), empirical per-symbol slippage via `GET /api/slippage/{symbol}` + `useEmpiricalSlippage` hook, short borrow cost (`borrow_rate_annual`). Results shows Borrow column + Cost Breakdown block.
+- [x] **B7** Slippage model redesign — separate *measured* slippage (diagnostics) from *modeled* slippage (backtest assumption). Always ≥ 0 everywhere it surfaces. Floor empirical at default, gate on minimum fill_count, single shared signed-cost helper in `backend/slippage.py`. Fixes journal display (wrong sign for sells/shorts), bot runner log sign drift, and the "favorable empirical auto-carries into Capital & Fees" pitfall. [plan](docs/superpowers/plans/2026-04-15-b7-slippage-redesign.md)
 - [x] Implement shorting — direction field, backtest + bot runner, chart markers, bot card refresh
 
 ## C — Strategy Summary & Analytics
@@ -64,8 +64,9 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 - [ ] **D2** Bot reordering/grouping (drag vs explicit groups vs tags)
 - [ ] **D3** Bot lifecycle vs journal: decide whether deleting/recreating a bot should reset its displayed P&L (filter journal by `bot.created_at`)
 - [ ] **D4** Clean up dead `BotState.total_pnl` field once migration is safe (currently kept for legacy `bots.json` deserialization)
-- [ ] **D8** IBKR silent order rejects — `placeOrder` returns an order_id even when IBKR rejects (Read-Only API, no permission, etc.); the reject arrives async on the error event stream and we never surface it. Post-close position re-check now prevents phantom SELL rows (`bot_runner.py:420`), but we should subscribe to `ib.errorEvent` and log rejects explicitly so the user knows *why* the close didn't go through.
 - [ ] **D5** Journal helper call frequency — runs on bot tick (for sizing) and on summary fetch. Journal is JSON-parsed each time. Fine for now, but if it gets slow (thousands of entries) add an mtime-based cache.
+- [ ] **D8** IBKR silent order rejects — `placeOrder` returns an order_id even when IBKR rejects (Read-Only API, no permission, etc.); the reject arrives async on the error event stream and we never surface it. Post-close position re-check now prevents phantom SELL rows (`bot_runner.py:420`), but we should subscribe to `ib.errorEvent` and log rejects explicitly so the user knows *why* the close didn't go through.
+
 ### Shipped
 - [x] IBKR stability pass — heartbeat auto-reconnect on ping failure (rotates clientId to dodge Error 326 stale-slot trap), robust startup with clientId rotation + clean shutdown disconnect, `ib.portfolio()` instead of `ib.positions()` so live price/market value/unrealized P&L populate, ping awaits Future on shared loop. UI: PositionsTable keyed by `symbol|broker|side` to avoid React reconciliation collapsing same-symbol rows, opened-time fallback for pre-broker-tagging journal rows. Bot runner: post-close position re-check prevents phantom SELL rows when IBKR silently rejects an order.
 - [x] **D6 + D7** IBKR heartbeat + multi-broker union for positions/orders/journal. HeartbeatMonitor pings providers every 5s; `/api/broker` exposes health + warmup. Positions/orders aggregate across brokers via `aggregate_from_brokers` (skipping unhealthy), journal trades stamped with `broker`. UI: Broker column + BrokerTag health dot, per-table broker filter (persisted), dismissible stale-broker banner. [plan](docs/superpowers/plans/2026-04-14-multi-broker-positions.md) · [spec](docs/superpowers/specs/2026-04-14-multi-broker-positions-design.md)
