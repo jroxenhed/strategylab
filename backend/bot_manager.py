@@ -25,7 +25,7 @@ from routes.backtest import run_backtest
 from signal_engine import Rule
 from shared import _fetch
 from broker import get_trading_provider, OrderRequest as BrokerOrderRequest
-from journal import _log_trade, compute_realized_pnl, first_bot_entry_time
+from journal import _log_trade, compute_realized_pnl, first_bot_entry_time, compute_bot_avg_cost_bps
 from bot_runner import BotRunner
 
 
@@ -386,7 +386,7 @@ class BotManager:
                 "data_source": config.data_source,
                 "direction": config.direction,
                 "broker": config.broker,
-                "avg_cost_bps": round(sum(state.slippage_bps) / len(state.slippage_bps), 2) if state.slippage_bps else None,
+                "avg_cost_bps": compute_bot_avg_cost_bps(config.symbol, bot_id=bot_id)[0],
                 "has_position": state.entry_price is not None,
                 "first_trade_time": first_trade_time,
             })

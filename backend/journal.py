@@ -57,6 +57,36 @@ def compute_realized_pnl(symbol: str, direction: str = "long", bot_id: str | Non
     return total
 
 
+def compute_bot_avg_cost_bps(symbol: str, bot_id: str | None = None) -> tuple[float | None, int]:
+    """Average of per-fill unsigned slippage cost for this bot's trades.
+
+    Reads the journal's cached `slippage_bps` (computed at log time with the
+    current helper), so stale values in `BotState.slippage_bps` can't contaminate.
+    Returns (avg_bps, fill_count); avg is None when no qualifying rows.
+    """
+    if not JOURNAL_PATH.exists():
+        return None, 0
+    try:
+        trades = json.loads(JOURNAL_PATH.read_text()).get("trades", [])
+    except (json.JSONDecodeError, OSError):
+        return None, 0
+    vals: list[float] = []
+    for t in trades:
+        if t.get("source") != "bot":
+            continue
+        if t.get("symbol", "").upper() != symbol.upper():
+            continue
+        if bot_id is not None and t.get("bot_id") != bot_id:
+            continue
+        s = t.get("slippage_bps")
+        if s is None:
+            continue
+        vals.append(float(s))
+    if not vals:
+        return None, 0
+    return round(sum(vals) / len(vals), 2), len(vals)
+
+
 def first_bot_entry_time(symbol: str, direction: str = "long", bot_id: str | None = None) -> str | None:
     """Return ISO timestamp of the earliest bot entry for (symbol, direction, bot_id).
 
