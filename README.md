@@ -23,7 +23,7 @@ Interactive trading strategy backtester and paper trading platform. Build strate
 - Fixed stop loss and trailing stops (percentage or ATR-based, with profit activation threshold)
 - Dynamic position sizing (reduce size after consecutive stop losses)
 - Trading hours filter with skip ranges (e.g. skip lunch, last 15 min)
-- Realistic cost model — IBKR Fixed per-share commission (`$0.0035/share`, `$0.35` min), signed slippage (manual or empirical-from-journal per symbol), short borrow cost based on annual rate × hold days
+- Realistic cost model — IBKR Fixed per-share commission (`$0.0035/share`, `$0.35` min), modeled slippage in bps (unsigned, default 2 bps; per-symbol empirical can floor *up* from the default but never below it), short borrow cost based on annual rate × hold days
 - Backtest metrics: total return, Sharpe ratio, max drawdown, win rate, trade log
 - Equity curve synced with main chart (baseline coloring: green above, red below initial capital)
 - Buy & hold baseline overlay toggle (dashed line over equity curve for quick benchmark comparison)
@@ -93,7 +93,8 @@ backend/
   shared.py            — _fetch(), data providers (Yahoo/Alpaca/IBKR), TTL cache
   broker.py            — TradingProvider protocol + Alpaca/IBKR implementations, broker registry
   models.py            — shared Pydantic models (StrategyRequest, etc.)
-  journal.py           — trade journal logger (bot_id-scoped P&L)
+  journal.py           — trade journal logger (bot_id-scoped P&L, caches slippage_bps)
+  slippage.py          — sign/unit conventions for slippage (cost ≥ 0, signed bias, modeled vs measured policy)
   signal_engine.py     — indicator computation, rule evaluation
   bot_manager.py       — bot lifecycle (add/start/stop/delete)
   bot_runner.py        — bot execution loop (polling, orders, stops)
@@ -101,7 +102,11 @@ backend/
     data.py            — GET /api/ohlcv/{ticker}
     indicators.py      — GET /api/indicators/{ticker}
     backtest.py        — POST /api/backtest
+    backtest_macro.py  — POST /api/backtest/macro (resampled equity D/W/M/Q/Y)
     trading.py         — manual trading, positions, journal
+    bots.py            — bot CRUD
+    providers.py       — GET /api/providers, GET/PUT /api/broker
+    slippage.py        — GET /api/slippage/{symbol}
     search.py          — GET /api/search
 
 frontend/src/
@@ -126,8 +131,8 @@ frontend/src/
 
 See `TODO.md` for the full themed roadmap. Highlights:
 
-- **Charts & Indicators** — portfolio equity chart (combined P&L across bots), equity curve macro mode, more indicators (ATR, Stochastic, VWAP), chart timeframe buttons, watchlist
-- **Strategy Engine** — skip N trades after SL, pre-market / extended hours, more rule conditions, borrow cost estimation for live shorts
-- **Strategy Summary** — further Summary tab layout polish (EV/PF + waterfall shipped)
-- **Bots** — browser-local timezone in bot log, bot reordering/grouping
+- **Charts & Indicators** — portfolio equity chart (combined P&L across bots), more indicators (ATR, Stochastic, VWAP), watchlist
+- **Strategy Engine** — pre-market / extended hours, per-rule signal visualization toggles, borrow cost estimation for live shorts, spread-derived slippage default, cost model v2 (margin interest, IBKR Tiered, hard-to-borrow rates, FX)
+- **Strategy Summary** — inline min↔max ranges, Alpha-vs-B&H metric, histogram polish
+- **Bots** — browser-local timezone in bot log, reordering/grouping, IBKR silent order reject surfacing
 - **Discovery (research)** — candidate scanning, batch backtesting, AI-assisted parameter tuning, pipeline to spawn a bot army
