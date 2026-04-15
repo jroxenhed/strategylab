@@ -109,7 +109,7 @@ export interface StrategyRequest {
   dynamic_sizing?: DynamicSizingConfig
   skip_after_stop?: SkipAfterStopConfig
   trading_hours?: TradingHoursConfig
-  slippage_pct?: number
+  slippage_bps?: number
   commission_pct?: number
   per_share_rate?: number
   min_per_order?: number
@@ -144,7 +144,7 @@ export interface SavedStrategy {
   dynamicSizing: DynamicSizingConfig
   skipAfterStop?: SkipAfterStopConfig
   tradingHours: TradingHoursConfig
-  slippage: number | ''
+  slippageBps: number | ''
   commission: number | ''
   perShareRate?: number
   minPerOrder?: number
@@ -284,7 +284,7 @@ export interface BotConfig {
   dynamic_sizing?: DynamicSizingConfig
   skip_after_stop?: SkipAfterStopConfig
   trading_hours?: TradingHoursConfig
-  slippage_pct?: number
+  slippage_bps?: number
   data_source?: string
   direction?: 'long' | 'short'
   broker?: string
@@ -331,7 +331,7 @@ export interface BotSummary {
   total_pnl: number
   backtest_summary: Record<string, number> | null
   data_source?: string
-  avg_slippage_pct?: number | null
+  avg_cost_bps?: number | null
   has_position?: boolean
   direction?: 'long' | 'short'
   broker?: string

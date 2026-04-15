@@ -212,8 +212,8 @@ export default function BotCard({
             <span style={{ color: '#666', textTransform: 'capitalize' }}>
               Status: <span style={{ color: statusColor(summary.status) }}>{summary.status}</span>
             </span>
-            {summary.avg_slippage_pct != null && (
-              <span style={{ color: '#666' }}>Slippage: <span style={{ color: Math.abs(summary.avg_slippage_pct) > 0.05 ? '#f85149' : '#8b949e' }}>{summary.avg_slippage_pct.toFixed(3)}%</span></span>
+            {summary.avg_cost_bps != null && (
+              <span style={{ color: '#666' }}>Slippage: <span style={{ color: summary.avg_cost_bps > 5 ? '#f85149' : '#8b949e' }}>{summary.avg_cost_bps.toFixed(1)} bps</span></span>
             )}
           </div>
 

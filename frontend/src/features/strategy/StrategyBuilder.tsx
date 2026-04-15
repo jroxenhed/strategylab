@@ -5,7 +5,7 @@ import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopCon
 import type { MASettings } from '../../App'
 import RuleRow, { emptyRule, validateRules } from './RuleRow'
 import { api } from '../../api/client'
-import { useEmpiricalSlippage } from '../../shared/hooks/useEmpiricalSlippage'
+import { useSlippage } from '../../shared/hooks/useSlippage'
 
 interface Props {
   ticker: string
@@ -74,13 +74,13 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     const ranges = th.skip_ranges ?? (th.skip_hours ? (th.skip_hours as number[]).map((h: number) => `${String(h).padStart(2,'0')}:00-${String(h+1).padStart(2,'0')}:00`) : [])
     return { enabled: th.enabled, start_time: start, end_time: end, skip_ranges: ranges }
   })
-  const [slippage, setSlippage] = useState<number | ''>(saved?.slippage ?? '')
+  const [slippageBps, setSlippageBps] = useState<number | ''>(saved?.slippageBps ?? '')
   const [commission, setCommission] = useState<number | ''>(saved?.commission ?? '')
   const [perShareRate, setPerShareRate] = useState<number>(saved?.perShareRate ?? 0.0035)
   const [minPerOrder, setMinPerOrder] = useState<number>(saved?.minPerOrder ?? 0.35)
   const [borrowRateAnnual, setBorrowRateAnnual] = useState<number>(saved?.borrowRateAnnual ?? 0.5)
   const [slippageSource, setSlippageSource] = useState<'empirical' | 'default' | 'manual'>('default')
-  const { data: empiricalSlip } = useEmpiricalSlippage(ticker)
+  const { data: slipInfo } = useSlippage(ticker)
   const [direction, setDirection] = useState<'long' | 'short'>(saved?.direction ?? 'long')
   const [debug, setDebug] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -92,14 +92,11 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
 
   useEffect(() => {
     if (slippageSource === 'manual') return
-    if (empiricalSlip?.empirical_pct != null && empiricalSlip.fill_count > 0) {
-      setSlippage(empiricalSlip.empirical_pct)
-      setSlippageSource('empirical')
-    } else {
-      setSlippage(0.01)
-      setSlippageSource('default')
+    if (slipInfo) {
+      setSlippageBps(slipInfo.modeled_bps)
+      setSlippageSource(slipInfo.source)
     }
-  }, [empiricalSlip?.empirical_pct, empiricalSlip?.fill_count, slippageSource])
+  }, [slipInfo?.modeled_bps, slipInfo?.source, slippageSource])
 
   function currentSnapshot(name: string): SavedStrategy {
     return {
@@ -108,7 +105,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
       buyRules, sellRules, buyLogic, sellLogic,
       capital, posSize, stopLoss,
       trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours,
-      slippage, commission, direction,
+      slippageBps, commission, direction,
       perShareRate, minPerOrder, borrowRateAnnual,
     }
   }
@@ -131,7 +128,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     setDynamicSizing(s.dynamicSizing ?? { enabled: false, consec_sls: 2, reduced_pct: 25, trigger: 'sl' })
     setSkipAfterStop(s.skipAfterStop ?? { enabled: false, count: 1, trigger: 'sl' })
     setTradingHours(s.tradingHours)
-    setSlippage(s.slippage); setCommission(s.commission)
+    setSlippageBps(s.slippageBps); setCommission(s.commission)
     setPerShareRate(s.perShareRate ?? 0.0035)
     setMinPerOrder(s.minPerOrder ?? 0.35)
     setBorrowRateAnnual(s.borrowRateAnnual ?? 0.5)
@@ -160,10 +157,10 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   useEffect(() => {
     localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({
       buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss,
-      trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours, slippage, commission, direction,
+      trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours, slippageBps, commission, direction,
       perShareRate, minPerOrder, borrowRateAnnual,
     }))
-  }, [buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours, slippage, commission, direction,
+  }, [buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours, slippageBps, commission, direction,
       perShareRate, minPerOrder, borrowRateAnnual])
 
   async function runBacktest() {
@@ -183,7 +180,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         dynamic_sizing: dynamicSizing.enabled ? dynamicSizing : undefined,
         skip_after_stop: skipAfterStop.enabled ? skipAfterStop : undefined,
         trading_hours: tradingHours.enabled ? tradingHours : undefined,
-        slippage_pct: slippage !== '' && slippage !== 0 ? slippage : undefined,
+        slippage_bps: slippageBps !== '' ? slippageBps : undefined,
         per_share_rate: perShareRate,
         min_per_order: minPerOrder,
         borrow_rate_annual: direction === 'short' ? borrowRateAnnual : 0,
@@ -224,29 +221,30 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             <input type="number" value={posSize} step={1} min={1} max={100} onChange={e => setPosSize(+e.target.value)} style={styles.settingsInput} />
           </div>
           <div style={styles.settingsRow}>
-            <label style={styles.settingsLabel}>Slippage (%)</label>
+            <label style={styles.settingsLabel}>Slippage (bps)</label>
             <input
               type="number"
-              value={slippage}
-              step={0.005}
-              placeholder="0"
+              value={slippageBps}
+              step={0.5}
+              min={0}
+              placeholder="2"
               onChange={e => {
                 const v = e.target.value
                 if (v === '') {
-                  setSlippageSource('default')
-                  setSlippage(empiricalSlip?.empirical_pct ?? 0.01)
+                  setSlippageSource(slipInfo?.source ?? 'default')
+                  setSlippageBps(slipInfo?.modeled_bps ?? 2)
                 } else {
-                  setSlippage(+v)
+                  setSlippageBps(Math.max(0, +v))
                   setSlippageSource('manual')
                 }
               }}
               style={styles.settingsInput}
             />
             <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 6 }}>
-              {slippageSource === 'empirical' && empiricalSlip
-                ? `empirical: ${empiricalSlip.fill_count} fills${(empiricalSlip.empirical_pct ?? 0) < 0 ? ' ⚠ favorable' : ''}`
+              {slippageSource === 'empirical' && slipInfo
+                ? `empirical: ${slipInfo.fill_count} fills`
                 : slippageSource === 'default'
-                ? 'default: 0.01%'
+                ? 'default: 2 bps'
                 : 'manual'}
             </span>
           </div>

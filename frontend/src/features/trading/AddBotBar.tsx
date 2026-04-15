@@ -81,7 +81,7 @@ export default function AddBotBar({
         dynamic_sizing: s.dynamicSizing ?? null,
         skip_after_stop: s.skipAfterStop ?? null,
         trading_hours: s.tradingHours ?? null,
-        slippage_pct: typeof s.slippage === 'number' ? s.slippage : 0,
+        slippage_bps: typeof s.slippageBps === 'number' ? s.slippageBps : 2.0,
         data_source: dataSource,
         direction,
         broker,

@@ -42,7 +42,7 @@ export async function updateBot(botId: string, updates: Record<string, unknown>)
   await api.patch(`/api/bots/${botId}`, updates)
 }
 
-export async function manualBuyBot(botId: string): Promise<{ qty: number; fill_price: number; slippage_pct: number }> {
+export async function manualBuyBot(botId: string): Promise<{ qty: number; fill_price: number; slippage_bps: number }> {
   const res = await api.post(`/api/bots/${botId}/buy`)
   return res.data
 }

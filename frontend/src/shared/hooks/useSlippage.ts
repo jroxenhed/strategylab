@@ -1,13 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../../api/client'
 
-export interface EmpiricalSlippage {
-  empirical_pct: number | null
+export interface SlippageInfo {
+  modeled_bps: number
+  measured_bps: number | null
+  fill_bias_bps: number | null
   fill_count: number
+  source: 'default' | 'empirical'
 }
 
-export function useEmpiricalSlippage(symbol: string) {
-  return useQuery<EmpiricalSlippage>({
+export function useSlippage(symbol: string) {
+  return useQuery<SlippageInfo>({
     queryKey: ['slippage', symbol.toUpperCase()],
     queryFn: async () => {
       const { data } = await api.get(`/api/slippage/${symbol.toUpperCase()}`)

@@ -88,7 +88,7 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
     let totalQty = 0
     let totalPnl = 0
     let gainPcts: number[] = []
-    let slippages: number[] = []
+    let costsBps: number[] = []
     for (const t of filtered) {
       totalQty += t.qty || 0
       const pnl = exitPnl.get(t.id)
@@ -99,15 +99,14 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
           gainPcts.push((pnl / (entryPx * t.qty)) * 100)
         }
       }
-      if (t.expected_price != null && t.price != null) {
-        slippages.push((t.price - t.expected_price) / t.expected_price * 100)
-      }
+      const cost = costBpsOf(t)
+      if (cost != null) costsBps.push(cost)
     }
     return {
       totalQty,
       totalPnl,
       avgGainPct: gainPcts.length > 0 ? gainPcts.reduce((a, b) => a + b, 0) / gainPcts.length : null,
-      avgSlippage: slippages.length > 0 ? slippages.reduce((a, b) => a + b, 0) / slippages.length : null,
+      avgCostBps: costsBps.length > 0 ? costsBps.reduce((a, b) => a + b, 0) / costsBps.length : null,
     }
   })()
 
@@ -124,9 +123,8 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
       const gainPct = (pnl != null && entryPx != null && t.qty)
         ? ((pnl / (entryPx * t.qty)) * 100).toFixed(2) + '%'
         : ''
-      const slippage = (t.expected_price != null && t.price != null)
-        ? ((t.price - t.expected_price) / t.expected_price * 100).toFixed(3) + '%'
-        : ''
+      const cost = costBpsOf(t)
+      const slippage = cost != null ? cost.toFixed(1) + ' bps' : ''
       return [
         fmtTime(t.timestamp),
         t.symbol,
@@ -201,7 +199,7 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
               {summaryStats.avgGainPct != null ? `${summaryStats.avgGainPct >= 0 ? '+' : ''}${summaryStats.avgGainPct.toFixed(2)}%` : ''}
             </span>
             <span style={{ ...styles.summaryCell, color: '#8b949e' }}>
-              {summaryStats.avgSlippage != null ? `${summaryStats.avgSlippage.toFixed(3)}%` : ''}
+              {summaryStats.avgCostBps != null ? `${summaryStats.avgCostBps.toFixed(1)} bps` : ''}
             </span>
             <span style={styles.summaryCell} />  {/* Source */}
             <span style={styles.summaryCell} />  {/* Reason */}
@@ -240,9 +238,10 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
                 })()}
               </span>
               <span style={{ ...styles.cell, color: slippageColor(t) }}>
-                {t.expected_price != null && t.price != null
-                  ? `${((t.price - t.expected_price) / t.expected_price * 100).toFixed(3)}%`
-                  : '—'}
+                {(() => {
+                  const c = costBpsOf(t)
+                  return c != null ? `${c.toFixed(1)} bps` : '—'
+                })()}
               </span>
               <span style={{ ...styles.cell, color: t.source === 'auto' ? '#e5c07b' : '#8b949e' }}>
                 {t.source}
@@ -284,13 +283,25 @@ const rowBackground = (t: JournalTrade, pnlMap: Map<string, number>) => {
   return 'transparent'
 }
 
-const slippageColor = (t: JournalTrade) => {
-  if (t.expected_price == null || t.price == null) return '#8b949e'
+const WORSE_WHEN_ABOVE = new Set(['buy', 'cover'])
+const WORSE_WHEN_BELOW = new Set(['sell', 'short'])
+
+function costBpsOf(t: JournalTrade): number | null {
+  if (t.slippage_bps != null) return t.slippage_bps
+  if (t.expected_price == null || t.price == null || t.expected_price === 0) return null
   const diff = t.price - t.expected_price
-  // For buys, positive slippage is bad (paid more). For sells, negative is bad (got less).
-  const isBad = t.side === 'buy' ? diff > 0 : diff < 0
-  if (Math.abs(diff) < 0.001) return '#8b949e'
-  return isBad ? '#f85149' : '#26a641'
+  let signedBps = 0
+  if (WORSE_WHEN_ABOVE.has(t.side)) signedBps = (diff / t.expected_price) * 10_000
+  else if (WORSE_WHEN_BELOW.has(t.side)) signedBps = (-diff / t.expected_price) * 10_000
+  else return null
+  return Math.max(0, signedBps)
+}
+
+const slippageColor = (t: JournalTrade) => {
+  const c = costBpsOf(t)
+  if (c == null) return '#8b949e'
+  if (c < 1) return '#8b949e'
+  return c > 5 ? '#f85149' : '#d29922'
 }
 
 const reasonColor = (r: string | null, pnl?: number | null) => {
