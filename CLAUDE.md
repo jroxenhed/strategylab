@@ -11,79 +11,17 @@ Interactive trading strategy backtester + live paper trading platform. Read this
 - If hitting an error or blocker, STOP and report immediately — don't retry in a loop.
 - Don't trust line numbers in docs/plans — they drift. Grep for the string anchor, then edit.
 - Output reasoning progressively to avoid API stream idle timeouts; never go silent for >60s.
-
-## Stack
-
-- **Frontend**: React + TypeScript + Vite, lightweight-charts v5 (TradingView), TanStack Query
-- **Backend**: Python FastAPI, yfinance, pandas, numpy
-
-```
-frontend/src/
-  App.tsx                — state, data fetching, layout (central hub)
-  main.tsx               — React entry point
-  api/
-    client.ts            — axios instance
-    trading.ts           — trading API calls (account, positions, orders)
-    bots.ts              — bot CRUD API calls
-  features/
-    chart/
-      Chart.tsx          — the complex one (see below)
-    strategy/
-      StrategyBuilder.tsx — buy/sell rule builder, backtest trigger
-      Results.tsx        — tabbed: Summary / Equity Curve / Trades
-      RuleRow.tsx        — single rule row with NOT toggle, mute, conditions
-      PnlHistogram.tsx   — P&L distribution histogram
-      MacroEquityChart.tsx — resampled equity for long timescales
-    sidebar/
-      Sidebar.tsx        — ticker, date range, intervals, data source, indicators
-    trading/
-      PaperTrading.tsx   — container: AccountBar → Bots → Positions → Journal → Orders
-      AccountBar.tsx     — equity/cash/buying power metrics bar
-      BotControlCenter.tsx — bot list with sparklines, start/stop all
-      BotCard.tsx        — individual bot card (editable config, sparkline)
-      AddBotBar.tsx      — create new bot (ticker, strategy, direction, allocation)
-      PositionsTable.tsx — live positions from broker
-      TradeJournal.tsx   — trade history with filters, CSV export
-      OrderHistory.tsx   — raw order history
-      MiniSparkline.tsx  — inline SVG sparkline for bot cards
-    discovery/
-      Discovery.tsx      — container: SignalScanner + PerformanceComparison
-      SignalScanner.tsx   — scan tickers for strategy signals
-      PerformanceComparison.tsx — compare strategy performance across tickers
-  shared/
-    hooks/
-      useOHLCV.ts        — useOHLCV, useIndicators, useProviders, useSearch, useBroker
-      useLocalStorage.ts — persistent state hook
-      useMacro.ts        — macro equity chart data hook
-    types/index.ts       — all shared TypeScript types
-    utils/
-      time.ts            — toET() timezone helper
-      format.ts          — number/currency formatting
-      colors.ts          — shared color constants
-
-backend/
-  main.py              — FastAPI app setup, lifespan (BotManager + IBKR init), CORS, routers
-  shared.py            — DataProvider protocol, providers (Yahoo/Alpaca/IBKR), _fetch() + TTL cache
-  broker.py            — TradingProvider protocol, AlpacaTradingProvider, IBKRTradingProvider, broker registry
-  models.py            — StrategyRequest, TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig
-  signal_engine.py     — Rule model, eval_rules()
-  bot_manager.py       — BotConfig, BotState, BotManager singleton, bot persistence
-  bot_runner.py        — async polling loop, entry/exit logic, position/fill management
-  journal.py           — trade journal: log_trade(), compute_realized_pnl(), JSON storage
-  routes/
-    data.py            — GET /api/ohlcv/{ticker}
-    indicators.py      — GET /api/indicators/{ticker}
-    backtest.py        — POST /api/backtest + trade simulation engine
-    backtest_macro.py  — POST /api/backtest/macro — resampled equity (D/W/M/Q/Y)
-    search.py          — GET /api/search
-    providers.py       — GET /api/providers, GET/PUT /api/broker
-    trading.py         — trading endpoints (account, positions, orders, buy, sell, scan)
-    bots.py            — bot CRUD, delegates to BotManager
-  tests/
-start.sh               — starts both servers
-```
+- **Key Bugs Fixed is authoritative.** If code appears to invite a "simpler" approach that conflicts with that section, don't take it — those patterns exist for non-obvious runtime reasons.
 
 ## Chart.tsx Architecture
+
+Key files (others are standard-named, discoverable by grep):
+- `frontend/src/App.tsx` — central hub for state, data fetching, layout
+- `frontend/src/features/chart/Chart.tsx` — read this section before editing
+- `backend/signal_engine.py` — Rule model, eval_rules()
+- `backend/bot_runner.py` — async polling loop, entry/exit/fill management
+- `backend/broker.py` — TradingProvider protocol + broker registry
+- `backend/journal.py` — log_trade(), compute_realized_pnl()
 
 This is the most complex file. Read it before editing.
 
@@ -110,9 +48,6 @@ In v5, `addSeries()` without an explicit `priceScaleId` creates an **independent
 - QQQ → `priceScaleId: 'qqq-scale'` (hidden, real close prices)
 - Volume → `priceScaleId: 'volume'` (hidden, `scaleMargins: { top: 0.75, bottom: 0 }`)
 
-### SPY/QQQ overlay
-
-Fetched in App.tsx always (even when hidden) to avoid loading delay. Passed to Chart only when `showSpy`/`showQqq` is true. Displayed as real close prices on independent hidden scales (`spy-scale`, `qqq-scale`), so each line auto-scales independently and the crosshair tooltip shows actual dollar values.
 
 ### Indicator pane height split
 
@@ -195,13 +130,6 @@ Non-obvious bits:
 - Journal rows tagged with `bot_id`; `compute_realized_pnl(symbol, direction, bot_id)` scopes per-bot so delete+recreate starts clean. Legacy untagged rows excluded.
 - **IBKR integration (D7) shipped** — details + operational gotchas (Read-Only mode, Error 162, ib_insync rules, Pydantic route-model trap) live in memory, not here.
 
-## Discovery Page
-
-`features/discovery/Discovery.tsx` — container for signal scanning and performance comparison tools.
-
-- `SignalScanner.tsx` — scans multiple tickers against a strategy's rules, shows which have active signals
-- `PerformanceComparison.tsx` — backtests a strategy across multiple tickers, compares returns
-
 ## Key Bugs Fixed
 
 These document **why** certain patterns exist in the code:
@@ -209,11 +137,3 @@ These document **why** certain patterns exist in the code:
 - **yf.download() concurrency**: `yfinance.download()` shares global state, returns wrong data under concurrent requests. All code uses `yf.Ticker(symbol).history()` via `_fetch()`.
 - **Bot P&L leak across recreations**: `compute_realized_pnl` filtered journal rows by `(symbol, direction)` only, so a new bot on the same symbol inherited the old (deleted) bot's P&L and sizing. Fixed by tagging every `_log_trade` with `bot_id` and filtering by it.
 - **Silent drop of bot config fields**: `AddBotRequest` in `routes/bots.py` duplicated `BotConfig` fields; any field missing from the duplicate was silently dropped by Pydantic's `extra="ignore"` default and replaced by the `BotConfig` default. Fixed by using `BotConfig` directly as the POST body schema.
-
-## Running
-
-```bash
-./start.sh
-# Frontend: http://localhost:5173
-# Backend:  http://localhost:8000
-```
