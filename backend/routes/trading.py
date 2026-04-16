@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 import time
 from datetime import datetime, timezone
@@ -6,6 +7,8 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 from shared import _fetch
 from broker import get_trading_provider, OrderRequest as BrokerOrderRequest, _trading_providers
 from broker_aggregate import aggregate_from_brokers
@@ -53,7 +56,7 @@ def get_account():
         provider = get_trading_provider()
         return provider.get_account()
     except Exception as e:
-        print(f"[Broker ERROR] get_account: {type(e).__name__}: {e}")
+        logger.error("get_account failed: %s: %s", type(e).__name__, e)
         raise _HTTPException(status_code=502, detail=f"Broker API error: {e}")
 
 

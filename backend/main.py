@@ -2,10 +2,18 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 load_dotenv()
 
+import logging
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import warnings
 warnings.filterwarnings("ignore")
+
+logging.basicConfig(
+    level=os.environ.get("STRATEGYLAB_LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 from routes.data import router as data_router
 from routes.indicators import router as indicators_router
@@ -46,9 +54,9 @@ async def lifespan(app: FastAPI):
         if ib is not None:
             try:
                 ib.disconnect()
-                print("[IBKR] Disconnected cleanly on shutdown")
+                logger.info("IBKR disconnected cleanly on shutdown")
             except Exception as e:
-                print(f"[IBKR] Disconnect on shutdown failed: {e}")
+                logger.warning("IBKR disconnect on shutdown failed: %s", e)
 
 
 app = FastAPI(lifespan=lifespan)

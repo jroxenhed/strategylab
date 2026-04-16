@@ -1,9 +1,12 @@
 from typing import Protocol
 from fastapi import HTTPException
+import logging
 import os
 import time
 import pandas as pd
 import yfinance as yf
+
+logger = logging.getLogger(__name__)
 
 
 _INTRADAY_INTERVALS = {'1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h'}
@@ -246,7 +249,7 @@ if _alpaca_client is not None:
             from broker import AlpacaTradingProvider, register_trading_provider
             register_trading_provider("alpaca", AlpacaTradingProvider(_alpaca_trading_client, _alpaca_client))
         except Exception as e:
-            print(f"[Alpaca] Trading provider registration failed: {e}")
+            logger.warning("Alpaca trading provider registration failed: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +289,7 @@ async def _create_ibkr_connection():
                 ib.connectAsync(host, port, clientId=client_id),
                 timeout=10.0,
             )
-            print(f"[IBKR] Connected to Gateway at {host}:{port} (clientId={client_id})")
+            logger.info("IBKR connected to Gateway at %s:%s (clientId=%s)", host, port, client_id)
             return ib
         except Exception as e:
             last_err = e
@@ -294,8 +297,8 @@ async def _create_ibkr_connection():
                 ib.disconnect()
             except Exception:
                 pass
-            print(f"[IBKR] clientId={client_id} failed ({type(e).__name__}: {e}); trying next")
-    print(f"[IBKR] Gateway not available ({host}:{port}): {last_err}")
+            logger.debug("IBKR clientId=%s failed (%s: %s); trying next", client_id, type(e).__name__, e)
+    logger.warning("IBKR Gateway not available (%s:%s): %s", host, port, last_err)
     return None
 
 
@@ -321,7 +324,7 @@ async def init_ibkr():
         # Register trading provider
         from broker import IBKRTradingProvider, register_trading_provider
         register_trading_provider("ibkr", IBKRTradingProvider(_ibkr_ib, _ibkr_loop))
-        print(f"[IBKR] Data + trading providers registered")
+        logger.info("IBKR data + trading providers registered")
 
 
 def register_provider(name: str, provider: DataProvider) -> None:
@@ -377,11 +380,12 @@ def _fetch(ticker: str, start: str, end: str, interval: str, source: str = "yaho
 
     cached = _fetch_cache.get(key)
     if cached and (now - cached[0]) < ttl:
-        age = round(now - cached[0])
-        print(f"[cache HIT]  {ticker} {interval} {start}→{end} [{source}]  age={age}s", flush=True)
+        if logger.isEnabledFor(logging.DEBUG):
+            age = round(now - cached[0])
+            logger.debug("cache HIT  %s %s %s→%s [%s] age=%ss", ticker, interval, start, end, source, age)
         return cached[1]
 
-    print(f"[cache MISS] {ticker} {interval} {start}→{end} [{source}]", flush=True)
+    logger.debug("cache MISS %s %s %s→%s [%s]", ticker, interval, start, end, source)
     # Alpaca HTTP keep-alive sockets go stale between bot polls; retry once on
     # RemoteDisconnected / ConnectionAborted so a dead socket doesn't swallow a tick.
     try:
