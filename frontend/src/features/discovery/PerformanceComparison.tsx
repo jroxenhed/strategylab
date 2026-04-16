@@ -3,6 +3,7 @@ import { createChart, LineSeries, ColorType } from 'lightweight-charts'
 import type { IChartApi } from 'lightweight-charts'
 import { fetchPerformance, type PerformanceResponse } from '../../api/trading'
 import type { Rule } from '../../shared/types'
+import { apiErrorDetail } from '../../shared/utils/errors'
 
 const SCANNER_STORAGE_KEY = 'strategylab-scanner'
 
@@ -50,8 +51,8 @@ export default function PerformanceComparison() {
         sell_logic: rules.sellLogic,
       })
       setResult(res)
-    } catch (e: any) {
-      setError(e.response?.data?.detail || e.message || 'Failed to fetch performance')
+    } catch (e) {
+      setError(apiErrorDetail(e, 'Failed to fetch performance'))
     } finally {
       setLoading(false)
     }

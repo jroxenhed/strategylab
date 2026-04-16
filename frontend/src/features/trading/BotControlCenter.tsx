@@ -6,6 +6,7 @@ import {
   startAllBots, stopAllBots, stopAndCloseAllBots,
 } from '../../api/bots'
 import { fmtUsd } from '../../shared/utils/format'
+import { apiErrorDetail } from '../../shared/utils/errors'
 import BotCard, { btnStyle } from './BotCard'
 import AddBotBar, { sectionStyle, inputStyle } from './AddBotBar'
 import { useBroker } from '../../shared/hooks/useOHLCV'
@@ -122,8 +123,8 @@ export default function BotControlCenter() {
     try {
       const f = await setBotFund(amount)
       setFund(f)
-    } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to set fund')
+    } catch (e) {
+      setError(apiErrorDetail(e, 'Failed to set fund'))
     }
   }
 
@@ -134,37 +135,37 @@ export default function BotControlCenter() {
 
   const handleStart = async (botId: string) => {
     try { await startBot(botId); await loadBots() }
-    catch (e: any) { setError(e?.response?.data?.detail ?? 'Failed to start bot') }
+    catch (e) { setError(apiErrorDetail(e, 'Failed to start bot')) }
   }
 
   const handleStop = async (botId: string) => {
     try { await stopBot(botId); await loadBots() }
-    catch (e: any) { setError(e?.response?.data?.detail ?? 'Failed to stop bot') }
+    catch (e) { setError(apiErrorDetail(e, 'Failed to stop bot')) }
   }
 
   const handleBacktest = async (botId: string) => {
     try { await backtestBot(botId); await loadBots() }
-    catch (e: any) { setError(e?.response?.data?.detail ?? 'Failed to run backtest') }
+    catch (e) { setError(apiErrorDetail(e, 'Failed to run backtest')) }
   }
 
   const handleDelete = async (botId: string) => {
     try { await deleteBot(botId); await loadBots() }
-    catch (e: any) { setError(e?.response?.data?.detail ?? 'Failed to delete bot') }
+    catch (e) { setError(apiErrorDetail(e, 'Failed to delete bot')) }
   }
 
   const handleManualBuy = async (botId: string) => {
     try { await manualBuyBot(botId); await loadBots() }
-    catch (e: any) { setError(e?.response?.data?.detail ?? 'Failed to place buy') }
+    catch (e) { setError(apiErrorDetail(e, 'Failed to place buy')) }
   }
 
   const handleResetPnl = async (botId: string) => {
     try { await resetBotPnl(botId); await loadBots() }
-    catch (e: any) { setError(e?.response?.data?.detail ?? 'Failed to reset P&L') }
+    catch (e) { setError(apiErrorDetail(e, 'Failed to reset P&L')) }
   }
 
   const handleUpdate = async (botId: string, updates: Record<string, unknown>) => {
     try { await updateBot(botId, updates); await loadBots() }
-    catch (e: any) { setError(e?.response?.data?.detail ?? 'Failed to update bot') }
+    catch (e) { setError(apiErrorDetail(e, 'Failed to update bot')) }
   }
 
   const handleStartAll = async () => {
@@ -172,8 +173,8 @@ export default function BotControlCenter() {
       const r = await startAllBots()
       await loadBots()
       setError(r.failed.length ? `Started ${r.started.length}, ${r.failed.length} failed` : '')
-    } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to start all bots')
+    } catch (e) {
+      setError(apiErrorDetail(e, 'Failed to start all bots'))
     }
   }
 
@@ -182,8 +183,8 @@ export default function BotControlCenter() {
       const r = await stopAllBots()
       await loadBots()
       setError(r.failed.length ? `Stopped ${r.stopped.length}, ${r.failed.length} failed` : '')
-    } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to stop all bots')
+    } catch (e) {
+      setError(apiErrorDetail(e, 'Failed to stop all bots'))
     }
   }
 
@@ -197,8 +198,8 @@ export default function BotControlCenter() {
       const r = await stopAndCloseAllBots()
       await loadBots()
       setError(r.failed.length ? `Closed ${r.closed.length}, ${r.failed.length} failed` : '')
-    } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to stop and close all bots')
+    } catch (e) {
+      setError(apiErrorDetail(e, 'Failed to stop and close all bots'))
     }
   }
 
