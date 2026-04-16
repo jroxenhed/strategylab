@@ -33,6 +33,7 @@ class BotRunner:
         self.state = state
         self.manager = manager
         self._error_listener = None  # bound IBKR error callback
+        self._active_order_ids: set[str] = set()  # order IDs placed by this bot
 
     def _log(self, level: str, msg: str):
         entry = {"time": datetime.now(timezone.utc).isoformat(), "msg": msg, "level": level}
@@ -316,6 +317,7 @@ class BotRunner:
                         )
 
                     result = await self._run_in_executor(provider.submit_order, order_req)
+                    self._active_order_ids.add(result.order_id)
                 except Exception as e:
                     self._log("ERROR", f"Buy order failed: {e}")
                     return
@@ -456,6 +458,7 @@ class BotRunner:
 
                 # Get actual fill price
                 order_id = close_result.order_id
+                self._active_order_ids.add(order_id)
                 # Stash pending close so the next tick recognizes the fill as ours
                 # even if the broker hasn't dropped the position from get_positions yet.
                 state.pending_close_order_id = order_id
@@ -532,10 +535,18 @@ class BotRunner:
                 state.trail_stop_price = None
                 state.pending_close_order_id = None
                 state.pending_close_reason = None
+                self._active_order_ids.clear()
                 self.manager.save()
 
     def _on_ibkr_error(self, reqId, errorCode, errorString, is_structural):
-        """Called by IBKRTradingProvider on async IBKR errors."""
+        """Called by IBKRTradingProvider on async IBKR errors.
+
+        Connection-level errors (reqId <= 0) affect all bots.
+        Order-specific errors (reqId > 0) only affect the bot that placed them.
+        """
+        # Filter: order-specific errors only matter if this bot placed the order
+        if reqId > 0 and str(reqId) not in self._active_order_ids:
+            return
         if is_structural:
             self._log("ERROR", f"IBKR reject code={errorCode}: {errorString}")
             self.state.status = "error"
@@ -576,9 +587,10 @@ class BotRunner:
         interval_secs = POLL_INTERVALS.get(self.config.interval, 30)
         consec_errors = 0
         MAX_CONSEC_ERRORS = 5
+        RECOVERY_WAIT = 30  # seconds to wait before retrying after transient failures
         try:
             while True:
-                # Check if paused by IBKR error handler
+                # Check if paused by IBKR structural error — permanent stop
                 if self.state.status == "error" and self.state.pause_reason:
                     self._log("WARN", f"Bot paused: {self.state.pause_reason}")
                     break
@@ -592,11 +604,17 @@ class BotRunner:
                     self._log("WARN", f"Tick failed ({consec_errors}/{MAX_CONSEC_ERRORS}): {e}")
                     self.manager.save()
                     if consec_errors >= MAX_CONSEC_ERRORS:
-                        self.state.status = "error"
-                        self.state.error_message = str(e)
-                        self._log("ERROR", f"Fatal after {MAX_CONSEC_ERRORS} consecutive failures: {e}")
+                        # Transient failures: backoff and retry instead of dying
+                        self._log("WARN", f"Backing off {RECOVERY_WAIT}s after {MAX_CONSEC_ERRORS} consecutive failures")
+                        self.state.error_message = f"Recovering: {e}"
                         self.manager.save()
-                        break
+                        await asyncio.sleep(RECOVERY_WAIT)
+                        consec_errors = 0
+                        self._log("INFO", "Resuming after recovery backoff")
+                        self.state.error_message = None
+                        self.state.status = "running"
+                        self.manager.save()
+                        continue
                 await asyncio.sleep(interval_secs)
         finally:
             self._unregister_error_listener()

@@ -8,6 +8,7 @@ import {
 import { fmtUsd } from '../../shared/utils/format'
 import BotCard, { btnStyle } from './BotCard'
 import AddBotBar, { sectionStyle, inputStyle } from './AddBotBar'
+import { useBroker } from '../../shared/hooks/useOHLCV'
 
 // ---------------------------------------------------------------------------
 // FundBar
@@ -84,6 +85,8 @@ function FundBar({ fund, onSetFund }: { fund: BotFundStatus | null; onSetFund: (
 // ---------------------------------------------------------------------------
 
 export default function BotControlCenter() {
+  const { adaptiveInterval, anyBrokerUnhealthy, health } = useBroker()
+  const [brokerBannerDismissed, setBrokerBannerDismissed] = useState(false)
   const [fund, setFund] = useState<BotFundStatus | null>(null)
   const [bots, setBots] = useState<BotSummary[]>([])
   const [error, setError] = useState('')
@@ -94,6 +97,9 @@ export default function BotControlCenter() {
   useEffect(() => {
     localStorage.setItem('sparklineScale', sparklineScale)
   }, [sparklineScale])
+  useEffect(() => {
+    if (!anyBrokerUnhealthy) setBrokerBannerDismissed(false)
+  }, [anyBrokerUnhealthy])
 
   const loadBots = async () => {
     try {
@@ -108,9 +114,9 @@ export default function BotControlCenter() {
 
   useEffect(() => {
     loadBots()
-    const id = setInterval(loadBots, 2000)
+    const id = setInterval(loadBots, adaptiveInterval(2000))
     return () => clearInterval(id)
-  }, [])
+  }, [adaptiveInterval])
 
   const handleSetFund = async (amount: number) => {
     try {
@@ -239,6 +245,24 @@ export default function BotControlCenter() {
         <div style={{ color: '#ef5350', fontSize: 12, padding: '4px 8px', background: '#1a0d0d', borderRadius: 4 }}>
           {error}
           <button onClick={() => setError('')} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#ef5350', cursor: 'pointer' }}>×</button>
+        </div>
+      )}
+
+      {anyBrokerUnhealthy && !brokerBannerDismissed && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '6px 10px', fontSize: 12,
+          background: 'rgba(240, 183, 78, 0.1)', border: '1px solid rgba(240, 183, 78, 0.3)',
+          borderRadius: 4, color: '#f0b74e',
+        }}>
+          <span style={{ fontWeight: 600 }}>Broker issue</span>
+          <span style={{ color: '#c9a84e' }}>
+            {Object.entries(health).filter(([, h]) => !h.healthy).map(([name]) => name.toUpperCase()).join(', ')} unhealthy — polling slowed to 10s
+          </span>
+          <button
+            onClick={() => setBrokerBannerDismissed(true)}
+            style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#f0b74e', cursor: 'pointer', fontSize: 14 }}
+          >×</button>
         </div>
       )}
 

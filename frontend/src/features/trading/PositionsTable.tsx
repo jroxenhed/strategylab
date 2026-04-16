@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { fetchPositions, placeSell, fetchJournal, type Position, type JournalTrade, type BrokerHealth } from '../../api/trading'
 import { fmtShortET } from '../../shared/utils/time'
 import { BrokerTag } from './BrokerTag'
+import { useBroker } from '../../shared/hooks/useOHLCV'
 
 interface Props {
   brokerFilter: string
@@ -13,6 +14,7 @@ interface Props {
 }
 
 export default function PositionsTable({ brokerFilter, onBrokerFilterChange, availableBrokers, health, heartbeatWarmup, onStale }: Props) {
+  const { adaptiveInterval } = useBroker()
   const [positions, setPositions] = useState<Position[]>([])
   const [journal, setJournal] = useState<JournalTrade[]>([])
   const [closing, setClosing] = useState<string | null>(null)
@@ -26,10 +28,10 @@ export default function PositionsTable({ brokerFilter, onBrokerFilterChange, ava
 
   useEffect(() => {
     load()
-    const id = window.setInterval(load, 5_000)
+    const id = window.setInterval(load, adaptiveInterval(5_000))
     return () => clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brokerFilter])
+  }, [brokerFilter, adaptiveInterval])
 
   const entryTimeMap = new Map<string, string>()
   const entryTimeFallback = new Map<string, string>()

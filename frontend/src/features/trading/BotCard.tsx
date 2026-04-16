@@ -5,6 +5,7 @@ import { fmtUsd, fmtPnl } from '../../shared/utils/format'
 import { statusColor, levelColor } from '../../shared/utils/colors'
 import { fmtTimeET } from '../../shared/utils/time'
 import MiniSparkline from './MiniSparkline'
+import { useBroker } from '../../shared/hooks/useOHLCV'
 
 const SAVED_KEY = 'strategylab-saved-strategies'
 
@@ -84,6 +85,7 @@ export default function BotCard({
   const [allocValue, setAllocValue] = useState('')
   const [editingStrategy, setEditingStrategy] = useState(false)
 
+  const { adaptiveInterval } = useBroker()
   const running = summary.status === 'running'
   const stopped = summary.status === 'stopped'
 
@@ -97,11 +99,11 @@ export default function BotCard({
     }
     load()
     if (running || expanded) {
-      const id = setInterval(load, 2000)
+      const id = setInterval(load, adaptiveInterval(2000))
       return () => { active = false; clearInterval(id) }
     }
     return () => { active = false }
-  }, [expanded, running, summary.bot_id])
+  }, [expanded, running, summary.bot_id, adaptiveInterval])
   const pnlColor = summary.total_pnl >= 0 ? '#26a69a' : '#ef5350'
 
   const dir = summary.direction ?? 'long'
@@ -217,6 +219,13 @@ export default function BotCard({
               <span style={{ color: '#666' }}>Slippage: <span style={{ color: summary.avg_cost_bps > 5 ? '#f85149' : '#8b949e' }}>{summary.avg_cost_bps.toFixed(1)} bps</span></span>
             )}
           </div>
+
+          {/* Pause reason (structural IBKR reject) */}
+          {detail?.state.pause_reason && (
+            <div style={{ fontSize: 11, color: '#f0b74e', background: 'rgba(240,183,78,0.08)', padding: '3px 8px', borderRadius: 3 }}>
+              {detail.state.pause_reason}
+            </div>
+          )}
 
           {/* Backtest summary (always visible if available) */}
           {summary.backtest_summary && (

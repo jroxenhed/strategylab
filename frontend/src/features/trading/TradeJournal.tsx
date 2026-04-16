@@ -3,6 +3,7 @@ import { fetchJournal, type JournalTrade, type BrokerHealth } from '../../api/tr
 import { listBots } from '../../api/bots'
 import { fmtShortET } from '../../shared/utils/time'
 import { BrokerTag } from './BrokerTag'
+import { useBroker } from '../../shared/hooks/useOHLCV'
 
 const DEFAULT_HEIGHT = 300
 const MIN_HEIGHT = 100
@@ -17,6 +18,7 @@ interface Props {
 }
 
 export default function TradeJournal({ brokerFilter, onBrokerFilterChange, availableBrokers, health, heartbeatWarmup }: Props) {
+  const { adaptiveInterval } = useBroker()
   const [trades, setTrades] = useState<JournalTrade[]>([])
   const [knownBotIds, setKnownBotIds] = useState<Set<string> | null>(null)
   const [filter, setFilter] = useState('')
@@ -54,10 +56,10 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
 
   useEffect(() => {
     reload()
-    const id = setInterval(reload, 5000)
+    const id = setInterval(reload, adaptiveInterval(5000))
     return () => clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brokerFilter])
+  }, [brokerFilter, adaptiveInterval])
 
   const filtered = filter
     ? trades.filter(t => t.symbol.toLowerCase().includes(filter.toLowerCase()))

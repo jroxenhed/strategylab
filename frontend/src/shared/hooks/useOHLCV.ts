@@ -82,11 +82,17 @@ export function useBroker() {
     return result
   }
 
+  const health = query.data?.health ?? {}
+  const anyUnhealthy = Object.values(health).some(h => !h.healthy)
+
   return {
     broker: query.data?.active ?? 'alpaca',
     available: query.data?.available ?? [],
-    health: query.data?.health ?? {},
+    health,
     heartbeatWarmup: query.data?.heartbeat_warmup ?? false,
+    anyBrokerUnhealthy: anyUnhealthy,
+    /** Use instead of a hardcoded interval — backs off when a broker is down */
+    adaptiveInterval: (normalMs: number) => anyUnhealthy ? Math.max(normalMs, 10_000) : normalMs,
     isLoading: query.isLoading,
     switchBroker,
   }
