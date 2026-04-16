@@ -101,6 +101,8 @@ Own multi-session research project. Needs its own design work before implementat
 ## F — Architecture & housekeeping
 
 - [ ] **F1** Rename "Paper Trading" to something cool
+- [ ] **F2** Split `backend/broker.py` (~680 lines) into `brokers/{yahoo,alpaca,ibkr}.py` behind the existing `TradingProvider` protocol. Low value, moderate risk — only tackle if friction shows up when editing a single provider.
+- [ ] **F3** Split `frontend/src/features/strategy/Results.tsx` (~745 lines) and `StrategyBuilder.tsx` (~578 lines) into smaller subcomponents (equity/drawdown/scatter/tables for Results; rule sections for StrategyBuilder). Same tradeoff as F2 — defer until a change actually gets painful.
 
 ### Shipped
 - [x] Structural refactoring — extract models/journal/bot_runner, split BotControlCenter, shared utils, centralize API client
