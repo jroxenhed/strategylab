@@ -102,6 +102,7 @@ export default function BotControlCenter() {
   }, [anyBrokerUnhealthy])
 
   const loadBots = async () => {
+    if (document.hidden) return
     try {
       const data = await listBots()
       setFund(data.fund)
@@ -114,7 +115,7 @@ export default function BotControlCenter() {
 
   useEffect(() => {
     loadBots()
-    const id = setInterval(loadBots, adaptiveInterval(2000))
+    const id = setInterval(loadBots, adaptiveInterval(5000))
     return () => clearInterval(id)
   }, [adaptiveInterval])
 

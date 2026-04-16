@@ -406,6 +406,9 @@ class BotManager:
                 "has_position": state.entry_price is not None,
                 "first_trade_time": first_trade_time,
                 "pnl_epoch": epoch,
+                "last_tick": state.last_tick,
+                "pause_reason": state.pause_reason,
+                "equity_snapshots": state.equity_snapshots,
             })
         return result
 

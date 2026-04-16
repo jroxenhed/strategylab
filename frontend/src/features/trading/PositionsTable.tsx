@@ -20,9 +20,14 @@ export default function PositionsTable({ brokerFilter, onBrokerFilterChange, ava
   const [closing, setClosing] = useState<string | null>(null)
 
   const load = () => {
+    if (document.hidden) return
     fetchPositions(brokerFilter)
       .then(r => { setPositions(r.rows); onStale(r.stale_brokers) })
       .catch(() => {})
+  }
+
+  const loadJournal = () => {
+    if (document.hidden) return
     fetchJournal(undefined, brokerFilter).then(setJournal).catch(() => {})
   }
 
@@ -32,6 +37,13 @@ export default function PositionsTable({ brokerFilter, onBrokerFilterChange, ava
     return () => clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brokerFilter, adaptiveInterval])
+
+  useEffect(() => {
+    loadJournal()
+    const id = window.setInterval(loadJournal, 30_000)
+    return () => clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brokerFilter])
 
   const entryTimeMap = new Map<string, string>()
   const entryTimeFallback = new Map<string, string>()

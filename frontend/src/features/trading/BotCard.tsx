@@ -54,8 +54,9 @@ function ActivityLog({ entries }: { entries: BotActivityEntry[] }) {
 
 function heartbeatColor(summary: BotSummary, detail: BotDetail | null): string {
   if (summary.status === 'stopped') return '#484f58'  // grey
-  if (!detail?.state.last_tick) return '#484f58'
-  const elapsed = (Date.now() - new Date(detail.state.last_tick).getTime()) / 1000
+  const lastTick = detail?.state.last_tick ?? summary.last_tick
+  if (!lastTick) return '#484f58'
+  const elapsed = (Date.now() - new Date(lastTick).getTime()) / 1000
   const interval = POLL_SECONDS[summary.interval] ?? 60
   return elapsed <= interval * 2 ? '#26a641' : '#f85149'  // green or red
 }
@@ -90,20 +91,19 @@ export default function BotCard({
   const stopped = summary.status === 'stopped'
 
   useEffect(() => {
+    if (!expanded) return
     let active = true
     const load = async () => {
+      if (document.hidden) return
       try {
         const d = await fetchBotDetail(summary.bot_id)
         if (active) setDetail(d)
       } catch {}
     }
     load()
-    if (running || expanded) {
-      const id = setInterval(load, adaptiveInterval(2000))
-      return () => { active = false; clearInterval(id) }
-    }
-    return () => { active = false }
-  }, [expanded, running, summary.bot_id, adaptiveInterval])
+    const id = setInterval(load, adaptiveInterval(5000))
+    return () => { active = false; clearInterval(id) }
+  }, [expanded, summary.bot_id, adaptiveInterval])
   const pnlColor = summary.total_pnl >= 0 ? '#26a69a' : '#ef5350'
 
   const dir = summary.direction ?? 'long'
@@ -122,7 +122,7 @@ export default function BotCard({
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {/* Heartbeat dot */}
             <div
-              title={detail?.state.last_tick ? `Last tick: ${fmtTimeET(detail.state.last_tick)}` : 'No tick yet'}
+              title={(() => { const t = detail?.state.last_tick ?? summary.last_tick; return t ? `Last tick: ${fmtTimeET(t)}` : 'No tick yet' })()}
               style={{
                 width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
                 background: heartbeatColor(summary, detail),
@@ -221,9 +221,9 @@ export default function BotCard({
           </div>
 
           {/* Pause reason (structural IBKR reject) */}
-          {detail?.state.pause_reason && (
+          {(detail?.state.pause_reason ?? summary.pause_reason) && (
             <div style={{ fontSize: 11, color: '#f0b74e', background: 'rgba(240,183,78,0.08)', padding: '3px 8px', borderRadius: 3 }}>
-              {detail.state.pause_reason}
+              {detail?.state.pause_reason ?? summary.pause_reason}
             </div>
           )}
 
@@ -277,7 +277,7 @@ export default function BotCard({
 
         {/* Right column: mini chart */}
         <div style={{ flex: 1, minWidth: 120, minHeight: 60 }}>
-          <MiniSparkline equityData={detail?.state.equity_snapshots ?? []} alignedRange={alignedRange} />
+          <MiniSparkline equityData={detail?.state.equity_snapshots ?? summary.equity_snapshots ?? []} alignedRange={alignedRange} />
         </div>
       </div>
 
