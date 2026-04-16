@@ -22,6 +22,7 @@ frontend/dist/
 # Runtime data (user-specific, not code)
 backend/data/bots.json
 backend/data/trade_journal.json
+backend/data/*.bak*
 
 # Misc
 .env
