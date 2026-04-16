@@ -102,7 +102,7 @@ class BotState:
 
     # History
     equity_snapshots: list = field(default_factory=list)  # [{time, value}]
-    backtest_result: Optional[dict] = None
+    backtest_summary: Optional[dict] = None               # summary stats only (equity curve not persisted)
     activity_log: list = field(default_factory=list)      # [{time, msg, level}], newest first
     error_message: Optional[str] = None
     pause_reason: Optional[str] = None   # set by IBKR error handler on structural rejects
@@ -128,7 +128,7 @@ class BotState:
             "total_pnl": self.total_pnl,
             "slippage_bps": self.slippage_bps,
             "equity_snapshots": self.equity_snapshots,
-            "backtest_result": self.backtest_result,
+            "backtest_summary": self.backtest_summary,
             "activity_log": self.activity_log,
             "error_message": self.error_message,
             "pause_reason": self.pause_reason,
@@ -142,6 +142,11 @@ class BotState:
         if "slippage_pcts" in d and "slippage_bps" not in d:
             d = {**d, "slippage_bps": [max(0.0, v) * 100 for v in d["slippage_pcts"] or []]}
             d.pop("slippage_pcts", None)
+        # Lazy migration: legacy bots.json stored the full backtest equity_curve
+        # under backtest_result — huge on disk. Keep summary only under its new name.
+        if "backtest_result" in d and "backtest_summary" not in d:
+            br = d.pop("backtest_result") or {}
+            d["backtest_summary"] = br.get("summary") if isinstance(br, dict) else None
         for k, v in d.items():
             if hasattr(s, k):
                 setattr(s, k, v)
@@ -274,12 +279,9 @@ class BotManager:
 
         try:
             result = run_backtest(req)
-            state.backtest_result = {
-                "summary": result.get("summary", {}),
-                "equity_curve": result.get("equity_curve", []),
-            }
+            state.backtest_summary = result.get("summary", {})
         except Exception as e:
-            state.backtest_result = {"error": str(e)}
+            state.backtest_summary = {"error": str(e)}
         finally:
             state.status = "stopped"
             self.save()
@@ -395,7 +397,7 @@ class BotManager:
                 "status": state.status,
                 "trades_count": state.trades_count,
                 "total_pnl": round(compute_realized_pnl(config.symbol, config.direction, bot_id=bot_id, since=epoch), 2),
-                "backtest_summary": state.backtest_result.get("summary") if state.backtest_result else None,
+                "backtest_summary": state.backtest_summary,
                 "data_source": config.data_source,
                 "direction": config.direction,
                 "broker": config.broker,

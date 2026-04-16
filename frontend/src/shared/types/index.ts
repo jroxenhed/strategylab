@@ -312,10 +312,7 @@ export interface BotState {
   trades_count: number
   total_pnl: number
   equity_snapshots: { time: string; value: number }[]
-  backtest_result?: {
-    summary: BacktestResult['summary']
-    equity_curve: { time: string; value: number }[]
-  }
+  backtest_summary?: BacktestResult['summary']
   activity_log: BotActivityEntry[]
   error_message?: string
   pause_reason?: string
