@@ -133,7 +133,7 @@ def test_alpaca_provider_get_account():
 
 def test_ibkr_provider_submit_market_order():
     """IBKRTradingProvider.submit_order() translates to ib_insync MarketOrder."""
-    from broker import IBKRTradingProvider, OrderRequest, OrderResult
+    from broker import OrderRequest, OrderResult
     from unittest.mock import MagicMock
 
     ib = MagicMock()
@@ -146,12 +146,26 @@ def test_ibkr_provider_submit_market_order():
     trade.orderStatus.filled = 0.0
     ib.placeOrder.return_value = trade
 
-    provider = IBKRTradingProvider(ib)
+    provider = _make_ibkr_provider(ib, run_side_effect=trade)
     result = provider.submit_order(OrderRequest(symbol="AAPL", qty=10, side="buy"))
     assert isinstance(result, OrderResult)
     assert result.order_id == "42"
     assert result.side == "buy"
-    ib.placeOrder.assert_called_once()
+
+
+def _make_ibkr_provider(ib, run_side_effect=None):
+    """Create an IBKRTradingProvider with a mock loop and _run bypass."""
+    import asyncio
+    from broker import IBKRTradingProvider
+    ib.isConnected.return_value = True
+    provider = IBKRTradingProvider(ib, asyncio.new_event_loop())
+    if run_side_effect is not None:
+        provider._run = lambda coro, **kw: run_side_effect
+    else:
+        # Default: run the coroutine synchronously via a one-shot loop
+        _loop = asyncio.new_event_loop()
+        provider._run = lambda coro, **kw: _loop.run_until_complete(coro)
+    return provider
 
 
 def test_ibkr_provider_get_positions():
@@ -162,11 +176,13 @@ def test_ibkr_provider_get_positions():
     pos = MagicMock()
     pos.contract.symbol = "AAPL"
     pos.position = 10.0  # positive = long
-    pos.avgCost = 150.0
-    pos.account = "DU12345"
-    ib.positions.return_value = [pos]
+    pos.averageCost = 150.0
+    pos.marketPrice = 155.0
+    pos.marketValue = 1550.0
+    pos.unrealizedPNL = 50.0
+    ib.portfolio.return_value = [pos]
 
-    provider = IBKRTradingProvider(ib)
+    provider = _make_ibkr_provider(ib)
     positions = provider.get_positions()
     assert len(positions) == 1
     assert positions[0]["symbol"] == "AAPL"
@@ -177,17 +193,17 @@ def test_ibkr_provider_get_positions():
 
 def test_ibkr_provider_get_account():
     from broker import IBKRTradingProvider
-    from unittest.mock import MagicMock
+    from unittest.mock import MagicMock, AsyncMock
 
     ib = MagicMock()
     av = lambda tag, val: MagicMock(tag=tag, value=str(val))
-    ib.accountSummary.return_value = [
+    ib.accountSummaryAsync = AsyncMock(return_value=[
         av("NetLiquidation", 100000),
         av("TotalCashValue", 50000),
         av("BuyingPower", 200000),
-    ]
+    ])
 
-    provider = IBKRTradingProvider(ib)
+    provider = _make_ibkr_provider(ib)
     account = provider.get_account()
     assert account["equity"] == 100000.0
     assert account["cash"] == 50000.0
@@ -203,16 +219,20 @@ def test_ibkr_provider_position_side_from_sign():
     long_pos = MagicMock()
     long_pos.contract.symbol = "AAPL"
     long_pos.position = 10.0
-    long_pos.avgCost = 150.0
-    long_pos.account = "DU12345"
+    long_pos.averageCost = 150.0
+    long_pos.marketPrice = 155.0
+    long_pos.marketValue = 1550.0
+    long_pos.unrealizedPNL = 50.0
     short_pos = MagicMock()
     short_pos.contract.symbol = "TSLA"
     short_pos.position = -5.0
-    short_pos.avgCost = 200.0
-    short_pos.account = "DU12345"
-    ib.positions.return_value = [long_pos, short_pos]
+    short_pos.averageCost = 200.0
+    short_pos.marketPrice = 195.0
+    short_pos.marketValue = -975.0
+    short_pos.unrealizedPNL = 25.0
+    ib.portfolio.return_value = [long_pos, short_pos]
 
-    provider = IBKRTradingProvider(ib)
+    provider = _make_ibkr_provider(ib)
     positions = provider.get_positions()
     assert positions[0]["side"] == "long"
     assert positions[1]["side"] == "short"

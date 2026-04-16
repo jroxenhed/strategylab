@@ -105,6 +105,7 @@ class BotState:
     backtest_result: Optional[dict] = None
     activity_log: list = field(default_factory=list)      # [{time, msg, level}], newest first
     error_message: Optional[str] = None
+    pause_reason: Optional[str] = None   # set by IBKR error handler on structural rejects
 
     def to_dict(self) -> dict:
         return {
@@ -130,6 +131,7 @@ class BotState:
             "backtest_result": self.backtest_result,
             "activity_log": self.activity_log,
             "error_message": self.error_message,
+            "pause_reason": self.pause_reason,
         }
 
     @classmethod

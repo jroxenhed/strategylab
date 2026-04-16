@@ -260,6 +260,9 @@ class AlpacaTradingProvider:
 # IBKR implementation
 # ---------------------------------------------------------------------------
 
+_CACHE_MISS = object()  # sentinel for IBKRTradingProvider TTL cache
+
+
 class IBKRTradingProvider:
     """TradingProvider backed by ib_insync.
 
@@ -270,12 +273,72 @@ class IBKRTradingProvider:
 
     name = "ibkr"
 
+    # IBKR error codes that indicate structural problems (retrying won't help)
+    _STRUCTURAL_ERRORS = {
+        103,   # duplicate order id
+        104,   # can't modify a filled order
+        110,   # price out of range
+        162,   # API not enabled / Read-Only
+        200,   # no security definition found
+        201,   # order rejected
+        202,   # order cancelled
+        321,   # error validating request
+        10147, # OrderId already in use
+    }
+
     def __init__(self, ib, loop, default_account: str | None = None):
         self._ib = ib
         self._loop = loop
         self._default_account = default_account or os.environ.get("IBKR_DEFAULT_ACCOUNT", "").strip() or None
         self._base_client_id = int(os.environ.get("IBKR_CLIENT_ID", "1"))
         self._client_id_offset = 0
+        self._reconnect_lock = asyncio.Lock()
+        # TTL cache: {method_name: (timestamp, result)}
+        self._cache: dict[str, tuple[float, any]] = {}
+        self._cache_ttl = 3.0
+        # Error event callback registry — bot_runner registers per-bot callbacks
+        self._error_listeners: list = []  # list of callables(reqId, errorCode, errorString)
+        # Subscribe to ib_insync error event
+        self._ib.errorEvent += self._on_ib_error
+
+    def _on_ib_error(self, reqId, errorCode, errorString, contract):
+        """Handle async IBKR errors (order rejects, connectivity, etc.)."""
+        import logging
+        log = logging.getLogger(__name__)
+        is_structural = errorCode in self._STRUCTURAL_ERRORS
+        tag = "STRUCTURAL" if is_structural else "TRANSIENT"
+        log.warning("[IBKR %s] reqId=%s code=%s: %s", tag, reqId, errorCode, errorString)
+        for listener in self._error_listeners:
+            try:
+                listener(reqId, errorCode, errorString, is_structural)
+            except Exception:
+                pass
+
+    def add_error_listener(self, callback) -> None:
+        """Register a callback(reqId, errorCode, errorString, is_structural)."""
+        self._error_listeners.append(callback)
+
+    def remove_error_listener(self, callback) -> None:
+        try:
+            self._error_listeners.remove(callback)
+        except ValueError:
+            pass
+
+    def _invalidate_cache(self):
+        self._cache.clear()
+
+    def _get_cached(self, key: str):
+        import time
+        entry = self._cache.get(key)
+        if entry is not None:
+            ts, result = entry
+            if time.monotonic() - ts < self._cache_ttl:
+                return result
+        return _CACHE_MISS
+
+    def _set_cached(self, key: str, result):
+        import time
+        self._cache[key] = (time.monotonic(), result)
 
     async def ping(self) -> None:
         """Liveness probe for HeartbeatMonitor. Must not trigger reconnect —
@@ -291,11 +354,40 @@ class IBKRTradingProvider:
         instance is reused, so both data and trading providers recover."""
         await self._reconnect_async()
 
-    def _run(self, coro, timeout: float = 30.0):
-        """Schedule a coroutine on the main loop, block until done."""
-        import asyncio
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result(timeout=timeout)
+    def _run(self, coro, timeout: float = 30.0, retries: int = 3):
+        """Schedule a coroutine on the main loop, block until done.
+
+        Retries transient failures (timeouts, connection resets) with
+        exponential backoff. Structural errors are not retried.
+        """
+        import time as _time
+        last_err = None
+        for attempt in range(retries):
+            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+            try:
+                return future.result(timeout=timeout)
+            except Exception as e:
+                last_err = e
+                # Don't retry on structural / logic errors
+                if isinstance(e, (ValueError, TypeError)):
+                    raise
+                if attempt < retries - 1:
+                    backoff = (2 ** attempt)  # 1s, 2s, 4s
+                    import logging
+                    logging.getLogger(__name__).info(
+                        "[IBKR] _run attempt %d failed (%s), retrying in %ds",
+                        attempt + 1, e, backoff,
+                    )
+                    _time.sleep(backoff)
+                    # Force reconnect before retry
+                    try:
+                        reconnect_future = asyncio.run_coroutine_threadsafe(
+                            self._reconnect_async(), self._loop
+                        )
+                        reconnect_future.result(timeout=15.0)
+                    except Exception:
+                        pass
+        raise last_err
 
     async def _ensure_connected_async(self):
         if not self._ib.isConnected():
@@ -309,29 +401,31 @@ class IBKRTradingProvider:
             await self._ib.connectAsync(host, port, clientId=client_id)
 
     async def _reconnect_async(self):
-        try:
+        """Reconnect with deduplication — only one reconnect runs at a time."""
+        async with self._reconnect_lock:
+            # Re-check after acquiring lock; another caller may have reconnected
             if self._ib.isConnected():
+                try:
+                    await self._ib.reqCurrentTimeAsync()
+                    return  # connection is fine now
+                except Exception:
+                    pass  # still broken, proceed with reconnect
+            try:
                 self._ib.disconnect()
-        except Exception:
-            pass
-        await self._ensure_connected_async()
+            except Exception:
+                pass
+            await self._ensure_connected_async()
+            self._invalidate_cache()
 
     def _ensure_connected(self):
-        """Verify Gateway session is alive; reconnect if stale.
+        """Check isConnected(); reconnect if needed.
 
-        `ib_insync.isConnected()` can return True after the Gateway has silently
-        dropped the TCP session (common after long idle / overnight reauth). A
-        cheap `reqCurrentTime` ping on every call catches that case and forces a
-        reconnect before the real call hangs. Gateway is local so latency is
-        negligible.
+        HeartbeatMonitor (30s interval) handles liveness probing and
+        reconnect for silent TCP drops. This just catches the obvious
+        'not connected' state before a call.
         """
         if not self._ib.isConnected():
-            self._run(self._reconnect_async())
-            return
-        try:
-            self._run(self._ib.reqCurrentTimeAsync(), timeout=5.0)
-        except Exception:
-            self._run(self._reconnect_async())
+            self._run(self._reconnect_async(), retries=1)
 
     def _contract(self, symbol: str):
         from ib_insync import Stock
@@ -341,11 +435,14 @@ class IBKRTradingProvider:
         return account_id or self._default_account
 
     def get_account(self, account_id: str | None = None) -> dict:
+        cached = self._get_cached("account")
+        if cached is not _CACHE_MISS:
+            return cached
         self._ensure_connected()
         acct = self._resolve_account(account_id)
         summary = self._run(self._ib.accountSummaryAsync(acct or ''))
         values = {item.tag: item.value for item in summary}
-        return {
+        result = {
             "equity": float(values.get("NetLiquidation", 0)),
             "cash": float(values.get("TotalCashValue", 0)),
             "buying_power": float(values.get("BuyingPower", 0)),
@@ -355,8 +452,13 @@ class IBKRTradingProvider:
             "trading_blocked": False,
             "account_blocked": False,
         }
+        self._set_cached("account", result)
+        return result
 
     def get_positions(self, account_id: str | None = None) -> list[dict]:
+        cached = self._get_cached("positions")
+        if cached is not _CACHE_MISS:
+            return cached
         self._ensure_connected()
         acct = self._resolve_account(account_id)
         # portfolio() returns PortfolioItems with marketPrice / marketValue /
@@ -390,9 +492,14 @@ class IBKRTradingProvider:
                 "unrealized_pl": upl,
                 "unrealized_pl_pct": upl_pct,
             })
+        self._set_cached("positions", result)
         return result
 
     def get_orders(self, status: str = "all", symbols: list[str] | None = None, limit: int = 50) -> list[dict]:
+        cache_key = f"orders:{status}:{','.join(symbols or [])}"
+        cached = self._get_cached(cache_key)
+        if cached is not _CACHE_MISS:
+            return cached
         self._ensure_connected()
         async def _refresh_and_list():
             if status != "open":
@@ -423,11 +530,13 @@ class IBKRTradingProvider:
             })
             if len(result) >= limit:
                 break
+        self._set_cached(cache_key, result)
         return result
 
     def submit_order(self, order: OrderRequest) -> OrderResult:
         from ib_insync import MarketOrder, StopOrder
         self._ensure_connected()
+        self._invalidate_cache()
 
         contract = self._contract(order.symbol)
         action = "BUY" if order.side == "buy" else "SELL"
@@ -475,6 +584,7 @@ class IBKRTradingProvider:
 
     def cancel_order(self, order_id: str) -> None:
         self._ensure_connected()
+        self._invalidate_cache()
         async def _cancel():
             for trade in self._ib.trades():
                 if str(trade.order.orderId) == order_id:
@@ -487,6 +597,7 @@ class IBKRTradingProvider:
     def close_position(self, symbol: str) -> OrderResult:
         from ib_insync import MarketOrder
         self._ensure_connected()
+        self._invalidate_cache()
         acct = self._resolve_account()
 
         async def _close():
@@ -516,6 +627,7 @@ class IBKRTradingProvider:
     def close_all_positions(self) -> None:
         from ib_insync import MarketOrder
         self._ensure_connected()
+        self._invalidate_cache()
         async def _close_all():
             for p in self._ib.positions():
                 qty = float(p.position)
@@ -528,6 +640,7 @@ class IBKRTradingProvider:
 
     def cancel_all_orders(self) -> None:
         self._ensure_connected()
+        self._invalidate_cache()
         async def _cancel_all():
             self._ib.reqGlobalCancel()
         self._run(_cancel_all())

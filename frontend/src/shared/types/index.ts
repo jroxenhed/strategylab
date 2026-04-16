@@ -318,6 +318,7 @@ export interface BotState {
   }
   activity_log: BotActivityEntry[]
   error_message?: string
+  pause_reason?: string
 }
 
 export interface BotSummary {

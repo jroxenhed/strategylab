@@ -32,6 +32,7 @@ class BotRunner:
         self.config = config
         self.state = state
         self.manager = manager
+        self._error_listener = None  # bound IBKR error callback
 
     def _log(self, level: str, msg: str):
         entry = {"time": datetime.now(timezone.utc).isoformat(), "msg": msg, "level": level}
@@ -533,29 +534,69 @@ class BotRunner:
                 state.pending_close_reason = None
                 self.manager.save()
 
+    def _on_ibkr_error(self, reqId, errorCode, errorString, is_structural):
+        """Called by IBKRTradingProvider on async IBKR errors."""
+        if is_structural:
+            self._log("ERROR", f"IBKR reject code={errorCode}: {errorString}")
+            self.state.status = "error"
+            self.state.pause_reason = f"IBKR reject: {errorString} (code {errorCode})"
+            self.state.error_message = self.state.pause_reason
+            self.manager.save()
+        else:
+            self._log("WARN", f"IBKR transient code={errorCode}: {errorString}")
+
+    def _register_error_listener(self):
+        """Subscribe to IBKR error events if this bot uses the ibkr broker."""
+        if self.config.broker != "ibkr":
+            return
+        provider = get_trading_provider(self.config.broker)
+        if hasattr(provider, "add_error_listener"):
+            self._error_listener = self._on_ibkr_error
+            provider.add_error_listener(self._error_listener)
+
+    def _unregister_error_listener(self):
+        if self._error_listener is None:
+            return
+        try:
+            provider = get_trading_provider(self.config.broker)
+            if hasattr(provider, "remove_error_listener"):
+                provider.remove_error_listener(self._error_listener)
+        except Exception:
+            pass
+        self._error_listener = None
+
     async def run(self):
         self.state.status = "running"
+        self.state.pause_reason = None
         self.state.started_at = datetime.now(timezone.utc).isoformat()
         self._log("INFO", f"Bot started: {self.config.symbol} {self.config.interval}")
+        self._register_error_listener()
         self.manager.save()
 
         interval_secs = POLL_INTERVALS.get(self.config.interval, 30)
         consec_errors = 0
         MAX_CONSEC_ERRORS = 5
-        while True:
-            try:
-                await self._tick()
-                consec_errors = 0
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                consec_errors += 1
-                self._log("WARN", f"Tick failed ({consec_errors}/{MAX_CONSEC_ERRORS}): {e}")
-                self.manager.save()
-                if consec_errors >= MAX_CONSEC_ERRORS:
-                    self.state.status = "error"
-                    self.state.error_message = str(e)
-                    self._log("ERROR", f"Fatal after {MAX_CONSEC_ERRORS} consecutive failures: {e}")
-                    self.manager.save()
+        try:
+            while True:
+                # Check if paused by IBKR error handler
+                if self.state.status == "error" and self.state.pause_reason:
+                    self._log("WARN", f"Bot paused: {self.state.pause_reason}")
                     break
-            await asyncio.sleep(interval_secs)
+                try:
+                    await self._tick()
+                    consec_errors = 0
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    consec_errors += 1
+                    self._log("WARN", f"Tick failed ({consec_errors}/{MAX_CONSEC_ERRORS}): {e}")
+                    self.manager.save()
+                    if consec_errors >= MAX_CONSEC_ERRORS:
+                        self.state.status = "error"
+                        self.state.error_message = str(e)
+                        self._log("ERROR", f"Fatal after {MAX_CONSEC_ERRORS} consecutive failures: {e}")
+                        self.manager.save()
+                        break
+                await asyncio.sleep(interval_secs)
+        finally:
+            self._unregister_error_listener()
