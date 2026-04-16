@@ -4,30 +4,11 @@ import type { IChartApi } from 'lightweight-charts'
 import type { BacktestResult, SignalTraceEntry, StrategyRequest } from '../../shared/types'
 import { useMacro } from '../../shared/hooks/useMacro'
 import { fmtDateTimeET } from '../../shared/utils/time'
+import { normaliseToPercent, applyLog } from '../../shared/utils/chartScale'
 import PnlHistogram from './PnlHistogram'
 import MacroEquityChart from './MacroEquityChart'
 
 export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace'
-
-function normaliseToPercent(data: { time: any; value: number }[]): { time: any; value: number; dollar: number }[] {
-  if (data.length === 0) return []
-  const first = data[0].value
-  if (first === 0) return data.map(d => ({ time: d.time, value: 0, dollar: d.value }))
-  return data.map(d => ({
-    time: d.time,
-    value: ((d.value - first) / first) * 100,
-    dollar: d.value,
-  }))
-}
-
-function applyLog(data: { time: any; value: number; dollar?: number }[], isNormalised: boolean): { time: any; value: number; dollar?: number }[] {
-  return data.map(d => ({
-    ...d,
-    value: isNormalised
-      ? Math.log10(Math.max(100 + d.value, 0.01))  // offset pct by 100 to avoid log(negative)
-      : Math.log10(Math.max(d.value, 0.01)),
-  }))
-}
 
 function fmtDate(d: string | number | undefined): string {
   if (typeof d === 'number') return fmtDateTimeET(d)
