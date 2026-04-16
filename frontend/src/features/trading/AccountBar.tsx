@@ -10,6 +10,7 @@ export default function AccountBar() {
 
   useEffect(() => {
     const load = () => {
+      if (document.hidden) return
       fetchAccount().then(a => { setAccount(a); setError(null); hasLoaded.value = true }).catch(e => {
         if (!hasLoaded.value) setError(e.message)
       })

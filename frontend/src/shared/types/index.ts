@@ -337,6 +337,9 @@ export interface BotSummary {
   direction?: 'long' | 'short'
   broker?: string
   first_trade_time?: string | null
+  last_tick?: string
+  pause_reason?: string
+  equity_snapshots?: { time: string; value: number }[]
 }
 
 export interface BotDetail {

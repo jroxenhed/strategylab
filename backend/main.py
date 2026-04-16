@@ -15,6 +15,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Silence uvicorn's per-request access log by default — the frontend polls several
+# endpoints every 5s and the log is just noise. Set STRATEGYLAB_HTTP_LOG=1 to re-enable.
+if not os.environ.get("STRATEGYLAB_HTTP_LOG"):
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
 from routes.data import router as data_router
 from routes.indicators import router as indicators_router
 from routes.backtest import router as backtest_router

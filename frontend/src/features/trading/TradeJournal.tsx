@@ -47,12 +47,16 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
   }, [])
 
   const reload = () => {
+    if (document.hidden) return
     fetchJournal(undefined, brokerFilter).then(setTrades).catch(() => {})
-    listBots().then(d => setKnownBotIds(new Set(d.bots.map(b => b.bot_id)))).catch(() => {})
   }
 
   const isOrphan = (t: JournalTrade) =>
     knownBotIds !== null && t.source === 'bot' && (t.bot_id == null || !knownBotIds.has(t.bot_id))
+
+  useEffect(() => {
+    listBots().then(d => setKnownBotIds(new Set(d.bots.map(b => b.bot_id)))).catch(() => {})
+  }, [brokerFilter])
 
   useEffect(() => {
     reload()

@@ -17,6 +17,7 @@ export default function OrderHistory({ brokerFilter, onBrokerFilterChange, avail
   const [filter, setFilter] = useState('')
 
   const load = () => {
+    if (document.hidden) return
     fetchOrders(brokerFilter)
       .then(r => { setOrders(r.rows); onStale(r.stale_brokers) })
       .catch(() => {})
