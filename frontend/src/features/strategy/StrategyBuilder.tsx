@@ -6,6 +6,7 @@ import type { MASettings } from '../../App'
 import RuleRow, { emptyRule, validateRules } from './RuleRow'
 import { api } from '../../api/client'
 import { useSlippage } from '../../shared/hooks/useSlippage'
+import { apiErrorDetail } from '../../shared/utils/errors'
 
 interface Props {
   ticker: string
@@ -196,8 +197,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
       }
       const { data } = await api.post('/api/backtest', req)
       onResult(data, req)
-    } catch (e: any) {
-      setError(e.response?.data?.detail || 'Backtest failed')
+    } catch (e) {
+      setError(apiErrorDetail(e, 'Backtest failed'))
     } finally {
       setLoading(false)
     }

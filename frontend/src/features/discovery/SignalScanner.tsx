@@ -4,6 +4,7 @@ import { fetchWatchlist, saveWatchlist, scanSignals, placeBuy, placeSell, type S
 import type { Rule } from '../../shared/types'
 import RuleRow, { emptyRule } from '../strategy/RuleRow'
 import { fmtTimeET, fmtShortET } from '../../shared/utils/time'
+import { apiErrorDetail } from '../../shared/utils/errors'
 
 const SCANNER_STORAGE_KEY = 'strategylab-scanner'
 
@@ -70,8 +71,8 @@ export default function SignalScanner() {
       })
       setResults(res.signals)
       setScannedAt(res.scanned_at)
-    } catch (e: any) {
-      setScanError(e?.response?.data?.detail ?? e.message ?? 'Scan failed')
+    } catch (e) {
+      setScanError(apiErrorDetail(e, 'Scan failed'))
     }
     setScanning(false)
   }
@@ -90,8 +91,8 @@ export default function SignalScanner() {
         await placeSell(symbol)
         setExecuteMsg(`Sold ${symbol}`)
       }
-    } catch (e: any) {
-      setExecuteMsg(e?.response?.data?.detail ?? `Failed to ${signal.toLowerCase()} ${symbol}`)
+    } catch (e) {
+      setExecuteMsg(apiErrorDetail(e, `Failed to ${signal.toLowerCase()} ${symbol}`))
     }
     setExecuting(null)
   }

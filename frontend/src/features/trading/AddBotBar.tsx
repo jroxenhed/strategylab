@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { BotFundStatus, SavedStrategy } from '../../shared/types'
 import { fmtUsd } from '../../shared/utils/format'
+import { apiErrorDetail } from '../../shared/utils/errors'
 import { btnStyle } from './BotCard'
 
 const SAVED_KEY = 'strategylab-saved-strategies'
@@ -87,8 +88,8 @@ export default function AddBotBar({
         broker,
       })
       setAllocation('')
-    } catch (e: any) {
-      setError(e?.response?.data?.detail ?? 'Failed to add bot')
+    } catch (e) {
+      setError(apiErrorDetail(e, 'Failed to add bot'))
     }
   }
 
