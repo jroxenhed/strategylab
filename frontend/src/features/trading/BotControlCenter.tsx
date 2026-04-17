@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { BotSummary, BotFundStatus } from '../../shared/types'
 import {
   listBots, setBotFund, addBot,
@@ -102,12 +102,22 @@ export default function BotControlCenter() {
     if (!anyBrokerUnhealthy) setBrokerBannerDismissed(false)
   }, [anyBrokerUnhealthy])
 
+  const prevFundJsonRef = useRef('')
+  const prevBotsJsonRef = useRef('')
   const loadBots = async () => {
     if (document.hidden) return
     try {
       const data = await listBots()
-      setFund(data.fund)
-      setBots(data.bots)
+      const fundJson = JSON.stringify(data.fund)
+      if (fundJson !== prevFundJsonRef.current) {
+        prevFundJsonRef.current = fundJson
+        setFund(data.fund)
+      }
+      const botsJson = JSON.stringify(data.bots)
+      if (botsJson !== prevBotsJsonRef.current) {
+        prevBotsJsonRef.current = botsJson
+        setBots(data.bots)
+      }
       setError('')
     } catch {
       setError('Could not reach bot API')

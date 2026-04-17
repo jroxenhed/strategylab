@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { createChart, BaselineSeries } from 'lightweight-charts'
+import { createChart, BaselineSeries, type IChartApi, type ISeriesApi } from 'lightweight-charts'
 
 interface Props {
   equityData: { time: string; value: number }[]
@@ -8,9 +8,26 @@ interface Props {
 
 export default function MiniSparkline({ equityData, alignedRange }: Props) {
   const ref = useRef<HTMLDivElement>(null)
+  const chartRef = useRef<IChartApi | null>(null)
+  const seriesRef = useRef<ISeriesApi<'Baseline'> | null>(null)
+  const lastSigRef = useRef<string>('')
 
+  const applyRange = () => {
+    const chart = chartRef.current
+    if (!chart) return
+    if (alignedRange && alignedRange.to > alignedRange.from) {
+      chart.timeScale().setVisibleRange({
+        from: alignedRange.from as any,
+        to: alignedRange.to as any,
+      })
+    } else {
+      chart.timeScale().fitContent()
+    }
+  }
+
+  // Mount once: create chart + series + ResizeObserver.
   useEffect(() => {
-    if (!ref.current || equityData.length < 2) return
+    if (!ref.current) return
     const chart = createChart(ref.current, {
       width: ref.current.clientWidth,
       height: 60,
@@ -34,34 +51,49 @@ export default function MiniSparkline({ equityData, alignedRange }: Props) {
       lineWidth: 1,
       priceScaleId: 'right',
     })
+    chartRef.current = chart
+    seriesRef.current = series
+    lastSigRef.current = ''
+
+    const ro = new ResizeObserver(() => {
+      const el = ref.current
+      const c = chartRef.current
+      if (!el || !c) return
+      c.applyOptions({ width: el.clientWidth })
+    })
+    ro.observe(ref.current)
+
+    return () => {
+      ro.disconnect()
+      chart.remove()
+      chartRef.current = null
+      seriesRef.current = null
+      lastSigRef.current = ''
+    }
+  }, [])
+
+  // Data updates: skip setData when the series hasn't meaningfully changed.
+  useEffect(() => {
+    const series = seriesRef.current
+    if (!series || equityData.length < 2) return
     const mapped = equityData
       .map(d => ({ time: Math.floor(new Date(d.time).getTime() / 1000), value: d.value }))
       .sort((a, b) => a.time - b.time)
       .filter((d, i, arr) => i === 0 || d.time > arr[i - 1].time) as any
+    if (mapped.length < 2) return
+    const last = mapped[mapped.length - 1]
+    const first = mapped[0]
+    const sig = `${mapped.length}|${first.time}|${last.time}|${last.value}`
+    if (sig === lastSigRef.current) return
+    lastSigRef.current = sig
     series.setData(mapped)
-
-    const applyRange = () => {
-      if (alignedRange && alignedRange.to > alignedRange.from) {
-        chart.timeScale().setVisibleRange({
-          from: alignedRange.from as any,
-          to: alignedRange.to as any,
-        })
-      } else {
-        chart.timeScale().fitContent()
-      }
-    }
     applyRange()
+  }, [equityData])
 
-    const ro = new ResizeObserver(() => {
-      if (!ref.current) return
-      chart.applyOptions({ width: ref.current.clientWidth })
-      applyRange()
-    })
-    ro.observe(ref.current)
+  // Range-only updates: reposition without rebuilding data.
+  useEffect(() => {
+    applyRange()
+  }, [alignedRange?.from, alignedRange?.to])
 
-    return () => { ro.disconnect(); chart.remove() }
-  }, [equityData, alignedRange?.from, alignedRange?.to])
-
-  if (equityData.length < 2) return null
   return <div ref={ref} style={{ width: '100%', height: 60 }} />
 }
