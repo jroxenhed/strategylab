@@ -292,6 +292,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       // sibling pane teardown) takes the null-guard path instead of throwing.
       chartRef.current = null
       candleSeriesRef.current = null
+      mainMarkersPluginRef.current = null
       rangeRestoredRef.current = false
       onChartReadyRef.current?.(null)
       chart.remove()
@@ -499,24 +500,20 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   }, [emaOverlays])
 
   // Trade markers — update via plugin ref so trades arriving post-backtest
-  // don't force a series rebuild. Plugin is created lazily on first non-empty
-  // markers array: creating it with [] on mount leaves the primitive in a
-  // state where later setMarkers() doesn't paint reliably on CandlestickSeries.
+  // don't force a series rebuild. candleData is in deps so the effect re-runs
+  // after series.setData() — otherwise a plugin attached before the series has
+  // its data (or attached to a pre-StrictMode-remount series) paints nothing.
   const mainMarkersPluginRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null)
   useEffect(() => {
     const series = candleSeriesRef.current
     if (!series) return
     const markers = mainMarkers ?? []
-    if (markers.length === 0) {
-      mainMarkersPluginRef.current?.setMarkers([])
-      return
-    }
     if (!mainMarkersPluginRef.current) {
       mainMarkersPluginRef.current = createSeriesMarkers(series, markers)
     } else {
       mainMarkersPluginRef.current.setMarkers(markers)
     }
-  }, [mainMarkers])
+  }, [mainMarkers, candleData])
 
   // ─── MACD chart ─────────────────────────────────────────────────────────
   // Kept toggle-driven (create when enabled, destroy when disabled) — same
