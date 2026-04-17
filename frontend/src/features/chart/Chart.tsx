@@ -8,10 +8,9 @@ import {
   ColorType,
 } from 'lightweight-charts'
 import type { IChartApi, ISeriesApi } from 'lightweight-charts'
-import type { OHLCVBar, IndicatorData, IndicatorKey, TimeValue, EMAOverlay } from '../../shared/types'
+import type { OHLCVBar, IndicatorData, IndicatorKey, TimeValue, EMAOverlay, Trade } from '../../shared/types'
 
 interface ChartProps {
-  ticker: string
   data: OHLCVBar[]
   spyData?: OHLCVBar[]
   qqqData?: OHLCVBar[]
@@ -19,7 +18,7 @@ interface ChartProps {
   showQqq: boolean
   indicatorData: IndicatorData
   activeIndicators: IndicatorKey[]
-  trades?: Array<{ type: string; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean; trailing_stop?: boolean }>
+  trades?: Trade[]
   emaOverlays?: EMAOverlay[]
   onChartReady?: (chart: IChartApi | null) => void
   maShowRaw8?: boolean
@@ -61,7 +60,7 @@ function toLineData(arr: TimeValue[]) {
   )
 }
 
-function buildMarkers(trades: Array<{ type: string; date: string; price: number; pnl?: number; pnl_pct?: number; stop_loss?: boolean; trailing_stop?: boolean }>, showPrice = true, subPane = false) {
+function buildMarkers(trades: Trade[], showPrice = true, subPane = false) {
   return trades.map(t => {
     const isEntry = t.type === 'buy' || t.type === 'short'
     const isShortEntry = t.type === 'short'
@@ -91,7 +90,7 @@ function buildMarkers(trades: Array<{ type: string; date: string; price: number;
   })
 }
 
-export default function Chart({ ticker, data, spyData, qqqData, showSpy, showQqq, indicatorData, activeIndicators, trades, emaOverlays, onChartReady, maShowRaw8 = true, maShowRaw21 = true, maShowSg8 = true, maShowSg21 = true, maCompensateLag = false }: ChartProps) {
+export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicatorData, activeIndicators, trades, emaOverlays, onChartReady, maShowRaw8 = true, maShowRaw21 = true, maShowSg8 = true, maShowSg21 = true, maCompensateLag = false }: ChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const macdChartRef = useRef<IChartApi | null>(null)

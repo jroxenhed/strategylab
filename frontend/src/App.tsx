@@ -53,8 +53,8 @@ export default function App() {
   const [end, setEnd] = useState(saved?.end ?? today)
   const [interval, setInterval] = useState(saved?.interval ?? '1d')
   const [activeIndicators, setActiveIndicators] = useState<IndicatorKey[]>(saved?.activeIndicators ?? ['macd', 'rsi'])
-  const [showSpy, setShowSpy] = useState(saved?.showSpy ?? false)
-  const [showQqq, setShowQqq] = useState(saved?.showQqq ?? false)
+  const [showSpy, setShowSpy] = useState<boolean>(saved?.showSpy ?? false)
+  const [showQqq, setShowQqq] = useState<boolean>(saved?.showQqq ?? false)
   const [dataSource, setDataSource] = useState<DataSource>((saved?.dataSource as DataSource) ?? 'yahoo')
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null)
   const [lastRequest, setLastRequest] = useState<StrategyRequest | null>(null)
@@ -172,7 +172,6 @@ export default function App() {
                         </div>
                       ) : ohlcv.length > 0 ? (
                         <Chart
-                          ticker={ticker}
                           data={ohlcv}
                           spyData={showSpy ? (spyData ?? []) : undefined}
                           qqqData={showQqq ? (qqqData ?? []) : undefined}

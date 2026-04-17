@@ -4,19 +4,37 @@ set -e
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 export PATH="/opt/homebrew/bin:$PATH"
 
-echo "Starting backend..."
+MODE="dev"
+if [ "$1" = "--prod" ] || [ "$1" = "-p" ] || [ "$1" = "prod" ]; then
+  MODE="prod"
+fi
+
+echo "Starting backend ($MODE)..."
 cd "$ROOT/backend"
-venv/bin/uvicorn main:app --reload --reload-exclude 'data' --port 8000 &
+if [ "$MODE" = "prod" ]; then
+  venv/bin/uvicorn main:app --port 8000 &
+else
+  venv/bin/uvicorn main:app --reload --reload-exclude 'data' --port 8000 &
+fi
 BACKEND_PID=$!
 
-echo "Starting frontend..."
 cd "$ROOT/frontend"
-npm run dev &
+if [ "$MODE" = "prod" ]; then
+  echo "Building frontend..."
+  npm run build
+  echo "Starting frontend (preview)..."
+  npm run preview -- --port 4173 &
+  FRONTEND_URL="http://localhost:4173"
+else
+  echo "Starting frontend (dev)..."
+  npm run dev &
+  FRONTEND_URL="http://localhost:5173"
+fi
 FRONTEND_PID=$!
 
 echo ""
 echo "  Backend:  http://localhost:8000"
-echo "  Frontend: http://localhost:5173"
+echo "  Frontend: $FRONTEND_URL"
 echo ""
 echo "Press Ctrl+C to stop both servers."
 
