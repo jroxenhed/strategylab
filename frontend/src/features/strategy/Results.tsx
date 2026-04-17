@@ -202,9 +202,15 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
     })
     ro.observe(chartRef.current)
     return () => {
+      // mainChart may already be destroyed if Chart unmounted first (e.g. on
+      // ticker change both Chart and Results remount). Calling methods on a
+      // removed lightweight-charts instance throws — swallow it so the React
+      // tree doesn't blank out.
       if (mainChart) {
-        mainChart.timeScale().unsubscribeVisibleLogicalRangeChange(onMainRangeChange)
-        mainChart.unsubscribeCrosshairMove(onMainCrosshairMove)
+        try {
+          mainChart.timeScale().unsubscribeVisibleLogicalRangeChange(onMainRangeChange)
+          mainChart.unsubscribeCrosshairMove(onMainCrosshairMove)
+        } catch { /* chart already removed */ }
       }
       chart.remove()
       ro.disconnect()
