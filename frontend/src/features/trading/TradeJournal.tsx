@@ -26,6 +26,7 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
   const dragging = useRef(false)
   const startY = useRef(0)
   const startH = useRef(0)
+  const prevTradesJsonRef = useRef('')
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     dragging.current = true
@@ -48,7 +49,14 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
 
   const reload = () => {
     if (document.hidden) return
-    fetchJournal(undefined, brokerFilter).then(setTrades).catch(() => {})
+    fetchJournal(undefined, brokerFilter)
+      .then(rows => {
+        const json = JSON.stringify(rows)
+        if (json === prevTradesJsonRef.current) return
+        prevTradesJsonRef.current = json
+        setTrades(rows)
+      })
+      .catch(() => {})
   }
 
   const isOrphan = (t: JournalTrade) =>

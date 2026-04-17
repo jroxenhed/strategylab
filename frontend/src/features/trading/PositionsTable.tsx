@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { fetchPositions, placeSell, fetchJournal, type Position, type JournalTrade, type BrokerHealth } from '../../api/trading'
 import { fmtShortET } from '../../shared/utils/time'
 import { BrokerTag } from './BrokerTag'
@@ -18,17 +18,35 @@ export default function PositionsTable({ brokerFilter, onBrokerFilterChange, ava
   const [positions, setPositions] = useState<Position[]>([])
   const [journal, setJournal] = useState<JournalTrade[]>([])
   const [closing, setClosing] = useState<string | null>(null)
+  const prevPositionsJsonRef = useRef('')
+  const prevJournalJsonRef = useRef('')
 
   const load = () => {
     if (document.hidden) return
     fetchPositions(brokerFilter)
-      .then(r => { setPositions(r.rows); onStale(r.stale_brokers) })
+      .then(r => {
+        onStale(r.stale_brokers)
+        const json = JSON.stringify(r.rows)
+        if (json === prevPositionsJsonRef.current) return
+        prevPositionsJsonRef.current = json
+        setPositions(r.rows)
+      })
       .catch(() => {})
   }
 
+  // Journal is only used to resolve each position's entry timestamp — polled
+  // at 60s (entries don't change once opened) with a diff guard so re-renders
+  // only happen when a new entry actually appears.
   const loadJournal = () => {
     if (document.hidden) return
-    fetchJournal(undefined, brokerFilter).then(setJournal).catch(() => {})
+    fetchJournal(undefined, brokerFilter)
+      .then(rows => {
+        const json = JSON.stringify(rows)
+        if (json === prevJournalJsonRef.current) return
+        prevJournalJsonRef.current = json
+        setJournal(rows)
+      })
+      .catch(() => {})
   }
 
   useEffect(() => {
@@ -40,7 +58,7 @@ export default function PositionsTable({ brokerFilter, onBrokerFilterChange, ava
 
   useEffect(() => {
     loadJournal()
-    const id = window.setInterval(loadJournal, 30_000)
+    const id = window.setInterval(loadJournal, 60_000)
     return () => clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brokerFilter])

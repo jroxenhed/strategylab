@@ -1,3 +1,4 @@
+import { useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../api/client'
 import { fetchBroker, setBroker as setBrokerApi, type BrokerInfo } from '../../api/trading'
@@ -85,6 +86,13 @@ export function useBroker() {
   const health = query.data?.health ?? {}
   const anyUnhealthy = Object.values(health).some(h => !h.healthy)
 
+  // Stable identity so consumers that list this in useEffect deps don't
+  // clear+reinstall their polling timers on every broker refetch.
+  const adaptiveInterval = useCallback(
+    (normalMs: number) => anyUnhealthy ? Math.max(normalMs, 10_000) : normalMs,
+    [anyUnhealthy],
+  )
+
   return {
     broker: query.data?.active ?? 'alpaca',
     available: query.data?.available ?? [],
@@ -92,7 +100,7 @@ export function useBroker() {
     heartbeatWarmup: query.data?.heartbeat_warmup ?? false,
     anyBrokerUnhealthy: anyUnhealthy,
     /** Use instead of a hardcoded interval — backs off when a broker is down */
-    adaptiveInterval: (normalMs: number) => anyUnhealthy ? Math.max(normalMs, 10_000) : normalMs,
+    adaptiveInterval,
     isLoading: query.isLoading,
     switchBroker,
   }
