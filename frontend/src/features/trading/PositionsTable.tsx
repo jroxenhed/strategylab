@@ -20,46 +20,48 @@ export default function PositionsTable({ brokerFilter, onBrokerFilterChange, ava
   const [closing, setClosing] = useState<string | null>(null)
   const prevPositionsJsonRef = useRef('')
   const prevJournalJsonRef = useRef('')
+  const reloadPositionsRef = useRef<() => void>(() => {})
 
-  const load = () => {
-    if (document.hidden) return
-    fetchPositions(brokerFilter)
-      .then(r => {
-        onStale(r.stale_brokers)
-        const json = JSON.stringify(r.rows)
-        if (json === prevPositionsJsonRef.current) return
-        prevPositionsJsonRef.current = json
-        setPositions(r.rows)
-      })
-      .catch(() => {})
-  }
+  useEffect(() => {
+    const ctrl = new AbortController()
+    const load = () => {
+      if (document.hidden) return
+      fetchPositions(brokerFilter, ctrl.signal)
+        .then(r => {
+          onStale(r.stale_brokers)
+          const json = JSON.stringify(r.rows)
+          if (json === prevPositionsJsonRef.current) return
+          prevPositionsJsonRef.current = json
+          setPositions(r.rows)
+        })
+        .catch(() => {})
+    }
+    reloadPositionsRef.current = load
+    load()
+    const id = window.setInterval(load, adaptiveInterval(5_000))
+    return () => { clearInterval(id); ctrl.abort() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brokerFilter, adaptiveInterval])
 
   // Journal is only used to resolve each position's entry timestamp — polled
   // at 60s (entries don't change once opened) with a diff guard so re-renders
   // only happen when a new entry actually appears.
-  const loadJournal = () => {
-    if (document.hidden) return
-    fetchJournal(undefined, brokerFilter)
-      .then(rows => {
-        const json = JSON.stringify(rows)
-        if (json === prevJournalJsonRef.current) return
-        prevJournalJsonRef.current = json
-        setJournal(rows)
-      })
-      .catch(() => {})
-  }
-
   useEffect(() => {
-    load()
-    const id = window.setInterval(load, adaptiveInterval(5_000))
-    return () => clearInterval(id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brokerFilter, adaptiveInterval])
-
-  useEffect(() => {
+    const ctrl = new AbortController()
+    const loadJournal = () => {
+      if (document.hidden) return
+      fetchJournal(undefined, brokerFilter, ctrl.signal)
+        .then(rows => {
+          const json = JSON.stringify(rows)
+          if (json === prevJournalJsonRef.current) return
+          prevJournalJsonRef.current = json
+          setJournal(rows)
+        })
+        .catch(() => {})
+    }
     loadJournal()
     const id = window.setInterval(loadJournal, 60_000)
-    return () => clearInterval(id)
+    return () => { clearInterval(id); ctrl.abort() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brokerFilter])
 
@@ -80,7 +82,7 @@ export default function PositionsTable({ brokerFilter, onBrokerFilterChange, ava
     setClosing(symbol)
     try {
       await placeSell(symbol)
-      load()
+      reloadPositionsRef.current()
     } catch { /* ignore */ }
     setClosing(null)
   }

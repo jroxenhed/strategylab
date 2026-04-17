@@ -16,17 +16,17 @@ export default function OrderHistory({ brokerFilter, onBrokerFilterChange, avail
   const [orders, setOrders] = useState<Order[]>([])
   const [filter, setFilter] = useState('')
 
-  const load = () => {
-    if (document.hidden) return
-    fetchOrders(brokerFilter)
-      .then(r => { setOrders(r.rows); onStale(r.stale_brokers) })
-      .catch(() => {})
-  }
-
   useEffect(() => {
+    const ctrl = new AbortController()
+    const load = () => {
+      if (document.hidden) return
+      fetchOrders(brokerFilter, ctrl.signal)
+        .then(r => { setOrders(r.rows); onStale(r.stale_brokers) })
+        .catch(() => {})
+    }
     load()
     const id = window.setInterval(load, 30_000)
-    return () => clearInterval(id)
+    return () => { clearInterval(id); ctrl.abort() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brokerFilter])
 

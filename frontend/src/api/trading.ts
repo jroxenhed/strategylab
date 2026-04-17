@@ -135,18 +135,18 @@ export interface PerformanceResponse {
 
 // --- API calls ---
 
-export async function fetchAccount(): Promise<Account> {
-  const { data } = await api.get('/api/trading/account')
+export async function fetchAccount(signal?: AbortSignal): Promise<Account> {
+  const { data } = await api.get('/api/trading/account', { signal })
   return data
 }
 
-export async function fetchPositions(broker: string = 'all'): Promise<StaleAware<Position>> {
-  const { data } = await api.get('/api/trading/positions', { params: { broker } })
+export async function fetchPositions(broker: string = 'all', signal?: AbortSignal): Promise<StaleAware<Position>> {
+  const { data } = await api.get('/api/trading/positions', { params: { broker }, signal })
   return { rows: data.positions ?? [], stale_brokers: data.stale_brokers ?? [] }
 }
 
-export async function fetchOrders(broker: string = 'all'): Promise<StaleAware<Order>> {
-  const { data } = await api.get('/api/trading/orders', { params: { broker } })
+export async function fetchOrders(broker: string = 'all', signal?: AbortSignal): Promise<StaleAware<Order>> {
+  const { data } = await api.get('/api/trading/orders', { params: { broker }, signal })
   return { rows: data.orders ?? [], stale_brokers: data.stale_brokers ?? [] }
 }
 
@@ -184,10 +184,10 @@ export async function saveWatchlist(symbols: string[]): Promise<void> {
   await api.post('/api/trading/watchlist', { symbols })
 }
 
-export async function fetchJournal(symbol?: string, broker: string = 'all'): Promise<JournalTrade[]> {
+export async function fetchJournal(symbol?: string, broker: string = 'all', signal?: AbortSignal): Promise<JournalTrade[]> {
   const params: Record<string, string> = { broker }
   if (symbol) params.symbol = symbol
-  const { data } = await api.get('/api/trading/journal', { params })
+  const { data } = await api.get('/api/trading/journal', { params, signal })
   return data.trades ?? []
 }
 

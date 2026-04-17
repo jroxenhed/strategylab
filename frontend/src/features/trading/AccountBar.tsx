@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import axios from 'axios'
 import { fetchAccount, type Account } from '../../api/trading'
 import { useBroker } from '../../shared/hooks/useOHLCV'
 
@@ -9,15 +10,17 @@ export default function AccountBar() {
   const { broker, available, health, heartbeatWarmup, switchBroker } = useBroker()
 
   useEffect(() => {
+    const ctrl = new AbortController()
     const load = () => {
       if (document.hidden) return
-      fetchAccount().then(a => { setAccount(a); setError(null); hasLoaded.value = true }).catch(e => {
+      fetchAccount(ctrl.signal).then(a => { setAccount(a); setError(null); hasLoaded.value = true }).catch(e => {
+        if (axios.isCancel(e)) return
         if (!hasLoaded.value) setError(e.message)
       })
     }
     load()
     const id = window.setInterval(load, 30_000)
-    return () => clearInterval(id)
+    return () => { clearInterval(id); ctrl.abort() }
   }, [broker])
 
   if (error) return <div style={styles.bar}><span style={{ color: '#f85149' }}>Account error: {error}</span></div>
