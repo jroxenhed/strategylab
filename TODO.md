@@ -67,6 +67,7 @@ _Older items predate the numbering scheme; new entries tagged with their letter+
 - [ ] **D2** Bot reordering/grouping (drag vs explicit groups vs tags)
 - [ ] **D4** Clean up dead `BotState.total_pnl` field once migration is safe (currently kept for legacy `bots.json` deserialization)
 - [ ] **D5** Journal helper call frequency — runs on bot tick (for sizing) and on summary fetch. Journal is JSON-parsed each time. Fine for now, but if it gets slow (thousands of entries) add an mtime-based cache.
+- [ ] **D9** Partial-position reconciliation logging — `bot_runner._tick()` only flags `external` when broker qty drops to 0; silent shrinkage (e.g. Apr 16 BABA short went 37 → 1 overnight, likely Alpaca HTB buy-in) is invisible in the journal. Detect `broker_qty` deltas between ticks without a matching bot order and write an `external_partial` row with the delta + timestamp so overnight forced-covers / manual edits are auditable in real time.
 
 ### Shipped
 _Older items predate the numbering scheme; new entries tagged with their letter+number._
