@@ -39,6 +39,7 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
   - Hard-to-borrow dynamic rate feed
   - FX conversion cost
 - [ ] **B10** Skip-on-wide-spread entry gate — frontend wiring. Backend shipped: `BotConfig.max_spread_bps` + pre-entry quote check in `bot_runner` (exits always execute, entries skip when spread exceeds cap). Expose as: (1) an input on bot creation (AddBotBar) with a sensible default, and/or (2) an editable field on BotCard (same affordance as allocation/strategy edit). Goal: change the cap without editing `bots.json`.
+- [ ] **B11** Saved-strategy library UX — the flat list in StrategyBuilder (`strategylab-saved-strategies` in localStorage) gets unwieldy as presets accumulate. Add renaming (inline edit on the preset row) plus some organising affordance — folders/tags, pin-to-top, or simple drag-to-reorder. Pick whichever has the lowest blast radius on the existing save/load flow; avoid redesigning the storage schema unless organising demands it.
 
 ### Shipped
 _Older items predate the numbering scheme; new entries tagged with their letter+number._
