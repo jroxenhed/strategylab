@@ -15,14 +15,7 @@ export default function MiniSparkline({ equityData, alignedRange }: Props) {
   const applyRange = () => {
     const chart = chartRef.current
     if (!chart) return
-    if (alignedRange && alignedRange.to > alignedRange.from) {
-      chart.timeScale().setVisibleRange({
-        from: alignedRange.from as any,
-        to: alignedRange.to as any,
-      })
-    } else {
-      chart.timeScale().fitContent()
-    }
+    try { chart.timeScale().fitContent() } catch {}
   }
 
   // Mount once: create chart + series + ResizeObserver.
@@ -79,21 +72,25 @@ export default function MiniSparkline({ equityData, alignedRange }: Props) {
     const mapped = equityData
       .map(d => ({ time: Math.floor(new Date(d.time).getTime() / 1000), value: d.value }))
       .sort((a, b) => a.time - b.time)
-      .filter((d, i, arr) => i === 0 || d.time > arr[i - 1].time) as any
+      .filter((d, i, arr) => i === 0 || d.time > arr[i - 1].time)
     if (mapped.length < 2) return
-    const last = mapped[mapped.length - 1]
     const first = mapped[0]
-    const sig = `${mapped.length}|${first.time}|${last.time}|${last.value}`
+    const last = mapped[mapped.length - 1]
+    // Pad with whitespace entries at the aligned union boundaries so every
+    // bot's time axis spans the same range. Using whitespace + fitContent
+    // avoids setVisibleRange's ensureNotNull throw when the requested range
+    // extends beyond the series' real data.
+    const padded: { time: number; value?: number }[] = [...mapped]
+    if (alignedRange && alignedRange.to > alignedRange.from) {
+      if (alignedRange.from < first.time) padded.unshift({ time: alignedRange.from })
+      if (alignedRange.to > last.time) padded.push({ time: alignedRange.to })
+    }
+    const sig = `${padded.length}|${padded[0].time}|${padded[padded.length - 1].time}|${last.value}`
     if (sig === lastSigRef.current) return
     lastSigRef.current = sig
-    series.setData(mapped)
+    series.setData(padded as any)
     applyRange()
-  }, [equityData])
-
-  // Range-only updates: reposition without rebuilding data.
-  useEffect(() => {
-    applyRange()
-  }, [alignedRange?.from, alignedRange?.to])
+  }, [equityData, alignedRange?.from, alignedRange?.to])
 
   return <div ref={ref} style={{ width: '100%', height: 60 }} />
 }
