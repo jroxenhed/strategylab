@@ -2,7 +2,7 @@
 
 Spec for rethinking chart indicator management to support customizable params, multiple instances, and forward-compatibility with B4 (per-rule signal visualization).
 
-Related: [B4 per-rule signal markers](2026-04-18-b4-per-rule-signal-markers.md)
+Related: [B4 per-rule signal markers](../../ideas/2026-04-18-b4-per-rule-signal-markers.md)
 
 ## Scope
 
