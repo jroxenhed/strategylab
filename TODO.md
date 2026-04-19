@@ -17,10 +17,11 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 
 - [ ] **A1** Portfolio equity chart (combined P&L across bots)
 - [ ] **A3** Equity curve trend analysis (open-ended — define "trend" first)
-- [ ] **A4** More indicators — ATR, Stochastic, VWAP (chart display + backtest rules)
-  - Customisable RSI lenght, ex: RSI(2). Add as second yellow line on RSI chart.
-  - MTC (start with RSI?)
-  - Generalised MA indicators 
+- [ ] **A4** Indicator system redesign — instance-based model with customisable params, multiple instances, generic SubPane, inline-expand sidebar UI. [Spec](docs/superpowers/specs/2026-04-20-indicator-system-redesign-design.md) · [Plan](docs/superpowers/plans/2026-04-20-indicator-system-redesign.md)
+  - Customisable RSI length, ex: RSI(2). Multiple in one pane.
+  - Generalised MA indicators (period + type per instance)
+  - ATR, Stochastic, VWAP (new indicator types via registry)
+  - MTC (start with RSI? — deferred, needs multi-timeframe data)
 - [ ] **A6** Watchlist — save/switch between tickers quickly
 
 ### Shipped
