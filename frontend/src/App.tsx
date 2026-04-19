@@ -140,9 +140,9 @@ export default function App() {
                 showSpy={showSpy}
                 showQqq={showQqq}
                 onTickerChange={t => { setTicker(t); setBacktestResult(null) }}
-                onStartChange={d => { if (d > end) { setStart(end); setEnd(d) } else { setStart(d) } }}
-                onEndChange={d => { if (d < start) { setEnd(start); setStart(d) } else { setEnd(d) } }}
-                onIntervalChange={setInterval}
+                onStartChange={d => { if (d > end) { setStart(end); setEnd(d) } else { setStart(d) }; setBacktestResult(null) }}
+                onEndChange={d => { if (d < start) { setEnd(start); setStart(d) } else { setEnd(d) }; setBacktestResult(null) }}
+                onIntervalChange={v => { setInterval(v); setBacktestResult(null) }}
                 onToggleIndicator={toggleIndicator}
                 onToggleSpy={() => setShowSpy(v => !v)}
                 onToggleQqq={() => setShowQqq(v => !v)}
@@ -151,7 +151,7 @@ export default function App() {
                 maSettings={maSettings}
                 onMaSettingsChange={setMaSettings}
                 datePreset={datePreset}
-                onDatePresetChange={setDatePreset}
+                onDatePresetChange={v => { setDatePreset(v); setBacktestResult(null) }}
               />
             </Panel>
 

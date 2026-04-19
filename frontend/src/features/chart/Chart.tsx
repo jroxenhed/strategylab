@@ -330,7 +330,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     })
     spy.setData(spyLineData)
     chart.priceScale('spy-scale').applyOptions({ visible: false })
-    return () => { chart.removeSeries(spy) }
+    return () => { try { chart.removeSeries(spy) } catch {} }
   }, [showSpy, spyLineData])
 
   // QQQ overlay
@@ -344,7 +344,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     })
     qqq.setData(qqqLineData)
     chart.priceScale('qqq-scale').applyOptions({ visible: false })
-    return () => { chart.removeSeries(qqq) }
+    return () => { try { chart.removeSeries(qqq) } catch {} }
   }, [showQqq, qqqLineData])
 
   // Volume overlay
@@ -357,7 +357,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     })
     vol.priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 }, visible: false })
     vol.setData(volumeData)
-    return () => { chart.removeSeries(vol) }
+    return () => { try { chart.removeSeries(vol) } catch {} }
   }, [showVolume, volumeData])
 
   // EMA
@@ -372,9 +372,9 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     const s200 = chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'EMA200', priceScaleId: 'right' })
     s200.setData(toLineData(ema200))
     return () => {
-      chart.removeSeries(s20)
-      chart.removeSeries(s50)
-      chart.removeSeries(s200)
+      try { chart.removeSeries(s20) } catch {}
+      try { chart.removeSeries(s50) } catch {}
+      try { chart.removeSeries(s200) } catch {}
     }
   }, [showEma, indicatorData.ema])
 
@@ -390,9 +390,9 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     const sl = chart.addSeries(LineSeries, { color: '#30363d', lineWidth: 1, title: 'BB Lower', priceScaleId: 'right' })
     sl.setData(toLineData(lower))
     return () => {
-      chart.removeSeries(su)
-      chart.removeSeries(sm)
-      chart.removeSeries(sl)
+      try { chart.removeSeries(su) } catch {}
+      try { chart.removeSeries(sm) } catch {}
+      try { chart.removeSeries(sl) } catch {}
     }
   }, [showBb, indicatorData.bb])
 
@@ -441,7 +441,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       created.push(s)
     }
 
-    return () => { for (const s of created) chart.removeSeries(s) }
+    return () => { for (const s of created) { try { chart.removeSeries(s) } catch {} } }
   }, [showMa, indicatorData.ma, maShowRaw8, maShowRaw21, maShowSg8, maShowSg21, maCompensateLag])
 
   // EMA rising/falling overlays (per-rule visualization during/after backtest)
@@ -496,7 +496,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         if (title) labeled = true
       }
     }
-    return () => { for (const s of created) chart.removeSeries(s) }
+    return () => { for (const s of created) { try { chart.removeSeries(s) } catch {} } }
   }, [emaOverlays])
 
   // Trade markers — update via plugin ref so trades arriving post-backtest
