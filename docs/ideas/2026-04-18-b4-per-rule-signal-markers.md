@@ -76,6 +76,17 @@ Color carries *which rule*; shape carries *what kind of signal*. Scales to 12+ r
 - How pattern geometry (#4) interacts with chart persistence — fade timing, redraw on pan/zoom.
 - Whether MTC mini-track (#5) belongs in the indicator pane or as its own micro-pane.
 
+## A4 indicator redesign impact (2026-04-20)
+
+The [indicator system redesign spec](../superpowers/specs/2026-04-20-indicator-system-redesign-design.md) introduces an `IndicatorInstance` model with typed params and unique IDs. This supersedes or simplifies several B4 concerns:
+
+- **#1 "rendered vs hidden" classification:** The static `visible_in_native_pane: bool` flag is no longer needed. A4 defines a `findMatchingIndicator(rule, indicators)` bridge function that dynamically checks whether a chart indicator matches the rule's params. Match = rendered (default markers OFF), no match = hidden (default markers ON).
+- **#3 Multi-pane replication:** Instance IDs let attribution target specific panes — "this trade fired because of rsi-2" resolves to the exact sub-pane containing RSI(2).
+- **#5 MTC mini-track:** A4's `subPaneSharing: 'shared'` means an MTC RSI from a higher timeframe could render as another line in the existing RSI pane, rather than needing a separate micro-pane. The "mini-track" concept may still be better UX for continuous state — revisit when MTC lands.
+- **Open question #3 (MTC pane location):** Partially answered — shared pane is the default, separate pane is a future override.
+
+Still independent and valid: attribution dots (#2), pattern geometry (#4), hover-to-audit (#6), signal-kind taxonomy (#7).
+
 ## Load-bearing trio
 
 If implementing incrementally: **1 + 2 + transition-only rendering from 7** is the minimum that makes the feature non-noisy at 12+ rule types. 3, 4, 5 are follow-ups tied to specific new rule types landing.
