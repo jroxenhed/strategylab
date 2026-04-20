@@ -10,6 +10,15 @@
 
 **Spec:** [`docs/superpowers/specs/2026-04-20-indicator-system-redesign-design.md`](../specs/2026-04-20-indicator-system-redesign-design.md)
 
+### Spec deviations
+
+| Spec item | Plan decision | Rationale |
+|-----------|--------------|-----------|
+| `IndicatorType` includes `'ema'` | Merged into `'ma'` with `params.type='ema'` | Avoids EMA(20) vs MA(20,ema) ambiguity; simplifies B4 bridge matching |
+| `IndicatorType` includes `'stochastic'`, `'vwap'` | Deferred — not in `IndicatorType` | No backend compute exists yet; add when implemented |
+| `signal_engine.py` — "No changes" | Refactored to delegate to registry | Prevents duplicated indicator math across two files; same function signature, same return shape |
+| `ORB` indicator | Not in registry | Existing GET endpoint handles it but it's niche; add to registry when needed (before Task 10 removes the GET endpoint, verify no active usage) |
+
 ---
 
 ## File Structure
@@ -21,6 +30,7 @@
 | `frontend/src/shared/types/indicators.ts` | `IndicatorType`, `IndicatorInstance`, `IndicatorTypeDef`, type defaults, ID generator |
 | `frontend/src/features/sidebar/IndicatorList.tsx` | Indicator section UI: active list, add dropdown, inline-expand settings rows |
 | `frontend/src/features/chart/SubPane.tsx` | Generic sub-pane component replacing hardcoded MACD/RSI pane effects |
+| `frontend/src/features/chart/chartUtils.ts` | Shared `toLineData` helper used by both Chart.tsx and SubPane.tsx |
 | `backend/indicators.py` | Indicator registry: per-type compute functions + `compute_instance()` dispatcher |
 
 ### Modified files
@@ -34,7 +44,7 @@
 | `frontend/src/features/chart/Chart.tsx` | Replace per-indicator overlay effects (EMA, BB, MA, Volume) with generic loop; replace MACD/RSI pane creation with `<SubPane>` components; update props |
 | `frontend/src/features/strategy/StrategyBuilder.tsx` | Add migration for old `SavedStrategy` format on load |
 | `backend/routes/indicators.py` | Add POST endpoint using registry; keep GET during transition |
-| `backend/signal_engine.py` | No changes (rule engine stays self-contained) |
+| `backend/signal_engine.py` | Refactor `compute_indicators()` to delegate to `indicators.py` registry — single source of truth for all indicator math |
 
 ---
 
@@ -51,7 +61,20 @@
 Create `frontend/src/shared/types/indicators.ts` with the core data model:
 
 ```typescript
-export type IndicatorType = 'rsi' | 'macd' | 'ema' | 'bb' | 'atr' | 'ma' | 'volume'
+// stochastic + vwap deferred to future work (spec lists them but no backend compute exists yet)
+// No standalone 'ema' type — use ma with type='ema'. Avoids EMA(20) vs MA(20,ema) ambiguity
+// which would also break B4 bridge matching.
+//
+// B4 bridge note: the rule engine uses hardcoded names like "ema20", "ma8".
+// B4's findMatchingIndicator() must map these to IndicatorInstance lookups:
+//   rule.indicator === "ema" && rule.param === "ema20"  → type:'ma', params:{period:20, type:'ema'}
+//   rule.indicator === "ema" && rule.param === "ema50"  → type:'ma', params:{period:50, type:'ema'}
+//   rule.indicator === "ema" && rule.param === "ema200" → type:'ma', params:{period:200, type:'ema'}
+//   rule.indicator === "ma"  (param "ma8"/"ma21")       → type:'ma', params:{period:8/21, type:...}
+// The matching function should parse the numeric suffix from rule.param, then check
+// inst.type === 'ma' && inst.params.period === parsedPeriod. For EMA rules, also
+// check inst.params.type === 'ema'.
+export type IndicatorType = 'rsi' | 'macd' | 'bb' | 'atr' | 'ma' | 'volume'
 
 export type IndicatorInstance = {
   id: string
@@ -62,19 +85,21 @@ export type IndicatorInstance = {
   pane: 'main' | 'sub'
 }
 
+export type ParamFieldNumber = { key: string; label: string; kind: 'number'; min?: number; max?: number }
+export type ParamFieldSelect = { key: string; label: string; kind: 'select'; options: { value: string; label: string }[] }
+export type ParamField = ParamFieldNumber | ParamFieldSelect
+
 export type IndicatorTypeDef = {
   type: IndicatorType
   label: string
   defaultParams: Record<string, number | string>
   pane: 'main' | 'sub'
-  paramFields: { key: string; label: string; min?: number; max?: number }[]
-  subPaneSharing: 'shared' | 'isolated'
+  paramFields: ParamField[]
+  subPaneSharing?: 'shared' | 'isolated'  // only meaningful for pane:'sub' types
 }
 
-let _nextId = 1
-
 export function generateInstanceId(type: IndicatorType): string {
-  return `${type}-${_nextId++}`
+  return `${type}-${crypto.randomUUID().slice(0, 8)}`
 }
 
 export function createInstance(type: IndicatorType, overrides?: Partial<IndicatorInstance>): IndicatorInstance {
@@ -94,7 +119,7 @@ export const INDICATOR_DEFS: Record<IndicatorType, IndicatorTypeDef> = {
     type: 'rsi', label: 'RSI',
     defaultParams: { period: 14 },
     pane: 'sub',
-    paramFields: [{ key: 'period', label: 'Period', min: 2 }],
+    paramFields: [{ key: 'period', label: 'Period', kind: 'number', min: 2 }],
     subPaneSharing: 'shared',
   },
   macd: {
@@ -102,52 +127,46 @@ export const INDICATOR_DEFS: Record<IndicatorType, IndicatorTypeDef> = {
     defaultParams: { fast: 12, slow: 26, signal: 9 },
     pane: 'sub',
     paramFields: [
-      { key: 'fast', label: 'Fast', min: 2 },
-      { key: 'slow', label: 'Slow', min: 2 },
-      { key: 'signal', label: 'Signal', min: 2 },
+      { key: 'fast', label: 'Fast', kind: 'number', min: 2 },
+      { key: 'slow', label: 'Slow', kind: 'number', min: 2 },
+      { key: 'signal', label: 'Signal', kind: 'number', min: 2 },
     ],
     subPaneSharing: 'isolated',
-  },
-  ema: {
-    type: 'ema', label: 'EMA',
-    defaultParams: { period: 20 },
-    pane: 'main',
-    paramFields: [{ key: 'period', label: 'Period', min: 2 }],
-    subPaneSharing: 'shared',
   },
   bb: {
     type: 'bb', label: 'Bollinger Bands',
     defaultParams: { period: 20, stddev: 2 },
     pane: 'main',
     paramFields: [
-      { key: 'period', label: 'Period', min: 2 },
-      { key: 'stddev', label: 'Std Dev', min: 0.5, max: 5 },
+      { key: 'period', label: 'Period', kind: 'number', min: 2 },
+      { key: 'stddev', label: 'Std Dev', kind: 'number', min: 0.5, max: 5 },
     ],
-    subPaneSharing: 'shared',
   },
   atr: {
     type: 'atr', label: 'ATR',
     defaultParams: { period: 14 },
     pane: 'sub',
-    paramFields: [{ key: 'period', label: 'Period', min: 2 }],
+    paramFields: [{ key: 'period', label: 'Period', kind: 'number', min: 2 }],
     subPaneSharing: 'shared',
   },
   ma: {
     type: 'ma', label: 'MA',
-    defaultParams: { period: 8, type: 'ema' },
+    defaultParams: { period: 20, type: 'ema' },
     pane: 'main',
     paramFields: [
-      { key: 'period', label: 'Period', min: 2 },
-      { key: 'type', label: 'Type', min: 0, max: 0 },
+      { key: 'period', label: 'Period', kind: 'number', min: 2 },
+      { key: 'type', label: 'Type', kind: 'select', options: [
+        { value: 'sma', label: 'SMA' },
+        { value: 'ema', label: 'EMA' },
+        { value: 'rma', label: 'RMA' },
+      ]},
     ],
-    subPaneSharing: 'shared',
   },
   volume: {
     type: 'volume', label: 'Volume',
     defaultParams: {},
     pane: 'main',
     paramFields: [],
-    subPaneSharing: 'shared',
   },
 }
 
@@ -158,8 +177,8 @@ export function paramSummary(inst: IndicatorInstance): string {
 }
 
 export const DEFAULT_INDICATORS: IndicatorInstance[] = [
-  { id: 'macd-default', type: 'macd', params: { fast: 12, slow: 26, signal: 9 }, enabled: true, pane: 'sub' },
-  { id: 'rsi-default', type: 'rsi', params: { period: 14 }, enabled: true, pane: 'sub' },
+  { id: 'macd-1', type: 'macd', params: { fast: 12, slow: 26, signal: 9 }, enabled: true, pane: 'sub' },
+  { id: 'rsi-1', type: 'rsi', params: { period: 14 }, enabled: true, pane: 'sub' },
 ]
 ```
 
@@ -168,7 +187,7 @@ export const DEFAULT_INDICATORS: IndicatorInstance[] = [
 In `frontend/src/shared/types/index.ts`, add the re-export at the top (after existing imports):
 
 ```typescript
-export type { IndicatorType, IndicatorInstance, IndicatorTypeDef } from './indicators'
+export type { IndicatorType, IndicatorInstance, IndicatorTypeDef, ParamField, ParamFieldNumber, ParamFieldSelect } from './indicators'
 export { INDICATOR_DEFS, DEFAULT_INDICATORS, createInstance, paramSummary } from './indicators'
 ```
 
@@ -211,13 +230,26 @@ git commit -m "feat(A4): add IndicatorInstance data model and type definitions"
 Create `backend/indicators.py` with per-type compute functions extracted from the current monolithic code in `routes/indicators.py` and `signal_engine.py`:
 
 ```python
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Callable
+
 import numpy as np
 import pandas as pd
 
 
-def compute_rsi(close: pd.Series, params: dict) -> dict[str, pd.Series]:
+@dataclass
+class OHLCVSeries:
+    close: pd.Series
+    high: pd.Series
+    low: pd.Series
+    volume: pd.Series
+
+
+def compute_rsi(ohlcv: OHLCVSeries, params: dict) -> dict[str, pd.Series]:
     period = int(params.get("period", 14))
-    delta = close.diff()
+    delta = ohlcv.close.diff()
     gain = delta.clip(lower=0).rolling(period).mean()
     loss = (-delta.clip(upper=0)).rolling(period).mean()
     rs = gain / loss.replace(0, np.nan)
@@ -225,28 +257,23 @@ def compute_rsi(close: pd.Series, params: dict) -> dict[str, pd.Series]:
     return {"rsi": rsi}
 
 
-def compute_macd(close: pd.Series, params: dict) -> dict[str, pd.Series]:
+def compute_macd(ohlcv: OHLCVSeries, params: dict) -> dict[str, pd.Series]:
     fast = int(params.get("fast", 12))
     slow = int(params.get("slow", 26))
     signal_period = int(params.get("signal", 9))
-    ema_fast = close.ewm(span=fast, adjust=False).mean()
-    ema_slow = close.ewm(span=slow, adjust=False).mean()
+    ema_fast = ohlcv.close.ewm(span=fast, adjust=False).mean()
+    ema_slow = ohlcv.close.ewm(span=slow, adjust=False).mean()
     macd_line = ema_fast - ema_slow
     signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
     histogram = macd_line - signal_line
     return {"macd": macd_line, "signal": signal_line, "histogram": histogram}
 
 
-def compute_ema(close: pd.Series, params: dict) -> dict[str, pd.Series]:
-    period = int(params.get("period", 20))
-    return {"ema": close.ewm(span=period, adjust=False).mean()}
-
-
-def compute_bb(close: pd.Series, params: dict) -> dict[str, pd.Series]:
+def compute_bb(ohlcv: OHLCVSeries, params: dict) -> dict[str, pd.Series]:
     period = int(params.get("period", 20))
     stddev = float(params.get("stddev", 2))
-    sma = close.rolling(period).mean()
-    std = close.rolling(period).std()
+    sma = ohlcv.close.rolling(period).mean()
+    std = ohlcv.close.rolling(period).std()
     return {
         "upper": sma + stddev * std,
         "middle": sma,
@@ -254,65 +281,81 @@ def compute_bb(close: pd.Series, params: dict) -> dict[str, pd.Series]:
     }
 
 
-def compute_atr(close: pd.Series, params: dict, high: pd.Series = None, low: pd.Series = None) -> dict[str, pd.Series]:
+def compute_atr(ohlcv: OHLCVSeries, params: dict) -> dict[str, pd.Series]:
     period = int(params.get("period", 14))
-    if high is None or low is None:
-        return {"atr": pd.Series(np.nan, index=close.index)}
-    prev_close = close.shift(1)
+    prev_close = ohlcv.close.shift(1)
     tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low - prev_close).abs(),
+        ohlcv.high - ohlcv.low,
+        (ohlcv.high - prev_close).abs(),
+        (ohlcv.low - prev_close).abs(),
     ], axis=1).max(axis=1)
     return {"atr": tr.rolling(period).mean()}
 
 
-def compute_ma(close: pd.Series, params: dict) -> dict[str, pd.Series]:
-    period = int(params.get("period", 8))
+def compute_ma(ohlcv: OHLCVSeries, params: dict) -> dict[str, pd.Series]:
+    period = int(params.get("period", 20))
     ma_type = str(params.get("type", "ema")).lower()
     if ma_type == "sma":
-        ma = close.rolling(period).mean()
+        ma = ohlcv.close.rolling(period).mean()
     elif ma_type == "rma":
-        ma = close.ewm(alpha=1 / period, adjust=False).mean()
+        ma = ohlcv.close.ewm(alpha=1 / period, adjust=False).mean()
     else:
-        ma = close.ewm(span=period, adjust=False).mean()
+        ma = ohlcv.close.ewm(span=period, adjust=False).mean()
     return {"ma": ma}
 
 
-def compute_volume(close: pd.Series, params: dict, volume: pd.Series = None) -> dict[str, pd.Series]:
-    if volume is None:
-        return {"volume": pd.Series(np.nan, index=close.index)}
-    return {"volume": volume}
+def compute_ema(ohlcv: OHLCVSeries, params: dict) -> dict[str, pd.Series]:
+    """Compute multiple EMA periods at once (used by signal_engine's compute_indicators)."""
+    periods = params.get("periods", [20])
+    result = {}
+    for p in periods:
+        result[f"ema{p}"] = ohlcv.close.ewm(span=int(p), adjust=False).mean()
+    return result
 
 
-INDICATOR_REGISTRY: dict[str, callable] = {
+def compute_volume(ohlcv: OHLCVSeries, params: dict) -> dict[str, pd.Series]:
+    return {"volume": ohlcv.volume}
+
+
+# Uniform signature: every function takes (OHLCVSeries, params) — no special-casing in dispatcher
+INDICATOR_REGISTRY: dict[str, Callable[[OHLCVSeries, dict], dict[str, pd.Series]]] = {
     "rsi": compute_rsi,
     "macd": compute_macd,
-    "ema": compute_ema,
     "bb": compute_bb,
     "atr": compute_atr,
     "ma": compute_ma,
+    "ema": compute_ema,
     "volume": compute_volume,
 }
+
+
+PARAM_CONSTRAINTS: dict[str, dict[str, tuple[float, float]]] = {
+    "rsi":   {"period": (2, 500)},
+    "macd":  {"fast": (2, 500), "slow": (2, 500), "signal": (2, 500)},
+    "bb":    {"period": (2, 500), "stddev": (0.5, 5)},
+    "atr":   {"period": (2, 500)},
+    "ma":    {"period": (2, 500)},
+}
+
+
+def _validate_params(indicator_type: str, params: dict) -> None:
+    constraints = PARAM_CONSTRAINTS.get(indicator_type, {})
+    for key, (lo, hi) in constraints.items():
+        val = params.get(key)
+        if val is not None and not (lo <= float(val) <= hi):
+            raise ValueError(f"{indicator_type}.{key} must be between {lo} and {hi}, got {val}")
 
 
 def compute_instance(
     indicator_type: str,
     params: dict,
-    close: pd.Series,
-    high: pd.Series = None,
-    low: pd.Series = None,
-    volume: pd.Series = None,
+    ohlcv: OHLCVSeries,
 ) -> dict[str, pd.Series]:
     fn = INDICATOR_REGISTRY.get(indicator_type)
     if not fn:
         raise ValueError(f"Unknown indicator type: {indicator_type}")
-    # ATR and volume need extra series
-    if indicator_type == "atr":
-        return fn(close, params, high=high, low=low)
-    if indicator_type == "volume":
-        return fn(close, params, volume=volume)
-    return fn(close, params)
+    _validate_params(indicator_type, params)
+    return fn(ohlcv, params)
 ```
 
 - [ ] **Step 2: Add POST endpoint to `routes/indicators.py`**
@@ -320,12 +363,15 @@ def compute_instance(
 Add below the existing GET endpoint in `backend/routes/indicators.py`:
 
 ```python
-from pydantic import BaseModel
-from indicators import compute_instance
+from typing import Literal
+from pydantic import BaseModel, Field
+from indicators import compute_instance, OHLCVSeries, INDICATOR_REGISTRY
+
+IndicatorTypeLiteral = Literal["rsi", "macd", "bb", "atr", "ma", "volume"]
 
 class InstanceRequest(BaseModel):
     id: str
-    type: str
+    type: IndicatorTypeLiteral
     params: dict = {}
 
 class IndicatorsPostRequest(BaseModel):
@@ -333,27 +379,29 @@ class IndicatorsPostRequest(BaseModel):
     end: str = "2024-01-01"
     interval: str = "1d"
     source: str = "yahoo"
-    instances: list[InstanceRequest]
+    instances: list[InstanceRequest] = Field(max_length=20)
 
 @router.post("/api/indicators/{ticker}")
 def post_indicators(ticker: str, body: IndicatorsPostRequest):
     try:
         df = _fetch(ticker, body.start, body.end, body.interval, source=body.source)
-        close = df["Close"]
-        high = df["High"]
-        low = df["Low"]
-        volume_series = df["Volume"]
+        ohlcv = OHLCVSeries(
+            close=df["Close"], high=df["High"],
+            low=df["Low"], volume=df["Volume"],
+        )
 
         result = {}
         for inst in body.instances:
-            series_dict = compute_instance(
-                inst.type, inst.params,
-                close, high=high, low=low, volume=volume_series,
-            )
-            result[inst.id] = {
-                key: _series_to_list(df.index, body.interval, series)
-                for key, series in series_dict.items()
-            }
+            try:
+                series_dict = compute_instance(inst.type, inst.params, ohlcv)
+                result[inst.id] = {
+                    key: _series_to_list(df.index, body.interval, series)
+                    for key, series in series_dict.items()
+                }
+            except ValueError as e:
+                result[inst.id] = {"error": "invalid_params", "detail": str(e)}
+            except Exception:
+                result[inst.id] = {"error": "compute_failed"}
         return result
     except HTTPException:
         raise
@@ -361,7 +409,62 @@ def post_indicators(ticker: str, body: IndicatorsPostRequest):
         raise HTTPException(status_code=500, detail=str(e))
 ```
 
-- [ ] **Step 3: Test the POST endpoint manually**
+- [ ] **Step 3: Refactor `signal_engine.py` to use the registry**
+
+The existing `compute_indicators()` in `signal_engine.py` duplicates the same math that now lives in `indicators.py`. Refactor it to delegate to the registry so there's a single source of truth. The function signature and return shape stay the same — callers (`bot_runner.py`, `routes/backtest.py`, `routes/trading.py`) are unchanged:
+
+```python
+from indicators import compute_instance, OHLCVSeries
+
+def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series = None,
+                       ma_type: str = "ema", sg8_window: int = 7, sg8_poly: int = 2,
+                       sg21_window: int = 7, sg21_poly: int = 2,
+                       predictive_sg: bool = False,
+                       use_sg8: bool = True, use_sg21: bool = True) -> dict[str, pd.Series]:
+    """Compute all indicators from a close price series. Returns dict of named series."""
+    ohlcv = OHLCVSeries(close=close, high=high if high is not None else close,
+                        low=low if low is not None else close, volume=pd.Series(dtype=float))
+
+    # MACD + signal
+    macd_result = compute_instance("macd", {"fast": 12, "slow": 26, "signal": 9}, ohlcv)
+    # RSI
+    rsi_result = compute_instance("rsi", {"period": 14}, ohlcv)
+    # EMAs
+    ema_result = compute_instance("ema", {"periods": [20, 50, 200]}, ohlcv)
+    # ATR (needs real high/low)
+    atr_result = compute_instance("atr", {"period": 14}, ohlcv) if high is not None else {}
+
+    result = {
+        "macd": macd_result["macd"],
+        "signal": macd_result["signal"],
+        "rsi": rsi_result["rsi"],
+        **ema_result,
+    }
+    if "atr" in atr_result:
+        result["atr"] = atr_result["atr"]
+
+    # MA8/MA21 + S-G smoothing (keep existing S-G logic inline — it's signal_engine-specific)
+    ma8_result = compute_instance("ma", {"period": 8, "type": ma_type}, ohlcv)
+    ma21_result = compute_instance("ma", {"period": 21, "type": ma_type}, ohlcv)
+    result["ma8"] = ma8_result["ma"]
+    result["ma21"] = ma21_result["ma"]
+
+    # S-G smoothing stays here — it's a signal_engine concern, not a generic indicator
+    if use_sg8:
+        # ... existing S-G logic for ma8 unchanged ...
+        pass
+    if use_sg21:
+        # ... existing S-G logic for ma21 unchanged ...
+        pass
+
+    return result
+```
+
+The S-G smoothing code stays in `signal_engine.py` because it's specific to the rule engine's MA processing. The core indicator math (RSI, MACD, EMA, ATR, MA) now flows through the registry.
+
+Verify no behavior change: the existing callers (`bot_runner.py:123`, `routes/backtest.py:85`, `routes/trading.py:231`) all call `compute_indicators()` with the same signature and expect the same return dict shape.
+
+- [ ] **Step 4: Test the POST endpoint manually**
 
 Start the backend and test with curl:
 
@@ -375,18 +478,36 @@ curl -X POST http://localhost:8000/api/indicators/AAPL \
     "instances": [
       {"id": "rsi-1", "type": "rsi", "params": {"period": 14}},
       {"id": "rsi-2", "type": "rsi", "params": {"period": 2}},
-      {"id": "ema-1", "type": "ema", "params": {"period": 20}}
+      {"id": "ma-1", "type": "ma", "params": {"period": 20, "type": "ema"}}
     ]
   }'
 ```
 
-Expected: JSON response with keys `"rsi-1"`, `"rsi-2"`, `"ema-1"`, each containing their respective series data. RSI values should be arrays of `{time, value}` objects. `rsi-1` and `rsi-2` should have different values (period 14 vs 2).
+Expected: JSON response with keys `"rsi-1"`, `"rsi-2"`, `"ma-1"`, each containing their respective series data. RSI values should be arrays of `{time, value}` objects. `rsi-1` and `rsi-2` should have different values (period 14 vs 2).
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Verify signal_engine parity**
+
+Run the backtest endpoint with an existing strategy and compare results to pre-refactor. The refactored `compute_indicators()` must return identical values. Quick smoke test:
 
 ```bash
-git add backend/indicators.py backend/routes/indicators.py
-git commit -m "feat(A4): add indicator registry and POST /api/indicators endpoint"
+cd backend && python -c "
+import pandas as pd
+from shared import _fetch
+df = _fetch('AAPL', '2025-01-01', '2025-06-01', '1d')
+from signal_engine import compute_indicators
+ind = compute_indicators(df['Close'], df['High'], df['Low'])
+print('RSI last:', round(float(ind['rsi'].iloc[-1]), 4))
+print('MACD last:', round(float(ind['macd'].iloc[-1]), 4))
+print('EMA20 last:', round(float(ind['ema20'].iloc[-1]), 4))
+print('MA8 last:', round(float(ind['ma8'].iloc[-1]), 4))
+"
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add backend/indicators.py backend/routes/indicators.py backend/signal_engine.py
+git commit -m "feat(A4): add indicator registry, POST endpoint, and refactor signal_engine to use it"
 ```
 
 ---
@@ -412,10 +533,12 @@ export function useInstanceIndicators(
   source: DataSource = 'yahoo',
 ) {
   const enabledInstances = instances.filter(i => i.enabled)
-  const instancesKey = JSON.stringify(enabledInstances.map(i => ({ id: i.id, type: i.type, params: i.params })))
+  // TanStack Query deep-compares arrays, so pass structured data instead of JSON.stringify.
+  // This avoids spurious refetches when instance order changes but the set is the same.
+  const instancesQueryKey = enabledInstances.map(i => ({ id: i.id, type: i.type, params: i.params }))
 
   return useQuery<Record<string, Record<string, { time: string; value: number | null }[]>>>({
-    queryKey: ['instance-indicators', ticker, start, end, interval, instancesKey, source],
+    queryKey: ['instance-indicators', ticker, start, end, interval, instancesQueryKey, source],
     queryFn: async () => {
       const { data } = await api.post(`/api/indicators/${ticker}`, {
         start,
@@ -458,36 +581,99 @@ git commit -m "feat(A4): add useInstanceIndicators hook for POST-based indicator
 Create `frontend/src/features/sidebar/IndicatorList.tsx`. This replaces the `ALL_INDICATORS` checkbox loop and MA settings expand in `Sidebar.tsx`:
 
 ```typescript
-import { useState } from 'react'
-import type { IndicatorInstance, IndicatorType } from '../../shared/types'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import type { IndicatorInstance, IndicatorType, ParamFieldNumber, ParamFieldSelect } from '../../shared/types'
 import { INDICATOR_DEFS, createInstance, paramSummary } from '../../shared/types/indicators'
 
 interface IndicatorListProps {
   indicators: IndicatorInstance[]
-  onChange: (indicators: IndicatorInstance[]) => void
+  onChange: React.Dispatch<React.SetStateAction<IndicatorInstance[]>>
 }
 
-const AVAILABLE_TYPES: IndicatorType[] = ['rsi', 'macd', 'ema', 'bb', 'atr', 'ma', 'volume']
+const AVAILABLE_TYPES: IndicatorType[] = ['rsi', 'macd', 'bb', 'atr', 'ma', 'volume']
+
+// Controlled number input with local draft state — avoids the defaultValue stale-on-rerender
+// problem while keeping the debounce pattern. Syncs from props when not focused.
+function NumberParamInput({ field, value, onChange, onCommit }: {
+  field: ParamFieldNumber
+  value: number
+  onChange: (v: number) => void
+  onCommit: (v: number) => void
+}) {
+  const [draft, setDraft] = useState(String(value))
+  const focused = useRef(false)
+
+  useEffect(() => {
+    if (!focused.current) setDraft(String(value))
+  }, [value])
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <span style={{ fontSize: 10, color: 'var(--text-muted)', minWidth: 40 }}>{field.label}</span>
+      <input
+        type="number"
+        value={draft}
+        min={field.min}
+        max={field.max}
+        onFocus={() => { focused.current = true }}
+        onChange={e => {
+          setDraft(e.target.value)
+          const v = parseFloat(e.target.value)
+          if (!isNaN(v)) onChange(v)
+        }}
+        onBlur={e => {
+          focused.current = false
+          const v = parseFloat(e.target.value)
+          if (!isNaN(v)) onCommit(v)
+        }}
+        style={{
+          width: 48, background: 'var(--bg-main)', border: '1px solid var(--border-light)',
+          borderRadius: 3, color: 'var(--text-primary)', padding: '2px 6px', fontSize: 11,
+        }}
+      />
+    </div>
+  )
+}
 
 export default function IndicatorList({ indicators, onChange }: IndicatorListProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [showAddMenu, setShowAddMenu] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>()
+
+  // Clean up debounce timer on unmount
+  useEffect(() => () => clearTimeout(debounceRef.current), [])
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!showAddMenu) return
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setShowAddMenu(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showAddMenu])
 
   function toggle(id: string) {
-    onChange(indicators.map(i => i.id === id ? { ...i, enabled: !i.enabled } : i))
+    onChange(prev => prev.map(i => i.id === id ? { ...i, enabled: !i.enabled } : i))
   }
 
   function remove(id: string) {
-    onChange(indicators.filter(i => i.id !== id))
+    onChange(prev => prev.filter(i => i.id !== id))
     if (expandedId === id) setExpandedId(null)
   }
 
-  function updateParam(id: string, key: string, value: number | string) {
-    onChange(indicators.map(i => i.id === id ? { ...i, params: { ...i.params, [key]: value } } : i))
-  }
+  // Debounced param update — uses functional updater so the closure never
+  // captures a stale `indicators` array. No deps on `indicators` or `onChange`.
+  const updateParam = useCallback((id: string, key: string, value: number | string) => {
+    clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      onChange(prev => prev.map(i => i.id === id ? { ...i, params: { ...i.params, [key]: value } } : i))
+    }, 300)
+  }, [onChange])
 
   function addIndicator(type: IndicatorType) {
-    onChange([...indicators, createInstance(type)])
+    onChange(prev => [...prev, createInstance(type)])
     setShowAddMenu(false)
   }
 
@@ -495,7 +681,7 @@ export default function IndicatorList({ indicators, onChange }: IndicatorListPro
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Indicators</span>
-        <div style={{ position: 'relative' }}>
+        <div ref={menuRef} style={{ position: 'relative' }}>
           <button
             onClick={() => setShowAddMenu(!showAddMenu)}
             style={{
@@ -577,40 +763,41 @@ export default function IndicatorList({ indicators, onChange }: IndicatorListPro
             {isExpanded && def.paramFields.length > 0 && (
               <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {def.paramFields.map(field => {
-                  if (field.key === 'type') {
+                  if (field.kind === 'select') {
+                    const selectField = field as ParamFieldSelect
                     return (
                       <div key={field.key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span style={{ fontSize: 10, color: 'var(--text-muted)', minWidth: 40 }}>{field.label}</span>
                         <select
-                          value={String(inst.params[field.key] ?? 'ema')}
-                          onChange={e => updateParam(inst.id, field.key, e.target.value)}
+                          value={String(inst.params[field.key] ?? selectField.options[0]?.value)}
+                          onChange={e => {
+                            // Select is a discrete action — apply immediately, no debounce
+                            clearTimeout(debounceRef.current)
+                            onChange(prev => prev.map(i => i.id === inst.id ? { ...i, params: { ...i.params, [field.key]: e.target.value } } : i))
+                          }}
                           style={{ fontSize: 11, background: 'var(--bg-main)', border: '1px solid var(--border-light)', borderRadius: 3, color: 'var(--text-primary)', padding: '2px 6px' }}
                         >
-                          <option value="sma">SMA</option>
-                          <option value="ema">EMA</option>
-                          <option value="rma">RMA</option>
+                          {selectField.options.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
                         </select>
                       </div>
                     )
                   }
                   return (
-                    <div key={field.key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontSize: 10, color: 'var(--text-muted)', minWidth: 40 }}>{field.label}</span>
-                      <input
-                        type="number"
-                        value={Number(inst.params[field.key] ?? 0)}
-                        min={field.min}
-                        max={field.max}
-                        onChange={e => {
-                          const v = parseFloat(e.target.value)
-                          if (!isNaN(v)) updateParam(inst.id, field.key, v)
-                        }}
-                        style={{
-                          width: 48, background: 'var(--bg-main)', border: '1px solid var(--border-light)',
-                          borderRadius: 3, color: 'var(--text-primary)', padding: '2px 6px', fontSize: 11,
-                        }}
-                      />
-                    </div>
+                    <NumberParamInput
+                      key={field.key}
+                      field={field}
+                      value={Number(inst.params[field.key] ?? 0)}
+                      onChange={v => updateParam(inst.id, field.key, v)}
+                      onCommit={v => {
+                        clearTimeout(debounceRef.current)
+                        // Clamp to field min/max — HTML attributes are advisory only
+                        const numField = field as ParamFieldNumber
+                        const clamped = Math.max(numField.min ?? -Infinity, Math.min(numField.max ?? Infinity, v))
+                        onChange(prev => prev.map(i => i.id === inst.id ? { ...i, params: { ...i.params, [field.key]: clamped } } : i))
+                      }}
+                    />
                   )
                 })}
               </div>
@@ -645,6 +832,8 @@ git commit -m "feat(A4): add IndicatorList sidebar component with inline-expand 
 
 This is the integration task. Replace `activeIndicators: IndicatorKey[]` + `maSettings: MASettings` with `indicators: IndicatorInstance[]`. Update localStorage persistence, Sidebar props, and data fetching.
 
+**localStorage migration:** Existing users have `activeIndicators` + `maSettings` in localStorage. The new code reads `saved?.indicators` which will be `undefined` for old data, falling back to `DEFAULT_INDICATORS`. This silently resets their indicator selection to MACD + RSI defaults. Acceptable because indicators are display preferences (not trading config), and the old format can't losslessly map to the new model (e.g. old `ema` = three fixed EMAs, new model = individual instances). If we wanted to preserve state, we'd need a migration function — not worth the complexity for chart display prefs.
+
 - [ ] **Step 1: Replace indicator state in App.tsx**
 
 In `frontend/src/App.tsx`:
@@ -663,7 +852,9 @@ import { useInstanceIndicators } from './shared/hooks/useOHLCV'  // add to exist
 // const [maSettings, setMaSettings] = useState<MASettings>({ ...DEFAULT_MA_SETTINGS, ...saved?.maSettings })
 
 // Add this:
-const [indicators, setIndicators] = useState<IndicatorInstance[]>(saved?.indicators ?? DEFAULT_INDICATORS)
+const [indicators, setIndicators] = useState<IndicatorInstance[]>(
+  saved?.indicators ?? DEFAULT_INDICATORS
+)
 ```
 
 3. Update the localStorage persistence effect — replace `activeIndicators` and `maSettings` with `indicators`:
@@ -706,7 +897,7 @@ In `frontend/src/features/sidebar/Sidebar.tsx`:
 
 // Add to SidebarProps:
   indicators: IndicatorInstance[]
-  onIndicatorsChange: (indicators: IndicatorInstance[]) => void
+  onIndicatorsChange: React.Dispatch<React.SetStateAction<IndicatorInstance[]>>
 ```
 
 2. Replace the Indicators section (the `ALL_INDICATORS.map(...)` block at lines 386-475) with:
@@ -775,8 +966,10 @@ This is the largest task. It replaces ~300 lines of per-indicator effects in Cha
 
 Create `frontend/src/features/chart/SubPane.tsx`. This replaces the hardcoded MACD and RSI pane effects. It creates its own `IChartApi`, renders series for one or more instances of the same type, handles crosshair sync and resize, and manages its own cleanup.
 
+**Ref architecture:** Instead of passing sibling ref arrays as props (which would create new array references every render and cause infinite re-render loops), SubPane uses a **registration callback**. Chart.tsx maintains a `PaneRegistry` — a stable ref holding a `Map<string, { chart, series }>`. Each SubPane registers itself on mount and deregisters on cleanup. Crosshair and sync handlers read the registry dynamically, so they always see the current set of panes without prop changes.
+
 ```typescript
-import { useEffect, useRef, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import {
   createChart,
   createSeriesMarkers,
@@ -786,14 +979,18 @@ import {
 } from 'lightweight-charts'
 import type { IChartApi, ISeriesApi } from 'lightweight-charts'
 import type { IndicatorInstance } from '../../shared/types'
+import { toLineData } from './chartUtils'
+
+export type PaneRegistryEntry = { chart: IChartApi; series: ISeriesApi<any> }
+export type PaneRegistry = Map<string, PaneRegistryEntry>
 
 interface SubPaneProps {
+  paneKey: string
   instances: IndicatorInstance[]
   instanceData: Record<string, Record<string, { time: string; value: number | null }[]>>
   mainChartRef: React.RefObject<IChartApi | null>
   mainSeriesRef: React.RefObject<ISeriesApi<any> | null>
-  siblingPaneRefs: React.RefObject<IChartApi | null>[]
-  siblingSeriesRefs: React.RefObject<ISeriesApi<any> | null>[]
+  paneRegistryRef: React.RefObject<PaneRegistry>
   syncWidthsRef: React.RefObject<() => void>
   markers?: any[]
   toET: (time: string | number) => any
@@ -817,25 +1014,36 @@ const chartOptions = {
   leftPriceScale: { visible: false, borderColor: GRID },
 }
 
-function toLineData(arr: { time: string; value: number | null }[], toET: (t: any) => any) {
-  return arr.map(d => d.value !== null
-    ? { time: toET(d.time as any) as any, value: d.value as number }
-    : { time: toET(d.time as any) as any }
-  )
-}
-
 export default function SubPane({
-  instances, instanceData, mainChartRef, mainSeriesRef,
-  siblingPaneRefs, siblingSeriesRefs, syncWidthsRef,
+  paneKey, instances, instanceData, mainChartRef, mainSeriesRef,
+  paneRegistryRef, syncWidthsRef,
   markers, toET, label,
 }: SubPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const primarySeriesRef = useRef<ISeriesApi<any> | null>(null)
+  const seriesMapRef = useRef<Map<string, ISeriesApi<any>> | null>(null)
   const markersPluginRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null)
 
   const indicatorType = instances[0]?.type
 
+  // Stable key so the effect doesn't tear down on every parent re-render (instances is a new array ref each time)
+  const instancesKey = useMemo(
+    () => JSON.stringify(instances.map(i => ({ id: i.id, type: i.type, params: i.params }))),
+    [instances],
+  )
+
+  // Extract only this pane's data — prevents unrelated indicator data from triggering teardown
+  const subData = useMemo(() => {
+    const result: typeof instanceData = {}
+    for (const inst of instances) {
+      if (instanceData[inst.id]) result[inst.id] = instanceData[inst.id]
+    }
+    return result
+  }, [instances, instanceData])
+
+  // ── Effect 1: Chart lifecycle — create/destroy the IChartApi when instances change ──
+  // Does NOT depend on subData — data updates happen in Effect 2 via setData().
   useEffect(() => {
     if (!containerRef.current || instances.length === 0) return
 
@@ -844,34 +1052,24 @@ export default function SubPane({
       height: containerRef.current.clientHeight,
     })
     chartRef.current = chart
+    const seriesMap = new Map<string, ISeriesApi<any>>()
     let firstSeries: ISeriesApi<any> | null = null
 
     if (indicatorType === 'macd') {
       const inst = instances[0]
-      const data = instanceData[inst.id]
-      if (data) {
-        const histSeries = chart.addSeries(HistogramSeries, {
-          color: UP,
-          priceFormat: { type: 'price', precision: 4 },
-        })
-        const histData = (data.histogram ?? []).map(d => d.value !== null
-          ? { time: toET(d.time as any) as any, value: d.value as number, color: (d.value as number) >= 0 ? UP : DOWN }
-          : { time: toET(d.time as any) as any }
-        )
-        histSeries.setData(histData)
-        firstSeries = histSeries
+      const histSeries = chart.addSeries(HistogramSeries, {
+        color: UP,
+        priceFormat: { type: 'price', precision: 4 },
+      })
+      seriesMap.set(`${inst.id}:histogram`, histSeries)
+      firstSeries = histSeries
 
-        chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'MACD' })
-          .setData(toLineData(data.macd ?? [], toET))
-        chart.addSeries(LineSeries, { color: '#f0883e', lineWidth: 1, title: 'Signal' })
-          .setData(toLineData(data.signal ?? [], toET))
-      }
+      const macdLine = chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'MACD' })
+      seriesMap.set(`${inst.id}:macd`, macdLine)
+      const signalLine = chart.addSeries(LineSeries, { color: '#f0883e', lineWidth: 1, title: 'Signal' })
+      seriesMap.set(`${inst.id}:signal`, signalLine)
     } else {
       instances.forEach((inst, idx) => {
-        const data = instanceData[inst.id]
-        if (!data) return
-        const seriesKey = Object.keys(data)[0]
-        if (!seriesKey) return
         const color = inst.color ?? SUB_COLORS[idx % SUB_COLORS.length]
         const paramStr = Object.values(inst.params).join(',')
         const series = chart.addSeries(LineSeries, {
@@ -879,27 +1077,24 @@ export default function SubPane({
           lineWidth: 1,
           title: `${inst.type.toUpperCase()}(${paramStr})`,
         })
-        series.setData(toLineData(data[seriesKey], toET))
+        seriesMap.set(inst.id, series)
         if (!firstSeries) firstSeries = series
       })
 
-      // RSI reference lines
-      if (indicatorType === 'rsi' && instances.length > 0) {
-        const firstData = instanceData[instances[0].id]
-        const seriesKey = firstData ? Object.keys(firstData)[0] : null
-        const arr = seriesKey ? firstData[seriesKey] : []
-        if (arr.length > 0) {
-          const first = arr[0].time
-          const last = arr[arr.length - 1].time
-          chart.addSeries(LineSeries, { color: '#f85149', lineWidth: 1, lineStyle: 2 })
-            .setData([{ time: toET(first as any) as any, value: 70 }, { time: toET(last as any) as any, value: 70 }])
-          chart.addSeries(LineSeries, { color: '#26a641', lineWidth: 1, lineStyle: 2 })
-            .setData([{ time: toET(first as any) as any, value: 30 }, { time: toET(last as any) as any, value: 30 }])
-        }
+      if (indicatorType === 'rsi') {
+        // Reference lines — will be positioned in Effect 2 when data arrives
+        seriesMap.set('__ref70', chart.addSeries(LineSeries, { color: '#f85149', lineWidth: 1, lineStyle: 2 }))
+        seriesMap.set('__ref30', chart.addSeries(LineSeries, { color: '#26a641', lineWidth: 1, lineStyle: 2 }))
       }
     }
 
     primarySeriesRef.current = firstSeries
+    seriesMapRef.current = seriesMap
+
+    if (firstSeries) {
+      paneRegistryRef.current.set(paneKey, { chart, series: firstSeries })
+    }
+
     chart.timeScale().fitContent()
 
     if (mainChartRef.current) {
@@ -913,14 +1108,17 @@ export default function SubPane({
       try {
         if (!param.time) {
           mainChartRef.current?.clearCrosshairPosition()
-          for (const ref of siblingPaneRefs) ref.current?.clearCrosshairPosition()
+          for (const [key, entry] of paneRegistryRef.current) {
+            if (key !== paneKey) entry.chart.clearCrosshairPosition()
+          }
           return
         }
         if (mainChartRef.current && mainSeriesRef.current)
           mainChartRef.current.setCrosshairPosition(NaN, param.time, mainSeriesRef.current)
-        for (let i = 0; i < siblingPaneRefs.length; i++) {
-          if (siblingPaneRefs[i].current && siblingSeriesRefs[i]?.current)
-            siblingPaneRefs[i].current!.setCrosshairPosition(NaN, param.time, siblingSeriesRefs[i].current!)
+        for (const [key, entry] of paneRegistryRef.current) {
+          if (key !== paneKey) {
+            try { entry.chart.setCrosshairPosition(NaN, param.time, entry.series) } catch {}
+          }
         }
       } catch {}
     }
@@ -933,17 +1131,68 @@ export default function SubPane({
     ro.observe(containerRef.current)
 
     return () => {
+      paneRegistryRef.current.delete(paneKey)
       chartRef.current = null
       primarySeriesRef.current = null
-      markersPluginRef.current = null
-      chart.unsubscribeCrosshairMove(crosshairHandler)
-      chart.remove()
+      seriesMapRef.current = null
+      // Detach markers plugin before destroying chart to avoid leaked event listeners
+      if (markersPluginRef.current) {
+        try { markersPluginRef.current.detach() } catch {}
+        markersPluginRef.current = null
+      }
+      try { chart.unsubscribeCrosshairMove(crosshairHandler) } catch {}
+      try { chart.remove() } catch {}
       ro.disconnect()
       syncWidthsRef.current()
     }
-  }, [instances, instanceData, indicatorType, toET, mainChartRef, mainSeriesRef, siblingPaneRefs, siblingSeriesRefs, syncWidthsRef])
+  }, [paneKey, instancesKey, indicatorType, toET])
+  // Note: does NOT depend on subData — chart structure only changes when instances change.
+  // mainChartRef, mainSeriesRef, paneRegistryRef, syncWidthsRef are stable refs —
+  // intentionally excluded from deps to avoid teardown loops.
 
-  // Markers
+  // ── Effect 2: Data application — update series data in-place without chart teardown ─��
+  useEffect(() => {
+    const sMap = seriesMapRef.current
+    if (!sMap || !chartRef.current) return
+
+    if (indicatorType === 'macd') {
+      const inst = instances[0]
+      const data = subData[inst.id]
+      if (!data) return
+      const histSeries = sMap.get(`${inst.id}:histogram`)
+      if (histSeries) {
+        histSeries.setData((data.histogram ?? []).map(d => d.value !== null
+          ? { time: toET(d.time as any) as any, value: d.value as number, color: (d.value as number) >= 0 ? UP : DOWN }
+          : { time: toET(d.time as any) as any }
+        ))
+      }
+      sMap.get(`${inst.id}:macd`)?.setData(toLineData(data.macd ?? [], toET))
+      sMap.get(`${inst.id}:signal`)?.setData(toLineData(data.signal ?? [], toET))
+    } else {
+      for (const inst of instances) {
+        const data = subData[inst.id]
+        if (!data) continue
+        const seriesKey = Object.keys(data)[0]
+        if (!seriesKey) continue
+        sMap.get(inst.id)?.setData(toLineData(data[seriesKey], toET))
+      }
+
+      if (indicatorType === 'rsi' && instances.length > 0) {
+        const firstData = subData[instances[0].id]
+        const seriesKey = firstData ? Object.keys(firstData)[0] : null
+        const arr = seriesKey ? firstData[seriesKey] : []
+        if (arr.length > 0) {
+          const first = arr[0].time, last = arr[arr.length - 1].time
+          sMap.get('__ref70')?.setData([{ time: toET(first as any) as any, value: 70 }, { time: toET(last as any) as any, value: 70 }])
+          sMap.get('__ref30')?.setData([{ time: toET(first as any) as any, value: 30 }, { time: toET(last as any) as any, value: 30 }])
+        }
+      }
+    }
+  }, [subData, instances, indicatorType, toET])
+  // instances is safe here — it doesn't trigger chart teardown (that's Effect 1 via instancesKey).
+  // Including it ensures the closure always reads fresh instance IDs for series lookups.
+
+  // ── Effect 3: Markers ──
   useEffect(() => {
     const series = primarySeriesRef.current
     if (!series) return
@@ -953,7 +1202,7 @@ export default function SubPane({
     } else {
       markersPluginRef.current.setMarkers(m)
     }
-  }, [markers, instances, instanceData])
+  }, [markers, instancesKey, subData])
 
   return (
     <div style={{ height: '100%', borderTop: '1px solid #1c2128', position: 'relative' }}>
@@ -968,8 +1217,12 @@ Key design points:
 - Takes an array of `IndicatorInstance` — multiple RSIs share one pane, each MACD gets its own
 - MACD renders histogram + two lines (special case); everything else renders one line per instance
 - RSI adds 70/30 reference lines automatically
-- Crosshair sync uses ref arrays so it works with any number of sibling panes
+- **Registration pattern:** each SubPane registers `{ chart, series }` into a shared `PaneRegistry` map on mount and deregisters on cleanup. Crosshair handlers read the registry dynamically — no stale closures, no prop-driven re-render loops
+- **Two-effect split:** Effect 1 (lifecycle) creates the chart + empty series when `instancesKey` changes. Effect 2 (data) calls `setData()` on existing series when `subData` changes. This avoids destroying and recreating the chart on every API data refresh — no visible flicker
+- `seriesMapRef` maps stable keys (instance IDs or `inst.id:seriesName` for MACD) to series objects so Effect 2 can update them in-place
 - Cleanup nulls refs before `chart.remove()` (same guard pattern as existing code)
+- Effect deps intentionally exclude stable refs (`mainChartRef`, `paneRegistryRef`, `syncWidthsRef`) to avoid teardown loops
+- **`syncWidthsRef` (not `syncWidths` callback):** SubPane receives a ref to the sync function, not the function itself. This matches the existing codebase pattern (`syncWidthsRef` in Chart.tsx) and is immune to dependency creep — if the function body changes, only the ref contents update, not the prop reference. A `useCallback` with `[]` deps would work today but becomes a teardown bomb if anyone later adds a dependency
 
 - [ ] **Step 2: Update Chart.tsx props**
 
@@ -979,6 +1232,7 @@ In `frontend/src/features/chart/Chart.tsx`, replace the `ChartProps` interface (
 import type { IndicatorInstance } from '../../shared/types'
 import { INDICATOR_DEFS } from '../../shared/types/indicators'
 import SubPane from './SubPane'
+import type { PaneRegistry } from './SubPane'
 
 interface ChartProps {
   data: OHLCVBar[]
@@ -1006,50 +1260,64 @@ Remove these individual effects from Chart.tsx:
 - MA8/MA21 + S-G effect (lines 399-445)
 - Volume effect (lines 350-361)
 
-Replace with a single generic effect:
+**Keep the `emaOverlays` effect (lines 447-500) unchanged.** This renders per-rule rising/falling EMA visualizations during backtests — it's driven by `emaOverlays` prop from backtest results, not by `instanceData`. Removing it would silently break backtest visualization. It stays as-is until B4 replaces it with per-rule signal markers.
+
+Create `frontend/src/features/chart/chartUtils.ts` with the shared helper used by both Chart.tsx and SubPane:
+
+```typescript
+export function toLineData(arr: { time: string; value: number | null }[], toET: (t: any) => any) {
+  return arr.map(d => d.value !== null
+    ? { time: toET(d.time as any) as any, value: d.value as number }
+    : { time: toET(d.time as any) as any }
+  )
+}
+```
+
+Import it in Chart.tsx: `import { toLineData } from './chartUtils'`
+
+Replace with a two-effect split (same pattern as SubPane — chart lifecycle vs data application). A single effect that calls `addSeries` + `removeSeries` on every data refresh causes visible flicker. Instead, Effect 1 creates empty series when the set of instances changes, and Effect 2 populates them via `setData()` when data arrives or updates — no teardown, no flicker.
 
 ```typescript
 // ─── Main-chart indicator overlays (generic) ─────────────────────────
+const mainInstances = useMemo(
+  () => indicators.filter(i => i.enabled && i.pane === 'main'),
+  [indicators],
+)
+
+// Stable key — only changes when the set of main instances changes, not on every data fetch
+const mainInstancesKey = useMemo(
+  () => JSON.stringify(mainInstances.map(i => ({ id: i.id, type: i.type, params: i.params }))),
+  [mainInstances],
+)
+
+// Ref to hold series created by Effect 1, read by Effect 2
+const mainOverlaySeriesRef = useRef<Map<string, ISeriesApi<any>> | null>(null)
+
+// ── Effect 1: Create/destroy overlay series when instances change ──
 useEffect(() => {
   const chart = chartRef.current
   if (!chart) return
-  const created: ISeriesApi<any>[] = []
-
-  const mainInstances = indicators.filter(i => i.enabled && i.pane === 'main')
+  const seriesMap = new Map<string, ISeriesApi<any>>()
 
   for (const inst of mainInstances) {
-    const data = instanceData[inst.id]
-    if (!data) continue
-
     if (inst.type === 'volume') {
-      const volData = (data.volume ?? []).map(d => ({
-        time: toET(d.time as any) as any,
-        value: d.value,
-        color: '#26a64166',
-      }))
       const vol = chart.addSeries(HistogramSeries, {
         priceFormat: { type: 'volume' },
         priceScaleId: 'volume',
       })
       vol.priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 }, visible: false })
-      vol.setData(volData)
-      created.push(vol)
+      seriesMap.set(inst.id, vol)
     } else if (inst.type === 'bb') {
       const colors = { upper: '#30363d', middle: '#58a6ff', lower: '#30363d' }
       for (const key of ['upper', 'middle', 'lower'] as const) {
-        if (!data[key]) continue
         const s = chart.addSeries(LineSeries, {
           color: colors[key], lineWidth: 1,
           title: `BB ${key.charAt(0).toUpperCase() + key.slice(1)}`,
           priceScaleId: 'right',
         })
-        s.setData(toLineData(data[key]))
-        created.push(s)
+        seriesMap.set(`${inst.id}:${key}`, s)
       }
     } else {
-      // EMA, MA — single line per instance
-      const seriesKey = Object.keys(data)[0]
-      if (!seriesKey || !data[seriesKey]) continue
       const paramStr = Object.values(inst.params).join(',')
       const color = inst.color ?? '#f0883e'
       const s = chart.addSeries(LineSeries, {
@@ -1057,13 +1325,48 @@ useEffect(() => {
         title: `${inst.type.toUpperCase()}(${paramStr})`,
         priceScaleId: 'right',
       })
-      s.setData(toLineData(data[seriesKey]))
-      created.push(s)
+      seriesMap.set(inst.id, s)
     }
   }
 
-  return () => { for (const s of created) { try { chart.removeSeries(s) } catch {} } }
-}, [indicators, instanceData])
+  mainOverlaySeriesRef.current = seriesMap
+
+  return () => {
+    mainOverlaySeriesRef.current = null
+    for (const s of seriesMap.values()) { try { chart.removeSeries(s) } catch {} }
+  }
+}, [mainInstancesKey])
+
+// ── Effect 2: Update overlay data in-place without chart teardown ──
+useEffect(() => {
+  const seriesMap = mainOverlaySeriesRef.current
+  if (!seriesMap) return
+
+  for (const inst of mainInstances) {
+    const data = instanceData[inst.id]
+    if (!data) continue
+
+    if (inst.type === 'volume') {
+      const vol = seriesMap.get(inst.id)
+      if (vol) {
+        vol.setData((data.volume ?? []).map(d => ({
+          time: toET(d.time as any) as any,
+          value: d.value,
+          color: '#26a64166',
+        })))
+      }
+    } else if (inst.type === 'bb') {
+      for (const key of ['upper', 'middle', 'lower'] as const) {
+        const s = seriesMap.get(`${inst.id}:${key}`)
+        if (s && data[key]) s.setData(toLineData(data[key], toET))
+      }
+    } else {
+      const seriesKey = Object.keys(data)[0]
+      if (!seriesKey || !data[seriesKey]) continue
+      seriesMap.get(inst.id)?.setData(toLineData(data[seriesKey], toET))
+    }
+  }
+}, [instanceData, mainInstancesKey])
 ```
 
 Also remove these now-unused variables/booleans:
@@ -1081,7 +1384,7 @@ Remove these from Chart.tsx:
 
 These are all replaced by `<SubPane>` components rendered in the JSX (Step 5).
 
-Add a `useMemo` to compute the sub-pane groups:
+Add a `useMemo` to compute the sub-pane groups. **Stability note:** `subPaneGroups` depends on `indicators`, so any indicator change (even to a main-chart indicator) recomputes the groups and produces new `instances` arrays. SubPane must NOT use `instances` as an effect dependency directly — it should use a stable key (JSON.stringify of instance IDs + params) so it only tears down when its own instances actually change:
 
 ```typescript
 const subPaneGroups = useMemo(() => {
@@ -1091,13 +1394,12 @@ const subPaneGroups = useMemo(() => {
 
   for (const inst of subInstances) {
     const def = INDICATOR_DEFS[inst.type]
-    if (def.subPaneSharing === 'shared') {
+    if ((def.subPaneSharing ?? 'isolated') === 'shared') {
       const existing = seen.get(inst.type)
       if (existing !== undefined) {
         groups[existing].instances.push(inst)
       } else {
         seen.set(inst.type, groups.length)
-        const paramStr = Object.values(inst.params).join(',')
         groups.push({
           key: inst.type,
           label: inst.type.toUpperCase(),
@@ -1105,10 +1407,9 @@ const subPaneGroups = useMemo(() => {
         })
       }
     } else {
-      const paramStr = Object.values(inst.params).join(',')
       groups.push({
         key: inst.id,
-        label: `${inst.type.toUpperCase()}(${paramStr})`,
+        label: `${inst.type.toUpperCase()}(${Object.values(inst.params).join(',')})`,
         instances: [inst],
       })
     }
@@ -1117,55 +1418,54 @@ const subPaneGroups = useMemo(() => {
 }, [indicators])
 ```
 
-For crosshair sync between sub-panes, create a ref array. Each `<SubPane>` needs refs to the other panes so crosshair events propagate. Use a stable ref map:
+Create a single stable `PaneRegistry` ref. Each SubPane registers/deregisters itself — no per-group refs needed:
 
 ```typescript
-const subPaneChartRefs = useRef<Map<string, React.RefObject<IChartApi | null>>>(new Map())
-const subPaneSeriesRefs = useRef<Map<string, React.RefObject<ISeriesApi<any> | null>>>(new Map())
-
-// Ensure refs exist for each group
-for (const group of subPaneGroups) {
-  if (!subPaneChartRefs.current.has(group.key)) {
-    subPaneChartRefs.current.set(group.key, { current: null })
-    subPaneSeriesRefs.current.set(group.key, { current: null })
-  }
-}
+const paneRegistryRef = useRef<PaneRegistry>(new Map())
 ```
 
-Update the `syncWidths` function inside the main chart mount effect to iterate over all sub-pane refs instead of hardcoded `macdChartRef`/`rsiChartRef`:
+Use the existing `syncWidthsRef` pattern (a ref holding the function) rather than `useCallback`. This pattern is already proven in the codebase — it's immune to dependency creep (adding a dep to `useCallback` would cause every SubPane to tear down its chart). The function is defined inside the main chart mount effect and assigned to the ref. SubPane receives the ref (not the function) and calls `syncWidthsRef.current()`:
 
 ```typescript
+const syncWidthsRef = useRef<() => void>(() => {})
+
+// Inside the main chart mount effect, after creating the chart:
 function syncWidths() {
   const mainChart = chartRef.current
   if (!mainChart) return
   try {
     let maxRightW = mainChart.priceScale('right').width()
-    for (const ref of subPaneChartRefs.current.values()) {
-      if (ref.current) maxRightW = Math.max(maxRightW, ref.current.priceScale('right').width())
+    for (const entry of paneRegistryRef.current.values()) {
+      maxRightW = Math.max(maxRightW, entry.chart.priceScale('right').width())
     }
     if (maxRightW > 0) {
       mainChart.applyOptions({ rightPriceScale: { minimumWidth: maxRightW } })
-      for (const ref of subPaneChartRefs.current.values()) {
-        ref.current?.applyOptions({ rightPriceScale: { minimumWidth: maxRightW } })
+      for (const entry of paneRegistryRef.current.values()) {
+        entry.chart.applyOptions({ rightPriceScale: { minimumWidth: maxRightW } })
       }
     }
     const mainLeftW = mainChart.priceScale('left').width()
     if (mainLeftW > 0) {
-      for (const ref of subPaneChartRefs.current.values()) {
-        ref.current?.applyOptions({ leftPriceScale: { minimumWidth: mainLeftW, visible: false } })
+      for (const entry of paneRegistryRef.current.values()) {
+        entry.chart.applyOptions({ leftPriceScale: { minimumWidth: mainLeftW, visible: false } })
       }
     }
   } catch {}
 }
+syncWidthsRef.current = syncWidths
 ```
+
+Update SubPane's props: change `syncWidths: () => void` to `syncWidthsRef: React.RefObject<() => void>`, and call `syncWidthsRef.current()` everywhere SubPane currently calls `syncWidths()`. This ensures SubPane never holds a direct function reference that could go stale or trigger re-renders.
+
+The main chart mount effect defines `syncWidths` locally and assigns it to `syncWidthsRef.current`. The `syncHandler` and crosshair handler inside the mount effect call `syncWidths()` directly (they're in the same closure). SubPanes call it via `syncWidthsRef.current()`.
 
 Update the main chart's `syncHandler` (pan/zoom sync) similarly:
 
 ```typescript
 const syncHandler = (range: any) => {
   if (!range) return
-  for (const ref of subPaneChartRefs.current.values()) {
-    try { ref.current?.timeScale().setVisibleLogicalRange(range) } catch {}
+  for (const entry of paneRegistryRef.current.values()) {
+    try { entry.chart.timeScale().setVisibleLogicalRange(range) } catch {}
   }
   // ... rest of rAF syncWidths and sessionStorage (unchanged)
 }
@@ -1177,13 +1477,11 @@ Update the main chart's crosshair handler:
 const crosshairHandler = (param: any) => {
   try {
     if (!param.time) {
-      for (const ref of subPaneChartRefs.current.values()) ref.current?.clearCrosshairPosition()
+      for (const entry of paneRegistryRef.current.values()) entry.chart.clearCrosshairPosition()
       return
     }
-    for (const [key, chartRefEntry] of subPaneChartRefs.current.entries()) {
-      const seriesRefEntry = subPaneSeriesRefs.current.get(key)
-      if (chartRefEntry.current && seriesRefEntry?.current)
-        chartRefEntry.current.setCrosshairPosition(NaN, param.time, seriesRefEntry.current)
+    for (const entry of paneRegistryRef.current.values()) {
+      try { entry.chart.setCrosshairPosition(NaN, param.time, entry.series) } catch {}
     }
   } catch {}
 }
@@ -1193,31 +1491,31 @@ const crosshairHandler = (param: any) => {
 
 Replace the height calculation and render (lines 666-687):
 
+Use flex-based layout instead of percentage heights. Percentage heights inside a scrolling container
+don't resolve correctly — flex with min/max constraints works at any pane count:
+
 ```typescript
 const subPaneCount = subPaneGroups.length
-const mainHeightPct = subPaneCount === 0 ? 100 : subPaneCount === 1 ? 65 : subPaneCount === 2 ? 50 : subPaneCount === 3 ? 45 : 40
-const subHeightPct = subPaneCount === 0 ? 0 : Math.floor((100 - mainHeightPct) / subPaneCount)
+// Main chart flex weight: decreases as sub-panes increase, but never below 2
+const mainFlex = subPaneCount === 0 ? 1 : subPaneCount === 1 ? 2 : subPaneCount === 2 ? 2 : 1.5
 
 return (
-  <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
-    <div ref={containerRef} style={{ height: `${mainHeightPct}%`, width: '100%' }} />
-    {subPaneGroups.map(group => (
-      <div key={group.key} style={{ height: `${subHeightPct}%` }}>
+  <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', overflow: 'hidden' }}>
+    <div ref={containerRef} style={{ flex: mainFlex, minHeight: 200, width: '100%' }} />
+    {/* Note: markers are per-pane — only pass markers relevant to each pane's indicator type.
+       subPaneMarkers should be a Record<string, marker[]> keyed by pane key (type for shared, id for isolated).
+       For now, pass trade markers only to the first sub-pane (existing behavior) until B4 adds per-indicator attribution. */}
+    {subPaneGroups.map((group, idx) => (
+      <div key={group.key} style={{ flex: 1, minHeight: 120, maxHeight: subPaneCount <= 2 ? '35%' : undefined }}>
         <SubPane
+          paneKey={group.key}
           instances={group.instances}
           instanceData={instanceData}
           mainChartRef={chartRef}
           mainSeriesRef={candleSeriesRef}
-          siblingPaneRefs={subPaneGroups
-            .filter(g => g.key !== group.key)
-            .map(g => subPaneChartRefs.current.get(g.key)!)
-          }
-          siblingSeriesRefs={subPaneGroups
-            .filter(g => g.key !== group.key)
-            .map(g => subPaneSeriesRefs.current.get(g.key)!)
-          }
+          paneRegistryRef={paneRegistryRef}
           syncWidthsRef={syncWidthsRef}
-          markers={subPaneMarkers ?? undefined}
+          markers={idx === 0 ? (subPaneMarkers ?? undefined) : undefined}
           toET={toET}
           label={group.label}
         />
@@ -1274,66 +1572,32 @@ Start the dev server, open the app, verify:
 4. Toggling indicators on/off works
 5. Crosshair syncs across all panes
 6. Pan/zoom on main chart syncs to sub-panes
+7. Run a backtest with a rising/falling EMA rule — verify the colored EMA overlay still renders on the main chart (emaOverlays effect preserved)
 
 - [ ] **Step 9: Commit**
 
 ```bash
 git add frontend/src/features/chart/SubPane.tsx frontend/src/features/chart/Chart.tsx \
+  frontend/src/features/chart/chartUtils.ts \
   frontend/src/App.tsx frontend/src/shared/types/index.ts frontend/src/shared/hooks/useOHLCV.ts
 git commit -m "feat(A4): replace hardcoded indicator panes with generic SubPane component"
 ```
 
 ---
 
-### Task 7: Strategy save/load migration
+### Task 7: Verify strategy save/load compatibility
 
-**Files:**
-- Modify: `frontend/src/features/strategy/StrategyBuilder.tsx`
+**Files:** None modified — this is a verification-only task.
 
-Old saved strategies have no `indicators` field. New ones include it. This task adds migration on load and includes indicators in the save snapshot.
+Indicators are a *chart display* concern persisted in `localStorage` via App.tsx's `STORAGE_KEY`. Strategy save/load stores *trading rules*. The optional `indicators?` field added to `SavedStrategy` in Task 1 is a forward-compatible hook for B11 (saved-strategy library) — no wiring needed now.
 
-- [ ] **Step 1: Add migration function**
-
-In `frontend/src/features/strategy/StrategyBuilder.tsx`, add a migration helper (near the top, after imports):
-
-```typescript
-import type { IndicatorInstance } from '../../shared/types'
-import { DEFAULT_INDICATORS } from '../../shared/types/indicators'
-
-function migrateIndicators(s: SavedStrategy): IndicatorInstance[] {
-  if (s.indicators) return s.indicators
-  return DEFAULT_INDICATORS
-}
-```
-
-Old strategies don't encode which chart indicators were active (that was stored in `localStorage` under `strategylab-settings`, not in the strategy save). So the migration just falls back to the defaults. This is the right behavior — the strategy blob stores *trading rules*, and indicators are a *chart display* concern.
-
-- [ ] **Step 2: Include indicators in save snapshot**
-
-The `currentSnapshot` function in StrategyBuilder doesn't have access to the `indicators` state (it lives in App.tsx). Two options: (a) pass indicators down as a prop, (b) leave it out of strategy saves for now since indicators are a chart-display concern persisted in localStorage.
-
-**Choice: (b)** — indicators are persisted in `localStorage` via App.tsx's `STORAGE_KEY`. They're restored on app load. Strategy save/load is for trading rules. The `indicators?` field on `SavedStrategy` is there as a forward-compatible hook for when users want strategy-specific indicator configs (B11 saved-strategy library), but doesn't need wiring now.
-
-No code change needed for save. For load, the migration function ensures old strategies don't break:
-
-```typescript
-function loadSavedStrategy(s: SavedStrategy) {
-  // ... existing field restoration ...
-  // indicators migration is a no-op since indicators live in App state,
-  // not strategy state. The field is reserved for future B11 use.
-}
-```
-
-- [ ] **Step 3: Verify save/load still works**
+- [ ] **Step 1: Verify save/load still works**
 
 Start the dev server. Save a strategy, reload the page, load it back. Verify no errors and all rule fields restore correctly. Old saved strategies in localStorage should load without errors (they have no `indicators` field, which is optional).
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 2: Verify localStorage indicator persistence**
 
-```bash
-git add frontend/src/features/strategy/StrategyBuilder.tsx
-git commit -m "feat(A4): add forward-compatible indicators field to SavedStrategy"
-```
+Change indicator params (e.g. RSI period to 7), reload the page. Verify the modified params survive the reload via `localStorage` restore. Add a new indicator, reload — verify its ID is unique (uses `crypto.randomUUID` prefix, no collisions).
 
 ---
 
@@ -1454,31 +1718,43 @@ git commit -m "feat(A4): skip indicator fetching when chart is disabled"
 
 ### Task 10: Remove old GET endpoint (cleanup)
 
+> **Note:** The old `useIndicators` hook and GET endpoint became dead code after Task 5. This cleanup is a separate task to keep each commit bisectable — Task 5 swaps the consumer, Task 10 removes the dead code.
+
 **Files:**
 - Modify: `backend/routes/indicators.py`
 - Modify: `frontend/src/shared/hooks/useOHLCV.ts`
 
-- [ ] **Step 1: Remove old `useIndicators` hook**
+- [ ] **Step 1: Check for ORB usage**
+
+Before removing the GET endpoint, verify nothing uses the `"orb"` indicator. Grep the frontend for `orb`:
+
+```bash
+grep -r "orb" frontend/src/ --include="*.ts" --include="*.tsx" -l
+```
+
+If any consumer exists, either add `compute_orb` to the registry or keep the GET endpoint until ORB is migrated. If no consumer exists (likely — ORB was speculative), proceed with removal.
+
+- [ ] **Step 2: Remove old `useIndicators` hook**
 
 In `frontend/src/shared/hooks/useOHLCV.ts`, delete the `useIndicators` function (lines 19-42). No file should import it after Task 5.
 
 Verify: `cd frontend && npx tsc --noEmit` — no errors.
 
-- [ ] **Step 2: Remove old GET endpoint**
+- [ ] **Step 3: Remove old GET endpoint**
 
-In `backend/routes/indicators.py`, remove the `@router.get("/api/indicators/{ticker}")` function (lines 17-127). Keep the `_series_to_list` helper and the new POST endpoint. Also remove the unused import of `compute_indicators` from `signal_engine`:
+In `backend/routes/indicators.py`, remove the `@router.get("/api/indicators/{ticker}")` function (lines 17-127). **Keep `_series_to_list`** — it's imported by `backend/routes/backtest.py` (`from routes.indicators import _series_to_list`). Also keep the new POST endpoint. Remove the unused import of `compute_indicators` from `signal_engine`:
 
 ```python
 # Remove this line:
 # from signal_engine import compute_indicators, _apply_sg, _apply_sg_predictive
 ```
 
-- [ ] **Step 3: Test the backend still starts**
+- [ ] **Step 4: Test the backend still starts**
 
 Run: `cd backend && python -c "from routes.indicators import router; print('OK')"`
 Expected: `OK`
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add frontend/src/shared/hooks/useOHLCV.ts backend/routes/indicators.py
