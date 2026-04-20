@@ -17,14 +17,12 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 
 - [ ] **A1** Portfolio equity chart (combined P&L across bots)
 - [ ] **A3** Equity curve trend analysis (open-ended — define "trend" first)
-- [ ] **A4** Indicator system redesign — instance-based model with customisable params, multiple instances, generic SubPane, inline-expand sidebar UI. [Spec](docs/superpowers/specs/2026-04-20-indicator-system-redesign-design.md) · [Plan](docs/superpowers/plans/2026-04-20-indicator-system-redesign.md)
-  - Customisable RSI length, ex: RSI(2). Multiple in one pane.
-  - Generalised MA indicators (period + type per instance)
-  - ATR, Stochastic, VWAP (new indicator types via registry)
-  - MTC (start with RSI? — deferred, needs multi-timeframe data)
+- [ ] **A5** Resizable, collapsible, double-click-to-maximize individual chart panes
+- [ ] **A7** New indicator types via registry: Stochastic, VWAP (ATR shipped with A4)
 - [ ] **A6** Watchlist — save/switch between tickers quickly
 
 ### Shipped
+- [x] **A4** Indicator system redesign — replaced hardcoded indicator toggles with instance-based model (`IndicatorInstance[]`, `INDICATOR_DEFS` registry, generic `SubPane` + `PaneRegistry`). Add/remove/configure multiple instances of RSI, MACD, BB, ATR, MA, Volume with inline param editing. POST-based indicator endpoint, collapsible sidebar sections, chart-disabled gating. [Recap](docs/misc/A4-indicator-system-redesign-recap.md) · [Spec](docs/superpowers/specs/2026-04-20-indicator-system-redesign-design.md) · [Plan](docs/superpowers/plans/2026-04-20-indicator-system-redesign.md)
 - [x] Equity curve macro mode for long timescales / thousands of trades — resampled equity chart (D/W/M/Q/Y) via `MacroEquityChart.tsx` + `/api/backtest/macro`
 - [x] Date range presets (D/W/M/Q/Y) + period stepping arrows (‹ › single, « » 5x skip)
 - [x] Equity curve: normalised B&H comparison toggle + log scale toggle
