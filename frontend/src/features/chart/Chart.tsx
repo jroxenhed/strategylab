@@ -469,7 +469,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', overflow: 'hidden' }}>
       <div ref={containerRef} style={{ flex: mainFlex, minHeight: 200, width: '100%' }} />
-      {subPaneGroups.map((group, idx) => (
+      {subPaneGroups.map(group => (
         <div key={group.key} style={{ flex: 1, minHeight: 120, maxHeight: subPaneCount <= 2 ? '35%' : undefined }}>
           <SubPane
             paneKey={group.key}
@@ -479,7 +479,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
             mainSeriesRef={candleSeriesRef}
             paneRegistryRef={paneRegistryRef}
             syncWidthsRef={syncWidthsRef}
-            markers={idx === 0 ? (subPaneMarkers ?? undefined) : undefined}
+            markers={subPaneMarkers ?? undefined}
             toET={toET}
             label={group.label}
           />
