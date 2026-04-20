@@ -77,7 +77,7 @@ export default function App() {
   const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', start, end, interval, dataSource)
 
   const { data: instanceData = {}, refetch: refetchIndicators } = useInstanceIndicators(
-    ticker, start, end, interval, indicators, dataSource,
+    ticker, start, end, interval, chartEnabled ? indicators : [], dataSource,
   )
 
   const refreshChart = useCallback(() => {
