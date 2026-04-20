@@ -1,8 +1,9 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
-import type { BacktestResult, IndicatorKey, DataSource, MAType, StrategyRequest, DatePreset } from './shared/types'
+import type { BacktestResult, IndicatorInstance, DataSource, MAType, StrategyRequest, DatePreset } from './shared/types'
+import { DEFAULT_INDICATORS } from './shared/types/indicators'
 import type { IChartApi } from 'lightweight-charts'
-import { useOHLCV, useIndicators } from './shared/hooks/useOHLCV'
+import { useOHLCV, useInstanceIndicators } from './shared/hooks/useOHLCV'
 import Sidebar from './features/sidebar/Sidebar'
 import Chart from './features/chart/Chart'
 import StrategyBuilder from './features/strategy/StrategyBuilder'
@@ -34,7 +35,6 @@ const DEFAULT_MA_SETTINGS: MASettings = {
 
 const STORAGE_KEY = 'strategylab-settings'
 const EMPTY_OHLCV: never[] = []
-const EMPTY_INDICATORS: Record<string, never[]> = {}
 const today = new Date().toISOString().slice(0, 10)
 const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
@@ -52,7 +52,7 @@ export default function App() {
   const [start, setStart] = useState(saved?.start ?? oneYearAgo)
   const [end, setEnd] = useState(saved?.end ?? today)
   const [interval, setInterval] = useState(saved?.interval ?? '1d')
-  const [activeIndicators, setActiveIndicators] = useState<IndicatorKey[]>(saved?.activeIndicators ?? ['macd', 'rsi'])
+  const [indicators, setIndicators] = useState<IndicatorInstance[]>(saved?.indicators ?? DEFAULT_INDICATORS)
   const [showSpy, setShowSpy] = useState<boolean>(saved?.showSpy ?? false)
   const [showQqq, setShowQqq] = useState<boolean>(saved?.showQqq ?? false)
   const [dataSource, setDataSource] = useState<DataSource>((saved?.dataSource as DataSource) ?? 'yahoo')
@@ -63,32 +63,26 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('chart')
   const [mainChart, setMainChart] = useState<IChartApi | null>(null)
   const [chartEnabled, setChartEnabled] = useState(true)
-  const [maSettings, setMaSettings] = useState<MASettings>({ ...DEFAULT_MA_SETTINGS, ...saved?.maSettings })
+  const [maSettings] = useState<MASettings>({ ...DEFAULT_MA_SETTINGS, ...saved?.maSettings })
   const [datePreset, setDatePreset] = useState<DatePreset>((saved?.datePreset as DatePreset) ?? 'Y')
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      ticker, start, end, interval, activeIndicators, showSpy, showQqq, dataSource, maSettings, datePreset,
+      ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, maSettings, datePreset,
     }))
-  }, [ticker, start, end, interval, activeIndicators, showSpy, showQqq, dataSource, maSettings, datePreset])
+  }, [ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, maSettings, datePreset])
 
   const { data: ohlcv = EMPTY_OHLCV, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, interval, dataSource)
   const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', start, end, interval, dataSource)
   const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', start, end, interval, dataSource)
 
-  const indicatorKeys = activeIndicators.filter(k => k !== 'volume')
-  const maParams = activeIndicators.includes('ma') ? maSettings : undefined
-  const { data: indicatorData = EMPTY_INDICATORS, refetch: refetchIndicators } = useIndicators(ticker, start, end, interval, indicatorKeys, dataSource, maParams)
+  const { data: instanceData = {}, refetch: refetchIndicators } = useInstanceIndicators(
+    ticker, start, end, interval, indicators, dataSource,
+  )
 
   const refreshChart = useCallback(() => {
     refetchOhlcv(); refetchIndicators(); refetchSpy(); refetchQqq()
   }, [refetchOhlcv, refetchIndicators, refetchSpy, refetchQqq])
-
-  const toggleIndicator = useCallback((key: IndicatorKey) => {
-    setActiveIndicators(prev =>
-      prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
-    )
-  }, [])
 
   const trades = useMemo(() => backtestResult?.trades ?? [], [backtestResult])
   const emaOverlays = backtestResult?.ema_overlays
@@ -136,20 +130,18 @@ export default function App() {
                 start={start}
                 end={end}
                 interval={interval}
-                activeIndicators={activeIndicators}
+                indicators={indicators}
+                onIndicatorsChange={setIndicators}
                 showSpy={showSpy}
                 showQqq={showQqq}
                 onTickerChange={t => { setTicker(t); setBacktestResult(null) }}
                 onStartChange={d => { if (d > end) { setStart(end); setEnd(d) } else { setStart(d) }; setBacktestResult(null) }}
                 onEndChange={d => { if (d < start) { setEnd(start); setStart(d) } else { setEnd(d) }; setBacktestResult(null) }}
                 onIntervalChange={v => { setInterval(v); setBacktestResult(null) }}
-                onToggleIndicator={toggleIndicator}
                 onToggleSpy={() => setShowSpy(v => !v)}
                 onToggleQqq={() => setShowQqq(v => !v)}
                 dataSource={dataSource}
                 onDataSourceChange={setDataSource}
-                maSettings={maSettings}
-                onMaSettingsChange={setMaSettings}
                 datePreset={datePreset}
                 onDatePresetChange={v => { setDatePreset(v); setBacktestResult(null) }}
               />
@@ -177,16 +169,11 @@ export default function App() {
                           qqqData={showQqq ? (qqqData ?? []) : undefined}
                           showSpy={showSpy}
                           showQqq={showQqq}
-                          indicatorData={indicatorData}
-                          activeIndicators={activeIndicators}
+                          indicators={indicators}
+                          instanceData={instanceData}
                           trades={trades}
                           emaOverlays={emaOverlays}
                           onChartReady={setMainChart}
-                          maShowRaw8={maSettings.showRaw8}
-                          maShowRaw21={maSettings.showRaw21}
-                          maShowSg8={maSettings.showSg8}
-                          maShowSg21={maSettings.showSg21}
-                          maCompensateLag={maSettings.compensateLag}
                         />
                       ) : (
                         <div style={styles.empty}>Loading {ticker}...</div>
