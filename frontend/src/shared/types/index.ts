@@ -16,48 +16,7 @@ export interface TimeValue {
   value: number | null
 }
 
-export interface MACDData {
-  macd: TimeValue[]
-  signal: TimeValue[]
-  histogram: TimeValue[]
-}
-
-export interface BBData {
-  upper: TimeValue[]
-  middle: TimeValue[]
-  lower: TimeValue[]
-}
-
-export interface EMAData {
-  ema20: TimeValue[]
-  ema50: TimeValue[]
-  ema200: TimeValue[]
-}
-
 export type MAType = 'sma' | 'ema' | 'rma'
-
-export interface MAData {
-  ma8: TimeValue[]
-  ma21: TimeValue[]
-  ma8_sg: TimeValue[]
-  ma21_sg: TimeValue[]
-  ma_type: MAType
-  sg8_window: number
-  sg8_poly: number
-  sg21_window: number
-  sg21_poly: number
-}
-
-export interface IndicatorData {
-  macd?: MACDData
-  rsi?: TimeValue[]
-  ema?: EMAData
-  bb?: BBData
-  ma?: MAData
-  volume?: TimeValue[]
-}
-
-export type IndicatorKey = 'macd' | 'rsi' | 'ema' | 'bb' | 'ma' | 'volume'
 
 export interface Rule {
   indicator: 'macd' | 'rsi' | 'price' | 'ema20' | 'ema50' | 'ema200' | 'ma8' | 'ma21'
@@ -260,7 +219,7 @@ export interface AppState {
   start: string
   end: string
   interval: string
-  activeIndicators: IndicatorKey[]
+  indicators: IndicatorInstance[]
   showSpy: boolean
   showQqq: boolean
 }

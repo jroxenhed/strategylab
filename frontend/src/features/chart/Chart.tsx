@@ -8,7 +8,11 @@ import {
   ColorType,
 } from 'lightweight-charts'
 import type { IChartApi, ISeriesApi } from 'lightweight-charts'
-import type { OHLCVBar, IndicatorData, IndicatorKey, TimeValue, EMAOverlay, Trade } from '../../shared/types'
+import type { OHLCVBar, IndicatorInstance, EMAOverlay, Trade } from '../../shared/types'
+import { INDICATOR_DEFS } from '../../shared/types/indicators'
+import SubPane from './SubPane'
+import type { PaneRegistry } from './SubPane'
+import { toLineData } from './chartUtils'
 
 interface ChartProps {
   data: OHLCVBar[]
@@ -16,16 +20,11 @@ interface ChartProps {
   qqqData?: OHLCVBar[]
   showSpy: boolean
   showQqq: boolean
-  indicatorData: IndicatorData
-  activeIndicators: IndicatorKey[]
+  indicators: IndicatorInstance[]
+  instanceData: Record<string, Record<string, { time: string; value: number | null }[]>>
   trades?: Trade[]
   emaOverlays?: EMAOverlay[]
   onChartReady?: (chart: IChartApi | null) => void
-  maShowRaw8?: boolean
-  maShowRaw21?: boolean
-  maShowSg8?: boolean
-  maShowSg21?: boolean
-  maCompensateLag?: boolean
 }
 
 const CHART_BG = '#0d1117'
@@ -60,15 +59,6 @@ function toET(time: string | number): any {
   return Date.UTC(get('year'), get('month') - 1, get('day'), get('hour') % 24, get('minute'), get('second')) / 1000
 }
 
-function toLineData(arr: TimeValue[]) {
-  // Use whitespace data (no value field) for nulls so the bar still occupies
-  // space in the time scale — keeps logical range aligned across charts
-  return arr.map(d => d.value !== null
-    ? { time: toET(d.time as any) as any, value: d.value as number }
-    : { time: toET(d.time as any) as any }
-  )
-}
-
 function buildMarkers(trades: Trade[], showPrice = true, subPane = false) {
   return trades.map(t => {
     const isEntry = t.type === 'buy' || t.type === 'short'
@@ -99,32 +89,16 @@ function buildMarkers(trades: Trade[], showPrice = true, subPane = false) {
   })
 }
 
-export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicatorData, activeIndicators, trades, emaOverlays, onChartReady, maShowRaw8 = true, maShowRaw21 = true, maShowSg8 = true, maShowSg21 = true, maCompensateLag = false }: ChartProps) {
+export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, trades, emaOverlays, onChartReady }: ChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
-  const macdChartRef = useRef<IChartApi | null>(null)
-  const rsiChartRef = useRef<IChartApi | null>(null)
-  const macdContainerRef = useRef<HTMLDivElement>(null)
-  const rsiContainerRef = useRef<HTMLDivElement>(null)
-  // Series refs for crosshair sync
   const candleSeriesRef = useRef<ISeriesApi<any> | null>(null)
-  const macdSeriesRef = useRef<ISeriesApi<any> | null>(null)
-  const rsiSeriesRef = useRef<ISeriesApi<any> | null>(null)
-  // Shared helpers the main mount effect installs; other effects trigger
-  // width realignment and range-restore without duplicating the logic.
   const syncWidthsRef = useRef<() => void>(() => {})
   const rangeRestoredRef = useRef(false)
-  // Hold the latest onChartReady so the mount-once effect doesn't re-fire
-  // when the parent re-renders with a new callback identity.
   const onChartReadyRef = useRef(onChartReady)
   useEffect(() => { onChartReadyRef.current = onChartReady })
-
-  const showMacd = activeIndicators.includes('macd')
-  const showRsi = activeIndicators.includes('rsi')
-  const showVolume = activeIndicators.includes('volume')
-  const showEma = activeIndicators.includes('ema')
-  const showBb = activeIndicators.includes('bb')
-  const showMa = activeIndicators.includes('ma')
+  const mainOverlaySeriesRef = useRef<Map<string, ISeriesApi<any>> | null>(null)
+  const paneRegistryRef = useRef<PaneRegistry>(new Map())
 
   // SPY/QQQ as real close prices on their own left axis
   const spyLineData = useMemo(() => {
@@ -144,37 +118,42 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     [data],
   )
 
-  const volumeData = useMemo(
-    () => data.map(d => ({
-      time: toET(d.time as any) as any,
-      value: d.volume,
-      color: d.close >= d.open ? '#26a64166' : '#f8514966',
-    })),
-    [data],
+  // Main-chart indicator instances (overlays on the candlestick chart)
+  const mainInstances = useMemo(
+    () => indicators.filter(i => i.enabled && i.pane === 'main'),
+    [indicators],
+  )
+  const mainInstancesKey = useMemo(
+    () => JSON.stringify(mainInstances.map(i => ({ id: i.id, type: i.type, params: i.params }))),
+    [mainInstances],
   )
 
-  const macdHistData = useMemo(() => {
-    if (!indicatorData.macd) return []
-    return indicatorData.macd.histogram.map(d => d.value !== null
-      ? { time: toET(d.time as any) as any, value: d.value as number, color: d.value >= 0 ? UP : DOWN }
-      : { time: toET(d.time as any) as any }
-    )
-  }, [indicatorData.macd])
+  // Sub-pane grouping: shared types (RSI) merge into one pane, isolated types (MACD) get their own
+  const subPaneGroups = useMemo(() => {
+    const subInstances = indicators.filter(i => i.enabled && i.pane === 'sub')
+    const groups: { key: string; label: string; instances: IndicatorInstance[] }[] = []
+    const seen = new Map<string, number>()
 
-  const macdLineData = useMemo(
-    () => indicatorData.macd ? toLineData(indicatorData.macd.macd) : [],
-    [indicatorData.macd],
-  )
-
-  const macdSignalData = useMemo(
-    () => indicatorData.macd ? toLineData(indicatorData.macd.signal) : [],
-    [indicatorData.macd],
-  )
-
-  const rsiData = useMemo(
-    () => indicatorData.rsi ? toLineData(indicatorData.rsi) : [],
-    [indicatorData.rsi],
-  )
+    for (const inst of subInstances) {
+      const def = INDICATOR_DEFS[inst.type]
+      if ((def.subPaneSharing ?? 'isolated') === 'shared') {
+        const existing = seen.get(inst.type)
+        if (existing !== undefined) {
+          groups[existing].instances.push(inst)
+        } else {
+          seen.set(inst.type, groups.length)
+          groups.push({ key: inst.type, label: inst.type.toUpperCase(), instances: [inst] })
+        }
+      } else {
+        groups.push({
+          key: inst.id,
+          label: `${inst.type.toUpperCase()}(${Object.values(inst.params).join(',')})`,
+          instances: [inst],
+        })
+      }
+    }
+    return groups
+  }, [indicators])
 
   const mainMarkers = useMemo(
     () => trades && trades.length > 0 ? buildMarkers(trades) : null,
@@ -205,27 +184,26 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     candleSeriesRef.current = candleSeries
 
     function syncWidths() {
-      // Read the main chart via ref (not closure) so this bails cleanly if it's
-      // been removed — MACD/RSI cleanups call syncWidthsRef.current() and can
-      // race the main chart's teardown (paneWidgets cleared → throws).
       const mainChart = chartRef.current
       if (!mainChart) return
       try {
-        const mainRightW = mainChart.priceScale('right').width()
-        const macdRightW = macdChartRef.current?.priceScale('right').width() ?? 0
-        const rsiRightW = rsiChartRef.current?.priceScale('right').width() ?? 0
-        const maxRightW = Math.max(mainRightW, macdRightW, rsiRightW)
+        let maxRightW = mainChart.priceScale('right').width()
+        for (const entry of paneRegistryRef.current.values()) {
+          maxRightW = Math.max(maxRightW, entry.chart.priceScale('right').width())
+        }
         if (maxRightW > 0) {
           mainChart.applyOptions({ rightPriceScale: { minimumWidth: maxRightW } })
-          macdChartRef.current?.applyOptions({ rightPriceScale: { minimumWidth: maxRightW } })
-          rsiChartRef.current?.applyOptions({ rightPriceScale: { minimumWidth: maxRightW } })
+          for (const entry of paneRegistryRef.current.values()) {
+            entry.chart.applyOptions({ rightPriceScale: { minimumWidth: maxRightW } })
+          }
         }
         const mainLeftW = mainChart.priceScale('left').width()
         if (mainLeftW > 0) {
-          macdChartRef.current?.applyOptions({ leftPriceScale: { minimumWidth: mainLeftW, visible: false } })
-          rsiChartRef.current?.applyOptions({ leftPriceScale: { minimumWidth: mainLeftW, visible: false } })
+          for (const entry of paneRegistryRef.current.values()) {
+            entry.chart.applyOptions({ leftPriceScale: { minimumWidth: mainLeftW, visible: false } })
+          }
         }
-      } catch { /* any sibling mid-teardown — skip this realignment */ }
+      } catch {}
     }
     syncWidthsRef.current = syncWidths
 
@@ -237,12 +215,9 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     let sessionWriteTimer: number | null = null
     const syncHandler = (range: any) => {
       if (!range) return
-      // Guard: refs may point to a chart that's been .remove()'d but not yet
-      // nulled (e.g. a pan event firing during sibling teardown on unmount).
-      // Calling setVisibleLogicalRange on a removed instance throws from
-      // inside lightweight-charts (paneWidgets[0] undefined) and blanks React.
-      try { macdChartRef.current?.timeScale().setVisibleLogicalRange(range) } catch {}
-      try { rsiChartRef.current?.timeScale().setVisibleLogicalRange(range) } catch {}
+      for (const entry of paneRegistryRef.current.values()) {
+        try { entry.chart.timeScale().setVisibleLogicalRange(range) } catch {}
+      }
       if (widthsRaf === null) {
         widthsRaf = requestAnimationFrame(() => {
           widthsRaf = null
@@ -260,19 +235,15 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     // Initial alignment: fire after MACD/RSI effects have had time to mount
     const alignTimer = setTimeout(syncWidths, 100)
 
-    // Crosshair sync: main → MACD + RSI.
-    // Same stale-ref hazard as syncHandler — wrap in try/catch.
     const crosshairHandler = (param: any) => {
       try {
         if (!param.time) {
-          macdChartRef.current?.clearCrosshairPosition()
-          rsiChartRef.current?.clearCrosshairPosition()
+          for (const entry of paneRegistryRef.current.values()) entry.chart.clearCrosshairPosition()
           return
         }
-        if (macdChartRef.current && macdSeriesRef.current)
-          macdChartRef.current.setCrosshairPosition(NaN, param.time, macdSeriesRef.current)
-        if (rsiChartRef.current && rsiSeriesRef.current)
-          rsiChartRef.current.setCrosshairPosition(NaN, param.time, rsiSeriesRef.current)
+        for (const entry of paneRegistryRef.current.values()) {
+          try { entry.chart.setCrosshairPosition(NaN, param.time, entry.series) } catch {}
+        }
       } catch {}
     }
     chart.subscribeCrosshairMove(crosshairHandler)
@@ -347,102 +318,79 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     return () => { try { chart.removeSeries(qqq) } catch {} }
   }, [showQqq, qqqLineData])
 
-  // Volume overlay
+  // ─── Main-chart indicator overlays (generic) ─���───────────────────────
   useEffect(() => {
     const chart = chartRef.current
-    if (!chart || !showVolume || volumeData.length === 0) return
-    const vol = chart.addSeries(HistogramSeries, {
-      priceFormat: { type: 'volume' },
-      priceScaleId: 'volume',
-    })
-    vol.priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 }, visible: false })
-    vol.setData(volumeData)
-    return () => { try { chart.removeSeries(vol) } catch {} }
-  }, [showVolume, volumeData])
+    if (!chart) return
+    const seriesMap = new Map<string, ISeriesApi<any>>()
 
-  // EMA
-  useEffect(() => {
-    const chart = chartRef.current
-    if (!chart || !showEma || !indicatorData.ema) return
-    const { ema20, ema50, ema200 } = indicatorData.ema
-    const s20 = chart.addSeries(LineSeries, { color: '#f0883e', lineWidth: 1, title: 'EMA20', priceScaleId: 'right' })
-    s20.setData(toLineData(ema20))
-    const s50 = chart.addSeries(LineSeries, { color: '#a371f7', lineWidth: 1, title: 'EMA50', priceScaleId: 'right' })
-    s50.setData(toLineData(ema50))
-    const s200 = chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'EMA200', priceScaleId: 'right' })
-    s200.setData(toLineData(ema200))
+    for (const inst of mainInstances) {
+      if (inst.type === 'volume') {
+        const vol = chart.addSeries(HistogramSeries, {
+          priceFormat: { type: 'volume' },
+          priceScaleId: 'volume',
+        })
+        vol.priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 }, visible: false })
+        seriesMap.set(inst.id, vol)
+      } else if (inst.type === 'bb') {
+        const colors = { upper: '#30363d', middle: '#58a6ff', lower: '#30363d' }
+        for (const key of ['upper', 'middle', 'lower'] as const) {
+          const s = chart.addSeries(LineSeries, {
+            color: colors[key], lineWidth: 1,
+            title: `BB ${key.charAt(0).toUpperCase() + key.slice(1)}`,
+            priceScaleId: 'right',
+          })
+          seriesMap.set(`${inst.id}:${key}`, s)
+        }
+      } else {
+        const paramStr = Object.values(inst.params).join(',')
+        const color = inst.color ?? '#f0883e'
+        const s = chart.addSeries(LineSeries, {
+          color, lineWidth: 1,
+          title: `${inst.type.toUpperCase()}(${paramStr})`,
+          priceScaleId: 'right',
+        })
+        seriesMap.set(inst.id, s)
+      }
+    }
+
+    mainOverlaySeriesRef.current = seriesMap
+
     return () => {
-      try { chart.removeSeries(s20) } catch {}
-      try { chart.removeSeries(s50) } catch {}
-      try { chart.removeSeries(s200) } catch {}
+      mainOverlaySeriesRef.current = null
+      for (const s of seriesMap.values()) { try { chart.removeSeries(s) } catch {} }
     }
-  }, [showEma, indicatorData.ema])
+  }, [mainInstancesKey])
 
-  // Bollinger Bands
   useEffect(() => {
-    const chart = chartRef.current
-    if (!chart || !showBb || !indicatorData.bb) return
-    const { upper, middle, lower } = indicatorData.bb
-    const su = chart.addSeries(LineSeries, { color: '#30363d', lineWidth: 1, title: 'BB Upper', priceScaleId: 'right' })
-    su.setData(toLineData(upper))
-    const sm = chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'BB Mid', priceScaleId: 'right' })
-    sm.setData(toLineData(middle))
-    const sl = chart.addSeries(LineSeries, { color: '#30363d', lineWidth: 1, title: 'BB Lower', priceScaleId: 'right' })
-    sl.setData(toLineData(lower))
-    return () => {
-      try { chart.removeSeries(su) } catch {}
-      try { chart.removeSeries(sm) } catch {}
-      try { chart.removeSeries(sl) } catch {}
-    }
-  }, [showBb, indicatorData.bb])
+    const seriesMap = mainOverlaySeriesRef.current
+    if (!seriesMap) return
 
-  // MA8 / MA21 + S-G smoothed versions
-  useEffect(() => {
-    const chart = chartRef.current
-    if (!chart || !showMa || !indicatorData.ma) return
-    const { ma8, ma21, ma8_sg, ma21_sg, sg8_window, sg21_window } = indicatorData.ma
-    const created: ISeriesApi<any>[] = []
-    if (maShowRaw8) {
-      const s = chart.addSeries(LineSeries, { color: '#e8ab6a', lineWidth: 1, title: 'MA8', priceScaleId: 'right' })
-      s.setData(toLineData(ma8))
-      created.push(s)
-    }
-    if (maShowRaw21) {
-      const s = chart.addSeries(LineSeries, { color: '#56d4c4', lineWidth: 1, title: 'MA21', priceScaleId: 'right' })
-      s.setData(toLineData(ma21))
-      created.push(s)
-    }
+    for (const inst of mainInstances) {
+      const data = instanceData[inst.id]
+      if (!data) continue
 
-    // Compensate lag: shift S-G values backward by (window-1)/2 bars
-    // to reconstruct the centered view. Display-only — backtest stays causal.
-    let sg8Display = ma8_sg
-    let sg21Display = ma21_sg
-    if (maCompensateLag) {
-      const shift8 = Math.floor((sg8_window - 1) / 2)
-      const shift21 = Math.floor((sg21_window - 1) / 2)
-      sg8Display = ma8_sg.map((d, i) => ({
-        time: d.time,
-        value: i + shift8 < ma8_sg.length ? ma8_sg[i + shift8].value : null,
-      }))
-      sg21Display = ma21_sg.map((d, i) => ({
-        time: d.time,
-        value: i + shift21 < ma21_sg.length ? ma21_sg[i + shift21].value : null,
-      }))
+      if (inst.type === 'volume') {
+        const vol = seriesMap.get(inst.id)
+        if (vol) {
+          vol.setData((data.volume ?? []).map(d => ({
+            time: toET(d.time as any) as any,
+            value: d.value,
+            color: '#26a64166',
+          })))
+        }
+      } else if (inst.type === 'bb') {
+        for (const key of ['upper', 'middle', 'lower'] as const) {
+          const s = seriesMap.get(`${inst.id}:${key}`)
+          if (s && data[key]) s.setData(toLineData(data[key], toET))
+        }
+      } else {
+        const seriesKey = Object.keys(data)[0]
+        if (!seriesKey || !data[seriesKey]) continue
+        seriesMap.get(inst.id)?.setData(toLineData(data[seriesKey], toET))
+      }
     }
-
-    if (maShowSg8) {
-      const s = chart.addSeries(LineSeries, { color: '#ffffff', lineWidth: 2, title: 'MA8-SG', priceScaleId: 'right', lineStyle: 2 })
-      s.setData(toLineData(sg8Display))
-      created.push(s)
-    }
-    if (maShowSg21) {
-      const s = chart.addSeries(LineSeries, { color: '#e8ab6a', lineWidth: 2, title: 'MA21-SG', priceScaleId: 'right', lineStyle: 2 })
-      s.setData(toLineData(sg21Display))
-      created.push(s)
-    }
-
-    return () => { for (const s of created) { try { chart.removeSeries(s) } catch {} } }
-  }, [showMa, indicatorData.ma, maShowRaw8, maShowRaw21, maShowSg8, maShowSg21, maCompensateLag])
+  }, [instanceData, mainInstancesKey])
 
   // EMA rising/falling overlays (per-rule visualization during/after backtest)
   useEffect(() => {
@@ -515,173 +463,28 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     }
   }, [mainMarkers, candleData])
 
-  // ─── MACD chart ─────────────────────────────────────────────────────────
-  // Kept toggle-driven (create when enabled, destroy when disabled) — same
-  // tradeoff as before. Markers moved to their own effect so trades arrival
-  // doesn't tear down the MACD chart.
-  useEffect(() => {
-    if (!macdContainerRef.current || !showMacd || !indicatorData.macd) return
-
-    const chart = createChart(macdContainerRef.current, { ...chartOptions, height: macdContainerRef.current.clientHeight })
-    macdChartRef.current = chart
-
-    const histSeries = chart.addSeries(HistogramSeries, {
-      color: UP,
-      priceFormat: { type: 'price', precision: 4 },
-    })
-    histSeries.setData(macdHistData)
-    macdSeriesRef.current = histSeries
-
-    chart.addSeries(LineSeries, { color: '#58a6ff', lineWidth: 1, title: 'MACD' }).setData(macdLineData)
-    chart.addSeries(LineSeries, { color: '#f0883e', lineWidth: 1, title: 'Signal' }).setData(macdSignalData)
-
-    chart.timeScale().fitContent()
-
-    // Sync to main chart's current visible range
-    if (chartRef.current) {
-      const mainRange = chartRef.current.timeScale().getVisibleLogicalRange()
-      if (mainRange) chart.timeScale().setVisibleLogicalRange(mainRange)
-    }
-
-    // Re-align widths now that MACD is in the layout
-    syncWidthsRef.current()
-
-    const crosshairHandler = (param: any) => {
-      try {
-        if (!param.time) {
-          chartRef.current?.clearCrosshairPosition()
-          rsiChartRef.current?.clearCrosshairPosition()
-          return
-        }
-        if (chartRef.current && candleSeriesRef.current)
-          chartRef.current.setCrosshairPosition(NaN, param.time, candleSeriesRef.current)
-        if (rsiChartRef.current && rsiSeriesRef.current)
-          rsiChartRef.current.setCrosshairPosition(NaN, param.time, rsiSeriesRef.current)
-      } catch {}
-    }
-    chart.subscribeCrosshairMove(crosshairHandler)
-
-    const ro = new ResizeObserver(() => {
-      if (macdContainerRef.current) chart.applyOptions({ width: macdContainerRef.current.clientWidth, height: macdContainerRef.current.clientHeight })
-    })
-    ro.observe(macdContainerRef.current)
-    return () => {
-      // Null the refs BEFORE remove() so any in-flight main-chart sync event
-      // skips this pane via the null guard instead of hitting a destroyed one.
-      macdChartRef.current = null
-      macdSeriesRef.current = null
-      macdMarkersPluginRef.current = null
-      chart.unsubscribeCrosshairMove(crosshairHandler)
-      chart.remove()
-      ro.disconnect()
-      syncWidthsRef.current()
-    }
-  }, [showMacd, indicatorData.macd, macdHistData, macdLineData, macdSignalData])
-
-  // MACD markers
-  const macdMarkersPluginRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null)
-  useEffect(() => {
-    const series = macdSeriesRef.current
-    if (!series) return
-    const markers = subPaneMarkers ?? []
-    if (!macdMarkersPluginRef.current) {
-      macdMarkersPluginRef.current = createSeriesMarkers(series, markers)
-    } else {
-      macdMarkersPluginRef.current.setMarkers(markers)
-    }
-  }, [subPaneMarkers, showMacd, indicatorData.macd])
-
-  // ─── RSI chart ──────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!rsiContainerRef.current || !showRsi || !indicatorData.rsi) return
-
-    const chart = createChart(rsiContainerRef.current, { ...chartOptions, height: rsiContainerRef.current.clientHeight })
-    rsiChartRef.current = chart
-
-    const rsiLine = chart.addSeries(LineSeries, { color: '#a371f7', lineWidth: 1, title: 'RSI' })
-    rsiLine.setData(rsiData)
-    rsiSeriesRef.current = rsiLine
-
-    const len = indicatorData.rsi.length
-    if (len > 0) {
-      const first = indicatorData.rsi[0].time
-      const last = indicatorData.rsi[len - 1].time
-      chart.addSeries(LineSeries, { color: '#f85149', lineWidth: 1, lineStyle: 2 }).setData([{ time: toET(first as any) as any, value: 70 }, { time: toET(last as any) as any, value: 70 }])
-      chart.addSeries(LineSeries, { color: '#26a641', lineWidth: 1, lineStyle: 2 }).setData([{ time: toET(first as any) as any, value: 30 }, { time: toET(last as any) as any, value: 30 }])
-    }
-
-    chart.timeScale().fitContent()
-
-    // Sync to main chart's current visible range
-    if (chartRef.current) {
-      const mainRange = chartRef.current.timeScale().getVisibleLogicalRange()
-      if (mainRange) chart.timeScale().setVisibleLogicalRange(mainRange)
-    }
-
-    syncWidthsRef.current()
-
-    const crosshairHandler = (param: any) => {
-      try {
-        if (!param.time) {
-          chartRef.current?.clearCrosshairPosition()
-          macdChartRef.current?.clearCrosshairPosition()
-          return
-        }
-        if (chartRef.current && candleSeriesRef.current)
-          chartRef.current.setCrosshairPosition(NaN, param.time, candleSeriesRef.current)
-        if (macdChartRef.current && macdSeriesRef.current)
-          macdChartRef.current.setCrosshairPosition(NaN, param.time, macdSeriesRef.current)
-      } catch {}
-    }
-    chart.subscribeCrosshairMove(crosshairHandler)
-
-    const ro = new ResizeObserver(() => {
-      if (rsiContainerRef.current) chart.applyOptions({ width: rsiContainerRef.current.clientWidth, height: rsiContainerRef.current.clientHeight })
-    })
-    ro.observe(rsiContainerRef.current)
-    return () => {
-      rsiChartRef.current = null
-      rsiSeriesRef.current = null
-      rsiMarkersPluginRef.current = null
-      chart.unsubscribeCrosshairMove(crosshairHandler)
-      chart.remove()
-      ro.disconnect()
-      syncWidthsRef.current()
-    }
-  }, [showRsi, indicatorData.rsi, rsiData])
-
-  // RSI markers
-  const rsiMarkersPluginRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null)
-  useEffect(() => {
-    const series = rsiSeriesRef.current
-    if (!series) return
-    const markers = subPaneMarkers ?? []
-    if (!rsiMarkersPluginRef.current) {
-      rsiMarkersPluginRef.current = createSeriesMarkers(series, markers)
-    } else {
-      rsiMarkersPluginRef.current.setMarkers(markers)
-    }
-  }, [subPaneMarkers, showRsi, indicatorData.rsi])
-
-  const indicatorPaneCount = (showMacd ? 1 : 0) + (showRsi ? 1 : 0)
-  const mainHeightPct = indicatorPaneCount === 0 ? 100 : indicatorPaneCount === 1 ? 65 : 50
-  const subHeightPct = indicatorPaneCount === 0 ? 0 : indicatorPaneCount === 1 ? 35 : 25
+  const subPaneCount = subPaneGroups.length
+  const mainFlex = subPaneCount === 0 ? 1 : subPaneCount === 1 ? 2 : subPaneCount === 2 ? 2 : 1.5
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
-      <div ref={containerRef} style={{ height: `${mainHeightPct}%`, width: '100%' }} />
-      {showMacd && (
-        <div style={{ height: `${subHeightPct}%`, borderTop: '1px solid #1c2128', position: 'relative' }}>
-          <span style={{ position: 'absolute', top: 4, left: 8, fontSize: 10, color: '#8b949e', zIndex: 1 }}>MACD</span>
-          <div ref={macdContainerRef} style={{ height: '100%', width: '100%' }} />
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', overflow: 'hidden' }}>
+      <div ref={containerRef} style={{ flex: mainFlex, minHeight: 200, width: '100%' }} />
+      {subPaneGroups.map((group, idx) => (
+        <div key={group.key} style={{ flex: 1, minHeight: 120, maxHeight: subPaneCount <= 2 ? '35%' : undefined }}>
+          <SubPane
+            paneKey={group.key}
+            instances={group.instances}
+            instanceData={instanceData}
+            mainChartRef={chartRef}
+            mainSeriesRef={candleSeriesRef}
+            paneRegistryRef={paneRegistryRef}
+            syncWidthsRef={syncWidthsRef}
+            markers={idx === 0 ? (subPaneMarkers ?? undefined) : undefined}
+            toET={toET}
+            label={group.label}
+          />
         </div>
-      )}
-      {showRsi && (
-        <div style={{ height: `${subHeightPct}%`, borderTop: '1px solid #1c2128', position: 'relative' }}>
-          <span style={{ position: 'absolute', top: 4, left: 8, fontSize: 10, color: '#8b949e', zIndex: 1 }}>RSI</span>
-          <div ref={rsiContainerRef} style={{ height: '100%', width: '100%' }} />
-        </div>
-      )}
+      ))}
     </div>
   )
 }
