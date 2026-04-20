@@ -82,51 +82,31 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
                        predictive_sg: bool = False,
                        use_sg8: bool = True, use_sg21: bool = True) -> dict[str, pd.Series]:
     """Compute all indicators from a close price series. Returns dict of named series."""
-    ema12 = close.ewm(span=12, adjust=False).mean()
-    ema26 = close.ewm(span=26, adjust=False).mean()
-    macd_line = ema12 - ema26
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    from indicators import compute_instance, OHLCVSeries
 
-    delta = close.diff()
-    gain = delta.clip(lower=0).rolling(14).mean()
-    loss = (-delta.clip(upper=0)).rolling(14).mean()
-    rs = gain / loss.replace(0, np.nan)
-    rsi = 100 - (100 / (1 + rs))
+    ohlcv = OHLCVSeries(close=close, high=high if high is not None else close,
+                        low=low if low is not None else close, volume=pd.Series(dtype=float))
 
-    ema20 = close.ewm(span=20, adjust=False).mean()
-    ema50 = close.ewm(span=50, adjust=False).mean()
-    ema200 = close.ewm(span=200, adjust=False).mean()
+    macd_result = compute_instance("macd", {"fast": 12, "slow": 26, "signal": 9}, ohlcv)
+    rsi_result = compute_instance("rsi", {"period": 14}, ohlcv)
+    ema_result = compute_instance("ema", {"periods": [20, 50, 200]}, ohlcv)
 
     result = {
-        "macd": macd_line,
-        "signal": signal_line,
-        "rsi": rsi,
-        "ema20": ema20,
-        "ema50": ema50,
-        "ema200": ema200,
+        "macd": macd_result["macd"],
+        "signal": macd_result["signal"],
+        "rsi": rsi_result["rsi"],
+        **ema_result,
         "close": close,
     }
 
     if high is not None and low is not None:
-        prev_close = close.shift(1)
-        tr = pd.concat([
-            high - low,
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
-        ], axis=1).max(axis=1)
-        result["atr"] = tr.rolling(14).mean()
+        atr_result = compute_instance("atr", {"period": 14}, ohlcv)
+        result["atr"] = atr_result["atr"]
 
-    # MA8 / MA21 + Savitzky-Golay smoothed variants
-    mt = ma_type.lower()
-    if mt == "sma":
-        ma8 = close.rolling(8).mean()
-        ma21 = close.rolling(21).mean()
-    elif mt == "rma":
-        ma8 = close.ewm(alpha=1/8, adjust=False).mean()
-        ma21 = close.ewm(alpha=1/21, adjust=False).mean()
-    else:
-        ma8 = close.ewm(span=8, adjust=False).mean()
-        ma21 = close.ewm(span=21, adjust=False).mean()
+    ma8_result = compute_instance("ma", {"period": 8, "type": ma_type}, ohlcv)
+    ma21_result = compute_instance("ma", {"period": 21, "type": ma_type}, ohlcv)
+    ma8 = ma8_result["ma"]
+    ma21 = ma21_result["ma"]
 
     result["ma8"] = ma8
     result["ma21"] = ma21

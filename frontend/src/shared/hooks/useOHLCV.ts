@@ -2,7 +2,7 @@ import { useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../api/client'
 import { fetchBroker, setBroker as setBrokerApi, type BrokerInfo } from '../../api/trading'
-import type { OHLCVBar, DataSource } from '../types'
+import type { OHLCVBar, DataSource, IndicatorInstance } from '../types'
 
 export function useOHLCV(ticker: string, start: string, end: string, interval: string, source: DataSource = 'yahoo') {
   return useQuery<OHLCVBar[]>({
@@ -37,6 +37,34 @@ export function useIndicators(
       return data
     },
     enabled: !!ticker && indicators.length > 0,
+    staleTime: 5 * 60 * 1000,
+  })
+}
+
+export function useInstanceIndicators(
+  ticker: string,
+  start: string,
+  end: string,
+  interval: string,
+  instances: IndicatorInstance[],
+  source: DataSource = 'yahoo',
+) {
+  const enabledInstances = instances.filter(i => i.enabled)
+  const instancesQueryKey = enabledInstances.map(i => ({ id: i.id, type: i.type, params: i.params }))
+
+  return useQuery<Record<string, Record<string, { time: string; value: number | null }[]>>>({
+    queryKey: ['instance-indicators', ticker, start, end, interval, instancesQueryKey, source],
+    queryFn: async () => {
+      const { data } = await api.post(`/api/indicators/${ticker}`, {
+        start,
+        end,
+        interval,
+        source,
+        instances: enabledInstances.map(i => ({ id: i.id, type: i.type, params: i.params })),
+      })
+      return data
+    },
+    enabled: !!ticker && enabledInstances.length > 0,
     staleTime: 5 * 60 * 1000,
   })
 }

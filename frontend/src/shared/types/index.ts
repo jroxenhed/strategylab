@@ -1,3 +1,6 @@
+export type { IndicatorType, IndicatorInstance, IndicatorTypeDef, ParamField, ParamFieldNumber, ParamFieldSelect } from './indicators'
+export { INDICATOR_DEFS, DEFAULT_INDICATORS, createInstance, paramSummary } from './indicators'
+
 export interface OHLCVBar {
   time: string
   open: number
@@ -150,6 +153,7 @@ export interface SavedStrategy {
   minPerOrder?: number
   borrowRateAnnual?: number
   direction: 'long' | 'short'
+  indicators?: IndicatorInstance[]
 }
 
 export interface Trade {
