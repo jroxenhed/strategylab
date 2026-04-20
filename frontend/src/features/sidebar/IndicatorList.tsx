@@ -90,8 +90,7 @@ export default function IndicatorList({ indicators, onChange }: IndicatorListPro
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Indicators</span>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 12 }}>
         <div ref={menuRef} style={{ position: 'relative' }}>
           <button
             onClick={() => setShowAddMenu(!showAddMenu)}

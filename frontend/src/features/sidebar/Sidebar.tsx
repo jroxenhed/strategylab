@@ -121,6 +121,9 @@ export default function Sidebar({
 
   const { data: providers = ['yahoo'] } = useProviders()
 
+  const [indicatorsCollapsed, setIndicatorsCollapsed] = useState(false)
+  const [compareCollapsed, setCompareCollapsed] = useState(false)
+
   const [localStart, setLocalStart] = useState(start)
   const [localEnd, setLocalEnd] = useState(end)
   useEffect(() => setLocalStart(start), [start])
@@ -365,21 +368,40 @@ export default function Sidebar({
       </div>
 
       <div style={styles.section}>
-        <IndicatorList indicators={indicators} onChange={onIndicatorsChange} />
+        <div
+          onClick={() => setIndicatorsCollapsed(c => !c)}
+          style={{ ...styles.sectionTitle, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, userSelect: 'none' }}
+        >
+          <span style={{ fontSize: 10, transform: indicatorsCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s' }}>▼</span>
+          Indicators
+        </div>
+        {!indicatorsCollapsed && (
+          <IndicatorList indicators={indicators} onChange={onIndicatorsChange} />
+        )}
       </div>
 
       <div style={styles.section}>
-        <div style={styles.sectionTitle}>Compare</div>
-        <label style={styles.checkRow}>
-          <input type="checkbox" checked={showSpy} onChange={onToggleSpy} style={{ accentColor: 'var(--accent-orange)' }} />
-          <span style={{ marginLeft: 8, color: 'var(--accent-orange)' }}>SPY</span>
-        </label>
-        <label style={styles.checkRow}>
-          <input type="checkbox" checked={showQqq} onChange={onToggleQqq} style={{ accentColor: 'var(--accent-purple)' }} />
-          <span style={{ marginLeft: 8, color: 'var(--accent-purple)' }}>QQQ</span>
-        </label>
-        {(showSpy || showQqq) && (
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>% change from start</div>
+        <div
+          onClick={() => setCompareCollapsed(c => !c)}
+          style={{ ...styles.sectionTitle, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, userSelect: 'none' }}
+        >
+          <span style={{ fontSize: 10, transform: compareCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s' }}>▼</span>
+          Compare
+        </div>
+        {!compareCollapsed && (
+          <>
+            <label style={styles.checkRow}>
+              <input type="checkbox" checked={showSpy} onChange={onToggleSpy} style={{ accentColor: 'var(--accent-orange)' }} />
+              <span style={{ marginLeft: 8, color: 'var(--accent-orange)' }}>SPY</span>
+            </label>
+            <label style={styles.checkRow}>
+              <input type="checkbox" checked={showQqq} onChange={onToggleQqq} style={{ accentColor: 'var(--accent-purple)' }} />
+              <span style={{ marginLeft: 8, color: 'var(--accent-purple)' }}>QQQ</span>
+            </label>
+            {(showSpy || showQqq) && (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>% change from start</div>
+            )}
+          </>
         )}
       </div>
     </aside>
