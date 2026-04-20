@@ -121,12 +121,6 @@ export default function SubPane({
     }
 
     chart.timeScale().fitContent()
-
-    if (mainChartRef.current) {
-      const mainRange = mainChartRef.current.timeScale().getVisibleLogicalRange()
-      if (mainRange) chart.timeScale().setVisibleLogicalRange(mainRange)
-    }
-
     syncWidthsRef.current()
 
     const crosshairHandler = (param: any) => {
@@ -210,6 +204,16 @@ export default function SubPane({
         }
       }
     }
+
+    // Re-sync range after data is applied — the initial setVisibleLogicalRange
+    // in Effect 1 fires on an empty chart and may no-op.
+    if (mainChartRef.current) {
+      const mainRange = mainChartRef.current.timeScale().getVisibleLogicalRange()
+      if (mainRange) {
+        try { chartRef.current.timeScale().setVisibleLogicalRange(mainRange) } catch {}
+      }
+    }
+    syncWidthsRef.current()
   }, [subData, instances, indicatorType, toET])
 
   // Effect 3: Markers
