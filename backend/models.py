@@ -57,14 +57,6 @@ class StrategyRequest(BaseModel):
     source: str = "yahoo"
     direction: str = "long"  # "long" | "short"
     debug: bool = False
-    ma_type: str = "ema"     # "sma" | "ema" | "rma" — for MA8/MA21 rule conditions
-    sg8_window: int = 7
-    sg8_poly: int = 2
-    sg21_window: int = 7
-    sg21_poly: int = 2
-    predictive_sg: bool = False  # extrapolating S-G (compensate lag via prediction, not lookahead)
-    use_sg8: bool = True   # when False, MA8 rules use raw MA instead of S-G smoothed
-    use_sg21: bool = True  # when False, MA21 rules use raw MA instead of S-G smoothed
     extended_hours: bool = False
 
     @field_validator('position_size')

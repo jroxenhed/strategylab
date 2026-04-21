@@ -2,8 +2,6 @@ import numpy as np
 import pandas as pd
 from typing import Optional
 from pydantic import BaseModel
-from scipy.signal import savgol_filter
-
 
 class Rule(BaseModel):
     indicator: str       # "macd", "rsi", "price", "ema"
@@ -44,66 +42,6 @@ def migrate_rule(rule: Rule) -> Rule:
         data["param"] = _PARAM_MIGRATION[rule.param]
     return Rule(**data)
 
-
-def _sg_predictive_coeffs(window: int, poly: int):
-    """Compute convolution coefficients for an extrapolating S-G filter.
-
-    Fits a polynomial of degree `poly` to the last `w` bars, then evaluates
-    it (w-1)//2 bars *ahead* of the most recent data point. This compensates
-    the causal filter's lag using only past data — genuine prediction, not
-    lookahead.  Returns (coefficients, adjusted_window).
-    """
-    w = max(window, poly + 1)
-    if w % 2 == 0:
-        w += 1
-    k = (w - 1) // 2
-    x = np.arange(w, dtype=float)
-    eval_pos = float(w - 1 + k)          # extrapolate k bars beyond window
-    V = np.vander(x, poly + 1, increasing=True)
-    pinv = np.linalg.pinv(V)
-    eval_vec = np.array([eval_pos ** p for p in range(poly + 1)])
-    return eval_vec @ pinv, w
-
-
-def _apply_sg_predictive(series: pd.Series, window: int, poly: int) -> pd.Series:
-    """S-G with forward extrapolation by (w-1)//2 bars.
-
-    Uses only past data but estimates where the smoothed value *would* be
-    at the current bar, compensating for the causal lag. Noisier than the
-    causal filter but fires turns earlier.
-    """
-    coeffs, w = _sg_predictive_coeffs(window, poly)
-    valid = series.dropna()
-    if len(valid) < w:
-        return pd.Series(np.nan, index=series.index)
-    vals = valid.values
-    conv = np.convolve(vals, coeffs[::-1], mode='full')
-    out = np.full(len(vals), np.nan)
-    out[w - 1:] = conv[w - 1: len(vals)]
-    result = pd.Series(np.nan, index=series.index)
-    result.loc[valid.index] = out
-    return result
-
-
-def _apply_sg(series: pd.Series, window: int, poly: int, causal: bool = False) -> pd.Series:
-    """Apply Savitzky-Golay smoothing to a series, skipping NaN warmup.
-
-    causal=True shifts the output forward by (w-1)//2 bars so each value
-    only depends on past data (no lookahead). Use for backtesting.
-    causal=False (default) uses the standard centered filter. Use for chart display.
-    """
-    w = max(window, poly + 1)
-    if w % 2 == 0:
-        w += 1
-    valid = series.dropna()
-    if len(valid) >= w:
-        vals = savgol_filter(valid.values, window_length=w, polyorder=poly, mode="nearest")
-        out = pd.Series(np.nan, index=series.index)
-        out.loc[valid.index] = vals
-        if causal:
-            out = out.shift((w - 1) // 2)
-        return out
-    return pd.Series(np.nan, index=series.index)
 
 
 def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series = None,
@@ -184,7 +122,6 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
     """Evaluate a single rule at bar index i."""
     if i < 1:
         return False
-    ind = rule.indicator.lower()
     cond = rule.condition.lower()
 
     s = resolve_series(rule, indicators)
@@ -242,17 +179,12 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
         lookback = int(rule.value) if rule.value is not None else 1
         if i < lookback + 1:
             return False
-        # Dead zone only when S-G is active — filters causal micro-oscillations.
-        # Raw MAs turn gradually and don't need it.
-        sg_active = indicators.get("_sg_active", {})
-        has_sg = sg_active.get(ind, True) if isinstance(sg_active, dict) else True
-        eps = abs(v_now) * 3e-5 if has_sg else 0
         if cond == "turns_up":
             # Last `lookback` bars must all be rising, and bar before that falling
             for k in range(lookback):
-                if s.iloc[i - k] - s.iloc[i - k - 1] < eps:
+                if s.iloc[i - k] - s.iloc[i - k - 1] <= 0:
                     return False
-            if s.iloc[i - lookback] - s.iloc[i - lookback - 1] >= -eps:
+            if s.iloc[i - lookback] - s.iloc[i - lookback - 1] >= 0:
                 return False
             # Min move %: MA must have risen at least threshold% from turn point
             if rule.threshold is not None and rule.threshold > 0:
@@ -265,9 +197,9 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
         else:
             # Last `lookback` bars must all be falling, and bar before that rising
             for k in range(lookback):
-                if s.iloc[i - k] - s.iloc[i - k - 1] > -eps:
+                if s.iloc[i - k] - s.iloc[i - k - 1] >= 0:
                     return False
-            if s.iloc[i - lookback] - s.iloc[i - lookback - 1] <= eps:
+            if s.iloc[i - lookback] - s.iloc[i - lookback - 1] <= 0:
                 return False
             # Min move %: MA must have fallen at least threshold% from turn point
             if rule.threshold is not None and rule.threshold > 0:

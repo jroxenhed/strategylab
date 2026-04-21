@@ -160,3 +160,12 @@ def test_resolve_ref_close():
 def test_resolve_ref_none_when_no_param():
     rule = Rule(indicator="rsi", condition="above", value=70)
     assert resolve_ref(rule, {}) is None
+
+
+def test_no_sg_active_in_indicators():
+    close = _make_close()
+    rules = [Rule(indicator="ma", condition="turns_up", params={"period": 8, "type": "sma"})]
+    indicators = compute_indicators(close, rules=rules)
+    assert "_sg_active" not in indicators
+    assert "ma8_sg" not in indicators
+    assert "ma21_sg" not in indicators
