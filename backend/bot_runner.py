@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from bot_manager import BotConfig, BotState, BotManager
 
-from signal_engine import compute_indicators, eval_rules
+from signal_engine import compute_indicators, eval_rules, migrate_rule
 from shared import _fetch
 from broker import get_trading_provider, OrderRequest as BrokerOrderRequest, OrderResult
 from journal import _log_trade, compute_realized_pnl
@@ -80,6 +80,9 @@ class BotRunner:
         cfg = self.config
         state = self.state
         is_short = cfg.direction == "short"
+        buy_rules = [migrate_rule(r) for r in cfg.buy_rules]
+        sell_rules = [migrate_rule(r) for r in cfg.sell_rules]
+        all_rules = buy_rules + sell_rules
         loop = asyncio.get_event_loop()
 
         state.last_tick = datetime.now(timezone.utc).isoformat()
@@ -120,7 +123,7 @@ class BotRunner:
         # 4. Compute indicators
         try:
             indicators = await self._run_in_executor(
-                compute_indicators, df["Close"], df["High"], df["Low"]
+                compute_indicators, df["Close"], df["High"], df["Low"], all_rules
             )
         except Exception as e:
             self._log("WARN", f"Indicator error: {e}")
@@ -236,7 +239,7 @@ class BotRunner:
                 return
 
             buy_signal = await self._run_in_executor(
-                eval_rules, cfg.buy_rules, cfg.buy_logic, indicators, i
+                eval_rules, buy_rules, cfg.buy_logic, indicators, i
             )
 
             if buy_signal:
@@ -410,7 +413,7 @@ class BotRunner:
 
             if exit_reason is None:
                 sell_signal = await self._run_in_executor(
-                    eval_rules, cfg.sell_rules, cfg.sell_logic, indicators, i
+                    eval_rules, sell_rules, cfg.sell_logic, indicators, i
                 )
                 if sell_signal:
                     exit_reason = "signal"

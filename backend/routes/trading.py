@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 from shared import _fetch
 from broker import get_trading_provider, OrderRequest as BrokerOrderRequest, _trading_providers
 from broker_aggregate import aggregate_from_brokers
-from signal_engine import Rule, compute_indicators, eval_rules
+from signal_engine import Rule, compute_indicators, eval_rules, migrate_rule
 from journal import _log_trade, DATA_DIR, JOURNAL_PATH
 from models import StrategyRequest
 from routes.backtest import run_backtest
@@ -228,16 +228,21 @@ def scan_signals(req: ScanRequest):
             df = _fetch(symbol, start.strftime('%Y-%m-%d'),
                         end.strftime('%Y-%m-%d'), req.interval, source='alpaca-iex')
 
-            indicators = compute_indicators(df["Close"], high=df["High"], low=df["Low"])
+            buy_rules = [migrate_rule(r) for r in req.buy_rules]
+            sell_rules = [migrate_rule(r) for r in req.sell_rules]
+            all_rules = buy_rules + sell_rules
+            indicators = compute_indicators(df["Close"], high=df["High"], low=df["Low"], rules=all_rules)
             i = len(df) - 1
 
-            buy_signal = eval_rules(req.buy_rules, req.buy_logic, indicators, i)
-            sell_signal = eval_rules(req.sell_rules, req.sell_logic, indicators, i)
+            buy_signal = eval_rules(buy_rules, req.buy_logic, indicators, i)
+            sell_signal = eval_rules(sell_rules, req.sell_logic, indicators, i)
 
             signal = "BUY" if buy_signal else ("SELL" if sell_signal else "NONE")
 
             rsi_val = float(indicators["rsi"].iloc[i])
-            ema50_val = float(indicators["ema50"].iloc[i])
+            from indicators import compute_instance, OHLCVSeries
+            _ohlcv = OHLCVSeries(close=df["Close"], high=df["High"], low=df["Low"], volume=pd.Series(dtype=float))
+            ema50_val = float(compute_instance("ma", {"period": 50, "type": "ema"}, _ohlcv)["ma"].iloc[i])
             price = float(df["Close"].iloc[i])
 
             result = {

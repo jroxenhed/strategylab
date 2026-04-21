@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
 from shared import _fetch, _format_time, _INTRADAY_INTERVALS
-from signal_engine import Rule, compute_indicators, eval_rules, eval_rule
+from signal_engine import Rule, compute_indicators, eval_rules, eval_rule, migrate_rule, resolve_series
 from routes.indicators import _series_to_list
 from models import TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, StrategyRequest
 from post_loss import is_post_loss_trigger
@@ -82,12 +82,10 @@ def run_backtest(req: StrategyRequest):
         close = df["Close"]
         high = df["High"]
         low = df["Low"]
-        indicators = compute_indicators(close, high=high, low=low,
-                                        ma_type=req.ma_type, sg8_window=req.sg8_window,
-                                        sg8_poly=req.sg8_poly, sg21_window=req.sg21_window,
-                                        sg21_poly=req.sg21_poly,
-                                        predictive_sg=req.predictive_sg,
-                                        use_sg8=req.use_sg8, use_sg21=req.use_sg21)
+        buy_rules = [migrate_rule(r) for r in req.buy_rules]
+        sell_rules = [migrate_rule(r) for r in req.sell_rules]
+        all_rules = buy_rules + sell_rules
+        indicators = compute_indicators(close, high=high, low=low, rules=all_rules)
 
         # Simulate
         capital = req.initial_capital
@@ -111,18 +109,6 @@ def run_backtest(req: StrategyRequest):
         skip_remaining = 0  # entries still to skip after a qualifying stop
         is_intraday = req.interval in _INTRADAY_INTERVALS
 
-        # Map rule indicator names to the actual series eval_rule uses
-        _trace_series_map = {
-            "macd": indicators["macd"],
-            "rsi": indicators["rsi"],
-            "price": indicators["close"],
-            "ema20": indicators["ema20"],
-            "ema50": indicators["ema50"],
-            "ema200": indicators["ema200"],
-            "ma8": indicators["ma8_sg"],
-            "ma21": indicators["ma21_sg"],
-        }
-
         def _trace_rules(rules, indicators, i, label):
             """Build per-rule evaluation detail for debug trace."""
             details = []
@@ -131,7 +117,7 @@ def run_backtest(req: StrategyRequest):
                     details.append({"rule": f"{r.indicator} {r.condition} {r.value if r.value is not None else ''}", "muted": True, "result": False})
                     continue
                 result = eval_rule(r, indicators, i)
-                ind_series = _trace_series_map.get(r.indicator, indicators.get("close"))
+                ind_series = resolve_series(r, indicators) or indicators.get("close")
                 v_now = round(float(ind_series.iloc[i]), 4) if ind_series is not None and pd.notna(ind_series.iloc[i]) else None
                 v_prev = round(float(ind_series.iloc[i - 1]), 4) if ind_series is not None and i > 0 and pd.notna(ind_series.iloc[i - 1]) else None
                 rule_desc = f"{r.indicator} {r.condition} {r.value if r.value is not None else ''}"
@@ -168,7 +154,7 @@ def run_backtest(req: StrategyRequest):
                             hour_ok = False
                             break
 
-            buy_fires = position == 0 and hour_ok and eval_rules(req.buy_rules, req.buy_logic, indicators, i)
+            buy_fires = position == 0 and hour_ok and eval_rules(buy_rules, req.buy_logic, indicators, i)
             if buy_fires and skip_remaining > 0:
                 skip_remaining -= 1
                 if signal_trace is not None:
@@ -210,7 +196,7 @@ def run_backtest(req: StrategyRequest):
                     signal_trace.append({
                         "date": date, "price": round(price, 4), "position": "entered",
                         "action": "SHORT" if is_short else "BUY",
-                        "buy_rules": _trace_rules(req.buy_rules, indicators, i, "buy"),
+                        "buy_rules": _trace_rules(buy_rules, indicators, i, "buy"),
                     })
 
             elif position > 0:
@@ -265,7 +251,7 @@ def run_backtest(req: StrategyRequest):
                     exit_price = raw_exit * (1 + drag)
                 else:
                     exit_price = raw_exit * (1 - drag)
-                sell_fired = eval_rules(req.sell_rules, req.sell_logic, indicators, i)
+                sell_fired = eval_rules(sell_rules, req.sell_logic, indicators, i)
                 if stop_hit or trail_hit or sell_fired:
                     exit_slippage = abs(position * (raw_exit - exit_price))
                     commission = per_leg_commission(position, req)
@@ -310,11 +296,11 @@ def run_backtest(req: StrategyRequest):
                         signal_trace.append({
                             "date": date, "price": round(price, 4), "position": "exited",
                             "action": action,
-                            "sell_rules": _trace_rules(req.sell_rules, indicators, i, "sell"),
+                            "sell_rules": _trace_rules(sell_rules, indicators, i, "sell"),
                         })
                 elif signal_trace is not None:
                     # In position but no sell — trace any bar where at least one sell rule fires
-                    sell_details = _trace_rules(req.sell_rules, indicators, i, "sell")
+                    sell_details = _trace_rules(sell_rules, indicators, i, "sell")
                     if any(d["result"] for d in sell_details if not d.get("muted")):
                         signal_trace.append({
                             "date": date, "price": round(price, 4), "position": "holding",
@@ -324,9 +310,9 @@ def run_backtest(req: StrategyRequest):
 
             elif signal_trace is not None and position == 0:
                 # Not in position — trace if sell rules WOULD have fired
-                active_sell = [r for r in req.sell_rules if not r.muted]
+                active_sell = [r for r in sell_rules if not r.muted]
                 if active_sell and i > 0:
-                    sell_details = _trace_rules(req.sell_rules, indicators, i, "sell")
+                    sell_details = _trace_rules(sell_rules, indicators, i, "sell")
                     if any(d["result"] for d in sell_details if not d.get("muted")):
                         signal_trace.append({
                             "date": date, "price": round(price, 4), "position": "flat",
@@ -373,10 +359,9 @@ def run_backtest(req: StrategyRequest):
 
         # Build EMA overlay for rising_over/falling_over conditions in buy rules
         ema_overlays = []
-        for rule in req.buy_rules:
-            if rule.condition in ("rising_over", "falling_over") and rule.indicator.startswith("ema"):
-                ema_key = rule.indicator.lower()
-                ema_series = indicators.get(ema_key)
+        for rule in buy_rules:
+            if rule.condition in ("rising_over", "falling_over") and rule.indicator == "ma" and rule.params:
+                ema_series = resolve_series(rule, indicators)
                 if ema_series is not None:
                     lookback = int(rule.value) if rule.value is not None else 10
                     active = []
@@ -388,7 +373,7 @@ def run_backtest(req: StrategyRequest):
                         else:
                             active.append(bool(ema_series.iloc[i] < ema_series.iloc[i - lookback]))
                     ema_overlays.append({
-                        "indicator": ema_key,
+                        "indicator": f"ma_{rule.params['period']}_{rule.params.get('type', 'ema')}",
                         "condition": rule.condition,
                         "lookback": lookback,
                         "series": _series_to_list(df.index, req.interval, ema_series),
