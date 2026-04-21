@@ -6,7 +6,7 @@ export const INDICATORS = ['macd', 'rsi', 'price', 'ma'] as const
 export const CONDITIONS: Record<string, string[]> = {
   macd: ['crossover_up', 'crossover_down', 'crosses_above', 'crosses_below', 'above', 'below'],
   rsi: ['above', 'below', 'crosses_above', 'crosses_below', 'turns_up_below', 'turns_down_above'],
-  price: ['above', 'below', 'crosses_above', 'crosses_below'],
+  price: ['above', 'below', 'crosses_above', 'crosses_below', 'rising', 'falling'],
   ma: ['turns_up', 'turns_down', 'decelerating', 'accelerating', 'rising', 'falling',
        'above', 'below', 'crosses_above', 'crosses_below', 'rising_over', 'falling_over'],
 }
