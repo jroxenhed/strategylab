@@ -1,22 +1,21 @@
 import { Trash2, VolumeX, Volume2 } from 'lucide-react'
 import type { Rule } from '../../shared/types'
 
-export const INDICATORS = ['macd', 'rsi', 'price', 'ema20', 'ema50', 'ema200', 'ma8', 'ma21'] as const
+export const INDICATORS = ['macd', 'rsi', 'price', 'ma'] as const
+
 export const CONDITIONS: Record<string, string[]> = {
   macd: ['crossover_up', 'crossover_down', 'crosses_above', 'crosses_below', 'above', 'below'],
   rsi: ['above', 'below', 'crosses_above', 'crosses_below', 'turns_up_below', 'turns_down_above'],
   price: ['above', 'below', 'crosses_above', 'crosses_below'],
-  ema20: ['above', 'below', 'rising', 'falling', 'rising_over', 'falling_over'],
-  ema50: ['above', 'below', 'rising', 'falling', 'rising_over', 'falling_over'],
-  ema200: ['above', 'below', 'rising', 'falling', 'rising_over', 'falling_over'],
-  ma8: ['turns_up', 'turns_down', 'decelerating', 'accelerating', 'rising', 'falling', 'above', 'below', 'crosses_above', 'crosses_below'],
-  ma21: ['turns_up', 'turns_down', 'decelerating', 'accelerating', 'rising', 'falling', 'above', 'below', 'crosses_above', 'crosses_below'],
+  ma: ['turns_up', 'turns_down', 'decelerating', 'accelerating', 'rising', 'falling',
+       'above', 'below', 'crosses_above', 'crosses_below', 'rising_over', 'falling_over'],
 }
+
 export const CONDITION_LABELS: Record<string, string> = {
   crossover_up: 'Crosses above signal',
   crossover_down: 'Crosses below signal',
-  crosses_above: 'Crosses above value',
-  crosses_below: 'Crosses below value',
+  crosses_above: 'Crosses above',
+  crosses_below: 'Crosses below',
   above: 'Is above',
   below: 'Is below',
   turns_up_below: 'Turns up from below',
@@ -30,39 +29,56 @@ export const CONDITION_LABELS: Record<string, string> = {
   decelerating: 'Decelerating',
   accelerating: 'Accelerating',
 }
+
 export const NEEDS_VALUE = ['above', 'below', 'crosses_above', 'crosses_below', 'turns_up_below', 'turns_down_above', 'rising_over', 'falling_over']
 export const OPTIONAL_VALUE = ['turns_up', 'turns_down']
+
 export const NEEDS_PARAM: Record<string, string[]> = {
   macd: ['crossover_up', 'crossover_down'],
 }
+
 export const CAN_USE_PARAM: Record<string, string[]> = {
   price: ['above', 'below', 'crosses_above', 'crosses_below'],
-  ema20: ['above', 'below', 'crosses_above', 'crosses_below'],
-  ema50: ['above', 'below', 'crosses_above', 'crosses_below'],
-  ema200: ['above', 'below', 'crosses_above', 'crosses_below'],
-  ma8: ['above', 'below', 'crosses_above', 'crosses_below'],
-  ma21: ['above', 'below', 'crosses_above', 'crosses_below'],
+  ma: ['above', 'below', 'crosses_above', 'crosses_below'],
 }
-export const PARAM_OPTIONS = [
-  { value: 'ema20', label: 'EMA 20' },
-  { value: 'ema50', label: 'EMA 50' },
-  { value: 'ema200', label: 'EMA 200' },
-  { value: 'ma8', label: 'MA 8' },
-  { value: 'ma21', label: 'MA 21' },
-  { value: 'close', label: 'Price' },
-]
 
 export const emptyRule = (): Rule => ({ indicator: 'macd', condition: 'crossover_up' })
+
+function indicatorLabel(rule: Rule): string {
+  if (rule.indicator === 'ma' && rule.params) {
+    return `MA ${rule.params.period} ${(rule.params.type || 'ema').toUpperCase()}`
+  }
+  return rule.indicator.toUpperCase()
+}
 
 export function validateRules(rules: Rule[], label: string): string | null {
   for (const rule of rules.filter(r => !r.muted)) {
     const hasParam = !!rule.param || NEEDS_PARAM[rule.indicator]?.includes(rule.condition)
     const needsValue = NEEDS_VALUE.includes(rule.condition) && !hasParam
     if (needsValue && (typeof rule.value !== 'number' || isNaN(rule.value))) {
-      return `${label} rule "${rule.indicator.toUpperCase()} ${CONDITION_LABELS[rule.condition]}" is missing a value`
+      return `${label} rule "${indicatorLabel(rule)} ${CONDITION_LABELS[rule.condition]}" is missing a value`
     }
   }
   return null
+}
+
+function decodeParam(param?: string): { mode: 'value' | 'close' | 'ma'; period?: number; type?: string } {
+  if (!param) return { mode: 'value' }
+  if (param === 'close') return { mode: 'close' }
+  if (param.startsWith('ma:')) {
+    const parts = param.split(':')
+    if (parts.length === 3) {
+      const period = parseInt(parts[1])
+      return { mode: 'ma', period: isNaN(period) ? 50 : period, type: parts[2] || 'ema' }
+    }
+  }
+  return { mode: 'value' }
+}
+
+function encodeParam(mode: string, period?: number, type?: string): string | undefined {
+  if (mode === 'close') return 'close'
+  if (mode === 'ma') return `ma:${period ?? 50}:${type ?? 'ema'}`
+  return undefined
 }
 
 export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onChange: (r: Rule) => void; onDelete: () => void }) {
@@ -73,13 +89,6 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
   const forcedParam = NEEDS_PARAM[rule.indicator]?.includes(rule.condition)
   const needsValue = NEEDS_VALUE.includes(rule.condition) && !forcedParam && !hasParam
   const optionalValue = OPTIONAL_VALUE.includes(rule.condition)
-
-  const paramOptions = PARAM_OPTIONS.filter(p => {
-    if (rule.indicator === 'price' && p.value === 'close') return false
-    if (rule.indicator === p.value) return false
-    return true
-  })
-
   const negated = rule.negated ?? false
 
   return (
@@ -98,26 +107,81 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
           cursor: 'pointer', lineHeight: 1,
         }}
       >NOT</button>
-      <select value={rule.indicator} onChange={e => onChange({ ...rule, indicator: e.target.value as Rule['indicator'], condition: CONDITIONS[e.target.value][0] as any, value: undefined, param: undefined })} style={styles.ruleSelect}>
+      <select
+        value={rule.indicator}
+        onChange={e => {
+          const newInd = e.target.value as Rule['indicator']
+          const update: Partial<Rule> = { indicator: newInd, condition: CONDITIONS[newInd][0], value: undefined, param: undefined }
+          if (newInd === 'ma') {
+            update.params = { period: 20, type: 'ema' }
+          } else {
+            update.params = undefined
+          }
+          onChange({ ...rule, ...update })
+        }}
+        style={styles.ruleSelect}
+      >
         {INDICATORS.map(i => <option key={i} value={i}>{i.toUpperCase()}</option>)}
       </select>
-      <select value={rule.condition} onChange={e => onChange({ ...rule, condition: e.target.value as any, param: undefined })} style={styles.ruleSelect}>
+      {rule.indicator === 'ma' && (
+        <>
+          <input
+            type="number"
+            min={2}
+            max={500}
+            value={rule.params?.period ?? 20}
+            onChange={e => onChange({ ...rule, params: { ...rule.params, period: parseInt(e.target.value) || 20, type: rule.params?.type ?? 'ema' } })}
+            style={{ ...styles.ruleSelect, width: 45 }}
+          />
+          <select
+            value={rule.params?.type ?? 'ema'}
+            onChange={e => onChange({ ...rule, params: { ...rule.params, period: rule.params?.period ?? 20, type: e.target.value } })}
+            style={{ ...styles.ruleSelect, width: 55 }}
+          >
+            <option value="sma">SMA</option>
+            <option value="ema">EMA</option>
+          </select>
+        </>
+      )}
+      <select value={rule.condition} onChange={e => onChange({ ...rule, condition: e.target.value, param: undefined })} style={styles.ruleSelect}>
         {conditions.map(c => <option key={c} value={c}>{CONDITION_LABELS[c] || c}</option>)}
       </select>
-      {canParam && (
-        <select
-          value={rule.param ?? '_value'}
-          onChange={e => {
-            const v = e.target.value
-            if (v === '_value') onChange({ ...rule, param: undefined })
-            else onChange({ ...rule, param: v, value: undefined })
-          }}
-          style={styles.ruleSelect}
-        >
-          <option value="_value">Value</option>
-          {paramOptions.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-        </select>
-      )}
+      {canParam && (() => {
+        const decoded = decodeParam(rule.param)
+        return (
+          <>
+            <select
+              value={decoded.mode}
+              onChange={e => onChange({ ...rule, param: encodeParam(e.target.value, decoded.period, decoded.type), value: e.target.value === 'value' ? rule.value : undefined })}
+              style={styles.ruleSelect}
+            >
+              <option value="value">Value</option>
+              <option value="close">Price</option>
+              <option value="ma">MA</option>
+            </select>
+            {decoded.mode === 'ma' && (
+              <>
+                <input
+                  type="number"
+                  min={2}
+                  max={500}
+                  value={decoded.period ?? 50}
+                  onChange={e => onChange({ ...rule, param: encodeParam('ma', parseInt(e.target.value) || 50, decoded.type) })}
+                  style={{ ...styles.ruleSelect, width: 45 }}
+                />
+                <select
+                  value={decoded.type ?? 'ema'}
+                  onChange={e => onChange({ ...rule, param: encodeParam('ma', decoded.period, e.target.value) })}
+                  style={{ ...styles.ruleSelect, width: 55 }}
+                >
+                  <option value="sma">SMA</option>
+                  <option value="ema">EMA</option>
+                </select>
+              </>
+            )}
+          </>
+        )
+      })()}
       {needsValue && (
         <input
           type="number"
