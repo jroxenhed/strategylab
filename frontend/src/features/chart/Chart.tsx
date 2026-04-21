@@ -124,7 +124,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     [indicators],
   )
   const mainInstancesKey = useMemo(
-    () => JSON.stringify(mainInstances.map(i => ({ id: i.id, type: i.type, params: i.params }))),
+    () => JSON.stringify(mainInstances.map(i => ({ id: i.id, type: i.type, params: i.params, color: i.color }))),
     [mainInstances],
   )
 
@@ -373,11 +373,23 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       if (inst.type === 'volume') {
         const vol = seriesMap.get(inst.id)
         if (vol) {
-          vol.setData((data.volume ?? []).map(d => ({
-            time: toET(d.time as any) as any,
-            value: d.value,
-            color: '#26a64166',
-          })))
+          const useCandleColor = inst.params.coloring === 'candle'
+          const closeMap = new Map<any, { close: number; prevClose: number }>()
+          if (useCandleColor) {
+            for (let i = 0; i < candleData.length; i++) {
+              const bar = candleData[i]
+              closeMap.set(bar.time, { close: bar.close, prevClose: i > 0 ? candleData[i - 1].close : bar.open })
+            }
+          }
+          vol.setData((data.volume ?? []).map(d => {
+            const t = toET(d.time as any) as any
+            let color = '#26a64166'
+            if (useCandleColor) {
+              const c = closeMap.get(t)
+              if (c) color = c.close >= c.prevClose ? '#26a64166' : '#ef535066'
+            }
+            return { time: t, value: d.value, color }
+          }))
         }
       } else if (inst.type === 'bb') {
         for (const key of ['upper', 'middle', 'lower'] as const) {
@@ -390,7 +402,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         seriesMap.get(inst.id)?.setData(toLineData(data[seriesKey], toET))
       }
     }
-  }, [instanceData, mainInstancesKey])
+  }, [instanceData, mainInstancesKey, candleData])
 
   // EMA rising/falling overlays (per-rule visualization during/after backtest)
   useEffect(() => {

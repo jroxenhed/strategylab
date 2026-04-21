@@ -9,6 +9,9 @@ interface IndicatorListProps {
 
 const AVAILABLE_TYPES: IndicatorType[] = ['rsi', 'macd', 'bb', 'atr', 'ma', 'volume']
 
+const PRESET_COLORS = ['#f0883e', '#58a6ff', '#a371f7', '#3fb950', '#f85149', '#d2a8ff', '#79c0ff', '#ffa657', '#ff7b72', '#7ee787']
+const SUPPORTS_COLOR = new Set<IndicatorType>(['ma', 'rsi', 'atr', 'macd'])
+
 function NumberParamInput({ field, value, onChange, onCommit }: {
   field: ParamFieldNumber
   value: number
@@ -152,7 +155,7 @@ export default function IndicatorList({ indicators, onChange }: IndicatorListPro
               {summary && (
                 <span style={{ fontSize: 10, color: 'var(--text-muted)', marginRight: 4 }}>{summary}</span>
               )}
-              {def.paramFields.length > 0 && (
+              {(def.paramFields.length > 0 || SUPPORTS_COLOR.has(inst.type)) && (
                 <span
                   onClick={() => setExpandedId(isExpanded ? null : inst.id)}
                   style={{ cursor: 'pointer', color: isExpanded ? 'var(--accent-primary)' : 'var(--text-muted)', fontSize: 13 }}
@@ -170,8 +173,24 @@ export default function IndicatorList({ indicators, onChange }: IndicatorListPro
               </span>
             </div>
 
-            {isExpanded && def.paramFields.length > 0 && (
+            {isExpanded && (def.paramFields.length > 0 || SUPPORTS_COLOR.has(inst.type)) && (
               <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {SUPPORTS_COLOR.has(inst.type) && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 10, color: 'var(--text-muted)', minWidth: 40 }}>Color</span>
+                    {PRESET_COLORS.map(c => (
+                      <span
+                        key={c}
+                        onClick={() => onChange(prev => prev.map(i => i.id === inst.id ? { ...i, color: c } : i))}
+                        style={{
+                          width: 14, height: 14, borderRadius: '50%', background: c, cursor: 'pointer',
+                          border: (inst.color ?? PRESET_COLORS[0]) === c ? '2px solid var(--text-primary)' : '2px solid transparent',
+                          flexShrink: 0,
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
                 {def.paramFields.map(field => {
                   if (field.kind === 'select') {
                     const selectField = field as ParamFieldSelect

@@ -57,7 +57,7 @@ export default function SubPane({
   const indicatorType = instances[0]?.type
 
   const instancesKey = useMemo(
-    () => JSON.stringify(instances.map(i => ({ id: i.id, type: i.type, params: i.params }))),
+    () => JSON.stringify(instances.map(i => ({ id: i.id, type: i.type, params: i.params, color: i.color }))),
     [instances],
   )
 

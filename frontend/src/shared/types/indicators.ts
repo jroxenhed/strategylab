@@ -88,9 +88,14 @@ export const INDICATOR_DEFS: Record<IndicatorType, IndicatorTypeDef> = {
   },
   volume: {
     type: 'volume', label: 'Volume',
-    defaultParams: {},
+    defaultParams: { coloring: 'candle' },
     pane: 'main',
-    paramFields: [],
+    paramFields: [
+      { key: 'coloring', label: 'Color', kind: 'select', options: [
+        { value: 'normal', label: 'Normal' },
+        { value: 'candle', label: 'By candle' },
+      ]},
+    ],
   },
 }
 
