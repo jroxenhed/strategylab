@@ -77,7 +77,7 @@ def _edge_stats(gains: list[float], losses: list[float], num_sells: int) -> dict
 @router.post("/api/backtest")
 def run_backtest(req: StrategyRequest):
     try:
-        df = _fetch(req.ticker, req.start, req.end, req.interval, source=req.source)
+        df = _fetch(req.ticker, req.start, req.end, req.interval, source=req.source, extended_hours=req.extended_hours)
 
         close = df["Close"]
         high = df["High"]

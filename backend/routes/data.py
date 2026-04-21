@@ -5,9 +5,9 @@ router = APIRouter()
 
 
 @router.get("/api/ohlcv/{ticker}")
-def get_ohlcv(ticker: str, start: str = "2023-01-01", end: str = "2024-01-01", interval: str = "1d", source: str = "yahoo"):
+def get_ohlcv(ticker: str, start: str = "2023-01-01", end: str = "2024-01-01", interval: str = "1d", source: str = "yahoo", extended_hours: bool = False):
     try:
-        df = _fetch(ticker, start, end, interval, source=source)
+        df = _fetch(ticker, start, end, interval, source=source, extended_hours=extended_hours)
         return {
             "ticker": ticker,
             "data": [

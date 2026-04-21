@@ -4,11 +4,11 @@ import { api } from '../../api/client'
 import { fetchBroker, setBroker as setBrokerApi, type BrokerInfo } from '../../api/trading'
 import type { OHLCVBar, DataSource, IndicatorInstance } from '../types'
 
-export function useOHLCV(ticker: string, start: string, end: string, interval: string, source: DataSource = 'yahoo') {
+export function useOHLCV(ticker: string, start: string, end: string, interval: string, source: DataSource = 'yahoo', extendedHours: boolean = false) {
   return useQuery<OHLCVBar[]>({
-    queryKey: ['ohlcv', ticker, start, end, interval, source],
+    queryKey: ['ohlcv', ticker, start, end, interval, source, extendedHours],
     queryFn: async () => {
-      const { data } = await api.get(`/api/ohlcv/${ticker}`, { params: { start, end, interval, source } })
+      const { data } = await api.get(`/api/ohlcv/${ticker}`, { params: { start, end, interval, source, extended_hours: extendedHours } })
       return data.data
     },
     enabled: !!ticker,
@@ -23,18 +23,20 @@ export function useInstanceIndicators(
   interval: string,
   instances: IndicatorInstance[],
   source: DataSource = 'yahoo',
+  extendedHours: boolean = false,
 ) {
   const enabledInstances = instances.filter(i => i.enabled)
   const instancesQueryKey = enabledInstances.map(i => ({ id: i.id, type: i.type, params: i.params }))
 
   return useQuery<Record<string, Record<string, { time: string; value: number | null }[]>>>({
-    queryKey: ['instance-indicators', ticker, start, end, interval, instancesQueryKey, source],
+    queryKey: ['instance-indicators', ticker, start, end, interval, instancesQueryKey, source, extendedHours],
     queryFn: async () => {
       const { data } = await api.post(`/api/indicators/${ticker}`, {
         start,
         end,
         interval,
         source,
+        extended_hours: extendedHours,
         instances: enabledInstances.map(i => ({ id: i.id, type: i.type, params: i.params })),
       })
       return data

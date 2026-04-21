@@ -17,6 +17,7 @@ interface Props {
   dataSource: DataSource
   settingsPortalId?: string
   maSettings?: MASettings
+  extendedHours?: boolean
 }
 
 const STRATEGY_STORAGE_KEY = 'strategylab-strategy'
@@ -40,7 +41,7 @@ function persistSavedStrategies(strategies: SavedStrategy[]) {
   localStorage.setItem(SAVED_STRATEGIES_KEY, JSON.stringify(strategies))
 }
 
-export default function StrategyBuilder({ ticker, start, end, interval, onResult, dataSource, settingsPortalId, maSettings }: Props) {
+export default function StrategyBuilder({ ticker, start, end, interval, onResult, dataSource, settingsPortalId, maSettings, extendedHours }: Props) {
   const saved = useState(() => loadStrategy())[0]
 
   useEffect(() => {
@@ -194,6 +195,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         predictive_sg: maSettings?.predictiveSg,
         use_sg8: maSettings?.showSg8 ?? true,
         use_sg21: maSettings?.showSg21 ?? true,
+        extended_hours: extendedHours,
       }
       const { data } = await api.post('/api/backtest', req)
       onResult(data, req)

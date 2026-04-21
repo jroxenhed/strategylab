@@ -21,6 +21,8 @@ interface SidebarProps {
   onToggleQqq: () => void
   dataSource: DataSource
   onDataSourceChange: (s: DataSource) => void
+  extendedHours: boolean
+  onExtendedHoursChange: (v: boolean) => void
   datePreset: DatePreset
   onDatePresetChange: (preset: DatePreset) => void
 }
@@ -111,6 +113,7 @@ export default function Sidebar({
   onTickerChange, onStartChange, onEndChange, onIntervalChange,
   onToggleSpy, onToggleQqq,
   dataSource, onDataSourceChange,
+  extendedHours, onExtendedHoursChange,
   datePreset, onDatePresetChange,
 }: SidebarProps) {
   const daysDiff = Math.round(
@@ -260,6 +263,16 @@ export default function Sidebar({
               onChange={() => onDataSourceChange(dataSource === 'alpaca-iex' ? 'alpaca' : 'alpaca-iex')}
             />
             <span style={{ marginLeft: 8, fontSize: 12 }}>IEX feed <span style={{ color: 'var(--accent-green)' }}>(real-time)</span></span>
+          </label>
+        )}
+        {(dataSource === 'yahoo' || dataSource === 'ibkr') && ['1m','5m','15m','30m','1h','60m'].includes(interval) && (
+          <label style={{ ...styles.checkRow, marginTop: 12, marginBottom: 0 }}>
+            <input
+              type="checkbox"
+              checked={extendedHours}
+              onChange={() => onExtendedHoursChange(!extendedHours)}
+            />
+            <span style={{ marginLeft: 8, fontSize: 12 }}>Extended hours <span style={{ color: 'var(--text-muted)' }}>(pre/post)</span></span>
           </label>
         )}
       </div>

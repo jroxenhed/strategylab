@@ -29,13 +29,14 @@ class IndicatorsPostRequest(BaseModel):
     end: str = "2024-01-01"
     interval: str = "1d"
     source: str = "yahoo"
+    extended_hours: bool = False
     instances: list[InstanceRequest] = Field(max_length=20)
 
 
 @router.post("/api/indicators/{ticker}")
 def post_indicators(ticker: str, body: IndicatorsPostRequest):
     try:
-        df = _fetch(ticker, body.start, body.end, body.interval, source=body.source)
+        df = _fetch(ticker, body.start, body.end, body.interval, source=body.source, extended_hours=body.extended_hours)
         ohlcv = OHLCVSeries(
             close=df["Close"], high=df["High"],
             low=df["Low"], volume=df["Volume"],

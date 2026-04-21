@@ -56,6 +56,7 @@ export default function App() {
   const [showSpy, setShowSpy] = useState<boolean>(saved?.showSpy ?? false)
   const [showQqq, setShowQqq] = useState<boolean>(saved?.showQqq ?? false)
   const [dataSource, setDataSource] = useState<DataSource>((saved?.dataSource as DataSource) ?? 'yahoo')
+  const [extendedHours, setExtendedHours] = useState<boolean>(saved?.extendedHours ?? false)
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null)
   const [lastRequest, setLastRequest] = useState<StrategyRequest | null>(null)
   const [resultsTab, setResultsTab] = useState<'summary' | 'equity' | 'trades' | 'trace'>('summary')
@@ -68,16 +69,16 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, maSettings, datePreset,
+      ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, maSettings, datePreset,
     }))
-  }, [ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, maSettings, datePreset])
+  }, [ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, maSettings, datePreset])
 
-  const { data: ohlcv = EMPTY_OHLCV, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, interval, dataSource)
-  const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', start, end, interval, dataSource)
-  const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', start, end, interval, dataSource)
+  const { data: ohlcv = EMPTY_OHLCV, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, interval, dataSource, extendedHours)
+  const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', start, end, interval, dataSource, extendedHours)
+  const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', start, end, interval, dataSource, extendedHours)
 
   const { data: instanceData = {}, refetch: refetchIndicators } = useInstanceIndicators(
-    ticker, start, end, interval, chartEnabled ? indicators : [], dataSource,
+    ticker, start, end, interval, chartEnabled ? indicators : [], dataSource, extendedHours,
   )
 
   const refreshChart = useCallback(() => {
@@ -142,6 +143,8 @@ export default function App() {
                 onToggleQqq={() => setShowQqq(v => !v)}
                 dataSource={dataSource}
                 onDataSourceChange={setDataSource}
+                extendedHours={extendedHours}
+                onExtendedHoursChange={setExtendedHours}
                 datePreset={datePreset}
                 onDatePresetChange={v => { setDatePreset(v); setBacktestResult(null) }}
               />
@@ -198,6 +201,7 @@ export default function App() {
                         dataSource={dataSource}
                         settingsPortalId="strategy-settings-portal"
                         maSettings={maSettings}
+                        extendedHours={extendedHours}
                       />
                       {backtestResult && (
                         <Results

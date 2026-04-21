@@ -2,6 +2,7 @@ from typing import Protocol
 from fastapi import HTTPException
 import logging
 import os
+import threading
 import time
 import pandas as pd
 import yfinance as yf
@@ -19,13 +20,13 @@ _INTERVAL_MAX_DAYS = {
 
 
 class DataProvider(Protocol):
-    def fetch(self, ticker: str, start: str, end: str, interval: str) -> pd.DataFrame:
+    def fetch(self, ticker: str, start: str, end: str, interval: str, extended_hours: bool = False) -> pd.DataFrame:
         """Return DataFrame with columns: Open, High, Low, Close, Volume and DatetimeIndex."""
         ...
 
 
 class YahooProvider:
-    def fetch(self, ticker: str, start: str, end: str, interval: str) -> pd.DataFrame:
+    def fetch(self, ticker: str, start: str, end: str, interval: str, extended_hours: bool = False) -> pd.DataFrame:
         # Clamp date range to yfinance limits for intraday intervals
         max_days = _INTERVAL_MAX_DAYS.get(interval)
         if max_days is not None:
@@ -36,7 +37,7 @@ class YahooProvider:
             if start_dt < earliest:
                 start = earliest.strftime('%Y-%m-%d')
 
-        df = yf.Ticker(ticker).history(start=start, end=end, interval=interval, auto_adjust=True)
+        df = yf.Ticker(ticker).history(start=start, end=end, interval=interval, auto_adjust=True, prepost=extended_hours)
         if df.empty:
             raise HTTPException(status_code=404, detail=f"No data for {ticker}")
         return df.dropna()
@@ -70,7 +71,7 @@ class AlpacaProvider:
         self._client = client
         self._feed = feed
 
-    def fetch(self, ticker: str, start: str, end: str, interval: str) -> pd.DataFrame:
+    def fetch(self, ticker: str, start: str, end: str, interval: str, extended_hours: bool = False) -> pd.DataFrame:
         if interval in _ALPACA_UNSUPPORTED:
             raise HTTPException(
                 status_code=400,
@@ -144,13 +145,18 @@ class IBKRDataProvider:
     Sync FastAPI route handlers run in AnyIO worker threads where there is no
     running event loop. ib_insync requires the main loop, so we schedule the
     async call onto it via run_coroutine_threadsafe.
+
+    IBKR imposes strict pacing on historical data requests — concurrent calls
+    trigger Error 162 ("API historical data query cancelled"). A threading lock
+    serializes all requests through a single IB connection.
     """
 
     def __init__(self, ib, loop):
         self._ib = ib
         self._loop = loop
+        self._lock = threading.Lock()
 
-    def fetch(self, ticker: str, start: str, end: str, interval: str) -> pd.DataFrame:
+    def fetch(self, ticker: str, start: str, end: str, interval: str, extended_hours: bool = False) -> pd.DataFrame:
         if interval in _IBKR_UNSUPPORTED:
             raise HTTPException(
                 status_code=400,
@@ -171,7 +177,6 @@ class IBKRDataProvider:
         contract = Stock(ticker, "SMART", "USD")
         end_dt = datetime.strptime(end, "%Y-%m-%d")
 
-        # Calculate duration string from start/end
         start_dt = datetime.strptime(start, "%Y-%m-%d")
         days = (end_dt - start_dt).days
         if days <= 1:
@@ -185,19 +190,20 @@ class IBKRDataProvider:
         if not self._ib.isConnected():
             raise HTTPException(status_code=503, detail="IBKR Gateway not connected")
 
-        coro = self._ib.reqHistoricalDataAsync(
-            contract,
-            endDateTime=end_dt.strftime("%Y%m%d %H:%M:%S"),
-            durationStr=duration,
-            barSizeSetting=bar_size,
-            whatToShow="TRADES",
-            useRTH=True,
-        )
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        try:
-            bars = future.result(timeout=30)
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"IBKR fetch failed: {e}")
+        with self._lock:
+            coro = self._ib.reqHistoricalDataAsync(
+                contract,
+                endDateTime=end_dt.strftime("%Y%m%d %H:%M:%S"),
+                durationStr=duration,
+                barSizeSetting=bar_size,
+                whatToShow="TRADES",
+                useRTH=not extended_hours,
+            )
+            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+            try:
+                bars = future.result(timeout=30)
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"IBKR fetch failed: {e}")
 
         if not bars:
             raise HTTPException(status_code=404, detail=f"No IBKR data for {ticker}")
@@ -364,7 +370,7 @@ def _evict_cache() -> None:
         del _fetch_cache[oldest]
 
 
-def _fetch(ticker: str, start: str, end: str, interval: str, source: str = "yahoo") -> pd.DataFrame:
+def _fetch(ticker: str, start: str, end: str, interval: str, source: str = "yahoo", extended_hours: bool = False) -> pd.DataFrame:
     """Fetch OHLCV data from the specified provider, with TTL caching.
 
     yf.download uses shared global state that corrupts data when called
@@ -374,7 +380,7 @@ def _fetch(ticker: str, start: str, end: str, interval: str, source: str = "yaho
     if provider is None:
         raise HTTPException(status_code=400, detail=f"Unknown data source: {source}")
 
-    key = (ticker.upper(), start, end, interval, source)
+    key = (ticker.upper(), start, end, interval, source, extended_hours)
     now = time.monotonic()
     ttl = _fetch_ttl(end, interval)
 
@@ -389,10 +395,10 @@ def _fetch(ticker: str, start: str, end: str, interval: str, source: str = "yaho
     # Alpaca HTTP keep-alive sockets go stale between bot polls; retry once on
     # RemoteDisconnected / ConnectionAborted so a dead socket doesn't swallow a tick.
     try:
-        df = provider.fetch(ticker, start, end, interval)
+        df = provider.fetch(ticker, start, end, interval, extended_hours=extended_hours)
     except Exception as e:
         if is_retryable_error(e):
-            df = provider.fetch(ticker, start, end, interval)
+            df = provider.fetch(ticker, start, end, interval, extended_hours=extended_hours)
         else:
             raise
 

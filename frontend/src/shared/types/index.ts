@@ -88,6 +88,7 @@ export interface StrategyRequest {
   predictive_sg?: boolean
   use_sg8?: boolean
   use_sg21?: boolean
+  extended_hours?: boolean
 }
 
 export interface SavedStrategy {
