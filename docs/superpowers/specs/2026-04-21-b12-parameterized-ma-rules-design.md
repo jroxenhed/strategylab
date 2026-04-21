@@ -76,7 +76,7 @@ Instead of computing a fixed set of MAs, scan the rules to determine what's need
 
 ```python
 def compute_indicators(close, high, low, rules):
-    ohlcv = {"close": close, "high": high, "low": low}
+    ohlcv = OHLCVSeries(close=close, high=high or close, low=low or close, volume=pd.Series(dtype=float))
     indicators = {"close": close}
 
     # MACD + RSI always computed (cheap, commonly used)
@@ -97,10 +97,11 @@ def compute_indicators(close, high, low, rules):
             _, period, ma_type = rule.param.split(":")
             ma_specs.add((int(period), ma_type))
 
-    # Compute each unique MA
+    # Compute each unique MA via the existing registry
     for period, ma_type in ma_specs:
         key = f"ma_{period}_{ma_type}"
-        indicators[key] = compute_ma(close, period, ma_type)
+        ma_result = compute_instance("ma", {"period": period, "type": ma_type}, ohlcv)
+        indicators[key] = ma_result["ma"]
 
     return indicators
 ```
@@ -140,7 +141,10 @@ Replace `series = series_map[rule.indicator]` and `ref = ref_map.get(rule.param)
 
 ### S-G removal
 
-Delete all S-G smoothing code from `compute_indicators()`. Remove the S-G import and helper functions if they exist solely for this purpose.
+Delete all S-G smoothing code:
+- `compute_indicators()` — remove S-G parameters, `_sg_active` dict, `ma8_sg`/`ma21_sg` keys
+- `eval_rule()` — remove the S-G dead zone logic in `turns_up`/`turns_down` (the `_sg_active` lookup and `eps` calculation at ~line 201-205). Without S-G, epsilon is always 0.
+- Top-level S-G functions: `_sg_predictive_coeffs()`, `_apply_sg_predictive()`, `_apply_sg()`, and the `scipy.signal` import
 
 ## Frontend changes
 
@@ -174,7 +178,7 @@ export const CAN_USE_PARAM: Record<string, string[]> = {
 When `indicator === 'ma'`, show inline period + type inputs immediately after the indicator dropdown:
 
 ```
-[Mute] [NOT] [MA v] [20] [EMA v] [Crosses above v] [Value/ref v] [Trash]
+[Mute] [NOT] [MA v] [20] [EMA v] [Crosses above v] [Value/ref v] [🗑]
 ```
 
 - Period: `<input type="number" min={1} max={500}/>` at ~45px width
@@ -238,7 +242,9 @@ function migrateRule(rule: Rule): Rule {
 }
 ```
 
-Applied to both `buyRules` and `sellRules` when loading saved strategies from localStorage.
+Applied in two places:
+- **Active strategy** (`strategylab-strategy` key) — migrate buyRules/sellRules on load in `loadStrategy()`
+- **Saved strategies library** (`strategylab-saved-strategies` key) — migrate each saved strategy's rules on load in `loadSavedStrategies()`
 
 ### Backend: migrate_rule()
 
@@ -251,13 +257,25 @@ Same mapping in Python. Applied in two places:
 
 Migration is idempotent — `indicator === 'ma'` doesn't match any migration key. Old format auto-converts; new format passes through unchanged.
 
-## Backtest route changes
+## Call site changes
 
-Update `routes/backtest.py` to:
+Three places call `compute_indicators()` — all need updating:
 
-1. Remove S-G parameters from the `compute_indicators()` call
-2. Pass rules to `compute_indicators()` so it can determine which MAs to compute
+### routes/backtest.py
+1. Remove S-G parameters from the call
+2. Pass `req.buy_rules + req.sell_rules` so it can determine which MAs to compute (both sides — a sell rule referencing an MA that only appears in sell rules still needs its series computed)
 3. Apply `migrate_rule()` defensively to incoming rules
+
+### bot_runner.py (line ~123)
+1. Pass `cfg.buy_rules + cfg.sell_rules` to `compute_indicators()`
+2. Apply `migrate_rule()` to bot rules on load (see Migration section)
+
+### routes/trading.py (line ~231, signal preview endpoint)
+1. Pass request rules to `compute_indicators()`
+2. Apply `migrate_rule()` defensively
+
+### Frontend: StrategyBuilder.tsx
+Remove S-G field serialization (lines ~190-197: `ma_type`, `sg8_window`, `sg8_poly`, etc.). Remove the `maSettings` prop and its thread from App.tsx. Remove the sidebar MA settings UI that configures S-G parameters.
 
 ## Extensibility for B13/B14
 

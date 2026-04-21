@@ -45,6 +45,7 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 - [ ] **B12** Parameterized MAs in strategy rules — replace 5 hardcoded MA entries (ma8, ma21, ema20, ema50, ema200) with generic `ma(period, type)`. User picks any period + SMA/EMA. Backend computes on demand. Foundation for B13/B14. [Ideation](docs/ideas/2026-04-21-strategy-builder-indicators-ideation.md) · [Spec](docs/superpowers/specs/2026-04-21-b12-parameterized-ma-rules-design.md)
 - [ ] **B13** BB / ATR / Volume as rule indicators — wire existing computed indicators into signal engine. BB: upper/lower/bandwidth/%B. ATR: normalized volatility filter. Volume: above-average / spike. Requires multi-output addressing for BB.
 - [ ] **B14** Stochastic + ADX rule indicators — new compute functions + registry entries. Stochastic %K/%D crossovers + overbought/oversold. ADX trend strength + directional (+DI/-DI). Exercises multi-output pattern from B13.
+- [ ] **B15** Fix MACD crossover bug — `crossover_up`/`crossover_down` conditions never fire because `rule.param` is never set to `'signal'`. `NEEDS_PARAM` suppresses the value input and `CAN_USE_PARAM` has no MACD entry, so the param dropdown never shows either. The condition label says "Crosses above signal" but the signal reference is never wired. Fix: auto-set `param: 'signal'` for MACD crossover conditions (in `emptyRule()` default + on condition change).
 
 ### Shipped
 _Older items predate the numbering scheme; new entries tagged with their letter+number._
