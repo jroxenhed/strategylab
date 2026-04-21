@@ -169,7 +169,11 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
           </select>
         </>
       )}
-      <select value={rule.condition} onChange={e => onChange({ ...rule, condition: e.target.value, param: undefined })} style={styles.ruleSelect}>
+      <select value={rule.condition} onChange={e => {
+        const newCond = e.target.value
+        const keepParam = CAN_USE_PARAM[rule.indicator]?.includes(newCond)
+        onChange({ ...rule, condition: newCond, param: keepParam ? rule.param : undefined })
+      }} style={styles.ruleSelect}>
         {conditions.map(c => <option key={c} value={c}>{CONDITION_LABELS[c] || c}</option>)}
       </select>
       {canParam && (() => {
