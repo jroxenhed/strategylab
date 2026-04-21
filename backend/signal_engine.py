@@ -107,25 +107,24 @@ def _apply_sg(series: pd.Series, window: int, poly: int, causal: bool = False) -
 
 
 def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series = None,
-                       ma_type: str = "ema", sg8_window: int = 7, sg8_poly: int = 2,
-                       sg21_window: int = 7, sg21_poly: int = 2,
-                       predictive_sg: bool = False,
-                       use_sg8: bool = True, use_sg21: bool = True) -> dict[str, pd.Series]:
-    """Compute all indicators from a close price series. Returns dict of named series."""
+                       rules: list[Rule] = None) -> dict[str, pd.Series]:
+    """Compute indicators based on what rules require. MACD/RSI always included."""
     from indicators import compute_instance, OHLCVSeries
+
+    if rules is None:
+        rules = []
 
     ohlcv = OHLCVSeries(close=close, high=high if high is not None else close,
                         low=low if low is not None else close, volume=pd.Series(dtype=float))
 
     macd_result = compute_instance("macd", {"fast": 12, "slow": 26, "signal": 9}, ohlcv)
     rsi_result = compute_instance("rsi", {"period": 14}, ohlcv)
-    ema_result = compute_instance("ema", {"periods": [20, 50, 200]}, ohlcv)
 
     result = {
         "macd": macd_result["macd"],
         "signal": macd_result["signal"],
+        "histogram": macd_result["histogram"],
         "rsi": rsi_result["rsi"],
-        **ema_result,
         "close": close,
     }
 
@@ -133,19 +132,52 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
         atr_result = compute_instance("atr", {"period": 14}, ohlcv)
         result["atr"] = atr_result["atr"]
 
-    ma8_result = compute_instance("ma", {"period": 8, "type": ma_type}, ohlcv)
-    ma21_result = compute_instance("ma", {"period": 21, "type": ma_type}, ohlcv)
-    ma8 = ma8_result["ma"]
-    ma21 = ma21_result["ma"]
+    ma_specs: set[tuple[int, str]] = set()
+    for rule in rules:
+        if rule.indicator == "ma" and rule.params:
+            ma_specs.add((rule.params["period"], rule.params.get("type", "ema")))
+        if rule.param and rule.param.startswith("ma:"):
+            parts = rule.param.split(":", 2)
+            if len(parts) != 3:
+                continue
+            _, period, ma_type = parts
+            ma_specs.add((int(period), ma_type))
 
-    result["ma8"] = ma8
-    result["ma21"] = ma21
-    sg_fn = _apply_sg_predictive if predictive_sg else lambda s, w, p: _apply_sg(s, w, p, causal=True)
-    result["ma8_sg"] = sg_fn(ma8, sg8_window, sg8_poly) if use_sg8 else ma8
-    result["ma21_sg"] = sg_fn(ma21, sg21_window, sg21_poly) if use_sg21 else ma21
-    result["_sg_active"] = {"ma8": use_sg8, "ma21": use_sg21}
+    for period, ma_type in ma_specs:
+        key = f"ma_{period}_{ma_type}"
+        ma_result = compute_instance("ma", {"period": period, "type": ma_type}, ohlcv)
+        result[key] = ma_result["ma"]
 
     return result
+
+
+def resolve_series(rule: Rule, indicators: dict[str, pd.Series]) -> pd.Series | None:
+    """Resolve the primary series for a rule's indicator."""
+    if rule.indicator == "ma" and rule.params:
+        key = f"ma_{rule.params['period']}_{rule.params.get('type', 'ema')}"
+        return indicators.get(key)
+    fixed = {"macd": "macd", "rsi": "rsi", "price": "close"}
+    return indicators.get(fixed.get(rule.indicator, rule.indicator))
+
+
+def resolve_ref(rule: Rule, indicators: dict[str, pd.Series]) -> pd.Series | None:
+    """Resolve the cross-reference series for a rule's param."""
+    if not rule.param:
+        return None
+    if rule.param == "signal":
+        return indicators.get("signal")
+    if rule.param == "close":
+        return indicators.get("close")
+    if rule.param.startswith("ma:"):
+        parts = rule.param.split(":", 2)
+        if len(parts) == 3:
+            _, period, ma_type = parts
+            try:
+                key = f"ma_{int(period)}_{ma_type}"
+                return indicators.get(key)
+            except ValueError:
+                return None
+    return None
 
 
 def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
@@ -155,27 +187,7 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
     ind = rule.indicator.lower()
     cond = rule.condition.lower()
 
-    series_map = {
-        "macd": indicators["macd"],
-        "rsi": indicators["rsi"],
-        "price": indicators["close"],
-        "ema20": indicators["ema20"],
-        "ema50": indicators["ema50"],
-        "ema200": indicators["ema200"],
-        "ma8": indicators["ma8_sg"],
-        "ma21": indicators["ma21_sg"],
-    }
-    ref_map = {
-        "signal": indicators["signal"],
-        "ema20": indicators["ema20"],
-        "ema50": indicators["ema50"],
-        "ema200": indicators["ema200"],
-        "close": indicators["close"],
-        "ma8": indicators["ma8_sg"],
-        "ma21": indicators["ma21_sg"],
-    }
-
-    s = series_map.get(ind)
+    s = resolve_series(rule, indicators)
     if s is None:
         return False
 
@@ -183,25 +195,27 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
     v_prev = s.iloc[i - 1]
 
     if cond in ("crossover_up", "crosses_above"):
-        if rule.param and rule.param in ref_map:
-            ref = ref_map[rule.param]
+        ref = resolve_ref(rule, indicators) if rule.param else None
+        if ref is not None:
             return v_prev < ref.iloc[i - 1] and v_now >= ref.iloc[i]
         elif rule.value is not None:
             return v_prev < rule.value <= v_now
     elif cond in ("crossover_down", "crosses_below"):
-        if rule.param and rule.param in ref_map:
-            ref = ref_map[rule.param]
+        ref = resolve_ref(rule, indicators) if rule.param else None
+        if ref is not None:
             return v_prev > ref.iloc[i - 1] and v_now <= ref.iloc[i]
         elif rule.value is not None:
             return v_prev > rule.value >= v_now
     elif cond == "above":
-        if rule.param and rule.param in ref_map:
-            return v_now > ref_map[rule.param].iloc[i]
+        ref = resolve_ref(rule, indicators) if rule.param else None
+        if ref is not None:
+            return v_now > ref.iloc[i]
         elif rule.value is not None:
             return v_now > rule.value
     elif cond == "below":
-        if rule.param and rule.param in ref_map:
-            return v_now < ref_map[rule.param].iloc[i]
+        ref = resolve_ref(rule, indicators) if rule.param else None
+        if ref is not None:
+            return v_now < ref.iloc[i]
         elif rule.value is not None:
             return v_now < rule.value
     elif cond == "rising":
