@@ -119,7 +119,7 @@ def test_compute_indicators_always_has_macd_rsi():
     indicators = compute_indicators(close, rules=[])
     assert "macd" in indicators
     assert "signal" in indicators
-    assert "rsi" in indicators
+    assert "rsi_14_sma" in indicators
     assert "close" in indicators
 
 
@@ -131,7 +131,7 @@ def test_resolve_series_ma():
 
 
 def test_resolve_series_fixed():
-    for ind, key in [("macd", "macd"), ("rsi", "rsi"), ("price", "close")]:
+    for ind, key in [("macd", "macd"), ("rsi", "rsi_14_sma"), ("price", "close")]:
         rule = Rule(indicator=ind, condition="above", value=50)
         indicators = {key: pd.Series([10, 20])}
         result = resolve_series(rule, indicators)
@@ -160,6 +160,28 @@ def test_resolve_ref_close():
 def test_resolve_ref_none_when_no_param():
     rule = Rule(indicator="rsi", condition="above", value=70)
     assert resolve_ref(rule, {}) is None
+
+
+def test_compute_indicators_rsi_custom_period():
+    close = _make_close()
+    rules = [Rule(indicator="rsi", condition="above", value=70, params={"period": 21, "type": "wilder"})]
+    indicators = compute_indicators(close, rules=rules)
+    assert "rsi_21_wilder" in indicators
+    assert "rsi_14_sma" not in indicators
+
+
+def test_resolve_series_rsi_with_params():
+    rule = Rule(indicator="rsi", condition="above", value=70, params={"period": 21, "type": "wilder"})
+    indicators = {"rsi_21_wilder": pd.Series([50, 60])}
+    result = resolve_series(rule, indicators)
+    assert list(result) == [50, 60]
+
+
+def test_resolve_series_rsi_default_period():
+    rule = Rule(indicator="rsi", condition="above", value=70)
+    indicators = {"rsi_14_sma": pd.Series([50, 60])}
+    result = resolve_series(rule, indicators)
+    assert list(result) == [50, 60]
 
 
 def test_no_sg_active_in_indicators():

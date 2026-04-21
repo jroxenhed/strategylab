@@ -56,15 +56,27 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
                         low=low if low is not None else close, volume=pd.Series(dtype=float))
 
     macd_result = compute_instance("macd", {"fast": 12, "slow": 26, "signal": 9}, ohlcv)
-    rsi_result = compute_instance("rsi", {"period": 14}, ohlcv)
 
     result = {
         "macd": macd_result["macd"],
         "signal": macd_result["signal"],
         "histogram": macd_result["histogram"],
-        "rsi": rsi_result["rsi"],
         "close": close,
     }
+
+    rsi_specs: set[tuple[int, str]] = set()
+    for rule in rules:
+        if rule.indicator == "rsi":
+            p = rule.params.get("period", 14) if rule.params else 14
+            t = rule.params.get("type", "sma") if rule.params else "sma"
+            rsi_specs.add((p, t))
+
+    if not rsi_specs:
+        rsi_specs.add((14, "sma"))
+
+    for period, rsi_type in rsi_specs:
+        rsi_result = compute_instance("rsi", {"period": period, "type": rsi_type}, ohlcv)
+        result[f"rsi_{period}_{rsi_type}"] = rsi_result["rsi"]
 
     if high is not None and low is not None:
         atr_result = compute_instance("atr", {"period": 14}, ohlcv)
@@ -94,7 +106,11 @@ def resolve_series(rule: Rule, indicators: dict[str, pd.Series]) -> pd.Series | 
     if rule.indicator == "ma" and rule.params:
         key = f"ma_{rule.params['period']}_{rule.params.get('type', 'ema')}"
         return indicators.get(key)
-    fixed = {"macd": "macd", "rsi": "rsi", "price": "close"}
+    if rule.indicator == "rsi":
+        period = rule.params.get("period", 14) if rule.params else 14
+        rsi_type = rule.params.get("type", "sma") if rule.params else "sma"
+        return indicators.get(f"rsi_{period}_{rsi_type}")
+    fixed = {"macd": "macd", "price": "close"}
     return indicators.get(fixed.get(rule.indicator, rule.indicator))
 
 

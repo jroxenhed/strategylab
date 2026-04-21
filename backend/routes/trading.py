@@ -239,7 +239,7 @@ def scan_signals(req: ScanRequest):
 
             signal = "BUY" if buy_signal else ("SELL" if sell_signal else "NONE")
 
-            rsi_val = float(indicators["rsi"].iloc[i])
+            rsi_val = float(indicators["rsi_14_sma"].iloc[i])
             from indicators import compute_instance, OHLCVSeries
             _ohlcv = OHLCVSeries(close=df["Close"], high=df["High"], low=df["Low"], volume=pd.Series(dtype=float))
             ema50_val = float(compute_instance("ma", {"period": 50, "type": "ema"}, _ohlcv)["ma"].iloc[i])

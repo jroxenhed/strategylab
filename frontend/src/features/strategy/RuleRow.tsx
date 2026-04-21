@@ -48,6 +48,10 @@ function indicatorLabel(rule: Rule): string {
   if (rule.indicator === 'ma' && rule.params) {
     return `MA ${rule.params.period} ${(rule.params.type || 'ema').toUpperCase()}`
   }
+  if (rule.indicator === 'rsi' && rule.params) {
+    const t = rule.params.type === 'wilder' ? ' Wilder' : ''
+    return `RSI ${rule.params.period ?? 14}${t}`
+  }
   return rule.indicator.toUpperCase()
 }
 
@@ -114,6 +118,8 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
           const update: Partial<Rule> = { indicator: newInd, condition: CONDITIONS[newInd][0], value: undefined, param: undefined }
           if (newInd === 'ma') {
             update.params = { period: 20, type: 'ema' }
+          } else if (newInd === 'rsi') {
+            update.params = { period: 14, type: 'wilder' }
           } else {
             update.params = undefined
           }
@@ -140,6 +146,26 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
           >
             <option value="sma">SMA</option>
             <option value="ema">EMA</option>
+          </select>
+        </>
+      )}
+      {rule.indicator === 'rsi' && (
+        <>
+          <input
+            type="number"
+            min={2}
+            max={500}
+            value={rule.params?.period ?? 14}
+            onChange={e => onChange({ ...rule, params: { ...rule.params, period: parseInt(e.target.value) || 14, type: rule.params?.type ?? 'sma' } })}
+            style={{ ...styles.ruleSelect, width: 45 }}
+          />
+          <select
+            value={rule.params?.type ?? 'sma'}
+            onChange={e => onChange({ ...rule, params: { ...rule.params, period: rule.params?.period ?? 14, type: e.target.value } })}
+            style={{ ...styles.ruleSelect, width: 65 }}
+          >
+            <option value="sma">SMA</option>
+            <option value="wilder">Wilder</option>
           </select>
         </>
       )}

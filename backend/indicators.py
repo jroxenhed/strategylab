@@ -17,9 +17,14 @@ class OHLCVSeries:
 
 def compute_rsi(ohlcv: OHLCVSeries, params: dict) -> dict[str, pd.Series]:
     period = int(params.get("period", 14))
+    rsi_type = str(params.get("type", "sma")).lower()
     delta = ohlcv.close.diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta.clip(upper=0)).rolling(period).mean()
+    if rsi_type == "wilder":
+        gain = delta.clip(lower=0).ewm(alpha=1/period, adjust=False).mean()
+        loss = (-delta.clip(upper=0)).ewm(alpha=1/period, adjust=False).mean()
+    else:
+        gain = delta.clip(lower=0).rolling(period).mean()
+        loss = (-delta.clip(upper=0)).rolling(period).mean()
     rs = gain / loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
     return {"rsi": rsi}

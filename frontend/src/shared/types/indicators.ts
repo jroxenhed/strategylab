@@ -41,9 +41,12 @@ export function createInstance(type: IndicatorType, overrides?: Partial<Indicato
 export const INDICATOR_DEFS: Record<IndicatorType, IndicatorTypeDef> = {
   rsi: {
     type: 'rsi', label: 'RSI',
-    defaultParams: { period: 14 },
+    defaultParams: { period: 14, type: 'wilder' },
     pane: 'sub',
-    paramFields: [{ key: 'period', label: 'Period', kind: 'number', min: 2 }],
+    paramFields: [
+      { key: 'period', label: 'Period', kind: 'number', min: 2 },
+      { key: 'type', label: 'Type', kind: 'select', options: [{ value: 'sma', label: 'SMA' }, { value: 'wilder', label: 'Wilder' }] },
+    ],
     subPaneSharing: 'shared',
   },
   macd: {
@@ -102,10 +105,10 @@ export const INDICATOR_DEFS: Record<IndicatorType, IndicatorTypeDef> = {
 export function paramSummary(inst: IndicatorInstance): string {
   const def = INDICATOR_DEFS[inst.type]
   if (def.paramFields.length === 0) return ''
-  return def.paramFields.map(f => inst.params[f.key]).join(',')
+  return def.paramFields.filter(f => f.kind === 'number').map(f => inst.params[f.key]).join(',')
 }
 
 export const DEFAULT_INDICATORS: IndicatorInstance[] = [
   { id: 'macd-1', type: 'macd', params: { fast: 12, slow: 26, signal: 9 }, enabled: true, pane: 'sub' },
-  { id: 'rsi-1', type: 'rsi', params: { period: 14 }, enabled: true, pane: 'sub' },
+  { id: 'rsi-1', type: 'rsi', params: { period: 14, type: 'wilder' }, enabled: true, pane: 'sub' },
 ]
