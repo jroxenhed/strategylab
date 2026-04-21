@@ -2,11 +2,39 @@ import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Plus, Play } from 'lucide-react'
 import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, SavedStrategy } from '../../shared/types'
-import type { MASettings } from '../../App'
 import RuleRow, { emptyRule, validateRules } from './RuleRow'
 import { api } from '../../api/client'
 import { useSlippage } from '../../shared/hooks/useSlippage'
 import { apiErrorDetail } from '../../shared/utils/errors'
+
+const MA_MIGRATION: Record<string, { period: number; type: string }> = {
+  ema20:  { period: 20,  type: 'ema' },
+  ema50:  { period: 50,  type: 'ema' },
+  ema200: { period: 200, type: 'ema' },
+  ma8:    { period: 8,   type: 'sma' },
+  ma21:   { period: 21,  type: 'sma' },
+}
+
+const PARAM_MIGRATION: Record<string, string> = {
+  ema20:  'ma:20:ema',
+  ema50:  'ma:50:ema',
+  ema200: 'ma:200:ema',
+  ma8:    'ma:8:sma',
+  ma21:   'ma:21:sma',
+}
+
+function migrateRule(rule: Rule): Rule {
+  const migrated = { ...rule } as Rule
+  const maSpec = MA_MIGRATION[(rule as any).indicator]
+  if (maSpec) {
+    migrated.indicator = 'ma'
+    migrated.params = maSpec
+  }
+  if (rule.param && PARAM_MIGRATION[rule.param]) {
+    migrated.param = PARAM_MIGRATION[rule.param]
+  }
+  return migrated
+}
 
 interface Props {
   ticker: string
@@ -16,7 +44,6 @@ interface Props {
   onResult: (r: BacktestResult | null, req?: StrategyRequest) => void
   dataSource: DataSource
   settingsPortalId?: string
-  maSettings?: MASettings
   extendedHours?: boolean
 }
 
@@ -26,14 +53,24 @@ const SAVED_STRATEGIES_KEY = 'strategylab-saved-strategies'
 function loadStrategy() {
   try {
     const raw = localStorage.getItem(STRATEGY_STORAGE_KEY)
-    return raw ? JSON.parse(raw) : null
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (parsed.buyRules) parsed.buyRules = parsed.buyRules.map(migrateRule)
+    if (parsed.sellRules) parsed.sellRules = parsed.sellRules.map(migrateRule)
+    return parsed
   } catch { return null }
 }
 
 function loadSavedStrategies(): SavedStrategy[] {
   try {
     const raw = localStorage.getItem(SAVED_STRATEGIES_KEY)
-    return raw ? JSON.parse(raw) : []
+    if (!raw) return []
+    const strategies: SavedStrategy[] = JSON.parse(raw)
+    for (const s of strategies) {
+      if (s.buyRules) s.buyRules = s.buyRules.map(migrateRule)
+      if (s.sellRules) s.sellRules = s.sellRules.map(migrateRule)
+    }
+    return strategies
   } catch { return [] }
 }
 
@@ -41,7 +78,7 @@ function persistSavedStrategies(strategies: SavedStrategy[]) {
   localStorage.setItem(SAVED_STRATEGIES_KEY, JSON.stringify(strategies))
 }
 
-export default function StrategyBuilder({ ticker, start, end, interval, onResult, dataSource, settingsPortalId, maSettings, extendedHours }: Props) {
+export default function StrategyBuilder({ ticker, start, end, interval, onResult, dataSource, settingsPortalId, extendedHours }: Props) {
   const saved = useState(() => loadStrategy())[0]
 
   useEffect(() => {
@@ -187,14 +224,6 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         min_per_order: minPerOrder,
         borrow_rate_annual: direction === 'short' ? borrowRateAnnual : 0,
         source: dataSource, debug, direction,
-        ma_type: maSettings?.type,
-        sg8_window: maSettings?.sg8Window,
-        sg8_poly: maSettings?.sg8Poly,
-        sg21_window: maSettings?.sg21Window,
-        sg21_poly: maSettings?.sg21Poly,
-        predictive_sg: maSettings?.predictiveSg,
-        use_sg8: maSettings?.showSg8 ?? true,
-        use_sg21: maSettings?.showSg21 ?? true,
         extended_hours: extendedHours,
       }
       const { data } = await api.post('/api/backtest', req)
