@@ -42,6 +42,9 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
   - FX conversion cost
 - [ ] **B10** Skip-on-wide-spread entry gate — frontend wiring. Backend shipped: `BotConfig.max_spread_bps` + pre-entry quote check in `bot_runner` (exits always execute, entries skip when spread exceeds cap). Expose as: (1) an input on bot creation (AddBotBar) with a sensible default, and/or (2) an editable field on BotCard (same affordance as allocation/strategy edit). Goal: change the cap without editing `bots.json`.
 - [ ] **B11** Saved-strategy library UX — the flat list in StrategyBuilder (`strategylab-saved-strategies` in localStorage) gets unwieldy as presets accumulate. Add renaming (inline edit on the preset row) plus some organising affordance — folders/tags, pin-to-top, or simple drag-to-reorder. Pick whichever has the lowest blast radius on the existing save/load flow; avoid redesigning the storage schema unless organising demands it.
+- [ ] **B12** Parameterized MAs in strategy rules — replace 5 hardcoded MA entries (ma8, ma21, ema20, ema50, ema200) with generic `ma(period, type)`. User picks any period + SMA/EMA. Backend computes on demand. Foundation for B13/B14. [Ideation](docs/ideas/2026-04-21-strategy-builder-indicators-ideation.md) · [Spec](docs/superpowers/specs/2026-04-21-b12-parameterized-ma-rules-design.md)
+- [ ] **B13** BB / ATR / Volume as rule indicators — wire existing computed indicators into signal engine. BB: upper/lower/bandwidth/%B. ATR: normalized volatility filter. Volume: above-average / spike. Requires multi-output addressing for BB.
+- [ ] **B14** Stochastic + ADX rule indicators — new compute functions + registry entries. Stochastic %K/%D crossovers + overbought/oversold. ADX trend strength + directional (+DI/-DI). Exercises multi-output pattern from B13.
 
 ### Shipped
 _Older items predate the numbering scheme; new entries tagged with their letter+number._
