@@ -13,6 +13,7 @@ class Rule(BaseModel):
     threshold: Optional[float] = None  # min move % for turns_up/turns_down
     muted: bool = False
     negated: bool = False
+    params: Optional[dict] = None
 
 
 def _sg_predictive_coeffs(window: int, poly: int):
