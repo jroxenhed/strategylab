@@ -25,7 +25,7 @@ from slippage import slippage_cost_bps, fill_bias_bps
 
 from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest
 from routes.backtest import run_backtest
-from signal_engine import Rule
+from signal_engine import migrate_rule, Rule
 from shared import _fetch
 from broker import get_trading_provider, OrderRequest as BrokerOrderRequest
 from journal import _log_trade, compute_realized_pnl, first_bot_entry_time, compute_bot_avg_cost_bps
@@ -466,10 +466,15 @@ class BotManager:
                 if "slippage_pct" in cfg_dict and "slippage_bps" not in cfg_dict:
                     cfg_dict = {**cfg_dict, "slippage_bps": max(0.0, cfg_dict["slippage_pct"]) * 100}
                     cfg_dict.pop("slippage_pct", None)
+                for key in ("buy_rules", "sell_rules"):
+                    if key in cfg_dict and cfg_dict[key]:
+                        cfg_dict[key] = [migrate_rule(Rule(**r)).model_dump() for r in cfg_dict[key]]
                 config = BotConfig(**cfg_dict)
                 state = BotState.from_dict(entry.get("state", {}))
                 state.status = "stopped"  # always start stopped after server restart
                 self.bots[config.bot_id] = (config, state)
+            if self.bots:
+                self.save()
         except Exception:
             logger.exception("Failed to load bots.json")
 

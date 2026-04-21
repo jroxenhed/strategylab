@@ -169,3 +169,17 @@ def test_no_sg_active_in_indicators():
     assert "_sg_active" not in indicators
     assert "ma8_sg" not in indicators
     assert "ma21_sg" not in indicators
+
+
+def test_migrate_rules_in_bot_config_dict():
+    """Simulate what BotManager.load() does with legacy bot configs."""
+    legacy_rules = [
+        {"indicator": "ema20", "condition": "rising"},
+        {"indicator": "ma8", "condition": "turns_up", "param": "ma21"},
+    ]
+    migrated = [migrate_rule(Rule(**r)) for r in legacy_rules]
+    assert migrated[0].indicator == "ma"
+    assert migrated[0].params == {"period": 20, "type": "ema"}
+    assert migrated[1].indicator == "ma"
+    assert migrated[1].params == {"period": 8, "type": "sma"}
+    assert migrated[1].param == "ma:21:sma"
