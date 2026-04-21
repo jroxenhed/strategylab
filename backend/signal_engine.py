@@ -16,6 +16,35 @@ class Rule(BaseModel):
     params: Optional[dict] = None
 
 
+_MA_MIGRATION: dict[str, dict] = {
+    "ema20":  {"period": 20,  "type": "ema"},
+    "ema50":  {"period": 50,  "type": "ema"},
+    "ema200": {"period": 200, "type": "ema"},
+    "ma8":    {"period": 8,   "type": "sma"},
+    "ma21":   {"period": 21,  "type": "sma"},
+}
+
+_PARAM_MIGRATION: dict[str, str] = {
+    "ema20":  "ma:20:ema",
+    "ema50":  "ma:50:ema",
+    "ema200": "ma:200:ema",
+    "ma8":    "ma:8:sma",
+    "ma21":   "ma:21:sma",
+}
+
+
+def migrate_rule(rule: Rule) -> Rule:
+    """Convert legacy hardcoded MA indicators to generic ma(period, type). Idempotent."""
+    data = rule.model_dump()
+    ma_spec = _MA_MIGRATION.get(rule.indicator)
+    if ma_spec:
+        data["indicator"] = "ma"
+        data["params"] = ma_spec
+    if rule.param and rule.param in _PARAM_MIGRATION:
+        data["param"] = _PARAM_MIGRATION[rule.param]
+    return Rule(**data)
+
+
 def _sg_predictive_coeffs(window: int, poly: int):
     """Compute convolution coefficients for an extrapolating S-G filter.
 
