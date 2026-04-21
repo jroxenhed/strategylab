@@ -229,6 +229,7 @@ class BotRunner:
                 self.manager.save()
 
             state.entry_price = None
+            state.entry_bar_count = 0
             state.trail_peak = None
             state.trail_stop_price = None
             state.pending_close_order_id = None
@@ -329,6 +330,7 @@ class BotRunner:
                 fill_price = await self._get_fill_price_provider(provider, result.order_id, price)
 
                 state.entry_price = fill_price
+                state.entry_bar_count = 0
                 state.trail_peak = fill_price
                 state.trades_count += 1
                 side_label = "SHORT" if is_short else "BUY"
@@ -357,6 +359,7 @@ class BotRunner:
         # 7. Has position → evaluate exits
         # ---------------------------------------------------------------
         else:
+            state.entry_bar_count += 1
             exit_reason = None
 
             # Update trailing peak/trough
@@ -411,6 +414,9 @@ class BotRunner:
                     if price <= state.trail_stop_price:
                         exit_reason = "trailing_stop"
 
+            if exit_reason is None and cfg.max_bars_held and state.entry_bar_count >= cfg.max_bars_held:
+                exit_reason = "time_stop"
+
             if exit_reason is None:
                 sell_signal = await self._run_in_executor(
                     eval_rules, sell_rules, cfg.sell_logic, indicators, i
@@ -433,6 +439,7 @@ class BotRunner:
                         if not pos_match:
                             self._log("WARN", f"Position side mismatch — clearing stale state")
                             state.entry_price = None
+                            state.entry_bar_count = 0
                             state.trail_peak = None
                             state.trail_stop_price = None
                             self.manager.save()
@@ -534,6 +541,7 @@ class BotRunner:
                 })
 
                 state.entry_price = None
+                state.entry_bar_count = 0
                 state.trail_peak = None
                 state.trail_stop_price = None
                 state.pending_close_order_id = None

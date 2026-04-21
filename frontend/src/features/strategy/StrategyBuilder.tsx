@@ -100,6 +100,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [capital, setCapital] = useState(saved?.capital ?? 10000)
   const [posSize, setPosSize] = useState(saved?.posSize ?? 100)
   const [stopLoss, setStopLoss] = useState<number | ''>(saved?.stopLoss ?? '')
+  const [maxBarsHeld, setMaxBarsHeld] = useState<number | ''>(saved?.maxBarsHeld ?? '')
   const [trailingEnabled, setTrailingEnabled] = useState<boolean>(saved?.trailingEnabled ?? false)
   const [trailingConfig, setTrailingConfig] = useState<TrailingStopConfig>(saved?.trailingConfig ?? { type: 'pct', value: 5, source: 'high', activate_on_profit: false, activate_pct: 0 })
   const [dynamicSizing, setDynamicSizing] = useState<DynamicSizingConfig>(saved?.dynamicSizing ?? { enabled: false, consec_sls: 2, reduced_pct: 25, trigger: 'sl' })
@@ -142,7 +143,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
       name, savedAt: new Date().toISOString(),
       ticker, interval,
       buyRules, sellRules, buyLogic, sellLogic,
-      capital, posSize, stopLoss,
+      capital, posSize, stopLoss, maxBarsHeld,
       trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours,
       slippageBps, commission, direction,
       perShareRate, minPerOrder, borrowRateAnnual,
@@ -162,7 +163,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   function loadSavedStrategy(s: SavedStrategy) {
     setBuyRules(s.buyRules); setSellRules(s.sellRules)
     setBuyLogic(s.buyLogic); setSellLogic(s.sellLogic)
-    setCapital(s.capital); setPosSize(s.posSize); setStopLoss(s.stopLoss)
+    setCapital(s.capital); setPosSize(s.posSize); setStopLoss(s.stopLoss); setMaxBarsHeld(s.maxBarsHeld ?? '')
     setTrailingEnabled(s.trailingEnabled); setTrailingConfig(s.trailingConfig)
     setDynamicSizing(s.dynamicSizing ?? { enabled: false, consec_sls: 2, reduced_pct: 25, trigger: 'sl' })
     setSkipAfterStop(s.skipAfterStop ?? { enabled: false, count: 1, trigger: 'sl' })
@@ -195,11 +196,11 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
 
   useEffect(() => {
     localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({
-      buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss,
+      buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, maxBarsHeld,
       trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours, slippageBps, commission, direction,
       perShareRate, minPerOrder, borrowRateAnnual,
     }))
-  }, [buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours, slippageBps, commission, direction,
+  }, [buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, maxBarsHeld, trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours, slippageBps, commission, direction,
       perShareRate, minPerOrder, borrowRateAnnual])
 
   async function runBacktest() {
@@ -215,6 +216,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         buy_logic: buyLogic, sell_logic: sellLogic,
         initial_capital: capital, position_size: posSize / 100,
         stop_loss_pct: stopLoss !== '' && stopLoss > 0 ? stopLoss : undefined,
+        max_bars_held: maxBarsHeld !== '' && maxBarsHeld > 0 ? maxBarsHeld : undefined,
         trailing_stop: trailingEnabled ? trailingConfig : undefined,
         dynamic_sizing: dynamicSizing.enabled ? dynamicSizing : undefined,
         skip_after_stop: skipAfterStop.enabled ? skipAfterStop : undefined,
@@ -326,6 +328,10 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
           <div style={styles.settingsRow}>
             <label style={styles.settingsLabel}>Stop Loss (%)</label>
             <input type="number" value={stopLoss} step={0.5} min={0} placeholder="Off" onChange={e => setStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+          </div>
+          <div style={styles.settingsRow}>
+            <label style={styles.settingsLabel}>Time Stop (bars)</label>
+            <input type="number" value={maxBarsHeld} step={1} min={1} placeholder="Off" onChange={e => setMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
           </div>
           <div style={{ ...styles.settingsRow, marginTop: 4 }}>
             <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>

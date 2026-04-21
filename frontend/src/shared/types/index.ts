@@ -69,6 +69,7 @@ export interface StrategyRequest {
   initial_capital: number
   position_size: number
   stop_loss_pct?: number
+  max_bars_held?: number
   trailing_stop?: TrailingStopConfig
   dynamic_sizing?: DynamicSizingConfig
   skip_after_stop?: SkipAfterStopConfig
@@ -238,6 +239,7 @@ export interface BotConfig {
   allocated_capital: number
   position_size: number
   stop_loss_pct?: number
+  max_bars_held?: number
   trailing_stop?: TrailingStopConfig
   dynamic_sizing?: DynamicSizingConfig
   skip_after_stop?: SkipAfterStopConfig

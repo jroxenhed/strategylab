@@ -78,6 +78,7 @@ export default function AddBotBar({
         allocated_capital: alloc,
         position_size: 1.0,
         stop_loss_pct: typeof s.stopLoss === 'number' ? s.stopLoss : null,
+        max_bars_held: typeof s.maxBarsHeld === 'number' ? s.maxBarsHeld : null,
         trailing_stop: s.trailingEnabled ? s.trailingConfig : null,
         dynamic_sizing: s.dynamicSizing ?? null,
         skip_after_stop: s.skipAfterStop ?? null,

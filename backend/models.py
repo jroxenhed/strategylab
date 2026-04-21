@@ -46,6 +46,7 @@ class StrategyRequest(BaseModel):
     position_size: float = 1.0   # fraction of capital per trade (0.01–1.0)
     stop_loss_pct: Optional[float] = None  # e.g. 5.0 means sell if price drops 5% from entry
     trailing_stop: Optional[TrailingStopConfig] = None
+    max_bars_held: Optional[int] = None
     slippage_bps: float = Field(default=2.0, ge=0.0)   # unsigned cost per leg, bps
     commission_pct: float = 0.0  # e.g. 0.1 means 0.1% fee per trade
     per_share_rate: float = 0.0   # commission-free default (Alpaca US equities); set 0.0035 for IBKR Fixed

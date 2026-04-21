@@ -92,6 +92,7 @@ def run_backtest(req: StrategyRequest):
         position = 0.0
         entry_price = 0.0
         entry_ts = None
+        entry_bar_idx = 0
         trail_peak = 0.0
         trail_stop_price = None
         trades = []
@@ -180,6 +181,7 @@ def run_backtest(req: StrategyRequest):
                 position = shares
                 entry_price = fill_price
                 entry_ts = df.index[i]
+                entry_bar_idx = i
                 capital -= shares * fill_price + commission
                 trail_peak = fill_price
                 trail_stop_price = None
@@ -235,13 +237,19 @@ def run_backtest(req: StrategyRequest):
                     stop_price_limit = entry_price * (1 - req.stop_loss_pct / 100) if (req.stop_loss_pct and req.stop_loss_pct > 0) else None
                     stop_hit = stop_price_limit is not None and low.iloc[i] <= stop_price_limit
 
-                # Exit priority: fixed stop beats trailing stop (it's the harder floor)
+                # Time stop: exit after N bars held
+                time_stop_hit = req.max_bars_held is not None and (i - entry_bar_idx) >= req.max_bars_held
+
+                # Exit priority: fixed stop beats trailing stop beats time stop
                 if stop_hit:
                     raw_exit = stop_price_limit
                     exit_reason = "stop_loss"
                 elif trail_hit:
                     raw_exit = trail_stop_price
                     exit_reason = "trailing_stop"
+                elif time_stop_hit:
+                    raw_exit = price
+                    exit_reason = "time_stop"
                 else:
                     raw_exit = price
                     exit_reason = "signal"
@@ -252,7 +260,7 @@ def run_backtest(req: StrategyRequest):
                 else:
                     exit_price = raw_exit * (1 - drag)
                 sell_fired = eval_rules(sell_rules, req.sell_logic, indicators, i)
-                if stop_hit or trail_hit or sell_fired:
+                if stop_hit or trail_hit or time_stop_hit or sell_fired:
                     exit_slippage = abs(position * (raw_exit - exit_price))
                     commission = per_leg_commission(position, req)
                     bcost = borrow_cost(position, entry_price, entry_ts, df.index[i],

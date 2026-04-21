@@ -57,6 +57,7 @@ class BotConfig(BaseModel):
 
     stop_loss_pct: Optional[float] = None
     trailing_stop: Optional[TrailingStopConfig] = None
+    max_bars_held: Optional[int] = None
     dynamic_sizing: Optional[DynamicSizingConfig] = None
     skip_after_stop: Optional[SkipAfterStopConfig] = None
     trading_hours: Optional[TradingHoursConfig] = None
@@ -84,6 +85,7 @@ class BotState:
 
     # Position tracking (mirrors backtest.py trailing stop state)
     entry_price: Optional[float] = None
+    entry_bar_count: int = 0
     trail_peak: Optional[float] = None
     trail_stop_price: Optional[float] = None
 
@@ -271,6 +273,7 @@ class BotManager:
             initial_capital=config.allocated_capital,
             position_size=config.position_size,
             stop_loss_pct=config.stop_loss_pct,
+            max_bars_held=config.max_bars_held,
             trailing_stop=config.trailing_stop,
             dynamic_sizing=config.dynamic_sizing,
             skip_after_stop=config.skip_after_stop,
