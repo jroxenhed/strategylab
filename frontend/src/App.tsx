@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
-import type { BacktestResult, IndicatorInstance, DataSource, MAType, StrategyRequest, DatePreset } from './shared/types'
+import type { BacktestResult, IndicatorInstance, DataSource, StrategyRequest, DatePreset } from './shared/types'
 import { DEFAULT_INDICATORS } from './shared/types/indicators'
 import type { IChartApi } from 'lightweight-charts'
 import { useOHLCV, useInstanceIndicators } from './shared/hooks/useOHLCV'
@@ -13,25 +13,6 @@ import Discovery from './features/discovery/Discovery'
 
 type AppTab = 'chart' | 'trading' | 'discovery'
 
-export interface MASettings {
-  type: MAType
-  sg8Window: number
-  sg8Poly: number
-  sg21Window: number
-  sg21Poly: number
-  showRaw8: boolean
-  showRaw21: boolean
-  showSg8: boolean
-  showSg21: boolean
-  compensateLag: boolean
-  predictiveSg: boolean
-}
-
-const DEFAULT_MA_SETTINGS: MASettings = {
-  type: 'ema', sg8Window: 7, sg8Poly: 2, sg21Window: 7, sg21Poly: 2,
-  showRaw8: true, showRaw21: true, showSg8: true, showSg21: true,
-  compensateLag: false, predictiveSg: false,
-}
 
 const STORAGE_KEY = 'strategylab-settings'
 const EMPTY_OHLCV: never[] = []
@@ -64,14 +45,13 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('chart')
   const [mainChart, setMainChart] = useState<IChartApi | null>(null)
   const [chartEnabled, setChartEnabled] = useState(true)
-  const [maSettings] = useState<MASettings>({ ...DEFAULT_MA_SETTINGS, ...saved?.maSettings })
   const [datePreset, setDatePreset] = useState<DatePreset>((saved?.datePreset as DatePreset) ?? 'Y')
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, maSettings, datePreset,
+      ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, datePreset,
     }))
-  }, [ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, maSettings, datePreset])
+  }, [ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, datePreset])
 
   const { data: ohlcv = EMPTY_OHLCV, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, interval, dataSource, extendedHours)
   const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', start, end, interval, dataSource, extendedHours)
@@ -200,7 +180,6 @@ export default function App() {
                         }}
                         dataSource={dataSource}
                         settingsPortalId="strategy-settings-portal"
-                        maSettings={maSettings}
                         extendedHours={extendedHours}
                       />
                       {backtestResult && (
