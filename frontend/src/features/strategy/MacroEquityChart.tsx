@@ -41,26 +41,26 @@ export default function MacroEquityChart({ macroCurve, initialCapital, showBasel
       baseValue = 0
 
       if (baselineCurve && baselineCurve.length > 0) {
-        // Skip baseline in macro view if baseline uses intraday timestamps (numeric)
-        // — macro buckets use date strings, so the time formats would never match
-        const firstTime = baselineCurve[0]?.time
-        const baselineIsIntraday = typeof firstTime === 'number'
-        if (!baselineIsIntraday) {
-          // Resample baseline to macro bucket boundaries by picking the value at each macro time
-          const baselineMap = new Map(
-            baselineCurve
-              .filter(d => d.value !== null)
-              .map(d => [String(d.time), d.value as number])
-          )
-          const macroBaselineRaw: { time: any; value: number }[] = []
-          let lastBaselineValue = initialCapital
-          for (const b of macroCurve) {
-            const v = baselineMap.get(b.time) ?? lastBaselineValue
-            lastBaselineValue = v
-            macroBaselineRaw.push({ time: b.time as any, value: v })
+        const baselineMap = new Map<string, number>()
+        const isIntraday = typeof baselineCurve[0]?.time === 'number'
+        for (const d of baselineCurve) {
+          if (d.value === null) continue
+          if (isIntraday) {
+            const dt = new Date((d.time as number) * 1000)
+            const key = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`
+            baselineMap.set(key, d.value)
+          } else {
+            baselineMap.set(String(d.time), d.value)
           }
-          macroBaselineData = normaliseToPercent(macroBaselineRaw)
         }
+        const macroBaselineRaw: { time: any; value: number }[] = []
+        let lastBaselineValue = initialCapital
+        for (const b of macroCurve) {
+          const v = baselineMap.get(b.time) ?? lastBaselineValue
+          lastBaselineValue = v
+          macroBaselineRaw.push({ time: b.time as any, value: v })
+        }
+        macroBaselineData = normaliseToPercent(macroBaselineRaw)
       }
 
       // For B&H + log: manually transform percentages (native log can't handle negatives)

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo } from 'react'
+import { useEffect, useRef, useMemo, useState } from 'react'
 import {
   createChart,
   createSeriesMarkers,
@@ -13,6 +13,7 @@ import { INDICATOR_DEFS } from '../../shared/types/indicators'
 import SubPane from './SubPane'
 import type { PaneRegistry } from './SubPane'
 import { toLineData } from './chartUtils'
+import TradeTooltip from './TradeTooltip'
 
 interface ChartProps {
   data: OHLCVBar[]
@@ -59,7 +60,13 @@ function toET(time: string | number): any {
   return Date.UTC(get('year'), get('month') - 1, get('day'), get('hour') % 24, get('minute'), get('second')) / 1000
 }
 
-function buildMarkers(trades: Trade[], showPrice = true, subPane = false) {
+function normalizeTime(t: any): string | number {
+  if (typeof t === 'object' && t !== null && 'year' in t)
+    return `${t.year}-${String(t.month).padStart(2, '0')}-${String(t.day).padStart(2, '0')}`
+  return t
+}
+
+function buildMarkers(trades: Trade[], subPane = false) {
   return trades.map(t => {
     const isEntry = t.type === 'buy' || t.type === 'short'
     const isShortEntry = t.type === 'short'
@@ -71,20 +78,18 @@ function buildMarkers(trades: Trade[], showPrice = true, subPane = false) {
         position: subPane ? 'inBar' as const : (isShortEntry ? 'aboveBar' as const : 'belowBar' as const),
         color: '#e5c07b',
         shape: subPane ? 'circle' as const : (isShortEntry ? 'arrowDown' as const : 'arrowUp' as const),
-        text: showPrice ? `${label} $${t.price}` : label,
+        text: label,
       }
     }
-    // Exit: sell or cover
     const win = (t.pnl ?? 0) >= 0
     const color = win ? UP : DOWN
-    const pctStr = t.pnl_pct != null ? ` ${t.pnl_pct > 0 ? '+' : ''}${t.pnl_pct}%` : ''
     const label = t.stop_loss ? 'SL' : t.trailing_stop ? 'TSL' : (isCover ? 'COV' : 'S')
     return {
       time: toET(t.date as any) as any,
       position: subPane ? 'inBar' as const : (isCover ? 'belowBar' as const : 'aboveBar' as const),
       color,
       shape: subPane ? 'circle' as const : (isCover ? 'arrowUp' as const : 'arrowDown' as const),
-      text: showPrice ? `${label} $${t.price}${pctStr}` : label,
+      text: label,
     }
   })
 }
@@ -161,9 +166,48 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   )
 
   const subPaneMarkers = useMemo(
-    () => trades && trades.length > 0 ? buildMarkers(trades, false, true) : null,
+    () => trades && trades.length > 0 ? buildMarkers(trades, true) : null,
     [trades],
   )
+
+  const candleTimeIndex = useMemo(() => {
+    const map = new Map<string | number, number>()
+    for (let i = 0; i < candleData.length; i++) {
+      map.set(candleData[i].time, i)
+    }
+    return map
+  }, [candleData])
+
+  const tradeLookup = useMemo(() => {
+    if (!trades || trades.length === 0 || candleData.length === 0) return null
+    const SNAP = 2
+    const byIdx = new Map<number, Trade[]>()
+    for (const t of trades) {
+      const idx = candleTimeIndex.get(toET(t.date as any))
+      if (idx === undefined) continue
+      const arr = byIdx.get(idx)
+      if (arr) arr.push(t)
+      else byIdx.set(idx, [t])
+    }
+    const result = new Map<string | number, Trade[]>()
+    for (let i = 0; i < candleData.length; i++) {
+      for (let d = 0; d <= SNAP; d++) {
+        if (d === 0) {
+          const t = byIdx.get(i)
+          if (t) { result.set(candleData[i].time, t); break }
+        } else {
+          const left = byIdx.get(i - d)
+          const right = byIdx.get(i + d)
+          if (left || right) { result.set(candleData[i].time, (left ?? right)!); break }
+        }
+      }
+    }
+    return result
+  }, [trades, candleTimeIndex, candleData])
+
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; trades: Trade[] } | null>(null)
+  const tradeLookupRef = useRef(tradeLookup)
+  useEffect(() => { tradeLookupRef.current = tradeLookup }, [tradeLookup])
 
   // ─── Main chart: mount once ─────────────────────────────────────────────
   // All overlays and markers are managed by additive effects below so a new
@@ -239,7 +283,15 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       try {
         if (!param.time) {
           for (const entry of paneRegistryRef.current.values()) entry.chart.clearCrosshairPosition()
+          setTooltip(null)
           return
+        }
+        const key = normalizeTime(param.time)
+        const tradesOnBar = tradeLookupRef.current?.get(key)
+        if (tradesOnBar && param.point) {
+          setTooltip({ x: param.point.x, y: param.point.y, trades: tradesOnBar })
+        } else {
+          setTooltip(null)
         }
         for (const entry of paneRegistryRef.current.values()) {
           try { entry.chart.setCrosshairPosition(NaN, param.time, entry.series) } catch {}
@@ -264,6 +316,8 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       chartRef.current = null
       candleSeriesRef.current = null
       mainMarkersPluginRef.current = null
+      tradeLookupRef.current = null
+      setTooltip(null)
       rangeRestoredRef.current = false
       onChartReadyRef.current?.(null)
       chart.remove()
@@ -480,7 +534,18 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', overflow: 'hidden' }}>
-      <div ref={containerRef} style={{ flex: mainFlex, minHeight: 200, width: '100%' }} />
+      <div style={{ position: 'relative', flex: mainFlex, minHeight: 200, width: '100%' }}>
+        <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+        {tooltip && trades && (
+          <TradeTooltip
+            x={tooltip.x} y={tooltip.y}
+            trades={tooltip.trades}
+            allTrades={trades}
+            candleTimeIndex={candleTimeIndex}
+            toET={toET}
+          />
+        )}
+      </div>
       {subPaneGroups.map(group => (
         <div key={group.key} style={{ flex: 1, minHeight: 120, maxHeight: subPaneCount <= 2 ? '35%' : undefined }}>
           <SubPane

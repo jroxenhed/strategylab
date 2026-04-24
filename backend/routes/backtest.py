@@ -110,22 +110,34 @@ def run_backtest(req: StrategyRequest):
         skip_remaining = 0  # entries still to skip after a qualifying stop
         is_intraday = req.interval in _INTRADAY_INTERVALS
 
+        def _rule_desc(r):
+            """Short human-readable description of a rule."""
+            desc = f"{r.indicator} {r.condition}"
+            if r.value is not None:
+                desc += f" {r.value}"
+            if r.param:
+                desc += f" ({r.param})"
+            if r.threshold is not None:
+                desc += f" min {r.threshold}%"
+            return desc.strip()
+
+        def _fired_rules(rules, indicators, i):
+            """Return list of rule descriptions for non-muted rules that fired."""
+            return [_rule_desc(r) for r in rules if not r.muted and eval_rule(r, indicators, i)]
+
         def _trace_rules(rules, indicators, i, label):
             """Build per-rule evaluation detail for debug trace."""
             details = []
             for r in rules:
                 if r.muted:
-                    details.append({"rule": f"{r.indicator} {r.condition} {r.value if r.value is not None else ''}", "muted": True, "result": False})
+                    details.append({"rule": _rule_desc(r), "muted": True, "result": False})
                     continue
                 result = eval_rule(r, indicators, i)
                 ind_series = resolve_series(r, indicators) or indicators.get("close")
                 v_now = round(float(ind_series.iloc[i]), 4) if ind_series is not None and pd.notna(ind_series.iloc[i]) else None
                 v_prev = round(float(ind_series.iloc[i - 1]), 4) if ind_series is not None and i > 0 and pd.notna(ind_series.iloc[i - 1]) else None
-                rule_desc = f"{r.indicator} {r.condition} {r.value if r.value is not None else ''}"
-                if r.threshold is not None:
-                    rule_desc += f" min {r.threshold}%"
                 details.append({
-                    "rule": rule_desc,
+                    "rule": _rule_desc(r),
                     "result": bool(result),
                     "v_now": v_now,
                     "v_prev": v_prev,
@@ -193,6 +205,7 @@ def run_backtest(req: StrategyRequest):
                     "direction": req.direction,
                     "slippage": round(entry_slippage, 2),
                     "commission": round(commission, 2),
+                    "rules": _fired_rules(buy_rules, indicators, i),
                 })
                 if signal_trace is not None:
                     signal_trace.append({
@@ -273,6 +286,15 @@ def run_backtest(req: StrategyRequest):
                         pnl = (proceeds - commission) - position * entry_price
                         capital += proceeds - commission
                     exit_type = "cover" if is_short else "sell"
+                    exit_rules: list[str] = []
+                    if exit_reason == "stop_loss":
+                        exit_rules = ["stop loss"]
+                    elif exit_reason == "trailing_stop":
+                        exit_rules = ["trailing stop"]
+                    elif time_stop_hit:
+                        exit_rules = ["time stop"]
+                    else:
+                        exit_rules = _fired_rules(sell_rules, indicators, i)
                     trades.append({
                         "type": exit_type,
                         "date": date,
@@ -286,6 +308,7 @@ def run_backtest(req: StrategyRequest):
                         "slippage": round(exit_slippage, 2),
                         "commission": round(commission, 2),
                         "borrow_cost": round(bcost, 2),
+                        "rules": exit_rules,
                     })
                     position = 0.0
                     entry_ts = None

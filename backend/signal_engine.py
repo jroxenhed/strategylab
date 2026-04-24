@@ -192,7 +192,7 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
         if rule.value is not None:
             return v_prev > rule.value and v_now < v_prev
     elif cond in ("turns_up", "turns_down"):
-        lookback = int(rule.value) if rule.value is not None else 1
+        lookback = max(1, int(rule.value)) if rule.value is not None else 1
         if i < lookback + 1:
             return False
         if cond == "turns_up":
@@ -202,9 +202,15 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
                     return False
             if s.iloc[i - lookback] - s.iloc[i - lookback - 1] >= 0:
                 return False
-            # Min move %: MA must have risen at least threshold% from turn point
+            # Min move %: must have risen at least threshold% from true trough
             if rule.threshold is not None and rule.threshold > 0:
-                trough = s.iloc[i - lookback]
+                trough = float(s.iloc[i - lookback])
+                for j in range(i - lookback - 1, -1, -1):
+                    v = float(s.iloc[j])
+                    if v < trough:
+                        trough = v
+                    else:
+                        break
                 if abs(trough) < 1e-12:
                     return False
                 if (v_now - trough) / abs(trough) * 100 < rule.threshold:
@@ -217,9 +223,15 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
                     return False
             if s.iloc[i - lookback] - s.iloc[i - lookback - 1] <= 0:
                 return False
-            # Min move %: MA must have fallen at least threshold% from turn point
+            # Min move %: must have fallen at least threshold% from true peak
             if rule.threshold is not None and rule.threshold > 0:
-                peak = s.iloc[i - lookback]
+                peak = float(s.iloc[i - lookback])
+                for j in range(i - lookback - 1, -1, -1):
+                    v = float(s.iloc[j])
+                    if v > peak:
+                        peak = v
+                    else:
+                        break
                 if abs(peak) < 1e-12:
                     return False
                 if (peak - v_now) / abs(peak) * 100 < rule.threshold:

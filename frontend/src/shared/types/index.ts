@@ -124,6 +124,7 @@ export interface Trade {
   commission?: number
   borrow_cost?: number
   direction?: 'long' | 'short'
+  rules?: string[]
 }
 
 export interface EMAOverlay {
