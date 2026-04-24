@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { createChart, BaselineSeries, LineSeries, HistogramSeries, ColorType } from 'lightweight-charts'
 import type { IChartApi } from 'lightweight-charts'
 import type { BacktestResult, SignalTraceEntry, StrategyRequest } from '../../shared/types'
@@ -23,6 +23,10 @@ interface Props {
   bucket: string | null
   onBucketChange: (bucket: string | null) => void
   lastRequest: StrategyRequest | null
+  showBaseline: boolean
+  onShowBaselineChange: (v: boolean) => void
+  logScale: boolean
+  onLogScaleChange: (v: boolean) => void
 }
 
 function autoDefaultBucket(equityLength: number): string {
@@ -32,10 +36,8 @@ function autoDefaultBucket(equityLength: number): string {
   return 'M'
 }
 
-export default function Results({ result, mainChart, activeTab, onTabChange, bucket, onBucketChange, lastRequest }: Props) {
+export default function Results({ result, mainChart, activeTab, onTabChange, bucket, onBucketChange, lastRequest, showBaseline, onShowBaselineChange, logScale, onLogScaleChange }: Props) {
   const { summary, trades, equity_curve, signal_trace } = result
-  const [showBaseline, setShowBaseline] = useState(false)
-  const [logScale, setLogScale] = useState(false)
   const chartRef = useRef<HTMLDivElement>(null)
   const sells = trades.filter(t => t.type === 'sell' || t.type === 'cover')
   const { data: macroData, isLoading: macroLoading } = useMacro(lastRequest, bucket)
@@ -261,7 +263,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
             <>
               <div style={{ width: 1, height: 16, background: '#30363d', margin: '0 6px' }} />
               <button
-                onClick={() => setShowBaseline(v => !v)}
+                onClick={() => onShowBaselineChange(!showBaseline)}
                 style={{
                   padding: '4px 8px',
                   fontSize: 11,
@@ -276,7 +278,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
                 B&amp;H
               </button>
               <button
-                onClick={() => setLogScale(v => !v)}
+                onClick={() => onLogScaleChange(!logScale)}
                 style={{
                   padding: '4px 8px',
                   fontSize: 11,

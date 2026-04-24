@@ -42,6 +42,8 @@ export default function App() {
   const [lastRequest, setLastRequest] = useState<StrategyRequest | null>(null)
   const [resultsTab, setResultsTab] = useState<'summary' | 'equity' | 'trades' | 'trace'>('summary')
   const [macroBucket, setMacroBucket] = useState<string | null>(null)
+  const [showBaseline, setShowBaseline] = useState(false)
+  const [logScale, setLogScale] = useState(false)
   const [activeTab, setActiveTab] = useState<AppTab>('chart')
   const [mainChart, setMainChart] = useState<IChartApi | null>(null)
   const [chartEnabled, setChartEnabled] = useState(true)
@@ -191,6 +193,10 @@ export default function App() {
                           bucket={macroBucket}
                           onBucketChange={setMacroBucket}
                           lastRequest={lastRequest}
+                          showBaseline={showBaseline}
+                          onShowBaselineChange={setShowBaseline}
+                          logScale={logScale}
+                          onLogScaleChange={setLogScale}
                         />
                       )}
                     </div>
