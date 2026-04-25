@@ -218,6 +218,8 @@ export default function App() {
                           onShowBaselineChange={setShowBaseline}
                           logScale={logScale}
                           onLogScaleChange={setLogScale}
+                          viewInterval={viewInterval}
+                          backtestInterval={interval}
                         />
                       )}
                     </div>

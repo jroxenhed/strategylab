@@ -23,7 +23,13 @@ export function snapTimestamp(
   if (secs) {
     return etTs - (etTs % secs)
   }
-  return etTs
+  // Daily+ intervals use "YYYY-MM-DD" string keys in candleTimeIndex.
+  // Convert the ET-shifted unix timestamp to a date string.
+  const d = new Date(etTs * 1000)
+  const y = d.getUTCFullYear()
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(d.getUTCDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 
 interface TradeForSnap {

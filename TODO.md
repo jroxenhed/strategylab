@@ -21,6 +21,7 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 - [ ] **A7** New indicator types via registry: Stochastic, VWAP (ATR shipped with A4)
 - [ ] **A6** Watchlist — save/switch between tickers quickly
 - [ ] **A8** Chart performance — large dataset optimizations (100K+ 5-min bars):
+  - [ ] Equity curve detail mode should downsample to match chart view interval. Current attempt in Results.tsx `downsampleEquity()` doesn't take effect — needs debugging (effect may not re-fire, or chart instance not recreating). The macro buckets (D/W/M/Q/Y) work fine; only Detail mode is broken.
   - [ ] Viewport-only rendering — only pass the visible bar range to indicator series and markers instead of all 100K bars. lightweight-charts handles panning via `subscribeVisibleLogicalRangeChange`; feed data on demand.
   - [ ] Off-screen downsampling — when zoomed out to show all bars, aggregate to coarser resolution (e.g. 15m/1h) for rendering, switch to full resolution on zoom-in. Reduces object count 10-50x at wide zoom.
 

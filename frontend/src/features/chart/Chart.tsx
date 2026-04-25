@@ -349,11 +349,14 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   }, [])
 
   // Candle data + one-time range restore
+  const prevCandleDataRef = useRef(candleData)
   useEffect(() => {
     const series = candleSeriesRef.current
     const chart = chartRef.current
     if (!series || !chart || candleData.length === 0) return
     series.setData(candleData)
+    const dataChanged = prevCandleDataRef.current !== candleData
+    prevCandleDataRef.current = candleData
     if (!rangeRestoredRef.current) {
       rangeRestoredRef.current = true
       const savedRange = sessionStorage.getItem('strategylab-chart-range')
@@ -363,6 +366,8 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       } else {
         chart.timeScale().fitContent()
       }
+    } else if (dataChanged) {
+      chart.timeScale().fitContent()
     }
   }, [candleData])
 

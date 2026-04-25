@@ -15,6 +15,41 @@ function fmtDate(d: string | number | undefined): string {
   return d ?? '—'
 }
 
+const INTERVAL_SECS: Record<string, number> = {
+  '1m': 60, '2m': 120, '5m': 300, '15m': 900, '30m': 1800,
+  '1h': 3600, '60m': 3600,
+}
+
+function downsampleEquity(
+  data: { time: any; value: number }[],
+  viewInterval: string,
+): { time: any; value: number }[] {
+  if (data.length === 0) return data
+  const secs = INTERVAL_SECS[viewInterval]
+  const isDaily = ['1d', '1wk', '1mo'].includes(viewInterval)
+  const result: { time: any; value: number }[] = []
+  let currentKey: any = null
+  for (const pt of data) {
+    let key: any
+    if (secs && typeof pt.time === 'number') {
+      key = pt.time - (pt.time % secs)
+    } else if (isDaily && typeof pt.time === 'number') {
+      // Floor unix timestamp to date string for daily+ grouping
+      const d = new Date(pt.time * 1000)
+      key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+    } else {
+      key = pt.time
+    }
+    if (key === currentKey && result.length > 0) {
+      result[result.length - 1] = { time: key, value: pt.value }
+    } else {
+      result.push({ time: key, value: pt.value })
+      currentKey = key
+    }
+  }
+  return result
+}
+
 interface Props {
   result: BacktestResult
   mainChart?: IChartApi | null
@@ -27,6 +62,8 @@ interface Props {
   onShowBaselineChange: (v: boolean) => void
   logScale: boolean
   onLogScaleChange: (v: boolean) => void
+  viewInterval: string
+  backtestInterval: string
 }
 
 function autoDefaultBucket(equityLength: number): string {
@@ -36,7 +73,7 @@ function autoDefaultBucket(equityLength: number): string {
   return 'M'
 }
 
-export default function Results({ result, mainChart, activeTab, onTabChange, bucket, onBucketChange, lastRequest, showBaseline, onShowBaselineChange, logScale, onLogScaleChange }: Props) {
+export default function Results({ result, mainChart, activeTab, onTabChange, bucket, onBucketChange, lastRequest, showBaseline, onShowBaselineChange, logScale, onLogScaleChange, viewInterval, backtestInterval }: Props) {
   const { summary, trades, equity_curve, signal_trace } = result
   const chartRef = useRef<HTMLDivElement>(null)
   const sells = trades.filter(t => t.type === 'sell' || t.type === 'cover')
@@ -55,10 +92,14 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       },
     })
 
-    // Prepare equity data
-    const rawEquity = equity_curve
+    // Prepare equity data, downsampled to match chart view interval
+    const needsDownsample = viewInterval !== backtestInterval
+    let rawEquity = equity_curve
       .filter(d => d.value !== null)
       .map(d => ({ time: d.time as any, value: d.value as number }))
+    if (needsDownsample) {
+      rawEquity = downsampleEquity(rawEquity, viewInterval)
+    }
 
     let equityData: { time: any; value: number; dollar?: number }[]
     let baselineData: { time: any; value: number; dollar?: number }[] | null = null
@@ -70,9 +111,10 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       baseValue = 0
 
       if (result.baseline_curve && result.baseline_curve.length > 0) {
-        const rawBaseline = result.baseline_curve
+        let rawBaseline = result.baseline_curve
           .filter(d => d.value !== null)
           .map(d => ({ time: d.time as any, value: d.value as number }))
+        if (needsDownsample) rawBaseline = downsampleEquity(rawBaseline, viewInterval)
         baselineData = normaliseToPercent(rawBaseline)
       }
 
@@ -217,7 +259,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       chart.remove()
       ro.disconnect()
     }
-  }, [activeTab, bucket, equity_curve, summary.total_return_pct, mainChart, showBaseline, result.baseline_curve, logScale])
+  }, [activeTab, bucket, equity_curve, summary.total_return_pct, mainChart, showBaseline, result.baseline_curve, logScale, viewInterval, backtestInterval])
 
   return (
     <div style={styles.container}>
