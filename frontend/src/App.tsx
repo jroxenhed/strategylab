@@ -56,8 +56,8 @@ export default function App() {
   }, [ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, datePreset])
 
   const { data: ohlcv = EMPTY_OHLCV, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, interval, dataSource, extendedHours)
-  const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', start, end, interval, dataSource, extendedHours)
-  const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', start, end, interval, dataSource, extendedHours)
+  const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', start, end, interval, dataSource, extendedHours, chartEnabled && showSpy)
+  const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', start, end, interval, dataSource, extendedHours, chartEnabled && showQqq)
 
   const { data: instanceData = {}, refetch: refetchIndicators } = useInstanceIndicators(
     ticker, start, end, interval, chartEnabled ? indicators : [], dataSource, extendedHours,

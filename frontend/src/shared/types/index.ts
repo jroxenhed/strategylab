@@ -107,6 +107,7 @@ export interface SavedStrategy {
   perShareRate?: number
   minPerOrder?: number
   borrowRateAnnual?: number
+  maxBarsHeld?: number | ''
   direction: 'long' | 'short'
   indicators?: IndicatorInstance[]
 }

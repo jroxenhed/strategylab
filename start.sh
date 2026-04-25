@@ -23,8 +23,8 @@ if [ "$MODE" = "prod" ]; then
   echo "Building frontend..."
   npm run build
   echo "Starting frontend (preview)..."
-  npm run preview -- --port 4173 &
-  FRONTEND_URL="http://localhost:4173"
+  npm run preview -- --port 5173 &
+  FRONTEND_URL="http://localhost:5173"
 else
   echo "Starting frontend (dev)..."
   npm run dev &

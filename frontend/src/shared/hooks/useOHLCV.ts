@@ -4,14 +4,14 @@ import { api } from '../../api/client'
 import { fetchBroker, setBroker as setBrokerApi, type BrokerInfo } from '../../api/trading'
 import type { OHLCVBar, DataSource, IndicatorInstance } from '../types'
 
-export function useOHLCV(ticker: string, start: string, end: string, interval: string, source: DataSource = 'yahoo', extendedHours: boolean = false) {
+export function useOHLCV(ticker: string, start: string, end: string, interval: string, source: DataSource = 'yahoo', extendedHours: boolean = false, enabled: boolean = true) {
   return useQuery<OHLCVBar[]>({
     queryKey: ['ohlcv', ticker, start, end, interval, source, extendedHours],
     queryFn: async () => {
       const { data } = await api.get(`/api/ohlcv/${ticker}`, { params: { start, end, interval, source, extended_hours: extendedHours } })
       return data.data
     },
-    enabled: !!ticker,
+    enabled: !!ticker && enabled,
     staleTime: 5 * 60 * 1000,
   })
 }

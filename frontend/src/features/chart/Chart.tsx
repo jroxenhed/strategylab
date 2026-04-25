@@ -47,15 +47,15 @@ const chartOptions = {
 // Shift unix timestamps to ET wall-clock time by reconstructing them as UTC
 // so the chart displays 9:30 instead of 13:30 for NYSE open.
 // Date strings (daily+) pass through unchanged.
+const _etFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit',
+  hour12: false,
+})
 function toET(time: string | number): any {
   if (typeof time !== 'number') return time
-  const d = new Date(time * 1000)
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false,
-  }).formatToParts(d)
+  const parts = _etFormatter.formatToParts(new Date(time * 1000))
   const get = (type: string) => parseInt(parts.find(p => p.type === type)?.value ?? '0')
   return Date.UTC(get('year'), get('month') - 1, get('day'), get('hour') % 24, get('minute'), get('second')) / 1000
 }
@@ -459,6 +459,8 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   }, [instanceData, mainInstancesKey, candleData])
 
   // EMA rising/falling overlays (per-rule visualization during/after backtest)
+  // Uses 2 series per overlay (active + inactive) instead of one per segment
+  // to avoid creating hundreds of LineSeries on large datasets.
   useEffect(() => {
     const chart = chartRef.current
     if (!chart || !emaOverlays || emaOverlays.length === 0) return
@@ -468,47 +470,60 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       const inactiveColor = '#484f58'
       const label = `${overlay.indicator.toUpperCase()} ${overlay.condition === 'rising_over' ? '↑' : '↓'}${overlay.lookback}`
 
-      // Build segments: contiguous runs of active/inactive points
-      // Each segment becomes its own line series so colors don't bleed
-      type Segment = { active: boolean; pts: Array<{ time: any; value: number }> }
-      const segments: Segment[] = []
-      let current: Segment | null = null
+      const activePts: Array<{ time: any; value?: number }> = []
+      const inactivePts: Array<{ time: any; value?: number }> = []
 
       for (let i = 0; i < overlay.series.length; i++) {
         const pt = overlay.series[i]
+        const t = toET(pt.time as any) as any
         if (pt.value === null) {
-          current = null
+          activePts.push({ time: t })
+          inactivePts.push({ time: t })
           continue
         }
         const isActive = overlay.active[i]
-        if (!current || current.active !== isActive) {
-          const newSeg: Segment = { active: isActive, pts: [] }
-          if (current && current.pts.length > 0) {
-            newSeg.pts.push({ ...current.pts[current.pts.length - 1] })
-          }
-          segments.push(newSeg)
-          current = newSeg
+        if (isActive) {
+          activePts.push({ time: t, value: pt.value })
+          inactivePts.push({ time: t })
+        } else {
+          activePts.push({ time: t })
+          inactivePts.push({ time: t, value: pt.value })
         }
-        current.pts.push({ time: toET(pt.time as any) as any, value: pt.value })
+        // Bridge point: duplicate into the other series at transitions
+        // so lines connect across the switch instead of leaving gaps.
+        const prev = i > 0 ? overlay.active[i - 1] : isActive
+        if (prev !== isActive && i > 0 && overlay.series[i - 1].value !== null) {
+          if (isActive) {
+            activePts[activePts.length - 1] = { time: t, value: pt.value }
+            inactivePts[inactivePts.length - 1] = { time: t, value: pt.value }
+          } else {
+            activePts[activePts.length - 1] = { time: t, value: pt.value }
+            inactivePts[inactivePts.length - 1] = { time: t, value: pt.value }
+          }
+        }
       }
 
-      let labeled = false
-      for (const seg of segments) {
-        if (seg.pts.length < 2) continue
-        const color = seg.active ? activeColor : inactiveColor
-        const title = !labeled ? label : ''
-        const s = chart.addSeries(LineSeries, {
-          color,
-          lineWidth: seg.active ? 2 : 1,
-          title,
-          priceScaleId: 'right',
-          lastValueVisible: false,
-          priceLineVisible: false,
-        })
-        s.setData(seg.pts)
-        created.push(s)
-        if (title) labeled = true
-      }
+      const sActive = chart.addSeries(LineSeries, {
+        color: activeColor,
+        lineWidth: 2,
+        title: label,
+        priceScaleId: 'right',
+        lastValueVisible: false,
+        priceLineVisible: false,
+      })
+      sActive.setData(activePts)
+      created.push(sActive)
+
+      const sInactive = chart.addSeries(LineSeries, {
+        color: inactiveColor,
+        lineWidth: 1,
+        title: '',
+        priceScaleId: 'right',
+        lastValueVisible: false,
+        priceLineVisible: false,
+      })
+      sInactive.setData(inactivePts)
+      created.push(sInactive)
     }
     return () => { for (const s of created) { try { chart.removeSeries(s) } catch {} } }
   }, [emaOverlays])

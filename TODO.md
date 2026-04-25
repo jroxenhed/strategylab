@@ -20,8 +20,12 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 - [ ] **A5** Resizable, collapsible, double-click-to-maximize individual chart panes
 - [ ] **A7** New indicator types via registry: Stochastic, VWAP (ATR shipped with A4)
 - [ ] **A6** Watchlist — save/switch between tickers quickly
+- [ ] **A8** Chart performance — large dataset optimizations (100K+ 5-min bars):
+  - [ ] Viewport-only rendering — only pass the visible bar range to indicator series and markers instead of all 100K bars. lightweight-charts handles panning via `subscribeVisibleLogicalRangeChange`; feed data on demand.
+  - [ ] Off-screen downsampling — when zoomed out to show all bars, aggregate to coarser resolution (e.g. 15m/1h) for rendering, switch to full resolution on zoom-in. Reduces object count 10-50x at wide zoom.
 
 ### Shipped
+- [x] **A8a** Chart performance — 10x load speedup on 100K+ bar datasets. Cached `Intl.DateTimeFormat` in `toET()` (was constructing 100K+ instances per render), consolidated EMA overlay rendering from hundreds of `LineSeries` (one per active/inactive segment) to 2 per overlay using whitespace entries, gated SPY/QQQ fetches on toggle state.
 - [x] **A4** Indicator system redesign — replaced hardcoded indicator toggles with instance-based model (`IndicatorInstance[]`, `INDICATOR_DEFS` registry, generic `SubPane` + `PaneRegistry`). Add/remove/configure multiple instances of RSI, MACD, BB, ATR, MA, Volume with inline param editing. POST-based indicator endpoint, collapsible sidebar sections, chart-disabled gating. [Recap](docs/misc/A4-indicator-system-redesign-recap.md) · [Spec](docs/superpowers/specs/2026-04-20-indicator-system-redesign-design.md) · [Plan](docs/superpowers/plans/2026-04-20-indicator-system-redesign.md)
 - [x] Equity curve macro mode for long timescales / thousands of trades — resampled equity chart (D/W/M/Q/Y) via `MacroEquityChart.tsx` + `/api/backtest/macro`
 - [x] Date range presets (D/W/M/Q/Y) + period stepping arrows (‹ › single, « » 5x skip)
