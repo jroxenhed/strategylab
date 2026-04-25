@@ -12,7 +12,7 @@ import type { OHLCVBar, IndicatorInstance, EMAOverlay, Trade } from '../../share
 import { INDICATOR_DEFS } from '../../shared/types/indicators'
 import SubPane from './SubPane'
 import type { PaneRegistry } from './SubPane'
-import { toLineData } from './chartUtils'
+import { toLineData, aggregateMarkers, snapTimestamp } from './chartUtils'
 import TradeTooltip from './TradeTooltip'
 
 interface ChartProps {
@@ -25,6 +25,8 @@ interface ChartProps {
   instanceData: Record<string, Record<string, { time: string; value: number | null }[]>>
   trades?: Trade[]
   emaOverlays?: EMAOverlay[]
+  viewInterval: string
+  backtestInterval: string
   onChartReady?: (chart: IChartApi | null) => void
 }
 
@@ -94,7 +96,7 @@ function buildMarkers(trades: Trade[], subPane = false) {
   })
 }
 
-export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, trades, emaOverlays, onChartReady }: ChartProps) {
+export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, trades, emaOverlays, viewInterval, backtestInterval, onChartReady }: ChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const candleSeriesRef = useRef<ISeriesApi<any> | null>(null)
@@ -160,15 +162,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     return groups
   }, [indicators])
 
-  const mainMarkers = useMemo(
-    () => trades && trades.length > 0 ? buildMarkers(trades) : null,
-    [trades],
-  )
-
-  const subPaneMarkers = useMemo(
-    () => trades && trades.length > 0 ? buildMarkers(trades, true) : null,
-    [trades],
-  )
+  const isAggregated = viewInterval !== backtestInterval
 
   const candleTimeIndex = useMemo(() => {
     const map = new Map<string | number, number>()
@@ -178,8 +172,36 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     return map
   }, [candleData])
 
+  const mainMarkers = useMemo(
+    () => {
+      if (!trades || trades.length === 0) return null
+      if (isAggregated) return aggregateMarkers(trades, candleTimeIndex, viewInterval, backtestInterval, toET)
+      return buildMarkers(trades)
+    },
+    [trades, isAggregated, candleTimeIndex, viewInterval, backtestInterval],
+  )
+
+  const subPaneMarkers = useMemo(
+    () => {
+      if (!trades || trades.length === 0) return null
+      if (isAggregated) return aggregateMarkers(trades, candleTimeIndex, viewInterval, backtestInterval, toET, true)
+      return buildMarkers(trades, true)
+    },
+    [trades, isAggregated, candleTimeIndex, viewInterval, backtestInterval],
+  )
+
   const tradeLookup = useMemo(() => {
     if (!trades || trades.length === 0 || candleData.length === 0) return null
+    if (isAggregated) {
+      const grouped = new Map<string | number, Trade[]>()
+      for (const t of trades) {
+        const snapped = snapTimestamp(t.date, viewInterval, toET)
+        const existing = grouped.get(snapped)
+        if (existing) existing.push(t)
+        else grouped.set(snapped, [t])
+      }
+      return grouped
+    }
     const SNAP = 2
     const byIdx = new Map<number, Trade[]>()
     for (const t of trades) {
@@ -203,7 +225,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       }
     }
     return result
-  }, [trades, candleTimeIndex, candleData])
+  }, [trades, candleTimeIndex, candleData, isAggregated, viewInterval])
 
   const [tooltip, setTooltip] = useState<{ x: number; y: number; trades: Trade[] } | null>(null)
   const tradeLookupRef = useRef(tradeLookup)
@@ -463,7 +485,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   // to avoid creating hundreds of LineSeries on large datasets.
   useEffect(() => {
     const chart = chartRef.current
-    if (!chart || !emaOverlays || emaOverlays.length === 0) return
+    if (!chart || !emaOverlays || emaOverlays.length === 0 || isAggregated) return
     const created: ISeriesApi<any>[] = []
     for (const overlay of emaOverlays) {
       const activeColor = overlay.side === 'buy' ? '#26a641' : '#f85149'
@@ -526,21 +548,21 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       created.push(sInactive)
     }
     return () => { for (const s of created) { try { chart.removeSeries(s) } catch {} } }
-  }, [emaOverlays])
+  }, [emaOverlays, isAggregated])
 
   // Trade markers — update via plugin ref so trades arriving post-backtest
   // don't force a series rebuild. candleData is in deps so the effect re-runs
   // after series.setData() — otherwise a plugin attached before the series has
   // its data (or attached to a pre-StrictMode-remount series) paints nothing.
-  const mainMarkersPluginRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null)
+  const mainMarkersPluginRef = useRef<any>(null)
   useEffect(() => {
     const series = candleSeriesRef.current
     if (!series) return
-    const markers = mainMarkers ?? []
+    const markers = (mainMarkers ?? []) as any[]
     if (!mainMarkersPluginRef.current) {
-      mainMarkersPluginRef.current = createSeriesMarkers(series, markers)
+      mainMarkersPluginRef.current = createSeriesMarkers(series, markers as any)
     } else {
-      mainMarkersPluginRef.current.setMarkers(markers)
+      mainMarkersPluginRef.current.setMarkers(markers as any)
     }
   }, [mainMarkers, candleData])
 

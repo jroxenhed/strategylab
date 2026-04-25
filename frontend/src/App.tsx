@@ -4,6 +4,7 @@ import type { BacktestResult, IndicatorInstance, DataSource, StrategyRequest, Da
 import { DEFAULT_INDICATORS } from './shared/types/indicators'
 import type { IChartApi } from 'lightweight-charts'
 import { useOHLCV, useInstanceIndicators } from './shared/hooks/useOHLCV'
+import { getCoarserIntervals } from './shared/utils/intervals'
 import Sidebar from './features/sidebar/Sidebar'
 import Chart from './features/chart/Chart'
 import StrategyBuilder from './features/strategy/StrategyBuilder'
@@ -48,6 +49,11 @@ export default function App() {
   const [mainChart, setMainChart] = useState<IChartApi | null>(null)
   const [chartEnabled, setChartEnabled] = useState(true)
   const [datePreset, setDatePreset] = useState<DatePreset>((saved?.datePreset as DatePreset) ?? 'Y')
+  const [viewInterval, setViewInterval] = useState(interval)
+
+  useEffect(() => { setViewInterval(interval) }, [interval])
+
+  const viewIntervalOptions = useMemo(() => getCoarserIntervals(interval), [interval])
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -55,12 +61,13 @@ export default function App() {
     }))
   }, [ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, datePreset])
 
-  const { data: ohlcv = EMPTY_OHLCV, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, interval, dataSource, extendedHours)
-  const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', start, end, interval, dataSource, extendedHours, chartEnabled && showSpy)
-  const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', start, end, interval, dataSource, extendedHours, chartEnabled && showQqq)
+  const chartInterval = chartEnabled ? viewInterval : interval
+  const { data: ohlcv = EMPTY_OHLCV, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, chartInterval, dataSource, extendedHours)
+  const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', start, end, chartInterval, dataSource, extendedHours, chartEnabled && showSpy)
+  const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', start, end, chartInterval, dataSource, extendedHours, chartEnabled && showQqq)
 
   const { data: instanceData = {}, refetch: refetchIndicators } = useInstanceIndicators(
-    ticker, start, end, interval, chartEnabled ? indicators : [], dataSource, extendedHours,
+    ticker, start, end, chartInterval, chartEnabled ? indicators : [], dataSource, extendedHours,
   )
 
   const refreshChart = useCallback(() => {
@@ -96,6 +103,18 @@ export default function App() {
               <button onClick={() => setChartEnabled(c => !c)} style={{ ...styles.chartToggleBtn, opacity: chartEnabled ? 0.5 : 1 }}>
                 {chartEnabled ? 'Disable Chart' : 'Enable Chart'}
               </button>
+              {chartEnabled && viewIntervalOptions.length > 1 && (
+                <select
+                  value={viewInterval}
+                  onChange={e => setViewInterval(e.target.value)}
+                  style={{ background: '#21262d', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px', fontSize: 12 }}
+                  title="Chart display interval"
+                >
+                  {viewIntervalOptions.map(o => (
+                    <option key={o.value} value={o.value}>{o.value === interval ? o.label : `View ${o.label}`}</option>
+                  ))}
+                </select>
+              )}
             </>
           )}
         </span>
@@ -158,6 +177,8 @@ export default function App() {
                           instanceData={instanceData}
                           trades={trades}
                           emaOverlays={emaOverlays}
+                          viewInterval={viewInterval}
+                          backtestInterval={interval}
                           onChartReady={setMainChart}
                         />
                       ) : (
