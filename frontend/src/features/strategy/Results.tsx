@@ -373,14 +373,6 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
               />
 
               <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start', marginTop: 12 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 220 }}>
-                  <StatRow label="Biggest win" value={summary.gain_stats?.max} color="#26a641" />
-                  <StatRow label="Avg win" value={summary.gain_stats?.mean} color="#26a641" />
-                  <StatRow label="Smallest win" value={summary.gain_stats?.min} color="#26a641" />
-                  <StatRow label="Biggest loss" value={summary.loss_stats?.min} color="#f85149" />
-                  <StatRow label="Avg loss" value={summary.loss_stats?.mean} color="#f85149" />
-                  <StatRow label="Smallest loss" value={summary.loss_stats?.max} color="#f85149" />
-                </div>
                 <div style={{ flex: 1, minWidth: 280 }}>
                   <EvWaterfall
                     winRatePct={summary.win_rate_pct}
@@ -390,6 +382,8 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
                     grossLoss={summary.gross_loss ?? 0}
                     numSells={summary.num_trades}
                     evPerTrade={summary.ev_per_trade ?? null}
+                    gainStats={summary.gain_stats ?? null}
+                    lossStats={summary.loss_stats ?? null}
                   />
                 </div>
                 <PnlHistogram values={summary.pnl_distribution ?? []} />
@@ -581,26 +575,6 @@ function CostRow({ label, value, suffix, color, bold }: {
   )
 }
 
-function StatRow({
-  label,
-  value,
-  color,
-}: {
-  label: string
-  value: number | null | undefined
-  color: string
-}) {
-  const fmt = (v: number | null | undefined) =>
-    v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}`
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, gap: 8 }}>
-      <span style={{ color: '#8b949e' }}>{label}</span>
-      <span style={{ fontFamily: 'monospace', color: value == null ? '#484f58' : color }}>
-        {fmt(value)}
-      </span>
-    </div>
-  )
-}
 
 function EvPfHeader({
   evPerTrade,
@@ -646,6 +620,64 @@ function EvPfHeader({
   )
 }
 
+interface SideStats {
+  min: number | null
+  max: number | null
+  mean: number | null
+  median: number | null
+}
+
+function RangeBar({
+  min,
+  max,
+  avg,
+  color,
+}: {
+  min: number
+  max: number
+  avg: number
+  color: string
+}) {
+  const fmtVal = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}`
+  const range = max - min
+  const avgPct = range === 0 ? 50 : ((avg - min) / range) * 100
+
+  return (
+    <div
+      style={{
+        gridColumn: '2 / -1',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 4,
+        height: 12,
+        marginTop: -2,
+      }}
+    >
+      <span style={{ fontSize: 9, color: '#484f58', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
+        {fmtVal(min)}
+      </span>
+      <div style={{ flex: 1, position: 'relative', height: 4 }}>
+        <div style={{ height: 4, borderRadius: 2, background: color, opacity: 0.25, width: '100%' }} />
+        <div
+          style={{
+            position: 'absolute',
+            left: `${avgPct}%`,
+            top: -2,
+            width: 1,
+            height: 8,
+            background: color,
+            opacity: 0.7,
+            transform: 'translateX(-0.5px)',
+          }}
+        />
+      </div>
+      <span style={{ fontSize: 9, color: '#484f58', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
+        {fmtVal(max)}
+      </span>
+    </div>
+  )
+}
+
 function EvWaterfall({
   winRatePct,
   avgGain,
@@ -654,6 +686,8 @@ function EvWaterfall({
   grossLoss,
   numSells,
   evPerTrade,
+  gainStats,
+  lossStats,
 }: {
   winRatePct: number
   avgGain: number
@@ -662,6 +696,8 @@ function EvWaterfall({
   grossLoss: number
   numSells: number
   evPerTrade: number | null
+  gainStats: SideStats | null
+  lossStats: SideStats | null
 }) {
   if (numSells <= 0) return null
 
@@ -706,6 +742,14 @@ function EvWaterfall({
             {winRatePct.toFixed(1)}% × {fmtUnsigned(avgGain)} =
           </span>
           <span style={{ color: '#26a641', textAlign: 'right' }}>{fmtSigned(winContribution)}</span>
+          {gainStats?.min != null && gainStats?.max != null && gainStats?.mean != null && (
+            <RangeBar
+              min={gainStats.min}
+              max={gainStats.max}
+              avg={gainStats.mean}
+              color="#26a641"
+            />
+          )}
         </>
       )}
 
@@ -717,6 +761,14 @@ function EvWaterfall({
             {lossRatePct.toFixed(1)}% × {fmtUnsigned(avgLoss)} =
           </span>
           <span style={{ color: '#f85149', textAlign: 'right' }}>{fmtSigned(-lossContribution)}</span>
+          {lossStats?.min != null && lossStats?.max != null && lossStats?.mean != null && (
+            <RangeBar
+              min={lossStats.min}
+              max={lossStats.max}
+              avg={lossStats.mean}
+              color="#f85149"
+            />
+          )}
         </>
       )}
 
