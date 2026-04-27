@@ -640,11 +640,16 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     }
   }, [maximizedPane, subPaneCount, panelMinSizes])
 
-  // After any panel resize, trigger syncWidths for price scale alignment
+  // After any panel resize, trigger syncWidths for price scale alignment.
+  // Debounced: syncWidths adjusts minimumWidth which can re-trigger onLayout,
+  // causing an infinite oscillation loop (two widths alternating each frame).
+  const layoutRafRef = useRef<number | null>(null)
   const handleLayout = useCallback(() => {
-    // syncWidths is called via rAF inside the sync handler, but manual resize
-    // via drag doesn't go through that path — call it explicitly here.
-    syncWidthsRef.current()
+    if (layoutRafRef.current !== null) return
+    layoutRafRef.current = requestAnimationFrame(() => {
+      layoutRafRef.current = null
+      syncWidthsRef.current()
+    })
   }, [])
 
   // The Group needs a key tied to subPaneCount so react-resizable-panels
