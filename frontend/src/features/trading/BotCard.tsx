@@ -157,8 +157,8 @@ export default function BotCard({
             }}
           />
 
-          {/* Symbol + strategy — fills remaining space, right-side columns are tight */}
-          <span style={{ fontSize: 12, flex: '1 1 0', minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {/* Symbol + strategy */}
+          <span style={{ fontSize: 12, flexShrink: 1, minWidth: 80, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             <span style={{ color: '#e6edf3', fontWeight: 600 }}>{summary.symbol}</span>
             {dir === 'short' && (
               <span style={{
