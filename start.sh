@@ -9,6 +9,11 @@ if [ "$1" = "--prod" ] || [ "$1" = "-p" ] || [ "$1" = "prod" ]; then
   MODE="prod"
 fi
 
+# Kill stale processes on our ports
+for port in 8000 5173; do
+  lsof -ti:$port 2>/dev/null | xargs kill 2>/dev/null || true
+done
+
 echo "Starting backend ($MODE)..."
 cd "$ROOT/backend"
 if [ "$MODE" = "prod" ]; then
