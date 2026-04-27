@@ -157,23 +157,21 @@ export default function BotCard({
             }}
           />
 
-          {/* Symbol (bold) + strategy name (muted) */}
-          <span style={{ fontSize: 12, flexShrink: 0 }}>
+          {/* Symbol + badge + strategy name */}
+          <span style={{ fontSize: 12, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
             <span style={{ color: '#e6edf3', fontWeight: 600 }}>{summary.symbol}</span>
+            {dir === 'short' && (
+              <span style={{
+                fontSize: 9, fontWeight: 700, padding: '0px 4px', borderRadius: 2,
+                background: 'rgba(239,83,80,0.15)', color: '#ef5350',
+                lineHeight: '16px', marginLeft: 4, verticalAlign: 'middle',
+              }}>S</span>
+            )}
             <span style={{ color: '#666', marginLeft: 6 }}>{summary.strategy_name}</span>
           </span>
 
-          {/* Direction badge — only for short */}
-          {dir === 'short' && (
-            <span style={{
-              fontSize: 9, fontWeight: 700, padding: '0px 4px', borderRadius: 2,
-              background: 'rgba(239,83,80,0.15)', color: '#ef5350',
-              lineHeight: '16px', flexShrink: 0,
-            }}>S</span>
-          )}
-
           {/* P&L: dollar + percentage */}
-          <span style={{ fontSize: 12, color: pnlColor, flexShrink: 0, marginLeft: 4 }}>
+          <span style={{ fontSize: 12, color: pnlColor, flexShrink: 0 }}>
             {fmtPnl(summary.total_pnl)}
             <span style={{ color: pnlColor, opacity: 0.7, marginLeft: 3 }}>
               ({(summary.total_pnl / summary.allocated_capital * 100).toFixed(1)}%)
@@ -188,11 +186,8 @@ export default function BotCard({
             {summary.status}
           </span>
 
-          {/* Spacer */}
-          <div style={{ flex: 1 }} />
-
-          {/* Mini sparkline — compact size */}
-          <div style={{ flex: '0 0 80px', height: 24 }} onClick={e => e.stopPropagation()}>
+          {/* Mini sparkline — takes remaining space */}
+          <div style={{ flex: 1, minWidth: 80, height: 24 }} onClick={e => e.stopPropagation()}>
             <MiniSparkline equityData={detail?.state.equity_snapshots ?? summary.equity_snapshots ?? []} alignedRange={alignedRange} height={24} />
           </div>
 

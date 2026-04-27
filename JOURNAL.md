@@ -4,6 +4,10 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-04-28
+
+- **D10 compact sparkline alignment fix.** Root cause: name column had `flex: 1` eating all horizontal space, squeezing sparklines into 80px on the far right. Fix: made the sparkline the flexible element (`flex: 1`) so it fills remaining space (~500-700px), while name/P&L/status stay content-width and cluster left. Direction badge moved inside name span to keep child count constant across rows.
+
 ## 2026-04-27
 
 - **15-task blitz session using parallel subagent orchestration.** Established the pattern: main session orchestrates (picks tasks, writes specs, dispatches, verifies diffs, commits), subagents do the heavy lifting in their own context windows. Four agents ran simultaneously at peak. Context needle barely moved in the main session despite the volume.
