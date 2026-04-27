@@ -3,7 +3,7 @@ import { Plus } from 'lucide-react'
 import { fetchWatchlist, saveWatchlist, scanSignals, placeBuy, placeSell, type SignalResult } from '../../api/trading'
 import type { Rule } from '../../shared/types'
 import RuleRow, { emptyRule } from '../strategy/RuleRow'
-import { fmtTimeET, fmtShortET } from '../../shared/utils/time'
+import { fmtTimeET, fmtShortET, tzLabel, useTimezone } from '../../shared/utils/time'
 import { apiErrorDetail } from '../../shared/utils/errors'
 
 const SCANNER_STORAGE_KEY = 'strategylab-scanner'
@@ -16,6 +16,7 @@ function loadScannerSettings() {
 }
 
 export default function SignalScanner() {
+  useTimezone()
   const saved = useState(() => loadScannerSettings())[0]
   const [symbols, setSymbols] = useState('')
   const [interval, setInterval] = useState('15m')
@@ -203,7 +204,7 @@ export default function SignalScanner() {
         <div style={styles.results}>
           {scannedAt && (
             <div style={styles.scannedAt}>
-              Scanned at {fmtTimeET(scannedAt)} ET
+              Scanned at {fmtTimeET(scannedAt)} {tzLabel()}
             </div>
           )}
           {executeMsg && (

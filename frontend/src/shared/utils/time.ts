@@ -1,36 +1,67 @@
-/**
- * All timestamps in StrategyLab are displayed in US Eastern Time (ET)
- * to match NYSE trading hours.
- */
+import { useSyncExternalStore } from 'react'
 
-/** Full date+time: "2026-04-01 13:35" ET — for backtest trades table */
+const TZ_KEY = 'strategylab-timezone'
+type TzMode = 'ET' | 'local'
+
+let current: TzMode = (localStorage.getItem(TZ_KEY) as TzMode) || 'ET'
+const listeners = new Set<() => void>()
+
+function notify() { listeners.forEach(fn => fn()) }
+
+export function getTimezone(): TzMode { return current }
+
+export function setTimezone(mode: TzMode) {
+  current = mode
+  localStorage.setItem(TZ_KEY, mode)
+  notify()
+}
+
+export function useTimezone(): [TzMode, (m: TzMode) => void] {
+  const mode = useSyncExternalStore(
+    cb => { listeners.add(cb); return () => listeners.delete(cb) },
+    () => current,
+  )
+  return [mode, setTimezone]
+}
+
+function tz(): string | undefined {
+  return current === 'ET' ? 'America/New_York' : undefined
+}
+
 export function fmtDateTimeET(d: string | number | undefined): string {
   if (d === undefined) return '—'
   const date = typeof d === 'number' ? new Date(d * 1000) : new Date(d)
   return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York',
+    timeZone: tz(),
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hour12: false,
   }).format(date).replace(',', '')
 }
 
-/** Short date+time: "Apr 1, 13:35" ET — for journals, order history, scanner */
 export function fmtShortET(d: string): string {
   try {
     return new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/New_York',
+      timeZone: tz(),
       month: 'short', day: 'numeric',
       hour: '2-digit', minute: '2-digit', hour12: false,
     }).format(new Date(d))
   } catch { return d }
 }
 
-/** Time only: "13:35:29" ET — for bot activity log */
 export function fmtTimeET(d: string): string {
   try {
     return new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/New_York',
+      timeZone: tz(),
       hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
     }).format(new Date(d))
   } catch { return d }
+}
+
+export function tzLabel(): string {
+  try {
+    const tz = current === 'ET' ? 'America/New_York' : undefined
+    return new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' })
+      .formatToParts(new Date())
+      .find(p => p.type === 'timeZoneName')?.value ?? 'Local'
+  } catch { return 'Local' }
 }

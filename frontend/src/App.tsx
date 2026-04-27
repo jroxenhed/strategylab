@@ -11,6 +11,7 @@ import StrategyBuilder from './features/strategy/StrategyBuilder'
 import Results from './features/strategy/Results'
 import PaperTrading from './features/trading/PaperTrading'
 import Discovery from './features/discovery/Discovery'
+import { useTimezone, tzLabel } from './shared/utils/time'
 
 type AppTab = 'chart' | 'trading' | 'discovery'
 
@@ -30,6 +31,7 @@ function loadSettings() {
 const saved = loadSettings()
 
 export default function App() {
+  const [tzMode, setTzMode] = useTimezone()
   const [ticker, setTicker] = useState(saved?.ticker ?? 'AAPL')
   const [start, setStart] = useState(saved?.start ?? oneYearAgo)
   const [end, setEnd] = useState(saved?.end ?? today)
@@ -94,6 +96,13 @@ export default function App() {
           ))}
         </div>
         <span style={{ color: '#8b949e', fontSize: 13, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button
+            onClick={() => setTzMode(tzMode === 'ET' ? 'local' : 'ET')}
+            style={{ ...styles.chartToggleBtn, color: tzMode === 'local' ? '#58a6ff' : '#8b949e' }}
+            title={tzMode === 'ET' ? 'Showing Eastern Time — click for local' : 'Showing local time — click for Eastern'}
+          >
+            {tzLabel()}
+          </button>
           {ticker} &nbsp;·&nbsp; {start} → {end}
           {activeTab === 'chart' && (
             <>
