@@ -15,7 +15,7 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 
 ## A — Charts & Indicators
 
-- [ ] **A1** Portfolio equity chart (combined P&L across bots)
+- [x] **A1** Portfolio equity chart (combined P&L across bots) — PortfolioStrip component with staircase-merged sparkline + summary stats (Total P&L $/%, Allocated, Running/Total, Profitable bots). Aligned sparklines via fixed 60% width.
 - [ ] **A3** Equity curve trend analysis (open-ended — define "trend" first)
 - [ ] **A5** Resizable, collapsible, double-click-to-maximize individual chart panes
 - [ ] **A7** New indicator types via registry: Stochastic, VWAP (ATR shipped with A4)

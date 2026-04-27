@@ -8,6 +8,7 @@ import {
 import { fmtUsd } from '../../shared/utils/format'
 import { apiErrorDetail } from '../../shared/utils/errors'
 import BotCard, { btnStyle } from './BotCard'
+import PortfolioStrip from './PortfolioStrip'
 import AddBotBar, { sectionStyle, inputStyle } from './AddBotBar'
 import { useBroker } from '../../shared/hooks/useOHLCV'
 
@@ -280,6 +281,10 @@ export default function BotControlCenter() {
 
       <FundBar fund={fund} onSetFund={handleSetFund} />
       <AddBotBar fund={fund} onAdd={handleAdd} />
+
+      {bots.some(b => (b.equity_snapshots?.length ?? 0) > 0) && (
+        <PortfolioStrip bots={bots} alignedRange={alignedRange} />
+      )}
 
       {bots.length === 0 && fund && fund.bot_fund > 0 && (
         <div style={{ color: '#555', fontSize: 13, padding: '8px 12px' }}>

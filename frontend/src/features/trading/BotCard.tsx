@@ -117,7 +117,7 @@ export default function BotCard({
       {/* Two-column layout */}
       <div style={{ display: 'flex', gap: 12 }}>
         {/* Left column */}
-        <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
           {/* Header row */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {/* Heartbeat dot */}
@@ -211,7 +211,7 @@ export default function BotCard({
               >{fmtUsd(summary.allocated_capital)}</span>
             )}</span>
             <span style={{ color: '#666' }}>Trades: <span style={{ color: '#aaa' }}>{summary.trades_count}</span></span>
-            <span style={{ color: '#666' }}>P&L: <span style={{ color: pnlColor }}>{fmtPnl(summary.total_pnl)}</span></span>
+            <span style={{ color: '#666' }}>P&L: <span style={{ color: pnlColor }}>{fmtPnl(summary.total_pnl)} ({(summary.total_pnl / summary.allocated_capital * 100).toFixed(1)}%)</span></span>
             <span style={{ color: '#666', textTransform: 'capitalize' }}>
               Status: <span style={{ color: statusColor(summary.status) }}>{summary.status}</span>
             </span>
@@ -276,7 +276,7 @@ export default function BotCard({
         </div>
 
         {/* Right column: mini chart */}
-        <div style={{ flex: 1, minWidth: 120, minHeight: 60 }}>
+        <div style={{ flex: '0 0 60%', minHeight: 60 }}>
           <MiniSparkline equityData={detail?.state.equity_snapshots ?? summary.equity_snapshots ?? []} alignedRange={alignedRange} />
         </div>
       </div>

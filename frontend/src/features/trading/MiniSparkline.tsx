@@ -4,9 +4,10 @@ import { createChart, BaselineSeries, type IChartApi, type ISeriesApi } from 'li
 interface Props {
   equityData: { time: string; value: number }[]
   alignedRange?: { from: number; to: number }
+  height?: number
 }
 
-export default function MiniSparkline({ equityData, alignedRange }: Props) {
+export default function MiniSparkline({ equityData, alignedRange, height = 60 }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Baseline'> | null>(null)
@@ -23,7 +24,7 @@ export default function MiniSparkline({ equityData, alignedRange }: Props) {
     if (!ref.current) return
     const chart = createChart(ref.current, {
       width: ref.current.clientWidth,
-      height: 60,
+      height,
       layout: { background: { color: 'transparent' }, textColor: '#aaa' },
       grid: { vertLines: { visible: false }, horzLines: { visible: false } },
       leftPriceScale: { visible: false },
@@ -92,5 +93,5 @@ export default function MiniSparkline({ equityData, alignedRange }: Props) {
     applyRange()
   }, [equityData, alignedRange?.from, alignedRange?.to])
 
-  return <div ref={ref} style={{ width: '100%', height: 60 }} />
+  return <div ref={ref} style={{ width: '100%', height }} />
 }
