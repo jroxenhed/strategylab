@@ -347,8 +347,8 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
             { label: 'B&H Return', value: `${summary.buy_hold_return_pct > 0 ? '+' : ''}${summary.buy_hold_return_pct}%`, color: '#8b949e', primary: false },
             { label: 'Trades', value: summary.num_trades, color: '#e6edf3', primary: false },
             { label: 'Win Rate', value: `${summary.win_rate_pct}%`, color: summary.win_rate_pct >= 50 ? '#26a641' : '#f85149', primary: false },
-            { label: 'Sharpe', value: summary.sharpe_ratio, color: summary.sharpe_ratio >= 1 ? '#26a641' : '#8b949e', primary: false },
-            { label: 'Max DD', value: `${summary.max_drawdown_pct}%`, color: '#f85149', primary: false },
+            { label: 'Sharpe', value: summary.sharpe_ratio, color: summary.sharpe_ratio >= 1 ? '#26a641' : summary.sharpe_ratio >= 0.5 ? '#d29922' : summary.sharpe_ratio < 0 ? '#f85149' : '#8b949e', primary: false },
+            { label: 'Max DD', value: `${summary.max_drawdown_pct}%`, color: Math.abs(summary.max_drawdown_pct) >= 10 ? '#f85149' : '#8b949e', primary: false },
           ].map(({ label, value, color, primary }) => (
             <div key={label} style={{ ...styles.metric, minWidth: primary ? 140 : 90 }}>
               <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>{label}</div>
