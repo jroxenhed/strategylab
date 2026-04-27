@@ -69,7 +69,7 @@ _Older items predate the numbering scheme; new entries tagged with their letter+
 - [ ] **C1** Merge stat column into waterfall (replace left min/avg/max column with inline min↔max range indicator under each waterfall row)
 - [x] **C2** "vs B&H" alpha metric replaces raw B&H Return — shows outperformance delta, green/red on sign.
 - [x] **C3** Sharpe: green ≥1, orange 0.5–1, red <0, gray 0–0.5. Max DD: red ≥10%, gray <10%.
-- [ ] **C4** Histogram zero line + min/max tick labels
+- [x] **C4** Histogram zero line (baseline + vertical dashed), min/max/zero dollar labels below bars.
 
 ### Shipped
 - [x] Summary readability pass — dropped `(mean)` suffix on EV/PF, renamed Max/Min gain/loss → Biggest/Smallest win/loss, added size hierarchy to top metrics row (Return + Final Value 22px primary, rest 13px secondary), removed median secondary values from avg rows
@@ -120,7 +120,7 @@ Own multi-session research project. Needs its own design work before implementat
 
 ## F — Architecture & housekeeping
 
-- [ ] **F1** Rename "Paper Trading" to something cool
+- [x] **F1** Renamed "Paper Trading" tab label to "Live Trading"
 - [ ] **F2** Group backend broker files into a `backend/brokers/` package **and** split `broker.py` (~680 lines) into `brokers/{yahoo,alpaca,ibkr}.py` behind the existing `TradingProvider` protocol. `broker_aggregate.py`, `broker_health.py`, `broker_health_singleton.py` move into the same package. Preserve `broker_health_singleton.py` as a separate module — it exists to break an import cycle, not as ceremony. Low value, moderate risk — only tackle if friction shows up when editing a single provider.
 - [ ] **F3** Split `frontend/src/features/strategy/Results.tsx` (~745 lines) and `StrategyBuilder.tsx` (~578 lines) into smaller subcomponents (equity/drawdown/scatter/tables for Results; rule sections for StrategyBuilder). Same tradeoff as F2 — defer until a change actually gets painful.
 - [ ] **F4** Frontend test harness. Backend has 12 test files, frontend has 0. Given the bug history in Chart.tsx (teardown race, pane sync, mount-once refactor) and the polling code (AbortController fixes, adaptive interval), a small Vitest + React Testing Library setup with smoke tests on `api/client`, `useOHLCV`, and a Chart mount/unmount cycle would catch whole-tree regressions early. Start narrow on the areas that already burned — don't chase coverage.

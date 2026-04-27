@@ -91,7 +91,7 @@ export default function App() {
               onClick={() => setActiveTab(tab)}
               style={{ ...styles.tab, ...(activeTab === tab ? styles.tabActive : {}) }}
             >
-              {tab === 'chart' ? 'Chart' : tab === 'trading' ? 'Paper Trading' : 'Discovery'}
+              {tab === 'chart' ? 'Chart' : tab === 'trading' ? 'Live Trading' : 'Discovery'}
             </button>
           ))}
         </div>

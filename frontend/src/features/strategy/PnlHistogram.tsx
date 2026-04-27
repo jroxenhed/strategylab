@@ -4,9 +4,18 @@ interface Props {
   height?: number
 }
 
+function fmtDollar(v: number): string {
+  const abs = Math.abs(v)
+  const s = abs >= 1000 ? `$${(abs / 1000).toFixed(1)}k` : `$${abs.toFixed(0)}`
+  return v < 0 ? `-${s}` : `+${s}`
+}
+
+const LABEL_H = 12
+
 export default function PnlHistogram({ values, width = 220, height = 60 }: Props) {
+  const totalH = height + LABEL_H
   if (values.length === 0) {
-    return <div style={{ width, height, color: '#484f58', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>no trades</div>
+    return <div style={{ width, height: totalH, color: '#484f58', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>no trades</div>
   }
   const min = Math.min(...values)
   const max = Math.max(...values)
@@ -23,7 +32,7 @@ export default function PnlHistogram({ values, width = 220, height = 60 }: Props
   const zeroX = min < 0 && max > 0 ? ((0 - min) / range) * width : null
 
   return (
-    <svg width={width} height={height} style={{ display: 'block' }}>
+    <svg width={width} height={totalH} style={{ display: 'block' }}>
       {buckets.map((count, i) => {
         const bucketStart = min + i * bucketSize
         const bucketEnd = bucketStart + bucketSize
@@ -44,7 +53,13 @@ export default function PnlHistogram({ values, width = 220, height = 60 }: Props
         )
       })}
       {zeroX != null && (
-        <line x1={zeroX} y1={0} x2={zeroX} y2={height} stroke="#30363d" strokeWidth={1} strokeDasharray="2,2" />
+        <line x1={zeroX} y1={0} x2={zeroX} y2={height} stroke="#484f58" strokeWidth={1} strokeDasharray="2,2" />
+      )}
+      <line x1={0} y1={height} x2={width} y2={height} stroke="#30363d" strokeWidth={1} />
+      <text x={1} y={height + LABEL_H - 2} fontSize={10} fill="#8b949e" textAnchor="start">{fmtDollar(min)}</text>
+      <text x={width - 1} y={height + LABEL_H - 2} fontSize={10} fill="#8b949e" textAnchor="end">{fmtDollar(max)}</text>
+      {zeroX != null && (
+        <text x={zeroX} y={height + LABEL_H - 2} fontSize={10} fill="#8b949e" textAnchor="middle">$0</text>
       )}
     </svg>
   )
