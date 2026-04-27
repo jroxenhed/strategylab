@@ -431,6 +431,24 @@ class BotManager:
         self.save()
         return epoch
 
+    def reorder(self, ids: list[str]):
+        """Reorder bots to match the given ID list.
+
+        IDs not in the list are appended at the end (handles races where a new
+        bot was added between the frontend read and the reorder call).  IDs in
+        the list that don't exist are silently ignored.
+        """
+        new_bots: dict[str, tuple[BotConfig, BotState]] = {}
+        for bid in ids:
+            if bid in self.bots:
+                new_bots[bid] = self.bots[bid]
+        # Append any bots not mentioned (newly added)
+        for bid in self.bots:
+            if bid not in new_bots:
+                new_bots[bid] = self.bots[bid]
+        self.bots = new_bots
+        self.save()
+
     def delete_bot(self, bot_id: str):
         if bot_id not in self.bots:
             raise KeyError(f"Bot {bot_id} not found")

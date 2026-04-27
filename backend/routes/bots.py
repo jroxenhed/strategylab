@@ -55,6 +55,10 @@ class UpdateBotRequest(BaseModel):
     broker: Optional[str] = None
 
 
+class ReorderBotsRequest(BaseModel):
+    order: list[str]
+
+
 # ---------------------------------------------------------------------------
 # Fund endpoints (must be before /{bot_id} routes)
 # ---------------------------------------------------------------------------
@@ -112,6 +116,14 @@ def stop_all_bots():
         except Exception as e:
             failed.append({"bot_id": bot_id, "error": str(e)})
     return {"stopped": stopped, "failed": failed}
+
+
+@router.put("/reorder")
+def reorder_bots(req: ReorderBotsRequest):
+    """Persist a new display order for the bot list."""
+    mgr = _get_manager()
+    mgr.reorder(req.order)
+    return {"ok": True}
 
 
 @router.post("/stop-and-close-all")

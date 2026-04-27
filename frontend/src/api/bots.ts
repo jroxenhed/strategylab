@@ -70,3 +70,7 @@ export async function stopAndCloseAllBots(): Promise<{ closed: string[]; failed:
   const res = await api.post('/api/bots/stop-and-close-all')
   return res.data
 }
+
+export async function reorderBots(order: string[]): Promise<void> {
+  await api.put('/api/bots/reorder', { order })
+}
