@@ -82,10 +82,11 @@ def run_backtest(req: StrategyRequest):
         close = df["Close"]
         high = df["High"]
         low = df["Low"]
+        volume = df["Volume"] if "Volume" in df.columns else None
         buy_rules = [migrate_rule(r) for r in req.buy_rules]
         sell_rules = [migrate_rule(r) for r in req.sell_rules]
         all_rules = buy_rules + sell_rules
-        indicators = compute_indicators(close, high=high, low=low, rules=all_rules)
+        indicators = compute_indicators(close, high=high, low=low, volume=volume, rules=all_rules)
 
         # Simulate
         capital = req.initial_capital

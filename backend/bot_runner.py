@@ -123,8 +123,10 @@ class BotRunner:
 
         # 4. Compute indicators
         try:
+            vol = df["Volume"] if "Volume" in df.columns else None
             indicators = await self._run_in_executor(
-                compute_indicators, df["Close"], df["High"], df["Low"], all_rules
+                lambda: compute_indicators(df["Close"], high=df["High"], low=df["Low"],
+                                           volume=vol, rules=all_rules)
             )
         except Exception as e:
             self._log("WARN", f"Indicator error: {e}")
