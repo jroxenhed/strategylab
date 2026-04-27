@@ -157,8 +157,8 @@ export default function BotCard({
             }}
           />
 
-          {/* Symbol + strategy — fixed column */}
-          <span style={{ fontSize: 12, flex: '1 1 0', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {/* Symbol + strategy — capped width so P&L sits next to it */}
+          <span style={{ fontSize: 12, flex: '0 1 220px', minWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             <span style={{ color: '#e6edf3', fontWeight: 600 }}>{summary.symbol}</span>
             {dir === 'short' && (
               <span style={{
@@ -170,7 +170,7 @@ export default function BotCard({
             <span style={{ color: '#666', marginLeft: 6 }}>{summary.strategy_name}</span>
           </span>
 
-          {/* P&L — fixed width column */}
+          {/* P&L — fixed width */}
           <span style={{ fontSize: 12, color: pnlColor, flex: '0 0 140px', textAlign: 'right' }}>
             {fmtPnl(summary.total_pnl)}
             <span style={{ opacity: 0.7, marginLeft: 3 }}>
@@ -178,13 +178,16 @@ export default function BotCard({
             </span>
           </span>
 
-          {/* Status — fixed width column */}
+          {/* Status — fixed width */}
           <span style={{
             fontSize: 10, color: statusColor(summary.status), textTransform: 'capitalize',
             flex: '0 0 55px', textAlign: 'center',
           }}>
             {summary.status}
           </span>
+
+          {/* Spacer — gap between info and sparkline/actions */}
+          <div style={{ flex: 1 }} />
 
           {/* Mini sparkline — compact size */}
           <div style={{ flex: '0 0 80px', height: 24 }} onClick={e => e.stopPropagation()}>
