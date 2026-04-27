@@ -24,6 +24,7 @@ interface SubPaneProps {
   markers?: any[]
   toET: (time: string | number) => any
   label: string
+  tzMode?: string
 }
 
 const CHART_BG = '#0d1117'
@@ -46,7 +47,7 @@ const chartOptions = {
 export default function SubPane({
   paneKey, instances, instanceData, mainChartRef, mainSeriesRef,
   paneRegistryRef, syncWidthsRef,
-  markers, toET, label,
+  markers, toET, label, tzMode,
 }: SubPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -214,7 +215,7 @@ export default function SubPane({
       }
     }
     syncWidthsRef.current()
-  }, [subData, instances, indicatorType, toET])
+  }, [subData, instances, indicatorType, toET, tzMode])
 
   // Effect 3: Markers
   useEffect(() => {

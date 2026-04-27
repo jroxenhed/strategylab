@@ -14,6 +14,7 @@ import SubPane from './SubPane'
 import type { PaneRegistry } from './SubPane'
 import { toLineData, aggregateMarkers, snapTimestamp } from './chartUtils'
 import TradeTooltip from './TradeTooltip'
+import { getTimezone, useTimezone } from '../../shared/utils/time'
 
 interface ChartProps {
   data: OHLCVBar[]
@@ -46,18 +47,29 @@ const chartOptions = {
 }
 
 // lightweight-charts v5 has no localization.timeZone support.
-// Shift unix timestamps to ET wall-clock time by reconstructing them as UTC
-// so the chart displays 9:30 instead of 13:30 for NYSE open.
+// Shift unix timestamps to the target timezone's wall-clock time by
+// reconstructing them as UTC so the chart displays e.g. 9:30 for NYSE open.
 // Date strings (daily+) pass through unchanged.
-const _etFormatter = new Intl.DateTimeFormat('en-US', {
-  timeZone: 'America/New_York',
-  year: 'numeric', month: '2-digit', day: '2-digit',
-  hour: '2-digit', minute: '2-digit', second: '2-digit',
-  hour12: false,
-})
+// The target timezone is controlled by the global TzMode toggle in time.ts.
+const _fmtCache = new Map<string, Intl.DateTimeFormat>()
+function _getFormatter(tzName: string): Intl.DateTimeFormat {
+  let f = _fmtCache.get(tzName)
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-US', {
+      timeZone: tzName,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    })
+    _fmtCache.set(tzName, f)
+  }
+  return f
+}
+const _localTz = Intl.DateTimeFormat().resolvedOptions().timeZone
 function toET(time: string | number): any {
   if (typeof time !== 'number') return time
-  const parts = _etFormatter.formatToParts(new Date(time * 1000))
+  const tzName = getTimezone() === 'ET' ? 'America/New_York' : _localTz
+  const parts = _getFormatter(tzName).formatToParts(new Date(time * 1000))
   const get = (type: string) => parseInt(parts.find(p => p.type === type)?.value ?? '0')
   return Date.UTC(get('year'), get('month') - 1, get('day'), get('hour') % 24, get('minute'), get('second')) / 1000
 }
@@ -95,6 +107,7 @@ function buildMarkers(trades: Trade[], subPane = false) {
 }
 
 export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, trades, emaOverlays, viewInterval, backtestInterval, onChartReady }: ChartProps) {
+  const [tzMode] = useTimezone()
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const candleSeriesRef = useRef<ISeriesApi<any> | null>(null)
@@ -109,18 +122,18 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   const spyLineData = useMemo(() => {
     if (!spyData || spyData.length === 0) return []
     return spyData.map(d => ({ time: toET(d.time as any) as any, value: d.close }))
-  }, [spyData])
+  }, [spyData, tzMode])
 
   const qqqLineData = useMemo(() => {
     if (!qqqData || qqqData.length === 0) return []
     return qqqData.map(d => ({ time: toET(d.time as any) as any, value: d.close }))
-  }, [qqqData])
+  }, [qqqData, tzMode])
 
   // Memoize toET-shifted series so re-runs triggered by trades/emaOverlays/toggles
   // don't re-transform thousands of bars each time.
   const candleData = useMemo(
     () => data.map(d => ({ ...d, time: toET(d.time as any) as any })),
-    [data],
+    [data, tzMode],
   )
 
   // Main-chart indicator instances (overlays on the candlestick chart)
@@ -176,7 +189,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       if (isAggregated) return aggregateMarkers(trades, candleTimeIndex, viewInterval, backtestInterval, toET)
       return buildMarkers(trades)
     },
-    [trades, isAggregated, candleTimeIndex, viewInterval, backtestInterval],
+    [trades, isAggregated, candleTimeIndex, viewInterval, backtestInterval, tzMode],
   )
 
   const subPaneMarkers = useMemo(
@@ -185,7 +198,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       if (isAggregated) return aggregateMarkers(trades, candleTimeIndex, viewInterval, backtestInterval, toET, true)
       return buildMarkers(trades, true)
     },
-    [trades, isAggregated, candleTimeIndex, viewInterval, backtestInterval],
+    [trades, isAggregated, candleTimeIndex, viewInterval, backtestInterval, tzMode],
   )
 
   const tradeLookup = useMemo(() => {
@@ -223,7 +236,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       }
     }
     return result
-  }, [trades, candleTimeIndex, candleData, isAggregated, viewInterval])
+  }, [trades, candleTimeIndex, candleData, isAggregated, viewInterval, tzMode])
 
   const [tooltip, setTooltip] = useState<{ x: number; y: number; trades: Trade[] } | null>(null)
   const tradeLookupRef = useRef(tradeLookup)
@@ -481,7 +494,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         seriesMap.get(inst.id)?.setData(toLineData(data[seriesKey], toET))
       }
     }
-  }, [instanceData, mainInstancesKey, candleData])
+  }, [instanceData, mainInstancesKey, candleData, tzMode])
 
   // EMA rising/falling overlays (per-rule visualization during/after backtest)
   // Uses 2 series per overlay (active + inactive) instead of one per segment
@@ -551,7 +564,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       created.push(sInactive)
     }
     return () => { for (const s of created) { try { chart.removeSeries(s) } catch {} } }
-  }, [emaOverlays, isAggregated])
+  }, [emaOverlays, isAggregated, tzMode])
 
   // Trade markers — update via plugin ref so trades arriving post-backtest
   // don't force a series rebuild. candleData is in deps so the effect re-runs
@@ -599,6 +612,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
             markers={subPaneMarkers ?? undefined}
             toET={toET}
             label={group.label}
+            tzMode={tzMode}
           />
         </div>
       ))}
