@@ -7,11 +7,12 @@ Interactive trading strategy backtester + live paper trading platform. Read this
 - **The task description IS the context.** Don't browse to "get oriented" — if the task is unclear, ask.
 - **No bulk reads.** No `cat`, no `ls *`, no reading full files to skim. Grep for the distinctive anchor, then Read only the small slice (±20 lines) around it.
 - **Grep over Read** whenever searching for a specific line, pattern, or symbol.
-- Work in small, focused steps. One-sentence narration before each. Commit per task, don't batch.
+- Work in small, focused steps. One-sentence narration before each. Commit per task, don't batch. Always push after committing.
 - If hitting an error or blocker, STOP and report immediately — don't retry in a loop.
 - Don't trust line numbers in docs/plans — they drift. Grep for the string anchor, then edit.
 - Output reasoning progressively to avoid API stream idle timeouts; never go silent for >60s.
 - **Key Bugs Fixed is authoritative.** If code appears to invite a "simpler" approach that conflicts with that section, don't take it — those patterns exist for non-obvious runtime reasons.
+- **Iterative review workflow for non-trivial tasks.** Write spec/plan/doc → dispatch review subagents → incorporate feedback → review again → repeat until confident → then present to user. Always use subagents for reviews to save main session context. Report progress back to the user frequently between iterations — don't go silent.
 
 ## Chart.tsx Architecture
 

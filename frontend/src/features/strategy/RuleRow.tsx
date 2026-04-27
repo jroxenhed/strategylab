@@ -42,7 +42,7 @@ export const CAN_USE_PARAM: Record<string, string[]> = {
   ma: ['above', 'below', 'crosses_above', 'crosses_below'],
 }
 
-export const emptyRule = (): Rule => ({ indicator: 'macd', condition: 'crossover_up' })
+export const emptyRule = (): Rule => ({ indicator: 'macd', condition: 'crossover_up', param: 'signal' })
 
 function indicatorLabel(rule: Rule): string {
   if (rule.indicator === 'ma' && rule.params) {
@@ -115,7 +115,9 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
         value={rule.indicator}
         onChange={e => {
           const newInd = e.target.value as Rule['indicator']
-          const update: Partial<Rule> = { indicator: newInd, condition: CONDITIONS[newInd][0], value: undefined, param: undefined }
+          const firstCond = CONDITIONS[newInd][0]
+          const autoParam = NEEDS_PARAM[newInd]?.includes(firstCond) ? 'signal' : undefined
+          const update: Partial<Rule> = { indicator: newInd, condition: firstCond, value: undefined, param: autoParam }
           if (newInd === 'ma') {
             update.params = { period: 20, type: 'ema' }
           } else if (newInd === 'rsi') {
@@ -172,7 +174,8 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
       <select value={rule.condition} onChange={e => {
         const newCond = e.target.value
         const keepParam = CAN_USE_PARAM[rule.indicator]?.includes(newCond)
-        onChange({ ...rule, condition: newCond, param: keepParam ? rule.param : undefined })
+        const forceParam = NEEDS_PARAM[rule.indicator]?.includes(newCond) ? 'signal' : undefined
+        onChange({ ...rule, condition: newCond, param: forceParam ?? (keepParam ? rule.param : undefined) })
       }} style={styles.ruleSelect}>
         {conditions.map(c => <option key={c} value={c}>{CONDITION_LABELS[c] || c}</option>)}
       </select>

@@ -33,6 +33,9 @@ function migrateRule(rule: Rule): Rule {
   if (rule.param && PARAM_MIGRATION[rule.param]) {
     migrated.param = PARAM_MIGRATION[rule.param]
   }
+  if (migrated.indicator === 'macd' && ['crossover_up', 'crossover_down'].includes(migrated.condition) && !migrated.param) {
+    migrated.param = 'signal'
+  }
   return migrated
 }
 
