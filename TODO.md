@@ -53,7 +53,7 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 - [ ] **B16** Ghost trade markers after interval/timeframe change — buy/sell annotation markers from a previous backtest persist on the chart when switching intervals. Likely a cleanup issue in the results overlay or Chart.tsx where old markers aren't removed before new data renders.
 - [ ] **B17** Hover-to-inspect trade markers — replace verbose on-chart marker labels with minimal buy/sell arrows (colored green/red by trade outcome). On hover, show a tooltip with entry/exit price, P&L %, hold duration, and exit reason. Removes the clutter problem when trades cluster in tight price ranges. Persistent arrows preserve at-a-glance trade density; tooltip provides the detail on demand. [Spec](docs/superpowers/specs/2026-04-23-b17-hover-trade-markers-design.md)
 - [x] **B18** Triggering rules in trade tooltip — extend B17 tooltip to show which buy/sell rules fired for each trade. Backend tags each trade with `rules` field via `_fired_rules()`. Entries show buy rules, exits show sell rules (or "stop loss"/"trailing stop"/"time stop" for mechanical exits).
-- [ ] **B15** Fix MACD crossover bug — `crossover_up`/`crossover_down` conditions never fire because `rule.param` is never set to `'signal'`. `NEEDS_PARAM` suppresses the value input and `CAN_USE_PARAM` has no MACD entry, so the param dropdown never shows either. The condition label says "Crosses above signal" but the signal reference is never wired. Fix: auto-set `param: 'signal'` for MACD crossover conditions (in `emptyRule()` default + on condition change).
+- [x] **B15** Fix MACD crossover bug — auto-set `param: 'signal'` for MACD crossover conditions in `emptyRule()`, indicator change handler, condition change handler, and `migrateRule()` for existing saved strategies.
 
 ### Shipped
 _Older items predate the numbering scheme; new entries tagged with their letter+number._
@@ -78,7 +78,7 @@ _Older items predate the numbering scheme; new entries tagged with their letter+
 
 ## D — Bots (live trading)
 
-- [ ] **D1** Bot log timezone: shows ET, user is in Sweden — use browser local time
+- [x] **D1** Global timezone toggle — header button switches all timestamps between ET (EST/EDT) and browser-local time (CET/CEST). Persisted to localStorage. `useSyncExternalStore`-based so formatting functions read the mode directly.
 - [ ] **D2** Bot reordering/grouping (drag vs explicit groups vs tags)
 - [ ] **D4** Clean up dead `BotState.total_pnl` field once migration is safe (currently kept for legacy `bots.json` deserialization)
 - [ ] **D5** Journal helper call frequency — runs on bot tick (for sizing) and on summary fetch. Journal is JSON-parsed each time. Fine for now, but if it gets slow (thousands of entries) add an mtime-based cache.
