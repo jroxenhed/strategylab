@@ -37,6 +37,7 @@ export default function AddBotBar({
   const [dataSource, setDataSource] = useState('alpaca-iex')
   const [broker, setBroker] = useState<'alpaca' | 'ibkr'>('alpaca')
   const [direction, setDirection] = useState<'long' | 'short'>('long')
+  const [maxSpreadBps, setMaxSpreadBps] = useState('50')
   const [error, setError] = useState('')
 
   const loadStrategies = () => {
@@ -84,6 +85,7 @@ export default function AddBotBar({
         skip_after_stop: s.skipAfterStop ?? null,
         trading_hours: s.tradingHours ?? null,
         slippage_bps: typeof s.slippageBps === 'number' ? s.slippageBps : 2.0,
+        max_spread_bps: maxSpreadBps ? parseFloat(maxSpreadBps) || null : null,
         data_source: dataSource,
         direction,
         broker,
@@ -169,6 +171,17 @@ export default function AddBotBar({
             </span>
           )}
         </div>
+
+        {/* Max Spread */}
+        <input
+          type="number"
+          placeholder="Max Spread bps"
+          value={maxSpreadBps}
+          min={0}
+          onChange={e => setMaxSpreadBps(e.target.value)}
+          style={{ ...inputStyle, width: 70 }}
+          title="Skip entries when bid/ask spread exceeds this (bps). Empty = disabled."
+        />
 
         <button
           onClick={handleAdd}

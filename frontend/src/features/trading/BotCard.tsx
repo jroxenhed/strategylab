@@ -84,6 +84,8 @@ export default function BotCard({
   const [detail, setDetail] = useState<BotDetail | null>(null)
   const [editingAlloc, setEditingAlloc] = useState(false)
   const [allocValue, setAllocValue] = useState('')
+  const [editingSpread, setEditingSpread] = useState(false)
+  const [spreadValue, setSpreadValue] = useState('')
   const [editingStrategy, setEditingStrategy] = useState(false)
 
   const { adaptiveInterval } = useBroker()
@@ -218,6 +220,31 @@ export default function BotCard({
             {summary.avg_cost_bps != null && (
               <span style={{ color: '#666' }}>Slippage: <span style={{ color: summary.avg_cost_bps > 5 ? '#f85149' : '#8b949e' }}>{summary.avg_cost_bps.toFixed(1)} bps</span></span>
             )}
+            <span style={{ color: '#666' }}>Spread cap: {editingSpread ? (
+              <input
+                autoFocus
+                type="number"
+                value={spreadValue}
+                min={0}
+                onChange={e => setSpreadValue(e.target.value)}
+                onBlur={() => {
+                  const v = spreadValue === '' ? 0 : parseFloat(spreadValue)
+                  if (!isNaN(v) && v >= 0) onUpdate({ max_spread_bps: v })
+                  setEditingSpread(false)
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                  if (e.key === 'Escape') setEditingSpread(false)
+                }}
+                style={{ width: 50, fontSize: 12, background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3, padding: '1px 4px' }}
+              />
+            ) : (
+              <span
+                style={{ color: stopped ? '#58a6ff' : '#aaa', cursor: stopped ? 'pointer' : 'default', borderBottom: stopped ? '1px dashed #58a6ff' : 'none' }}
+                onClick={() => { if (stopped) { setSpreadValue(summary.max_spread_bps ? String(summary.max_spread_bps) : ''); setEditingSpread(true) } }}
+                title={stopped ? 'Click to edit (empty = disabled)' : 'Stop bot to edit'}
+              >{summary.max_spread_bps ? `${summary.max_spread_bps} bps` : 'off'}</span>
+            )}</span>
           </div>
 
           {/* Pause reason (structural IBKR reject) */}

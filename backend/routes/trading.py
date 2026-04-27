@@ -417,6 +417,5 @@ def get_watchlist():
 
 @router.post("/watchlist")
 def save_watchlist(req: WatchlistRequest):
-    WATCHLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
     WATCHLIST_PATH.write_text(json.dumps({"symbols": req.symbols}, indent=2))
     return {"symbols": req.symbols}

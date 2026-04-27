@@ -247,6 +247,7 @@ export interface BotConfig {
   skip_after_stop?: SkipAfterStopConfig
   trading_hours?: TradingHoursConfig
   slippage_bps?: number
+  max_spread_bps?: number | null
   data_source?: string
   direction?: 'long' | 'short'
   broker?: string
@@ -295,6 +296,7 @@ export interface BotSummary {
   has_position?: boolean
   direction?: 'long' | 'short'
   broker?: string
+  max_spread_bps?: number | null
   first_trade_time?: string | null
   last_tick?: string
   pause_reason?: string

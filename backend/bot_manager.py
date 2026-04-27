@@ -28,11 +28,11 @@ from routes.backtest import run_backtest
 from signal_engine import migrate_rule, Rule
 from shared import _fetch
 from broker import get_trading_provider, OrderRequest as BrokerOrderRequest
-from journal import _log_trade, compute_realized_pnl, first_bot_entry_time, compute_bot_avg_cost_bps
+from journal import _log_trade, compute_realized_pnl, first_bot_entry_time, compute_bot_avg_cost_bps, DATA_DIR
 from bot_runner import BotRunner
 
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "bots.json")
+DATA_PATH = str(DATA_DIR / "bots.json")
 
 # ---------------------------------------------------------------------------
 # BotConfig
@@ -408,6 +408,7 @@ class BotManager:
                 "direction": config.direction,
                 "broker": config.broker,
                 "avg_cost_bps": compute_bot_avg_cost_bps(config.symbol, bot_id=bot_id, since=epoch)[0],
+                "max_spread_bps": config.max_spread_bps,
                 "has_position": state.entry_price is not None,
                 "first_trade_time": first_trade_time,
                 "pnl_epoch": epoch,
@@ -451,7 +452,6 @@ class BotManager:
                 for config, state in self.bots.values()
             ],
         }
-        os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
         with open(DATA_PATH, "w") as f:
             json.dump(data, f, indent=2, default=str)
 
