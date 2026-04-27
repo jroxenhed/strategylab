@@ -42,4 +42,4 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 - **A1 — Portfolio summary strip** (earlier session). Staircase-merged sparkline + summary stats (Total P&L $/%, Allocated, Running/Total, Profitable bots).
 
-- **6-feature parallel blitz** (~15 min wall-clock). A5 resizable chart panes, A6 watchlist sidebar, B13 BB/ATR/Volume rules, D2 bot drag-to-reorder, F4 frontend test harness, sparkline hover tooltip. Six worktree agents dispatched simultaneously, zero code conflicts, all working on first load. [Post-mortem](docs/misc/2026-04-27-session-postmortem-2.md)
+- **6-feature parallel blitz** (~15 min wall-clock). A5 resizable chart panes, A6 watchlist sidebar, B13 BB/ATR/Volume rules, D2 bot drag-to-reorder, F4 frontend test harness, sparkline hover tooltip. Six worktree agents dispatched simultaneously, zero code conflicts, all working on first load. [Post-mortem](docs/postmortems/2026-04-27-session-postmortem-2.md)
