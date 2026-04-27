@@ -17,9 +17,9 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 
 - [x] **A1** Portfolio equity chart (combined P&L across bots) — PortfolioStrip component with staircase-merged sparkline + summary stats (Total P&L $/%, Allocated, Running/Total, Profitable bots). Aligned sparklines via fixed 60% width.
 - [ ] **A3** Equity curve trend analysis (open-ended — define "trend" first)
-- [ ] **A5** Resizable, collapsible, double-click-to-maximize individual chart panes
+- [x] **A5** Resizable, collapsible, double-click-to-maximize individual chart panes — react-resizable-panels with drag dividers, double-click maximize/restore (TV style), localStorage persistence via autoSaveId.
 - [ ] **A7** New indicator types via registry: Stochastic, VWAP (ATR shipped with A4)
-- [ ] **A6** Watchlist — save/switch between tickers quickly
+- [x] **A6** Watchlist — right sidebar panel (TV style) with resizable divider, compact rows (price + daily change %), click-to-switch, batch quote endpoint with 30s polling, localStorage persistence.
 - [ ] **A8** Chart performance — large dataset optimizations (100K+ 5-min bars):
   - [ ] Equity curve detail mode should downsample to match chart view interval. Current attempt in Results.tsx `downsampleEquity()` doesn't take effect — needs debugging (effect may not re-fire, or chart instance not recreating). The macro buckets (D/W/M/Q/Y) work fine; only Detail mode is broken.
   - [ ] Viewport-only rendering — only pass the visible bar range to indicator series and markers instead of all 100K bars. lightweight-charts handles panning via `subscribeVisibleLogicalRangeChange`; feed data on demand.
@@ -48,7 +48,7 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
   - FX conversion cost
 - [x] **B10** Skip-on-wide-spread entry gate — frontend wired. AddBotBar: "Max Spread bps" input (default 50), BotCard: inline-editable spread cap (same pattern as allocation). Empty/0 = disabled.
 - [x] **B11** Saved-strategy library UX — inline rename + pin-to-top. Pinned strategies sort first (★ prefix in dropdown). Rename validates non-empty, no duplicates. Backward-compatible with old saves.
-- [ ] **B13** BB / ATR / Volume as rule indicators — wire existing computed indicators into signal engine. BB: upper/lower/bandwidth/%B. ATR: normalized volatility filter. Volume: above-average / spike. Requires multi-output addressing for BB.
+- [x] **B13** BB / ATR / ATR% / Volume as rule indicators — multi-output addressing in signal engine (BB upper/lower/middle/bandwidth/%B, ATR, ATR as % of close, Volume raw + SMA). Cross-reference support (price vs BB band, volume vs SMA). Frontend rule builder with param UIs for each.
 - [ ] **B14** Stochastic + ADX rule indicators — new compute functions + registry entries. Stochastic %K/%D crossovers + overbought/oversold. ADX trend strength + directional (+DI/-DI). Exercises multi-output pattern from B13.
 - [x] **B16** Ghost trade markers — verified fixed. Interval change clears backtestResult (→ markers), view interval change recomputes markers via useMemo. No stale markers survive.
 - [x] **B17** Hover-to-inspect trade markers — tooltip was already implemented (B18 shipped it). Stripped text labels from main-chart markers; subpane markers retain labels. Arrows colored by P&L outcome. [Spec](docs/superpowers/specs/2026-04-23-b17-hover-trade-markers-design.md)
@@ -79,7 +79,7 @@ _Older items predate the numbering scheme; new entries tagged with their letter+
 ## D — Bots (live trading)
 
 - [x] **D1** Global timezone toggle — header button switches all timestamps between ET (EST/EDT) and browser-local time (CET/CEST). Persisted to localStorage. `useSyncExternalStore`-based so formatting functions read the mode directly.
-- [ ] **D2** Bot reordering/grouping (drag vs explicit groups vs tags)
+- [x] **D2** Bot drag-to-reorder — @dnd-kit sortable with drag handles, smooth animation, persists order to bots.json via PUT /api/bots/reorder. Handles new/deleted bots gracefully.
 - [x] **D4** Removed dead `BotState.total_pnl` — never written by bot_runner, P&L is live-computed via `compute_realized_pnl()`. Old bots.json silently ignores the field via `from_dict()` filtering.
 - [ ] **D5** Journal helper call frequency — runs on bot tick (for sizing) and on summary fetch. Journal is JSON-parsed each time. Fine for now, but if it gets slow (thousands of entries) add an mtime-based cache.
 - [x] **D9** Partial-position reconciliation — tracks `_last_broker_qty` between ticks, logs WARN on external shrinkage. Guards: skips first tick (learns baseline), skips pending close orders, skips full closures (existing path), ignores qty increases.
@@ -123,7 +123,7 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] **F1** Renamed "Paper Trading" tab label to "Live Trading"
 - [ ] **F2** Group backend broker files into a `backend/brokers/` package **and** split `broker.py` (~680 lines) into `brokers/{yahoo,alpaca,ibkr}.py` behind the existing `TradingProvider` protocol. `broker_aggregate.py`, `broker_health.py`, `broker_health_singleton.py` move into the same package. Preserve `broker_health_singleton.py` as a separate module — it exists to break an import cycle, not as ceremony. Low value, moderate risk — only tackle if friction shows up when editing a single provider.
 - [ ] **F3** Split `frontend/src/features/strategy/Results.tsx` (~745 lines) and `StrategyBuilder.tsx` (~578 lines) into smaller subcomponents (equity/drawdown/scatter/tables for Results; rule sections for StrategyBuilder). Same tradeoff as F2 — defer until a change actually gets painful.
-- [ ] **F4** Frontend test harness. Backend has 12 test files, frontend has 0. Given the bug history in Chart.tsx (teardown race, pane sync, mount-once refactor) and the polling code (AbortController fixes, adaptive interval), a small Vitest + React Testing Library setup with smoke tests on `api/client`, `useOHLCV`, and a Chart mount/unmount cycle would catch whole-tree regressions early. Start narrow on the areas that already burned — don't chase coverage.
+- [x] **F4** Frontend test harness — Vitest + React Testing Library, 27 smoke tests across 3 files: api client (10), useOHLCV hooks (9), Chart mount/unmount lifecycle (8). Targets historically buggy teardown paths. Runs in 1.2s.
 - [ ] **F6** Split `frontend/src/shared/types/index.ts` (350 lines, 35 exports) by domain: `types/chart.ts`, `types/strategy.ts`, `types/trading.ts`, with `index.ts` as a barrel re-export. Low risk (edit imports), improves greppability when hunting for a specific interface.
 - [ ] **F7** Sub-group `frontend/src/features/trading/` (10 files). Natural split: bot-management (`AddBotBar`, `BotCard`, `BotControlCenter`, `MiniSparkline`) vs account-view (`AccountBar`, `PositionsTable`, `OrderHistory`, `TradeJournal`) vs shared (`BrokerTag`), with `PaperTrading.tsx` staying as the feature entry. Defer until the feature grows further — 10 siblings is borderline, not painful yet.
 - [ ] **F8** API contract drift watch. `BotConfig`, `StrategyRequest`, etc. are manually mirrored between Pydantic (backend) and `shared/types/index.ts` (frontend). Fine at ~35 types; once drift bites (fields silently dropped à la the `AddBotRequest` bug), switch to generating TS types from FastAPI's OpenAPI schema via `openapi-typescript`. Flag only — don't preempt.
