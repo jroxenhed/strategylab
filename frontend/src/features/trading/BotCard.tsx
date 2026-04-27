@@ -157,34 +157,39 @@ export default function BotCard({
             }}
           />
 
-          {/* Symbol + strategy */}
-          <span style={{ fontSize: 12, flexShrink: 1, minWidth: 80, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {/* Symbol (bold) + strategy name (muted) */}
+          <span style={{ fontSize: 12, flexShrink: 0 }}>
             <span style={{ color: '#e6edf3', fontWeight: 600 }}>{summary.symbol}</span>
-            {dir === 'short' && (
-              <span style={{
-                fontSize: 9, fontWeight: 700, padding: '0px 4px', borderRadius: 2, marginLeft: 4,
-                background: 'rgba(239,83,80,0.15)', color: '#ef5350',
-                lineHeight: '16px', verticalAlign: 'middle',
-              }}>S</span>
-            )}
             <span style={{ color: '#666', marginLeft: 6 }}>{summary.strategy_name}</span>
           </span>
 
-          {/* P&L — fixed width */}
-          <span style={{ fontSize: 12, color: pnlColor, flex: '0 0 140px', textAlign: 'right' }}>
+          {/* Direction badge — only for short */}
+          {dir === 'short' && (
+            <span style={{
+              fontSize: 9, fontWeight: 700, padding: '0px 4px', borderRadius: 2,
+              background: 'rgba(239,83,80,0.15)', color: '#ef5350',
+              lineHeight: '16px', flexShrink: 0,
+            }}>S</span>
+          )}
+
+          {/* P&L: dollar + percentage */}
+          <span style={{ fontSize: 12, color: pnlColor, flexShrink: 0, marginLeft: 4 }}>
             {fmtPnl(summary.total_pnl)}
-            <span style={{ opacity: 0.7, marginLeft: 3 }}>
+            <span style={{ color: pnlColor, opacity: 0.7, marginLeft: 3 }}>
               ({(summary.total_pnl / summary.allocated_capital * 100).toFixed(1)}%)
             </span>
           </span>
 
-          {/* Status */}
+          {/* Status badge */}
           <span style={{
             fontSize: 10, color: statusColor(summary.status), textTransform: 'capitalize',
             flexShrink: 0,
           }}>
             {summary.status}
           </span>
+
+          {/* Spacer */}
+          <div style={{ flex: 1 }} />
 
           {/* Mini sparkline — compact size */}
           <div style={{ flex: '0 0 80px', height: 24 }} onClick={e => e.stopPropagation()}>
