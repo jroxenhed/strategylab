@@ -69,6 +69,7 @@ export default function BotCard({
   summary,
   onStart, onStop, onBacktest, onDelete, onManualBuy, onUpdate, onResetPnl,
   alignedRange,
+  dragHandleProps,
 }: {
   summary: BotSummary
   onStart: () => void
@@ -79,6 +80,7 @@ export default function BotCard({
   onUpdate: (updates: Record<string, unknown>) => void
   onResetPnl: () => void
   alignedRange?: { from: number; to: number }
+  dragHandleProps?: Record<string, unknown>
 }) {
   const [expanded, setExpanded] = useState(false)
   const [detail, setDetail] = useState<BotDetail | null>(null)
@@ -118,6 +120,20 @@ export default function BotCard({
     }}>
       {/* Two-column layout */}
       <div style={{ display: 'flex', gap: 12 }}>
+        {/* Drag handle */}
+        {dragHandleProps && (
+          <div
+            {...dragHandleProps}
+            style={{
+              display: 'flex', alignItems: 'center', cursor: 'grab',
+              color: '#484f58', fontSize: 16, padding: '0 2px',
+              userSelect: 'none', flexShrink: 0, alignSelf: 'stretch',
+            }}
+            title="Drag to reorder"
+          >
+            ⠿
+          </div>
+        )}
         {/* Left column */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
           {/* Header row */}

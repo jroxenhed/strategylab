@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BotSummary, BotFundStatus } from '../../shared/types'
 import {
   listBots, setBotFund, addBot,
   startBot, stopBot, backtestBot, deleteBot, manualBuyBot, updateBot, resetBotPnl,
-  startAllBots, stopAllBots, stopAndCloseAllBots,
+  startAllBots, stopAllBots, stopAndCloseAllBots, reorderBots,
 } from '../../api/bots'
 import { fmtUsd } from '../../shared/utils/format'
 import { apiErrorDetail } from '../../shared/utils/errors'
@@ -11,6 +11,12 @@ import BotCard, { btnStyle } from './BotCard'
 import PortfolioStrip from './PortfolioStrip'
 import AddBotBar, { sectionStyle, inputStyle } from './AddBotBar'
 import { useBroker } from '../../shared/hooks/useOHLCV'
+import {
+  DndContext, closestCenter, PointerSensor, useSensor, useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 
 // ---------------------------------------------------------------------------
 // FundBar
@@ -83,6 +89,54 @@ function FundBar({ fund, onSetFund }: { fund: BotFundStatus | null; onSetFund: (
 }
 
 // ---------------------------------------------------------------------------
+// SortableBotCard — wraps BotCard with dnd-kit sortable
+// ---------------------------------------------------------------------------
+
+function SortableBotCard(props: {
+  botId: string
+  summary: BotSummary
+  alignedRange?: { from: number; to: number }
+  onStart: () => void
+  onStop: () => void
+  onBacktest: () => void
+  onDelete: () => void
+  onManualBuy: () => void
+  onUpdate: (updates: Record<string, unknown>) => void
+  onResetPnl: () => void
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: props.botId,
+  })
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.7 : 1,
+    scale: isDragging ? '1.02' : '1',
+    boxShadow: isDragging ? '0 8px 24px rgba(0,0,0,0.4)' : 'none',
+    zIndex: isDragging ? 10 : 'auto',
+    position: 'relative' as const,
+  }
+
+  return (
+    <div ref={setNodeRef} style={style} {...attributes}>
+      <BotCard
+        summary={props.summary}
+        alignedRange={props.alignedRange}
+        onStart={props.onStart}
+        onStop={props.onStop}
+        onBacktest={props.onBacktest}
+        onDelete={props.onDelete}
+        onManualBuy={props.onManualBuy}
+        onUpdate={props.onUpdate}
+        onResetPnl={props.onResetPnl}
+        dragHandleProps={listeners}
+      />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // BotControlCenter — main component
 // ---------------------------------------------------------------------------
 
@@ -92,6 +146,43 @@ export default function BotControlCenter() {
   const [fund, setFund] = useState<BotFundStatus | null>(null)
   const [bots, setBots] = useState<BotSummary[]>([])
   const [error, setError] = useState('')
+  // Track user-set order; updated on drag-end and reconciled with server data
+  const orderRef = useRef<string[]>([])
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+  )
+
+  // Reconcile server bots with local order: keep existing order, append new IDs at end
+  const orderedBots = useMemo(() => {
+    const order = orderRef.current
+    const botMap = new Map(bots.map(b => [b.bot_id, b]))
+    const result: BotSummary[] = []
+    for (const id of order) {
+      const bot = botMap.get(id)
+      if (bot) { result.push(bot); botMap.delete(id) }
+    }
+    // Append any bots not in the saved order (newly added)
+    for (const bot of botMap.values()) result.push(bot)
+    return result
+  }, [bots])
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const ids = orderedBots.map(b => b.bot_id)
+    const oldIdx = ids.indexOf(active.id as string)
+    const newIdx = ids.indexOf(over.id as string)
+    if (oldIdx === -1 || newIdx === -1) return
+    const newOrder = [...ids]
+    const [moved] = newOrder.splice(oldIdx, 1)
+    newOrder.splice(newIdx, 0, moved)
+    orderRef.current = newOrder
+    // Optimistic: force re-render via setBots identity change
+    setBots(prev => [...prev])
+    reorderBots(newOrder).catch(() => {})
+  }, [orderedBots])
+
   const [sparklineScale, setSparklineScale] = useState<'local' | 'aligned'>(() => {
     const v = localStorage.getItem('sparklineScale')
     return v === 'aligned' ? 'aligned' : 'local'
@@ -117,6 +208,10 @@ export default function BotControlCenter() {
       const botsJson = JSON.stringify(data.bots)
       if (botsJson !== prevBotsJsonRef.current) {
         prevBotsJsonRef.current = botsJson
+        // Initialise order from server on first load; keep user order on subsequent loads
+        if (orderRef.current.length === 0) {
+          orderRef.current = data.bots.map((b: BotSummary) => b.bot_id)
+        }
         setBots(data.bots)
       }
       setError('')
@@ -292,20 +387,25 @@ export default function BotControlCenter() {
         </div>
       )}
 
-      {bots.map(bot => (
-        <BotCard
-          key={bot.bot_id}
-          summary={bot}
-          alignedRange={alignedRange}
-          onStart={() => handleStart(bot.bot_id)}
-          onStop={() => handleStop(bot.bot_id)}
-          onBacktest={() => handleBacktest(bot.bot_id)}
-          onDelete={() => handleDelete(bot.bot_id)}
-          onManualBuy={() => handleManualBuy(bot.bot_id)}
-          onUpdate={(updates) => handleUpdate(bot.bot_id, updates)}
-          onResetPnl={() => handleResetPnl(bot.bot_id)}
-        />
-      ))}
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={orderedBots.map(b => b.bot_id)} strategy={verticalListSortingStrategy}>
+          {orderedBots.map(bot => (
+            <SortableBotCard
+              key={bot.bot_id}
+              botId={bot.bot_id}
+              summary={bot}
+              alignedRange={alignedRange}
+              onStart={() => handleStart(bot.bot_id)}
+              onStop={() => handleStop(bot.bot_id)}
+              onBacktest={() => handleBacktest(bot.bot_id)}
+              onDelete={() => handleDelete(bot.bot_id)}
+              onManualBuy={() => handleManualBuy(bot.bot_id)}
+              onUpdate={(updates) => handleUpdate(bot.bot_id, updates)}
+              onResetPnl={() => handleResetPnl(bot.bot_id)}
+            />
+          ))}
+        </SortableContext>
+      </DndContext>
     </div>
   )
 }
