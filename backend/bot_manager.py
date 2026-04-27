@@ -102,7 +102,6 @@ class BotState:
     # Aggregate stats
     scans_count: int = 0
     trades_count: int = 0
-    total_pnl: float = 0.0
     slippage_bps: list = field(default_factory=list)  # list of unsigned cost (bps) per fill
 
     # History
@@ -130,7 +129,6 @@ class BotState:
             "skip_remaining": self.skip_remaining,
             "scans_count": self.scans_count,
             "trades_count": self.trades_count,
-            "total_pnl": self.total_pnl,
             "slippage_bps": self.slippage_bps,
             "equity_snapshots": self.equity_snapshots,
             "backtest_summary": self.backtest_summary,

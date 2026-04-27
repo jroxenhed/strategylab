@@ -273,7 +273,6 @@ export interface BotState {
   last_signal?: string
   last_price?: number
   trades_count: number
-  total_pnl: number
   equity_snapshots: { time: string; value: number }[]
   backtest_summary?: BacktestResult['summary']
   activity_log: BotActivityEntry[]

@@ -80,7 +80,7 @@ _Older items predate the numbering scheme; new entries tagged with their letter+
 
 - [x] **D1** Global timezone toggle — header button switches all timestamps between ET (EST/EDT) and browser-local time (CET/CEST). Persisted to localStorage. `useSyncExternalStore`-based so formatting functions read the mode directly.
 - [ ] **D2** Bot reordering/grouping (drag vs explicit groups vs tags)
-- [ ] **D4** Clean up dead `BotState.total_pnl` field once migration is safe (currently kept for legacy `bots.json` deserialization)
+- [x] **D4** Removed dead `BotState.total_pnl` — never written by bot_runner, P&L is live-computed via `compute_realized_pnl()`. Old bots.json silently ignores the field via `from_dict()` filtering.
 - [ ] **D5** Journal helper call frequency — runs on bot tick (for sizing) and on summary fetch. Journal is JSON-parsed each time. Fine for now, but if it gets slow (thousands of entries) add an mtime-based cache.
 - [ ] **D9** Partial-position reconciliation logging — `bot_runner._tick()` only flags `external` when broker qty drops to 0; silent shrinkage (e.g. Apr 16 BABA short went 37 → 1 overnight, likely Alpaca HTB buy-in) is invisible in the journal. Detect `broker_qty` deltas between ticks without a matching bot order and write an `external_partial` row with the delta + timestamp so overnight forced-covers / manual edits are auditable in real time.
 

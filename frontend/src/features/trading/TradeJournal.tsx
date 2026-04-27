@@ -78,7 +78,7 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
     : trades
 
   // Pair exits with most-recent entry of the same (symbol, direction, source).
-  // Mirrors bot state.total_pnl: only bot fills count, entries are consumed on exit
+  // Mirrors compute_realized_pnl: only bot fills count, entries are consumed on exit
   // (so duplicate/phantom exits can't reuse stale entry prices), and long/short on the
   // same symbol don't clobber each other.
   const exitPnl = new Map<string, number>()        // trade id → pnl
