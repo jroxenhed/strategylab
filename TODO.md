@@ -37,7 +37,7 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
 
 ## B — Strategy Engine & Rules
 
-- [ ] **B2** Pre-market / extended hours option
+- [x] **B2** Extended hours — fully wired. Yahoo/IBKR native, Alpaca client-side RTH filter (9:30-16:00 ET). Cache keys already include `extended_hours`.
 - [ ] **B4** Per-rule signal visualization toggles — eye icon on each rule row in strategy builder; when enabled, that rule's signals show as markers on the main chart during/after backtest. Replaces current hardcoded signal marker behavior. State stored with rule fields, persists with save/load. No global master toggle.
 - [ ] **B5** Borrow cost estimation (for live short positions on real accounts)
 - [ ] **B8** Spread-derived slippage default (follow-up to B7) — pull live bid/ask spread from broker (Alpaca quote endpoint / IBKR market data) and default modeled slippage to half-spread for the symbol. More principled than global/empirical fallback, especially for illiquid names. Only viable providers that expose quotes.
@@ -47,11 +47,11 @@ Themed roadmap. Each section lists active work first, then a **Shipped** block p
   - Hard-to-borrow dynamic rate feed
   - FX conversion cost
 - [x] **B10** Skip-on-wide-spread entry gate — frontend wired. AddBotBar: "Max Spread bps" input (default 50), BotCard: inline-editable spread cap (same pattern as allocation). Empty/0 = disabled.
-- [ ] **B11** Saved-strategy library UX — the flat list in StrategyBuilder (`strategylab-saved-strategies` in localStorage) gets unwieldy as presets accumulate. Add renaming (inline edit on the preset row) plus some organising affordance — folders/tags, pin-to-top, or simple drag-to-reorder. Pick whichever has the lowest blast radius on the existing save/load flow; avoid redesigning the storage schema unless organising demands it.
+- [x] **B11** Saved-strategy library UX — inline rename + pin-to-top. Pinned strategies sort first (★ prefix in dropdown). Rename validates non-empty, no duplicates. Backward-compatible with old saves.
 - [ ] **B13** BB / ATR / Volume as rule indicators — wire existing computed indicators into signal engine. BB: upper/lower/bandwidth/%B. ATR: normalized volatility filter. Volume: above-average / spike. Requires multi-output addressing for BB.
 - [ ] **B14** Stochastic + ADX rule indicators — new compute functions + registry entries. Stochastic %K/%D crossovers + overbought/oversold. ADX trend strength + directional (+DI/-DI). Exercises multi-output pattern from B13.
 - [x] **B16** Ghost trade markers — verified fixed. Interval change clears backtestResult (→ markers), view interval change recomputes markers via useMemo. No stale markers survive.
-- [ ] **B17** Hover-to-inspect trade markers — replace verbose on-chart marker labels with minimal buy/sell arrows (colored green/red by trade outcome). On hover, show a tooltip with entry/exit price, P&L %, hold duration, and exit reason. Removes the clutter problem when trades cluster in tight price ranges. Persistent arrows preserve at-a-glance trade density; tooltip provides the detail on demand. [Spec](docs/superpowers/specs/2026-04-23-b17-hover-trade-markers-design.md)
+- [x] **B17** Hover-to-inspect trade markers — tooltip was already implemented (B18 shipped it). Stripped text labels from main-chart markers; subpane markers retain labels. Arrows colored by P&L outcome. [Spec](docs/superpowers/specs/2026-04-23-b17-hover-trade-markers-design.md)
 - [x] **B18** Triggering rules in trade tooltip — extend B17 tooltip to show which buy/sell rules fired for each trade. Backend tags each trade with `rules` field via `_fired_rules()`. Entries show buy rules, exits show sell rules (or "stop loss"/"trailing stop"/"time stop" for mechanical exits).
 - [x] **B15** Fix MACD crossover bug — auto-set `param: 'signal'` for MACD crossover conditions in `emptyRule()`, indicator change handler, condition change handler, and `migrateRule()` for existing saved strategies.
 
@@ -82,7 +82,7 @@ _Older items predate the numbering scheme; new entries tagged with their letter+
 - [ ] **D2** Bot reordering/grouping (drag vs explicit groups vs tags)
 - [x] **D4** Removed dead `BotState.total_pnl` — never written by bot_runner, P&L is live-computed via `compute_realized_pnl()`. Old bots.json silently ignores the field via `from_dict()` filtering.
 - [ ] **D5** Journal helper call frequency — runs on bot tick (for sizing) and on summary fetch. Journal is JSON-parsed each time. Fine for now, but if it gets slow (thousands of entries) add an mtime-based cache.
-- [ ] **D9** Partial-position reconciliation logging — `bot_runner._tick()` only flags `external` when broker qty drops to 0; silent shrinkage (e.g. Apr 16 BABA short went 37 → 1 overnight, likely Alpaca HTB buy-in) is invisible in the journal. Detect `broker_qty` deltas between ticks without a matching bot order and write an `external_partial` row with the delta + timestamp so overnight forced-covers / manual edits are auditable in real time.
+- [x] **D9** Partial-position reconciliation — tracks `_last_broker_qty` between ticks, logs WARN on external shrinkage. Guards: skips first tick (learns baseline), skips pending close orders, skips full closures (existing path), ignores qty increases.
 
 ### Shipped
 _Older items predate the numbering scheme; new entries tagged with their letter+number._

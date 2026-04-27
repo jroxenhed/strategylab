@@ -132,6 +132,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [activeStrategyName, setActiveStrategyName] = useState<string | null>(null)
   const [showSaveAs, setShowSaveAs] = useState(false)
   const [saveAsName, setSaveAsName] = useState('')
+  const [renamingStrategy, setRenamingStrategy] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
 
   useEffect(() => {
     if (slippageSource === 'manual') return
@@ -155,6 +157,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
 
   function saveStrategy(name: string) {
     const snap = currentSnapshot(name)
+    const existing = savedStrategies.find(s => s.name === name)
+    if (existing?.pinned) snap.pinned = true
     const updated = savedStrategies.filter(s => s.name !== name).concat(snap)
     setSavedStrategies(updated)
     persistSavedStrategies(updated)
@@ -186,6 +190,29 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     persistSavedStrategies(updated)
     if (activeStrategyName === name) setActiveStrategyName(null)
   }
+
+  function renameStrategy(oldName: string, newName: string) {
+    const trimmed = newName.trim()
+    if (!trimmed || trimmed === oldName) { setRenamingStrategy(null); return }
+    if (savedStrategies.some(s => s.name === trimmed)) { alert(`"${trimmed}" already exists.`); return }
+    const updated = savedStrategies.map(s => s.name === oldName ? { ...s, name: trimmed } : s)
+    setSavedStrategies(updated)
+    persistSavedStrategies(updated)
+    if (activeStrategyName === oldName) setActiveStrategyName(trimmed)
+    setRenamingStrategy(null)
+  }
+
+  function togglePin(name: string) {
+    const updated = savedStrategies.map(s => s.name === name ? { ...s, pinned: !s.pinned } : s)
+    setSavedStrategies(updated)
+    persistSavedStrategies(updated)
+  }
+
+  const sortedStrategies = [...savedStrategies].sort((a, b) => {
+    if (a.pinned && !b.pinned) return -1
+    if (!a.pinned && b.pinned) return 1
+    return 0
+  })
 
   // Portal target must be found after first DOM commit, not during render
   const [settingsTarget, setSettingsTarget] = useState<HTMLElement | null>(null)
@@ -493,8 +520,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             style={styles.strategySelect}
           >
             <option value="">Strategy: unsaved</option>
-            {savedStrategies.map(s => (
-              <option key={s.name} value={s.name}>{s.name}</option>
+            {sortedStrategies.map(s => (
+              <option key={s.name} value={s.name}>{s.pinned ? '★ ' : ''}{s.name}</option>
             ))}
           </select>
           {activeStrategyName && (
@@ -502,7 +529,17 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
           )}
           <button onClick={() => { setShowSaveAs(true); setSaveAsName(activeStrategyName ?? '') }} style={styles.strategyBtn}>Save As</button>
           {activeStrategyName && (
-            <button onClick={() => { if (confirm(`Delete "${activeStrategyName}"?`)) deleteStrategy(activeStrategyName) }} style={{ ...styles.strategyBtn, color: '#f85149' }}>Delete</button>
+            <>
+              <button
+                onClick={() => { setRenamingStrategy(activeStrategyName); setRenameValue(activeStrategyName) }}
+                style={styles.strategyBtn}
+              >Rename</button>
+              <button
+                onClick={() => togglePin(activeStrategyName)}
+                style={{ ...styles.strategyBtn, color: savedStrategies.find(s => s.name === activeStrategyName)?.pinned ? 'var(--accent-primary)' : undefined }}
+              >{savedStrategies.find(s => s.name === activeStrategyName)?.pinned ? '★ Unpin' : '☆ Pin'}</button>
+              <button onClick={() => { if (confirm(`Delete "${activeStrategyName}"?`)) deleteStrategy(activeStrategyName) }} style={{ ...styles.strategyBtn, color: '#f85149' }}>Delete</button>
+            </>
           )}
           {showSaveAs && (
             <div style={styles.saveAsRow}>
@@ -516,6 +553,20 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
               />
               <button onClick={() => { if (saveAsName.trim()) saveStrategy(saveAsName.trim()) }} style={styles.strategyBtn}>OK</button>
               <button onClick={() => setShowSaveAs(false)} style={styles.strategyBtn}>Cancel</button>
+            </div>
+          )}
+          {renamingStrategy && (
+            <div style={styles.saveAsRow}>
+              <input
+                autoFocus
+                value={renameValue}
+                onChange={e => setRenameValue(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') renameStrategy(renamingStrategy, renameValue); if (e.key === 'Escape') setRenamingStrategy(null) }}
+                placeholder="New name"
+                style={styles.saveAsInput}
+              />
+              <button onClick={() => renameStrategy(renamingStrategy, renameValue)} style={styles.strategyBtn}>OK</button>
+              <button onClick={() => setRenamingStrategy(null)} style={styles.strategyBtn}>Cancel</button>
             </div>
           )}
         </div>

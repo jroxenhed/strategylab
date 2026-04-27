@@ -110,6 +110,7 @@ export interface SavedStrategy {
   maxBarsHeld?: number | ''
   direction: 'long' | 'short'
   indicators?: IndicatorInstance[]
+  pinned?: boolean
 }
 
 export interface Trade {

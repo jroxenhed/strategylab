@@ -34,6 +34,7 @@ class BotRunner:
         self.manager = manager
         self._error_listener = None  # bound IBKR error callback
         self._active_order_ids: set[str] = set()  # order IDs placed by this bot
+        self._last_broker_qty: int | None = None  # for partial-position reconciliation
 
     def _log(self, level: str, msg: str):
         entry = {"time": datetime.now(timezone.utc).isoformat(), "msg": msg, "level": level}
@@ -154,6 +155,17 @@ class BotRunner:
             self._log("WARN", f"Position check failed: {e}")
             return
 
+        # 5b. Partial-position reconciliation: detect external shrinkage
+        if has_position and state.entry_price is not None and not state.pending_close_order_id:
+            if self._last_broker_qty is not None and broker_qty < self._last_broker_qty:
+                delta = self._last_broker_qty - broker_qty
+                self._log(
+                    "WARN",
+                    f"External: position reduced {self._last_broker_qty} → {broker_qty} ({delta} shares)",
+                )
+        if has_position:
+            self._last_broker_qty = broker_qty
+
         # ---------------------------------------------------------------
         # 6. No position → evaluate buy rules
         # ---------------------------------------------------------------
@@ -234,6 +246,7 @@ class BotRunner:
             state.trail_stop_price = None
             state.pending_close_order_id = None
             state.pending_close_reason = None
+            self._last_broker_qty = None
 
             if not in_hours:
                 self._log("INFO", "Outside trading hours — skipping entry")
@@ -332,6 +345,7 @@ class BotRunner:
                 state.entry_price = fill_price
                 state.entry_bar_count = 0
                 state.trail_peak = fill_price
+                self._last_broker_qty = qty
                 state.trades_count += 1
                 side_label = "SHORT" if is_short else "BUY"
                 state.last_signal = side_label
@@ -442,6 +456,7 @@ class BotRunner:
                             state.entry_bar_count = 0
                             state.trail_peak = None
                             state.trail_stop_price = None
+                            self._last_broker_qty = None
                             self.manager.save()
                             return
                     except Exception as e:
@@ -546,6 +561,7 @@ class BotRunner:
                 state.trail_stop_price = None
                 state.pending_close_order_id = None
                 state.pending_close_reason = None
+                self._last_broker_qty = None
                 self._active_order_ids.clear()
                 self.manager.save()
 

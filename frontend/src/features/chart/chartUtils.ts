@@ -78,7 +78,7 @@ export function aggregateMarkers(
           position: subPane ? 'inBar' as const : (isShortEntry ? 'aboveBar' as const : 'belowBar' as const),
           color: '#e5c07b',
           shape: subPane ? 'circle' as const : (isShortEntry ? 'arrowDown' as const : 'arrowUp' as const),
-          text: isShortEntry ? 'SH' : 'B',
+          ...(subPane && { text: isShortEntry ? 'SH' : 'B' }),
         })
       } else {
         const win = (t.pnl ?? 0) >= 0
@@ -87,7 +87,7 @@ export function aggregateMarkers(
           position: subPane ? 'inBar' as const : (isCover ? 'belowBar' as const : 'aboveBar' as const),
           color: win ? UP : DOWN,
           shape: subPane ? 'circle' as const : (isCover ? 'arrowUp' as const : 'arrowDown' as const),
-          text: t.stop_loss ? 'SL' : t.trailing_stop ? 'TSL' : (isCover ? 'COV' : 'S'),
+          ...(subPane && { text: t.stop_loss ? 'SL' : t.trailing_stop ? 'TSL' : (isCover ? 'COV' : 'S') }),
         })
       }
     } else {
@@ -97,7 +97,7 @@ export function aggregateMarkers(
         position: subPane ? 'inBar' as const : 'aboveBar' as const,
         color: netPnl >= 0 ? UP : DOWN,
         shape: subPane ? 'circle' as const : 'arrowDown' as const,
-        text: `${group.length}T`,
+        ...(subPane ? { text: `${group.length}T` } : {}),
       })
     }
   }

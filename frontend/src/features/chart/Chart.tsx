@@ -74,24 +74,22 @@ function buildMarkers(trades: Trade[], subPane = false) {
     const isShortEntry = t.type === 'short'
     const isCover = t.type === 'cover'
     if (isEntry) {
-      const label = isShortEntry ? 'SH' : 'B'
       return {
         time: toET(t.date as any) as any,
         position: subPane ? 'inBar' as const : (isShortEntry ? 'aboveBar' as const : 'belowBar' as const),
         color: '#e5c07b',
         shape: subPane ? 'circle' as const : (isShortEntry ? 'arrowDown' as const : 'arrowUp' as const),
-        text: label,
+        ...(subPane && { text: isShortEntry ? 'SH' : 'B' }),
       }
     }
     const win = (t.pnl ?? 0) >= 0
     const color = win ? UP : DOWN
-    const label = t.stop_loss ? 'SL' : t.trailing_stop ? 'TSL' : (isCover ? 'COV' : 'S')
     return {
       time: toET(t.date as any) as any,
       position: subPane ? 'inBar' as const : (isCover ? 'belowBar' as const : 'aboveBar' as const),
       color,
       shape: subPane ? 'circle' as const : (isCover ? 'arrowUp' as const : 'arrowDown' as const),
-      text: label,
+      ...(subPane && { text: t.stop_loss ? 'SL' : t.trailing_stop ? 'TSL' : (isCover ? 'COV' : 'S') }),
     }
   })
 }

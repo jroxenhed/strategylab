@@ -124,6 +124,16 @@ class AlpacaProvider:
 
         df = pd.DataFrame(rows)
         df.index = pd.to_datetime(df.pop("timestamp"))
+
+        # Alpaca always returns extended-hours bars for intraday — filter to RTH when not requested
+        if not extended_hours and interval in _INTRADAY_INTERVALS:
+            idx = df.index.tz_localize("UTC") if df.index.tz is None else df.index
+            et = idx.tz_convert("America/New_York")
+            rth = (et.time >= pd.Timestamp("09:30").time()) & (et.time < pd.Timestamp("16:00").time())
+            df = df.loc[rth]
+            if df.empty:
+                raise HTTPException(status_code=404, detail=f"No RTH data for {ticker}")
+
         return df
 
 
