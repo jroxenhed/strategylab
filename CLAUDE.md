@@ -14,6 +14,7 @@ Interactive trading strategy backtester + live paper trading platform. Read this
 - **Key Bugs Fixed is authoritative.** If code appears to invite a "simpler" approach that conflicts with that section, don't take it — those patterns exist for non-obvious runtime reasons.
 - **Iterative review workflow for non-trivial tasks.** Write spec/plan/doc → dispatch review subagents → incorporate feedback → review again → repeat until confident → then present to user. Always use subagents for reviews to save main session context. Report progress back to the user frequently between iterations — don't go silent.
 - **Parallel subagent orchestration.** For 2+ independent tasks, dispatch as parallel background subagents. Main session stays in orchestrator role: pick tasks, write specs, dispatch, verify diffs, commit. Brief each agent with a clear spec + self-review checklist. Skip review cycle for trivial changes (renames, color tweaks, <10 lines) — judgment call. Always verify the diff before committing.
+- **Journal.** Append to `JOURNAL.md` at the end of any session that produces durable work. Keep bullets short, include TODO IDs. Don't re-read every TODO — just log what happened.
 
 ## Chart.tsx Architecture
 
