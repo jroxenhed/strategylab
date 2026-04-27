@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo, useState } from 'react'
+import { useEffect, useRef, useMemo, useState, useCallback } from 'react'
 import {
   createChart,
   createSeriesMarkers,
@@ -10,6 +10,7 @@ import {
 import type { IChartApi, ISeriesApi } from 'lightweight-charts'
 import type { OHLCVBar, IndicatorInstance, EMAOverlay, Trade } from '../../shared/types'
 import { INDICATOR_DEFS } from '../../shared/types/indicators'
+import { Group, Panel, Separator } from 'react-resizable-panels'
 import SubPane from './SubPane'
 import type { PaneRegistry } from './SubPane'
 import { toLineData, aggregateMarkers, snapTimestamp } from './chartUtils'
@@ -242,6 +243,8 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   const tradeLookupRef = useRef(tradeLookup)
   useEffect(() => { tradeLookupRef.current = tradeLookup }, [tradeLookup])
 
+  const subPaneCount = subPaneGroups.length
+
   // ─── Main chart: mount once ─────────────────────────────────────────────
   // All overlays and markers are managed by additive effects below so a new
   // trade or toggle touches only its own series instead of tearing the whole
@@ -356,8 +359,11 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       chart.remove()
       ro.disconnect()
     }
+    // subPaneCount triggers re-creation because the Group key changes,
+    // remounting the containerRef DOM node. The chart must be recreated
+    // on the new node.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [subPaneCount])
 
   // Candle data + one-time range restore
   const prevCandleDataRef = useRef(candleData)
@@ -380,7 +386,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     } else if (dataChanged) {
       chart.timeScale().fitContent()
     }
-  }, [candleData])
+  }, [candleData, subPaneCount])
 
   // SPY overlay
   useEffect(() => {
@@ -394,7 +400,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     spy.setData(spyLineData)
     chart.priceScale('spy-scale').applyOptions({ visible: false })
     return () => { try { chart.removeSeries(spy) } catch {} }
-  }, [showSpy, spyLineData])
+  }, [showSpy, spyLineData, subPaneCount])
 
   // QQQ overlay
   useEffect(() => {
@@ -408,7 +414,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     qqq.setData(qqqLineData)
     chart.priceScale('qqq-scale').applyOptions({ visible: false })
     return () => { try { chart.removeSeries(qqq) } catch {} }
-  }, [showQqq, qqqLineData])
+  }, [showQqq, qqqLineData, subPaneCount])
 
   // ─── Main-chart indicator overlays (generic) ─���───────────────────────
   useEffect(() => {
@@ -452,7 +458,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       mainOverlaySeriesRef.current = null
       for (const s of seriesMap.values()) { try { chart.removeSeries(s) } catch {} }
     }
-  }, [mainInstancesKey])
+  }, [mainInstancesKey, subPaneCount])
 
   useEffect(() => {
     const seriesMap = mainOverlaySeriesRef.current
@@ -494,7 +500,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         seriesMap.get(inst.id)?.setData(toLineData(data[seriesKey], toET))
       }
     }
-  }, [instanceData, mainInstancesKey, candleData, tzMode])
+  }, [instanceData, mainInstancesKey, candleData, tzMode, subPaneCount])
 
   // EMA rising/falling overlays (per-rule visualization during/after backtest)
   // Uses 2 series per overlay (active + inactive) instead of one per segment
@@ -564,7 +570,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       created.push(sInactive)
     }
     return () => { for (const s of created) { try { chart.removeSeries(s) } catch {} } }
-  }, [emaOverlays, isAggregated, tzMode])
+  }, [emaOverlays, isAggregated, tzMode, subPaneCount])
 
   // Trade markers — update via plugin ref so trades arriving post-backtest
   // don't force a series rebuild. candleData is in deps so the effect re-runs
@@ -580,27 +586,150 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     } else {
       mainMarkersPluginRef.current.setMarkers(markers as any)
     }
-  }, [mainMarkers, candleData])
+  }, [mainMarkers, candleData, subPaneCount])
 
-  const subPaneCount = subPaneGroups.length
-  const mainFlex = subPaneCount === 0 ? 1 : subPaneCount === 1 ? 2 : subPaneCount === 2 ? 2 : 1.5
+  // Compute default panel sizes based on sub-pane count (matches original ratios)
+  const defaultSizes = useMemo(() => {
+    if (subPaneCount === 0) return [100]
+    if (subPaneCount === 1) return [65, 35]
+    if (subPaneCount === 2) return [50, 25, 25]
+    // 3+ sub-panes: distribute evenly after giving main ~40%
+    const subSize = Math.floor(60 / subPaneCount)
+    return [100 - subSize * subPaneCount, ...Array(subPaneCount).fill(subSize)]
+  }, [subPaneCount])
 
+  // Double-click to maximize: track which pane index is maximized (null = none)
+  const [maximizedPane, setMaximizedPane] = useState<number | null>(null)
+  const preMaxLayoutRef = useRef<number[] | null>(null)
+  const groupRef = useRef<any>(null)
+
+  // Reset maximized state when sub-pane count changes (indicators toggled)
+  useEffect(() => {
+    setMaximizedPane(null)
+    preMaxLayoutRef.current = null
+  }, [subPaneCount])
+
+  // minSize per panel index: main=20, each sub=5
+  const panelMinSizes = useMemo(() => {
+    const mins = [20]
+    for (let i = 0; i < subPaneCount; i++) mins.push(5)
+    return mins
+  }, [subPaneCount])
+
+  const handlePaneDoubleClick = useCallback((paneIndex: number) => {
+    const group = groupRef.current
+    if (!group) return
+    if (maximizedPane === paneIndex) {
+      // Restore previous layout
+      if (preMaxLayoutRef.current) {
+        group.setLayout(preMaxLayoutRef.current)
+      }
+      preMaxLayoutRef.current = null
+      setMaximizedPane(null)
+    } else {
+      // Save current layout, then maximize this pane.
+      // Other panes collapse to their minSize; the target gets the remainder.
+      preMaxLayoutRef.current = group.getLayout()
+      const totalPanels = 1 + subPaneCount
+      const othersMin = panelMinSizes.reduce((sum, m, i) => i === paneIndex ? sum : sum + m, 0)
+      const layout = panelMinSizes.map((m, i) =>
+        i === paneIndex ? 100 - othersMin : m
+      )
+      group.setLayout(layout)
+      setMaximizedPane(paneIndex)
+    }
+  }, [maximizedPane, subPaneCount, panelMinSizes])
+
+  // After any panel resize, trigger syncWidths for price scale alignment
+  const handleLayout = useCallback(() => {
+    // syncWidths is called via rAF inside the sync handler, but manual resize
+    // via drag doesn't go through that path — call it explicitly here.
+    syncWidthsRef.current()
+  }, [])
+
+  // The Group needs a key tied to subPaneCount so react-resizable-panels
+  // resets its internal layout when panel count changes (defaultSize only
+  // applies on mount). This remounts the main chart container, so the
+  // main chart effect includes subPaneCount in its deps to recreate
+  // the chart on the new DOM node.
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', overflow: 'hidden' }}>
-      <div style={{ position: 'relative', flex: mainFlex, minHeight: 200, width: '100%' }}>
-        <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
-        {tooltip && trades && (
-          <TradeTooltip
-            x={tooltip.x} y={tooltip.y}
-            trades={tooltip.trades}
-            allTrades={trades}
-            candleTimeIndex={candleTimeIndex}
+    <div style={{ height: '100%', width: '100%', overflow: 'hidden' }}>
+      <Group
+        key={`chart-panes-${subPaneCount}`}
+        ref={groupRef}
+        orientation="vertical"
+        autoSaveId={subPaneCount > 0 ? `chart-pane-sizes-${subPaneCount}` : undefined}
+        onLayout={handleLayout}
+        style={{ height: '100%' }}
+      >
+        {/* Main chart panel — always present */}
+        <Panel defaultSize={defaultSizes[0]} minSize={20}>
+          <div
+            style={{ position: 'relative', height: '100%', width: '100%' }}
+            onDoubleClick={subPaneCount > 0 ? () => handlePaneDoubleClick(0) : undefined}
+          >
+            <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+            {tooltip && trades && (
+              <TradeTooltip
+                x={tooltip.x} y={tooltip.y}
+                trades={tooltip.trades}
+                allTrades={trades}
+                candleTimeIndex={candleTimeIndex}
+                toET={toET}
+              />
+            )}
+          </div>
+        </Panel>
+
+        {/* Sub-pane panels with separators */}
+        {subPaneGroups.map((group, idx) => (
+          <SubPanelEntry
+            key={group.key}
+            group={group}
+            paneIndex={idx + 1}
+            defaultSize={defaultSizes[idx + 1]}
+            instanceData={instanceData}
+            chartRef={chartRef}
+            candleSeriesRef={candleSeriesRef}
+            paneRegistryRef={paneRegistryRef}
+            syncWidthsRef={syncWidthsRef}
+            subPaneMarkers={subPaneMarkers}
             toET={toET}
+            tzMode={tzMode}
+            onDoubleClick={handlePaneDoubleClick}
           />
-        )}
-      </div>
-      {subPaneGroups.map(group => (
-        <div key={group.key} style={{ flex: 1, minHeight: 120, maxHeight: subPaneCount <= 2 ? '35%' : undefined }}>
+        ))}
+      </Group>
+    </div>
+  )
+}
+
+// Extracted to avoid inline JSX fragments with Separator+Panel pairs
+function SubPanelEntry({
+  group, paneIndex, defaultSize, instanceData, chartRef, candleSeriesRef,
+  paneRegistryRef, syncWidthsRef, subPaneMarkers, toET, tzMode, onDoubleClick,
+}: {
+  group: { key: string; label: string; instances: IndicatorInstance[] }
+  paneIndex: number
+  defaultSize: number
+  instanceData: Record<string, Record<string, { time: string; value: number | null }[]>>
+  chartRef: React.RefObject<IChartApi | null>
+  candleSeriesRef: React.RefObject<ISeriesApi<any> | null>
+  paneRegistryRef: React.RefObject<PaneRegistry>
+  syncWidthsRef: React.RefObject<() => void>
+  subPaneMarkers: any[] | null
+  toET: (time: string | number) => any
+  tzMode?: string
+  onDoubleClick: (paneIndex: number) => void
+}) {
+  return (
+    <>
+      <Separator className="resize-handle-h" />
+      <Panel defaultSize={defaultSize} minSize={5}>
+        <div
+          style={{ height: '100%', width: '100%' }}
+          onDoubleClick={() => onDoubleClick(paneIndex)}
+        >
           <SubPane
             paneKey={group.key}
             instances={group.instances}
@@ -615,7 +744,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
             tzMode={tzMode}
           />
         </div>
-      ))}
-    </div>
+      </Panel>
+    </>
   )
 }
