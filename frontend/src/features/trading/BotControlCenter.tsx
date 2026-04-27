@@ -96,6 +96,7 @@ function SortableBotCard(props: {
   botId: string
   summary: BotSummary
   alignedRange?: { from: number; to: number }
+  compact?: boolean
   onStart: () => void
   onStop: () => void
   onBacktest: () => void
@@ -123,6 +124,7 @@ function SortableBotCard(props: {
       <BotCard
         summary={props.summary}
         alignedRange={props.alignedRange}
+        compact={props.compact}
         onStart={props.onStart}
         onStop={props.onStop}
         onBacktest={props.onBacktest}
@@ -187,9 +189,15 @@ export default function BotControlCenter() {
     const v = localStorage.getItem('sparklineScale')
     return v === 'aligned' ? 'aligned' : 'local'
   })
+  const [compactMode, setCompactMode] = useState<boolean>(() => {
+    return localStorage.getItem('botCardCompact') === 'true'
+  })
   useEffect(() => {
     localStorage.setItem('sparklineScale', sparklineScale)
   }, [sparklineScale])
+  useEffect(() => {
+    localStorage.setItem('botCardCompact', String(compactMode))
+  }, [compactMode])
   useEffect(() => {
     if (!anyBrokerUnhealthy) setBrokerBannerDismissed(false)
   }, [anyBrokerUnhealthy])
@@ -333,6 +341,21 @@ export default function BotControlCenter() {
         </div>
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: 4, background: '#0d1117', border: '1px solid #1e2530', borderRadius: 4, padding: 2 }}>
+          {(['expanded', 'compact'] as const).map(mode => (
+            <button
+              key={mode}
+              onClick={() => setCompactMode(mode === 'compact')}
+              style={{
+                fontSize: 11, padding: '3px 10px', borderRadius: 3, border: 'none', cursor: 'pointer',
+                background: (mode === 'compact') === compactMode ? '#1e3a5f' : 'transparent',
+                color: (mode === 'compact') === compactMode ? '#e6edf3' : '#8b949e',
+              }}
+            >
+              {mode === 'expanded' ? 'Expanded' : 'Compact'}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 4, background: '#0d1117', border: '1px solid #1e2530', borderRadius: 4, padding: 2 }}>
           {(['local', 'aligned'] as const).map(mode => (
             <button
               key={mode}
@@ -395,6 +418,7 @@ export default function BotControlCenter() {
               botId={bot.bot_id}
               summary={bot}
               alignedRange={alignedRange}
+              compact={compactMode}
               onStart={() => handleStart(bot.bot_id)}
               onStop={() => handleStop(bot.bot_id)}
               onBacktest={() => handleBacktest(bot.bot_id)}

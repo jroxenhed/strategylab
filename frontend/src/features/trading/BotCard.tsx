@@ -70,6 +70,7 @@ export default function BotCard({
   onStart, onStop, onBacktest, onDelete, onManualBuy, onUpdate, onResetPnl,
   alignedRange,
   dragHandleProps,
+  compact = false,
 }: {
   summary: BotSummary
   onStart: () => void
@@ -81,6 +82,7 @@ export default function BotCard({
   onResetPnl: () => void
   alignedRange?: { from: number; to: number }
   dragHandleProps?: Record<string, unknown>
+  compact?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
   const [detail, setDetail] = useState<BotDetail | null>(null)
@@ -89,6 +91,7 @@ export default function BotCard({
   const [editingSpread, setEditingSpread] = useState(false)
   const [spreadValue, setSpreadValue] = useState('')
   const [editingStrategy, setEditingStrategy] = useState(false)
+  const [overflowOpen, setOverflowOpen] = useState(false)
 
   const { adaptiveInterval } = useBroker()
   const running = summary.status === 'running'
@@ -113,6 +116,145 @@ export default function BotCard({
   const dir = summary.direction ?? 'long'
   const bgTint = dir === 'short' ? 'rgba(239, 83, 80, 0.08)' : 'rgba(38, 166, 154, 0.05)'
 
+  // ---- Compact layout ----
+  if (compact) {
+    return (
+      <div style={{
+        background: `linear-gradient(135deg, ${bgTint}, #161b22)`,
+        border: '1px solid #1e2530', borderRadius: 4,
+        display: 'flex', flexDirection: 'column',
+      }}>
+        {/* Compact single-row */}
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '4px 8px', minHeight: 34, cursor: 'pointer',
+          }}
+          onClick={() => setExpanded(e => !e)}
+        >
+          {/* Drag handle */}
+          {dragHandleProps && (
+            <div
+              {...dragHandleProps}
+              onClick={e => e.stopPropagation()}
+              style={{
+                cursor: 'grab', color: '#484f58', fontSize: 14,
+                userSelect: 'none', flexShrink: 0, lineHeight: 1,
+              }}
+              title="Drag to reorder"
+            >
+              ⠿
+            </div>
+          )}
+
+          {/* Heartbeat dot */}
+          <div
+            title={(() => { const t = detail?.state.last_tick ?? summary.last_tick; return t ? `Last tick: ${fmtTimeET(t)}` : 'No tick yet' })()}
+            style={{
+              width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+              background: heartbeatColor(summary, detail),
+              boxShadow: running ? `0 0 4px ${heartbeatColor(summary, detail)}` : 'none',
+            }}
+          />
+
+          {/* Symbol (bold) + strategy name (muted) */}
+          <span style={{ fontSize: 12, flexShrink: 0 }}>
+            <span style={{ color: '#e6edf3', fontWeight: 600 }}>{summary.symbol}</span>
+            <span style={{ color: '#666', marginLeft: 6 }}>{summary.strategy_name}</span>
+          </span>
+
+          {/* Direction badge — only for short */}
+          {dir === 'short' && (
+            <span style={{
+              fontSize: 9, fontWeight: 700, padding: '0px 4px', borderRadius: 2,
+              background: 'rgba(239,83,80,0.15)', color: '#ef5350',
+              lineHeight: '16px', flexShrink: 0,
+            }}>S</span>
+          )}
+
+          {/* P&L: dollar + percentage */}
+          <span style={{ fontSize: 12, color: pnlColor, flexShrink: 0, marginLeft: 4 }}>
+            {fmtPnl(summary.total_pnl)}
+            <span style={{ color: pnlColor, opacity: 0.7, marginLeft: 3 }}>
+              ({(summary.total_pnl / summary.allocated_capital * 100).toFixed(1)}%)
+            </span>
+          </span>
+
+          {/* Status badge */}
+          <span style={{
+            fontSize: 10, color: statusColor(summary.status), textTransform: 'capitalize',
+            flexShrink: 0,
+          }}>
+            {summary.status}
+          </span>
+
+          {/* Spacer */}
+          <div style={{ flex: 1 }} />
+
+          {/* Mini sparkline — compact size */}
+          <div style={{ flex: '0 0 80px', height: 24 }} onClick={e => e.stopPropagation()}>
+            <MiniSparkline equityData={detail?.state.equity_snapshots ?? summary.equity_snapshots ?? []} alignedRange={alignedRange} height={24} />
+          </div>
+
+          {/* Start/Stop icon button */}
+          <div style={{ display: 'flex', gap: 3, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+            {stopped ? (
+              <button onClick={onStart} style={{
+                ...btnStyle('#1a3a2a'), padding: '2px 6px', fontSize: 13, lineHeight: 1,
+              }} title="Start">&#9654;</button>
+            ) : (
+              <button onClick={onStop} style={{
+                ...btnStyle('#3a1a1a'), padding: '2px 6px', fontSize: 13, lineHeight: 1,
+              }} title="Stop">&#9632;</button>
+            )}
+
+            {/* Overflow menu */}
+            <div style={{ position: 'relative' }}>
+              <button
+                onClick={() => setOverflowOpen(o => !o)}
+                style={{ ...btnStyle('#1e2530'), padding: '2px 6px', fontSize: 13, lineHeight: 1 }}
+                title="More actions"
+              >&#8230;</button>
+              {overflowOpen && (
+                <div style={{
+                  position: 'absolute', top: '100%', right: 0, zIndex: 20,
+                  background: '#161b22', border: '1px solid #30363d', borderRadius: 4,
+                  padding: 4, display: 'flex', flexDirection: 'column', gap: 2,
+                  minWidth: 110, marginTop: 2,
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+                }}>
+                  <button onClick={() => { onBacktest(); setOverflowOpen(false) }} disabled={running}
+                    style={{ ...btnStyle('#1e3a5f', running), width: '100%', textAlign: 'left' }}>Backtest</button>
+                  <button onClick={() => { onManualBuy(); setOverflowOpen(false) }}
+                    disabled={!running || summary.has_position}
+                    style={{ ...btnStyle('#1a3a2a', !running || summary.has_position), width: '100%', textAlign: 'left' }}>
+                    {dir === 'short' ? 'Short' : 'Buy'}
+                  </button>
+                  <button onClick={() => {
+                    if (confirm('Reset P&L for this bot? Journal rows are kept; the display starts fresh from now.')) onResetPnl()
+                    setOverflowOpen(false)
+                  }} style={{ ...btnStyle('#3a2e1a'), width: '100%', textAlign: 'left' }}>Reset P&L</button>
+                  {stopped && (
+                    <button onClick={() => { onDelete(); setOverflowOpen(false) }}
+                      style={{ ...btnStyle('#3a1a1a'), width: '100%', textAlign: 'left' }}>Delete</button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Expandable activity log (below the compact row) */}
+        {expanded && (
+          <div style={{ padding: '0 8px 8px' }}>
+            <ActivityLog entries={detail?.state.activity_log ?? []} />
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ---- Expanded (default) layout ----
   return (
     <div style={{
       background: `linear-gradient(135deg, ${bgTint}, #161b22)`, border: '1px solid #1e2530', borderRadius: 6,
