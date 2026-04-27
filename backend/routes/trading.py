@@ -231,7 +231,8 @@ def scan_signals(req: ScanRequest):
             buy_rules = [migrate_rule(r) for r in req.buy_rules]
             sell_rules = [migrate_rule(r) for r in req.sell_rules]
             all_rules = buy_rules + sell_rules
-            indicators = compute_indicators(df["Close"], high=df["High"], low=df["Low"], rules=all_rules)
+            vol = df["Volume"] if "Volume" in df.columns else None
+            indicators = compute_indicators(df["Close"], high=df["High"], low=df["Low"], volume=vol, rules=all_rules)
             i = len(df) - 1
 
             buy_signal = eval_rules(buy_rules, req.buy_logic, indicators, i)

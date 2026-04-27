@@ -45,6 +45,7 @@ def migrate_rule(rule: Rule) -> Rule:
 
 
 def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series = None,
+                       volume: pd.Series = None,
                        rules: list[Rule] = None) -> dict[str, pd.Series]:
     """Compute indicators based on what rules require. MACD/RSI always included."""
     from indicators import compute_instance, OHLCVSeries
@@ -53,7 +54,8 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
         rules = []
 
     ohlcv = OHLCVSeries(close=close, high=high if high is not None else close,
-                        low=low if low is not None else close, volume=pd.Series(dtype=float))
+                        low=low if low is not None else close,
+                        volume=volume if volume is not None else pd.Series(0, index=close.index, dtype=float))
 
     macd_result = compute_instance("macd", {"fast": 12, "slow": 26, "signal": 9}, ohlcv)
 
@@ -98,6 +100,82 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
         ma_result = compute_instance("ma", {"period": period, "type": ma_type}, ohlcv)
         result[key] = ma_result["ma"]
 
+    # --- Bollinger Bands ---
+    bb_specs: set[tuple[int, float]] = set()
+    for rule in rules:
+        if rule.indicator == "bb":
+            p = rule.params.get("period", 20) if rule.params else 20
+            s = rule.params.get("std", 2) if rule.params else 2
+            bb_specs.add((int(p), float(s)))
+        # Also check param refs like bb:20:2:upper
+        if rule.param and rule.param.startswith("bb:"):
+            parts = rule.param.split(":")
+            if len(parts) >= 3:
+                try:
+                    bb_specs.add((int(parts[1]), float(parts[2])))
+                except ValueError:
+                    pass
+
+    for bb_period, bb_std in bb_specs:
+        bb_result = compute_instance("bb", {"period": bb_period, "stddev": bb_std}, ohlcv)
+        prefix = f"bb_{bb_period}_{bb_std}"
+        result[f"{prefix}_upper"] = bb_result["upper"]
+        result[f"{prefix}_lower"] = bb_result["lower"]
+        result[f"{prefix}_middle"] = bb_result["middle"]
+        # Bandwidth = (upper - lower) / middle
+        result[f"{prefix}_bandwidth"] = (bb_result["upper"] - bb_result["lower"]) / bb_result["middle"]
+        # %B = (close - lower) / (upper - lower)
+        band_width = bb_result["upper"] - bb_result["lower"]
+        result[f"{prefix}_pctb"] = (close - bb_result["lower"]) / band_width.replace(0, np.nan)
+
+    # --- ATR (rule-specific periods beyond default 14) ---
+    atr_specs: set[int] = set()
+    for rule in rules:
+        if rule.indicator in ("atr", "atr_pct"):
+            p = rule.params.get("period", 14) if rule.params else 14
+            atr_specs.add(int(p))
+        if rule.param and rule.param.startswith("atr:"):
+            parts = rule.param.split(":")
+            if len(parts) >= 2:
+                try:
+                    atr_specs.add(int(parts[1]))
+                except ValueError:
+                    pass
+
+    for atr_period in atr_specs:
+        key = f"atr_{atr_period}"
+        if key not in result:
+            atr_r = compute_instance("atr", {"period": atr_period}, ohlcv)
+            result[key] = atr_r["atr"]
+        # ATR as % of close
+        result[f"atr_pct_{atr_period}"] = result[key] / close * 100
+
+    # Also store default ATR with keyed name for consistency
+    if "atr" in result and "atr_14" not in result:
+        result["atr_14"] = result["atr"]
+        result["atr_pct_14"] = result["atr"] / close * 100
+
+    # --- Volume ---
+    vol_needed = any(r.indicator == "volume" for r in rules)
+    vol_ref = any(r.param and r.param.startswith("volume") for r in rules)
+    if vol_needed or vol_ref:
+        result["volume_raw"] = ohlcv.volume
+        # Compute volume SMA for each requested period
+        vol_sma_periods: set[int] = set()
+        for rule in rules:
+            if rule.indicator == "volume" and rule.param == "sma":
+                p = rule.params.get("period", 20) if rule.params else 20
+                vol_sma_periods.add(int(p))
+            if rule.param and rule.param.startswith("volume_sma:"):
+                parts = rule.param.split(":")
+                if len(parts) >= 2:
+                    try:
+                        vol_sma_periods.add(int(parts[1]))
+                    except ValueError:
+                        pass
+        for vp in vol_sma_periods:
+            result[f"volume_sma_{vp}"] = ohlcv.volume.rolling(vp).mean()
+
     return result
 
 
@@ -110,6 +188,23 @@ def resolve_series(rule: Rule, indicators: dict[str, pd.Series]) -> pd.Series | 
         period = rule.params.get("period", 14) if rule.params else 14
         rsi_type = rule.params.get("type", "sma") if rule.params else "sma"
         return indicators.get(f"rsi_{period}_{rsi_type}")
+    if rule.indicator == "bb":
+        p = rule.params.get("period", 20) if rule.params else 20
+        s = rule.params.get("std", 2) if rule.params else 2
+        band = rule.param or "upper"
+        return indicators.get(f"bb_{p}_{float(s)}_{band}")
+    if rule.indicator == "atr":
+        p = rule.params.get("period", 14) if rule.params else 14
+        return indicators.get(f"atr_{p}")
+    if rule.indicator == "atr_pct":
+        p = rule.params.get("period", 14) if rule.params else 14
+        return indicators.get(f"atr_pct_{p}")
+    if rule.indicator == "volume":
+        param = rule.param or "raw"
+        if param == "sma":
+            p = rule.params.get("period", 20) if rule.params else 20
+            return indicators.get(f"volume_sma_{p}")
+        return indicators.get("volume_raw")
     fixed = {"macd": "macd", "price": "close"}
     return indicators.get(fixed.get(rule.indicator, rule.indicator))
 
@@ -129,6 +224,31 @@ def resolve_ref(rule: Rule, indicators: dict[str, pd.Series]) -> pd.Series | Non
             try:
                 key = f"ma_{int(period)}_{ma_type}"
                 return indicators.get(key)
+            except ValueError:
+                return None
+    # BB band as reference: bb:period:std:band
+    if rule.param.startswith("bb:"):
+        parts = rule.param.split(":")
+        if len(parts) >= 4:
+            try:
+                key = f"bb_{int(parts[1])}_{float(parts[2])}_{parts[3]}"
+                return indicators.get(key)
+            except (ValueError, IndexError):
+                return None
+    # ATR as reference: atr:period
+    if rule.param.startswith("atr:"):
+        parts = rule.param.split(":")
+        if len(parts) >= 2:
+            try:
+                return indicators.get(f"atr_{int(parts[1])}")
+            except ValueError:
+                return None
+    # Volume SMA as reference: volume_sma:period
+    if rule.param.startswith("volume_sma:"):
+        parts = rule.param.split(":")
+        if len(parts) >= 2:
+            try:
+                return indicators.get(f"volume_sma_{int(parts[1])}")
             except ValueError:
                 return None
     return None
