@@ -344,7 +344,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
           {[
             { label: 'Return', value: `${summary.total_return_pct > 0 ? '+' : ''}${summary.total_return_pct}%`, color: summary.total_return_pct >= 0 ? '#26a641' : '#f85149', primary: true },
             { label: 'Final Value', value: `$${summary.final_value.toLocaleString()}`, color: '#e6edf3', primary: true },
-            { label: 'B&H Return', value: `${summary.buy_hold_return_pct > 0 ? '+' : ''}${summary.buy_hold_return_pct}%`, color: '#8b949e', primary: false },
+            { label: 'vs B&H', value: `${(summary.total_return_pct - summary.buy_hold_return_pct) >= 0 ? '+' : ''}${(summary.total_return_pct - summary.buy_hold_return_pct).toFixed(1)}%`, color: (summary.total_return_pct - summary.buy_hold_return_pct) >= 0 ? '#26a641' : '#f85149', primary: false },
             { label: 'Trades', value: summary.num_trades, color: '#e6edf3', primary: false },
             { label: 'Win Rate', value: `${summary.win_rate_pct}%`, color: summary.win_rate_pct >= 50 ? '#26a641' : '#f85149', primary: false },
             { label: 'Sharpe', value: summary.sharpe_ratio, color: summary.sharpe_ratio >= 1 ? '#26a641' : summary.sharpe_ratio >= 0.5 ? '#d29922' : summary.sharpe_ratio < 0 ? '#f85149' : '#8b949e', primary: false },

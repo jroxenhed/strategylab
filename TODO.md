@@ -67,7 +67,7 @@ _Older items predate the numbering scheme; new entries tagged with their letter+
 ## C — Strategy Summary & Analytics
 
 - [ ] **C1** Merge stat column into waterfall (replace left min/avg/max column with inline min↔max range indicator under each waterfall row)
-- [ ] **C2** Show B&H as alpha (single "Alpha vs B&H" metric instead of parallel Return / B&H Return)
+- [x] **C2** "vs B&H" alpha metric replaces raw B&H Return — shows outperformance delta, green/red on sign.
 - [x] **C3** Sharpe: green ≥1, orange 0.5–1, red <0, gray 0–0.5. Max DD: red ≥10%, gray <10%.
 - [ ] **C4** Histogram zero line + min/max tick labels
 
