@@ -42,31 +42,4 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 - **A1 — Portfolio summary strip** (earlier session). Staircase-merged sparkline + summary stats (Total P&L $/%, Allocated, Running/Total, Profitable bots).
 
----
-
-### Session post-mortem: 6-feature parallel blitz (22:00)
-
-**What happened:** User said "spin up all of them" for 6 independent TODO items. Main session scoped each feature in conversation (Phase 1), then dispatched 6 subagents in parallel worktrees with detailed briefs. All 6 completed, were reviewed, merged, and visually confirmed working on first load. Zero code-level merge conflicts (only package-lock.json, resolved with `npm install`). Total wall-clock ~15 min from dispatch to push.
-
-**Features shipped:**
-- **A5** — Resizable chart panes (react-resizable-panels, TV-style double-click maximize/restore, localStorage persist)
-- **A6** — Watchlist sidebar (compact price rows, resizable divider, batch quote endpoint, 30s polling)
-- **B13** — BB/ATR/ATR%/Volume as rule indicators (multi-output addressing, cross-references, full param UI)
-- **D2** — Bot drag-to-reorder (@dnd-kit, backend persist, handles add/delete gracefully)
-- **F4** — Frontend test harness (Vitest + RTL, 27 tests in 1.2s targeting historically buggy paths)
-- **Sparkline tooltip** — Date/time + equity hover overlay on bot card sparklines (direct DOM via refs)
-
-**What worked:**
-1. **Scoping before dispatch.** Quick brainstorm with user nailed down TV-style behaviors, sidebar placement, etc. Agents got unambiguous briefs — no wasted cycles on design decisions.
-2. **Worktree isolation.** Six agents editing different files in parallel without stepping on each other. Only conflict was package-lock.json between F4 (vitest) and D2 (@dnd-kit) — trivially resolved.
-3. **Targeted pre-dispatch research.** Three quick greps (sidebar layout, existing deps, Chart.tsx height logic) before writing briefs. Just enough context for good briefs without burning main session context.
-4. **Review while waiting.** Reviewed each agent's diff as it landed. Caught the pre-existing test failure (test_backtest_costs.py) early and confirmed it wasn't caused by B13.
-5. **Agent brief quality.** Each brief included: what to build, current architecture context, CLAUDE.md gotchas to preserve, how to verify. The Chart.tsx brief explicitly warned about teardown race guards and syncWidths — the agent preserved both.
-
-**What could be better:**
-1. **Agents don't commit.** Every agent left changes uncommitted in the worktree. Had to commit for each one manually before merging. Could add "commit your work when done" to briefs.
-2. **No visual verification by agents.** All six flagged "not visually verified." The user caught success on first load, but a bad merge could have required debugging. Consider spinning up a verification agent post-merge.
-3. **Package-lock merge pain.** Two agents independently `npm install`-ed different packages. The lockfile conflict was trivial but could be avoided by having one agent handle all npm deps, or by batching package.json changes into main before dispatching.
-4. **Merge commit messages.** Auto-generated "Merge branch 'worktree-agent-xxx'" messages clutter the log. Could squash-merge or use `--no-ff -m "feat: ..."` for cleaner history.
-
-**Pattern validated:** The subagent-first workflow from CLAUDE.md scales well beyond the previous 15-task session. Key enabler is feature independence — when tasks don't share files, parallel worktrees are free parallelism. The bottleneck is Phase 1 (scoping with user), not Phase 3 (implementation).
+- **6-feature parallel blitz** (~15 min wall-clock). A5 resizable chart panes, A6 watchlist sidebar, B13 BB/ATR/Volume rules, D2 bot drag-to-reorder, F4 frontend test harness, sparkline hover tooltip. Six worktree agents dispatched simultaneously, zero code conflicts, all working on first load. [Post-mortem](docs/misc/2026-04-27-session-postmortem-2.md)
