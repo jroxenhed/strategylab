@@ -11,6 +11,7 @@ import StrategyBuilder from './features/strategy/StrategyBuilder'
 import Results from './features/strategy/Results'
 import PaperTrading from './features/trading/PaperTrading'
 import Discovery from './features/discovery/Discovery'
+import WatchlistPanel from './features/watchlist/WatchlistPanel'
 import { useTimezone, tzLabel } from './shared/utils/time'
 
 type AppTab = 'chart' | 'trading' | 'discovery'
@@ -240,10 +241,21 @@ export default function App() {
 
             <Separator className="resize-handle-v" />
 
-            {/* RIGHT SIDEBAR: Settings portal target */}
+            {/* RIGHT SIDEBAR: Watchlist + Settings */}
             <Panel defaultSize="20%" minSize="12%" collapsible>
               <div style={styles.rightPanel}>
-                <div id="strategy-settings-portal" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }} />
+                <Group orientation="vertical" style={{ height: '100%' }}>
+                  <Panel defaultSize="30%" minSize="15%">
+                    <WatchlistPanel
+                      currentSymbol={ticker}
+                      onSymbolClick={t => { setTicker(t); setBacktestResult(null) }}
+                    />
+                  </Panel>
+                  <Separator className="resize-handle-h" />
+                  <Panel defaultSize="70%" minSize="20%">
+                    <div id="strategy-settings-portal" style={{ height: '100%', overflow: 'hidden' }} />
+                  </Panel>
+                </Group>
               </div>
             </Panel>
 
