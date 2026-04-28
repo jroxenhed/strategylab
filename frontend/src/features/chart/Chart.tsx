@@ -630,7 +630,6 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       // Save current layout, then maximize this pane.
       // Other panes collapse to their minSize; the target gets the remainder.
       preMaxLayoutRef.current = group.getLayout()
-      const totalPanels = 1 + subPaneCount
       const othersMin = panelMinSizes.reduce((sum, m, i) => i === paneIndex ? sum : sum + m, 0)
       const layout = panelMinSizes.map((m, i) =>
         i === paneIndex ? 100 - othersMin : m
@@ -661,7 +660,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     <div style={{ height: '100%', width: '100%', overflow: 'hidden' }}>
       <Group
         key={`chart-panes-${subPaneCount}`}
-        ref={groupRef}
+        {...{ ref: groupRef } as any}
         orientation="vertical"
         autoSaveId={subPaneCount > 0 ? `chart-pane-sizes-${subPaneCount}` : undefined}
         onLayout={handleLayout}

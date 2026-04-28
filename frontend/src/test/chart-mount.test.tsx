@@ -14,7 +14,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 /* ── lightweight-charts mock ─────────────────────────────────────── */
 
 // Track all created chart instances so tests can assert on cleanup calls
-const chartInstances: ReturnType<typeof makeChart>[] = []
+const chartInstances: any[] = []
 
 function makeSeriesApi() {
   const markers: any[] = []
@@ -75,7 +75,7 @@ function makeChart() {
 
 vi.mock('lightweight-charts', () => ({
   createChart: vi.fn((_container: HTMLElement, _opts?: any) => makeChart()),
-  createSeriesMarkers: vi.fn((_series: any, markers: any[]) => ({
+  createSeriesMarkers: vi.fn((_series: any, _markers: any[]) => ({
     setMarkers: vi.fn(),
     destroy: vi.fn(),
   })),
@@ -160,7 +160,7 @@ describe('Chart mount/unmount lifecycle', () => {
   it('survives mount → unmount → remount cycle', () => {
     // First mount
     const { unmount } = renderChart()
-    const firstBatchCount = chartInstances.length
+    void chartInstances.length
 
     // Unmount
     expect(() => unmount()).not.toThrow()
