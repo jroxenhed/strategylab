@@ -48,7 +48,10 @@ export default function App() {
   const [macroBucket, setMacroBucket] = useState<string | null>(null)
   const [showBaseline, setShowBaseline] = useState(false)
   const [logScale, setLogScale] = useState(false)
-  const [activeTab, setActiveTab] = useState<AppTab>('chart')
+  const [activeTab, setActiveTab] = useState<AppTab>(() => {
+    const s = localStorage.getItem('activeTab')
+    return s === 'chart' || s === 'trading' || s === 'discovery' ? s : 'chart'
+  })
   const [mainChart, setMainChart] = useState<IChartApi | null>(null)
   const [chartEnabled, setChartEnabled] = useState(true)
   const [datePreset, setDatePreset] = useState<DatePreset>((saved?.datePreset as DatePreset) ?? 'Y')
@@ -89,7 +92,7 @@ export default function App() {
           {(['chart', 'trading', 'discovery'] as const).map(tab => (
             <button
               key={tab}
-              onClick={() => setActiveTab(tab)}
+              onClick={() => { setActiveTab(tab); localStorage.setItem('activeTab', tab) }}
               style={{ ...styles.tab, ...(activeTab === tab ? styles.tabActive : {}) }}
             >
               {tab === 'chart' ? 'Chart' : tab === 'trading' ? 'Live Trading' : 'Discovery'}
