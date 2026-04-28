@@ -119,6 +119,7 @@ export default function MiniSparkline({ equityData, alignedRange, height = 60 }:
       const c = chartRef.current
       if (!el || !c) return
       c.applyOptions({ width: el.clientWidth })
+      try { c.timeScale().fitContent() } catch {}
     })
     ro.observe(ref.current)
 
