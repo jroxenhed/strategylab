@@ -12,8 +12,17 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 JOURNAL_PATH = DATA_DIR / "trade_journal.json"
 
 
+def _load_trades() -> list[dict]:
+    if not JOURNAL_PATH.exists():
+        return []
+    try:
+        return json.loads(JOURNAL_PATH.read_text()).get("trades", [])
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
 def compute_realized_pnl(symbol: str, direction: str = "long", bot_id: str | None = None,
-                         since: str | None = None) -> float:
+                         since: str | None = None, *, trades: list[dict] | None = None) -> float:
     """Sum realized P&L for bot-sourced trades of a given (symbol, direction, bot_id).
 
     Pairs entries with exits in chronological order (LIFO: each exit consumes
@@ -23,12 +32,8 @@ def compute_realized_pnl(symbol: str, direction: str = "long", bot_id: str | Non
     `since` (ISO timestamp) is given, only trades at or after it count —
     supports the "Reset P&L" affordance without deleting the bot.
     """
-    if not JOURNAL_PATH.exists():
-        return 0.0
-    try:
-        trades = json.loads(JOURNAL_PATH.read_text()).get("trades", [])
-    except (json.JSONDecodeError, OSError):
-        return 0.0
+    if trades is None:
+        trades = _load_trades()
 
     total = 0.0
     open_entry: dict | None = None  # {"price": float, "qty": float}
@@ -66,19 +71,15 @@ def compute_realized_pnl(symbol: str, direction: str = "long", bot_id: str | Non
 
 
 def compute_bot_avg_cost_bps(symbol: str, bot_id: str | None = None,
-                             since: str | None = None) -> tuple[float | None, int]:
+                             since: str | None = None, *, trades: list[dict] | None = None) -> tuple[float | None, int]:
     """Average of per-fill unsigned slippage cost for this bot's trades.
 
     Reads the journal's cached `slippage_bps` (computed at log time with the
     current helper), so stale values in `BotState.slippage_bps` can't contaminate.
     Returns (avg_bps, fill_count); avg is None when no qualifying rows.
     """
-    if not JOURNAL_PATH.exists():
-        return None, 0
-    try:
-        trades = json.loads(JOURNAL_PATH.read_text()).get("trades", [])
-    except (json.JSONDecodeError, OSError):
-        return None, 0
+    if trades is None:
+        trades = _load_trades()
     vals: list[float] = []
     for t in trades:
         if t.get("source") != "bot":
@@ -99,18 +100,14 @@ def compute_bot_avg_cost_bps(symbol: str, bot_id: str | None = None,
 
 
 def first_bot_entry_time(symbol: str, direction: str = "long", bot_id: str | None = None,
-                         since: str | None = None) -> str | None:
+                         since: str | None = None, *, trades: list[dict] | None = None) -> str | None:
     """Return ISO timestamp of the earliest bot entry for (symbol, direction, bot_id).
 
     Used so an open first position still contributes to the aligned sparkline
     window — equity snapshots are only written on exits.
     """
-    if not JOURNAL_PATH.exists():
-        return None
-    try:
-        trades = json.loads(JOURNAL_PATH.read_text()).get("trades", [])
-    except (json.JSONDecodeError, OSError):
-        return None
+    if trades is None:
+        trades = _load_trades()
     entry_sides = ("buy",) if direction == "long" else ("short",)
     for t in trades:
         if t.get("source") != "bot":

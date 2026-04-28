@@ -28,7 +28,7 @@ from routes.backtest import run_backtest
 from signal_engine import migrate_rule, Rule
 from shared import _fetch
 from broker import get_trading_provider, OrderRequest as BrokerOrderRequest
-from journal import _log_trade, compute_realized_pnl, first_bot_entry_time, compute_bot_avg_cost_bps, DATA_DIR
+from journal import _log_trade, _load_trades, compute_realized_pnl, first_bot_entry_time, compute_bot_avg_cost_bps, DATA_DIR
 from bot_runner import BotRunner
 
 
@@ -386,10 +386,11 @@ class BotManager:
         return {"qty": qty, "fill_price": fill_price, "slippage_bps": round(cost_bps, 2)}
 
     def list_bots(self) -> list[dict]:
+        all_trades = _load_trades()
         result = []
         for bot_id, (config, state) in self.bots.items():
             epoch = config.pnl_epoch
-            first_trade_time = first_bot_entry_time(config.symbol, config.direction, bot_id=bot_id, since=epoch)
+            first_trade_time = first_bot_entry_time(config.symbol, config.direction, bot_id=bot_id, since=epoch, trades=all_trades)
             if first_trade_time is None and state.equity_snapshots:
                 first_trade_time = state.equity_snapshots[0]["time"]
             result.append({
@@ -400,12 +401,12 @@ class BotManager:
                 "allocated_capital": config.allocated_capital,
                 "status": state.status,
                 "trades_count": state.trades_count,
-                "total_pnl": round(compute_realized_pnl(config.symbol, config.direction, bot_id=bot_id, since=epoch), 2),
+                "total_pnl": round(compute_realized_pnl(config.symbol, config.direction, bot_id=bot_id, since=epoch, trades=all_trades), 2),
                 "backtest_summary": state.backtest_summary,
                 "data_source": config.data_source,
                 "direction": config.direction,
                 "broker": config.broker,
-                "avg_cost_bps": compute_bot_avg_cost_bps(config.symbol, bot_id=bot_id, since=epoch)[0],
+                "avg_cost_bps": compute_bot_avg_cost_bps(config.symbol, bot_id=bot_id, since=epoch, trades=all_trades)[0],
                 "max_spread_bps": config.max_spread_bps,
                 "has_position": state.entry_price is not None,
                 "first_trade_time": first_trade_time,
