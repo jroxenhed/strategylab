@@ -6,7 +6,7 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-04-28
 
-- **D10 compact sparkline alignment fix.** Root cause: name column had `flex: 1` eating all horizontal space, squeezing sparklines into 80px on the far right. Fix: made the sparkline the flexible element (`flex: 1`) so it fills remaining space (~500-700px), while name/P&L/status stay content-width and cluster left. Direction badge moved inside name span to keep child count constant across rows.
+- **D10 compact sparkline alignment fix.** Multiple iterations. Real root cause: compact row was a flat flex layout where sparkline position depended on variable-width text before it. Fix: restructured to two-column layout mirroring expanded mode — `flex: 1` left column (text/buttons) + `flex: 0 0 60%` right column (sparkline). Also fixed overflow menu z-index (removed `scale: '1'` creating stacking contexts on idle SortableBotCard wrappers) and moved buttons before sparkline.
 
 ## 2026-04-27
 
