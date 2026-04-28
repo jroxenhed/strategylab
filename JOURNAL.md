@@ -7,6 +7,11 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 ## 2026-04-28
 
 - **D10 compact sparkline alignment fix.** Multiple iterations. Real root cause: compact row was a flat flex layout where sparkline position depended on variable-width text before it. Fix: restructured to two-column layout mirroring expanded mode — `flex: 1` left column (text/buttons) + `flex: 0 0 60%` right column (sparkline). Also fixed overflow menu z-index (removed `scale: '1'` creating stacking contexts on idle SortableBotCard wrappers) and moved buttons before sparkline.
+- **Compact cards: inline buttons.** Replaced overflow dropdown menu with inline action buttons (Backtest, Stop, Buy, Reset, Delete). Right-aligned via `marginLeft: auto`. Simpler code, better UX, net -29 lines.
+- **Portfolio sparkline alignment.** Matched PortfolioStrip horizontal padding and gap to bot card values so sparkline left edges line up vertically across portfolio and bot rows.
+- **Sparkline instant settle on load.** Added `fitContent()` call to MiniSparkline's ResizeObserver — charts were bunching to the right on page load because the initial mount width was stale and `fitContent` wasn't re-called after resize.
+- **Tab persistence.** Active tab (Chart/Live Trading/Discovery) now persists to localStorage across page reloads.
+- **`list_bots` perf fix.** Journal was read + parsed 27 times per `list_bots` call (3 functions × 9 bots). Added `_load_trades()` helper and optional `trades` parameter — now reads once and passes through. Live Trading page load went from 3-5s to instant.
 
 ## 2026-04-27
 
