@@ -55,9 +55,9 @@ export default function PortfolioStrip({ bots, alignedRange }: Props) {
     <div style={{
       background: 'linear-gradient(135deg, rgba(88, 166, 255, 0.05), #161b22)',
       border: '1px solid #1e2530', borderRadius: 6,
-      padding: 12, display: 'flex', flexDirection: 'column', gap: 8,
+      padding: '12px 8px', display: 'flex', flexDirection: 'column', gap: 8,
     }}>
-      <div style={{ display: 'flex', gap: 12 }}>
+      <div style={{ display: 'flex', gap: 8 }}>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
           <span style={{ color: '#e6edf3', fontWeight: 600 }}>Portfolio</span>
           <div style={{ display: 'flex', gap: 16, fontSize: 12 }}>
