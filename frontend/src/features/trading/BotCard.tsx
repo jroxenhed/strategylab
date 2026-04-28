@@ -91,7 +91,6 @@ export default function BotCard({
   const [editingSpread, setEditingSpread] = useState(false)
   const [spreadValue, setSpreadValue] = useState('')
   const [editingStrategy, setEditingStrategy] = useState(false)
-  const [overflowOpen, setOverflowOpen] = useState(false)
 
   const { adaptiveInterval } = useBroker()
   const running = summary.status === 'running'
@@ -123,8 +122,6 @@ export default function BotCard({
         background: `linear-gradient(135deg, ${bgTint}, #161b22)`,
         border: '1px solid #1e2530', borderRadius: 4,
         display: 'flex', flexDirection: 'column',
-        position: 'relative',
-        zIndex: overflowOpen ? 30 : 'auto',
       }}>
         {/* Compact two-column row (mirrors expanded layout structure) */}
         <div
@@ -190,51 +187,25 @@ export default function BotCard({
               {summary.status}
             </span>
 
-            {/* Start/Stop + overflow menu */}
-            <div style={{ display: 'flex', gap: 3, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+            {/* Action buttons — inline, same as expanded, right-aligned */}
+            <div style={{ display: 'flex', gap: 3, flexShrink: 0, marginLeft: 'auto' }} onClick={e => e.stopPropagation()}>
+              <button onClick={onBacktest} disabled={running}
+                style={{ ...btnStyle('#1e3a5f', running), padding: '2px 6px', fontSize: 10, lineHeight: 1 }}>Backtest</button>
               {stopped ? (
-                <button onClick={onStart} style={{
-                  ...btnStyle('#1a3a2a'), padding: '2px 6px', fontSize: 13, lineHeight: 1,
-                }} title="Start">&#9654;</button>
+                <button onClick={onStart} style={{ ...btnStyle('#1a3a2a'), padding: '2px 6px', fontSize: 10, lineHeight: 1 }}>Start</button>
               ) : (
-                <button onClick={onStop} style={{
-                  ...btnStyle('#3a1a1a'), padding: '2px 6px', fontSize: 13, lineHeight: 1,
-                }} title="Stop">&#9632;</button>
+                <button onClick={onStop} style={{ ...btnStyle('#3a1a1a'), padding: '2px 6px', fontSize: 10, lineHeight: 1 }}>Stop</button>
               )}
-
-              {/* Overflow menu */}
-              <div style={{ position: 'relative' }}>
-                <button
-                  onClick={() => setOverflowOpen(o => !o)}
-                  style={{ ...btnStyle('#1e2530'), padding: '2px 6px', fontSize: 13, lineHeight: 1 }}
-                  title="More actions"
-                >&#8230;</button>
-                {overflowOpen && (
-                  <div style={{
-                    position: 'absolute', top: '100%', right: 0, zIndex: 20,
-                    background: '#161b22', border: '1px solid #30363d', borderRadius: 4,
-                    padding: 4, display: 'flex', flexDirection: 'column', gap: 2,
-                    minWidth: 110, marginTop: 2,
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-                  }}>
-                    <button onClick={() => { onBacktest(); setOverflowOpen(false) }} disabled={running}
-                      style={{ ...btnStyle('#1e3a5f', running), width: '100%', textAlign: 'left' }}>Backtest</button>
-                    <button onClick={() => { onManualBuy(); setOverflowOpen(false) }}
-                      disabled={!running || summary.has_position}
-                      style={{ ...btnStyle('#1a3a2a', !running || summary.has_position), width: '100%', textAlign: 'left' }}>
-                      {dir === 'short' ? 'Short' : 'Buy'}
-                    </button>
-                    <button onClick={() => {
-                      if (confirm('Reset P&L for this bot? Journal rows are kept; the display starts fresh from now.')) onResetPnl()
-                      setOverflowOpen(false)
-                    }} style={{ ...btnStyle('#3a2e1a'), width: '100%', textAlign: 'left' }}>Reset P&L</button>
-                    {stopped && (
-                      <button onClick={() => { onDelete(); setOverflowOpen(false) }}
-                        style={{ ...btnStyle('#3a1a1a'), width: '100%', textAlign: 'left' }}>Delete</button>
-                    )}
-                  </div>
-                )}
-              </div>
+              <button onClick={onManualBuy} disabled={!running || summary.has_position}
+                style={{ ...btnStyle('#1a3a2a', !running || summary.has_position), padding: '2px 6px', fontSize: 10, lineHeight: 1 }}>
+                {dir === 'short' ? 'Short' : 'Buy'}
+              </button>
+              <button onClick={() => {
+                if (confirm('Reset P&L for this bot? Journal rows are kept; the display starts fresh from now.')) onResetPnl()
+              }} style={{ ...btnStyle('#3a2e1a'), padding: '2px 6px', fontSize: 10, lineHeight: 1 }}>Reset</button>
+              {stopped && (
+                <button onClick={onDelete} style={{ ...btnStyle('#3a1a1a'), padding: '2px 6px', fontSize: 10, lineHeight: 1 }}>Delete</button>
+              )}
             </div>
           </div>
 
