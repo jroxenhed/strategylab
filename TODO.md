@@ -82,7 +82,7 @@ _Older items predate the numbering scheme; new entries tagged with their letter+
 - [x] **D2** Bot drag-to-reorder — @dnd-kit sortable with drag handles, smooth animation, persists order to bots.json via PUT /api/bots/reorder. Handles new/deleted bots gracefully.
 - [x] **D4** Removed dead `BotState.total_pnl` — never written by bot_runner, P&L is live-computed via `compute_realized_pnl()`. Old bots.json silently ignores the field via `from_dict()` filtering.
 - [x] **D10** Compact mode for bot cards — toggle between current expanded layout and a condensed single-row view showing only essential info (heartbeat, symbol, strategy, P&L, status). Portfolio summary strip stays as-is. Persist preference to localStorage. Sparkline alignment fix: sparkline is the flex element (takes remaining space), text stays content-width.
-- [ ] **D5** Journal helper call frequency — runs on bot tick (for sizing) and on summary fetch. Journal is JSON-parsed each time. Fine for now, but if it gets slow (thousands of entries) add an mtime-based cache.
+- [x] **D5** Journal helper call frequency — `list_bots` was reading + parsing journal 27 times (3 functions × 9 bots). Added `_load_trades()` helper + optional `trades` param; now reads once and passes through. Live Trading page load went from 3-5s to instant.
 - [x] **D9** Partial-position reconciliation — tracks `_last_broker_qty` between ticks, logs WARN on external shrinkage. Guards: skips first tick (learns baseline), skips pending close orders, skips full closures (existing path), ignores qty increases.
 
 ### Shipped

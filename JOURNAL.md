@@ -12,6 +12,7 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 - **Sparkline instant settle on load.** Added `fitContent()` call to MiniSparkline's ResizeObserver — charts were bunching to the right on page load because the initial mount width was stale and `fitContent` wasn't re-called after resize.
 - **Tab persistence.** Active tab (Chart/Live Trading/Discovery) now persists to localStorage across page reloads.
 - **`list_bots` perf fix.** Journal was read + parsed 27 times per `list_bots` call (3 functions × 9 bots). Added `_load_trades()` helper and optional `trades` parameter — now reads once and passes through. Live Trading page load went from 3-5s to instant.
+- **Build fixes.** Resolved 6 pre-existing `tsc -b` errors in Chart.tsx (unused var, Group ref type) and chart-mount.test.tsx (circular type, unused vars). Prod build now passes clean.
 
 ## 2026-04-27
 
