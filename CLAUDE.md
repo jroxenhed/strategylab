@@ -15,15 +15,15 @@ Interactive trading strategy backtester + live paper trading platform. Read this
 - **Subagent-first workflow.** Main session is a pure orchestrator — delegate ALL work to subagents. The only exception is single-line edits to tracking files (TODO.md, JOURNAL.md). Never debug, explore, or implement in the main session. The orchestrator's job is judgment (what to build, what to fix, what to defer) and verification (did agents do what was asked).
 - **Orchestrator cycle (follow this for every task):**
   1. Pick task from TODO
-  2. Explore (haiku) — map current code, understand dependencies
-  3. Spec (orchestrator) — write tight brief from exploration results
-  4. Implement (parallel sonnet) — backend + frontend simultaneously when independent. Before dispatching, verify file independence: list target files per agent, confirm zero overlap. If files overlap, sequence those agents.
-  5. Verify (orchestrator) — grep key changes, run `npm run build` (not `tsc --noEmit`), spot-check with absolute paths
-  6. Review (parallel sonnet) — 4–7 persona agents via ce:review
-  7. Synthesize (orchestrator) — merge findings, classify fix vs defer
-  8. Fix (sonnet) — dispatch ONE fixer agent with ALL findings. A single fixer can make holistic decisions (e.g., extract a shared module that resolves 3 findings at once). Never dispatch per-finding fixers.
-  9. Verify + commit (orchestrator) — run `npm run build`, check fixes, update TODO/JOURNAL atomically, push
-  10. Repeat
+  2. Explore+Spec (haiku) — map current code AND return a draft implementation brief. Orchestrator reviews/adjusts the brief (2s of judgment), doesn't rewrite from scratch. Saves a full orchestrator turn per task.
+  3. Implement (parallel sonnet) — backend + frontend simultaneously when independent. Before dispatching, verify file independence: list target files per agent, confirm zero overlap. If files overlap, sequence those agents.
+  4. Verify (orchestrator) — grep key changes, run `npm run build` (not `tsc --noEmit`), spot-check with absolute paths
+  5. Review (parallel sonnet) — 4–7 persona agents via ce:review
+  6. Synthesize (orchestrator) — merge findings, classify fix vs defer
+  7. Fix (sonnet) — dispatch ONE fixer agent with ALL findings. A single fixer can make holistic decisions (e.g., extract a shared module that resolves 3 findings at once). Never dispatch per-finding fixers.
+  8. Verify + commit (orchestrator) — run `npm run build`, check fixes, update TODO/JOURNAL atomically, push
+  9. Repeat
+- **Pipeline parallelism across tasks.** Don't wait for Task A's full cycle before starting Task B. While Task A is in review (the slowest phase), Task B can be in explore/implement — as long as their files don't overlap. The orchestrator tracks multiple tasks at different pipeline stages. Typical overlap: Task A in review + Task B in implement = ~2x wall-clock speedup on multi-task sessions. Use `run_in_background: true` on review agents, then dispatch the next task's explore+implement while reviews run. When review results arrive, synthesize and fix Task A, then move to Task B's review.
 - **Model routing for subagents.** haiku for reads/exploration, sonnet for coding/implementation/review, opus only when complexity demands it. Set the `model` parameter on every Agent call.
 - **Review dispatch rules.** Pass file paths and intent to reviewers — not diff content. Let reviewers read files themselves. Always use absolute paths in verification commands. Prefer "read these files" over "run git diff" in agent prompts — file reads don't require shell permissions.
 - **Review loop for non-trivial work.** Implement → parallel review agents → synthesize → fix agent → verify. Skip for trivial (<10 line) changes. For medium changes, a single reviewer suffices. For large/multi-file changes, run parallel reviewers across correctness, maintainability, project-standards, and domain personas.
