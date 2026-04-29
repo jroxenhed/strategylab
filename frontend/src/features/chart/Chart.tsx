@@ -96,7 +96,7 @@ function buildMarkers(trades: Trade[], subPane = false) {
         position: subPane ? 'inBar' as const : (isShortEntry ? 'aboveBar' as const : 'belowBar' as const),
         color: '#e5c07b',
         shape: subPane ? 'circle' as const : (isShortEntry ? 'arrowDown' as const : 'arrowUp' as const),
-        ...(subPane && { text: isShortEntry ? 'SH' : 'B' }),
+        text: isShortEntry ? 'SH' : 'B',
       }
     }
     const win = (t.pnl ?? 0) >= 0
@@ -106,7 +106,7 @@ function buildMarkers(trades: Trade[], subPane = false) {
       position: subPane ? 'inBar' as const : (isCover ? 'belowBar' as const : 'aboveBar' as const),
       color,
       shape: subPane ? 'circle' as const : (isCover ? 'arrowUp' as const : 'arrowDown' as const),
-      ...(subPane && { text: t.stop_loss ? 'SL' : t.trailing_stop ? 'TSL' : (isCover ? 'COV' : 'S') }),
+      text: t.stop_loss ? 'SL' : t.trailing_stop ? 'TSL' : (isCover ? 'COV' : 'S'),
     }
   })
 }
@@ -243,7 +243,8 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     const SNAP = 2
     const byIdx = new Map<number, Trade[]>()
     for (const t of trades) {
-      const idx = candleTimeIndex.get(toET(t.date as any))
+      const snapped = snapTimestamp(t.date, viewInterval, toET)
+      const idx = candleTimeIndex.get(snapped)
       if (idx === undefined) continue
       const arr = byIdx.get(idx)
       if (arr) arr.push(t)

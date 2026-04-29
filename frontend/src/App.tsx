@@ -8,7 +8,7 @@ import { getCoarserIntervals } from './shared/utils/intervals'
 import Sidebar from './features/sidebar/Sidebar'
 import Chart from './features/chart/Chart'
 import StrategyBuilder from './features/strategy/StrategyBuilder'
-import Results from './features/strategy/Results'
+import Results, { ResultsTab } from './features/strategy/Results'
 import StrategyComparison from './features/strategy/StrategyComparison'
 import PaperTrading from './features/trading/PaperTrading'
 import Discovery from './features/discovery/Discovery'
@@ -45,7 +45,7 @@ export default function App() {
   const [extendedHours, setExtendedHours] = useState<boolean>(saved?.extendedHours ?? false)
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null)
   const [lastRequest, setLastRequest] = useState<StrategyRequest | null>(null)
-  const [resultsTab, setResultsTab] = useState<'summary' | 'equity' | 'trades' | 'trace'>('summary')
+  const [resultsTab, setResultsTab] = useState<ResultsTab>('summary')
   const [macroBucket, setMacroBucket] = useState<string | null>(null)
   const [showBaseline, setShowBaseline] = useState(false)
   const [logScale, setLogScale] = useState(false)

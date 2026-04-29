@@ -8,7 +8,7 @@ import { normaliseToPercent, applyLog } from '../../shared/utils/chartScale'
 import PnlHistogram from './PnlHistogram'
 import MacroEquityChart from './MacroEquityChart'
 
-export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace'
+export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace' | 'session'
 
 function fmtDate(d: string | number | undefined): string {
   if (typeof d === 'number') return fmtDateTimeET(d)
@@ -268,13 +268,13 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
     <div style={styles.container}>
       <div style={{ ...styles.tabBar, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex' }}>
-          {(['summary', 'equity', 'trades', ...(signal_trace ? ['trace'] : [])] as ResultsTab[]).map(tab => (
+          {(['summary', 'equity', 'trades', ...(signal_trace ? ['trace'] : []), ...(result.session_analytics && result.session_analytics.length > 0 ? ['session'] : [])] as ResultsTab[]).map(tab => (
             <button
               key={tab}
               onClick={() => onTabChange(tab)}
               style={{ ...styles.tab, ...(activeTab === tab ? styles.tabActive : {}) }}
             >
-              {tab === 'summary' ? 'Summary' : tab === 'equity' ? 'Equity Curve' : tab === 'trades' ? `Trades (${sells.length})` : `Signal Trace (${signal_trace!.length})`}
+              {tab === 'summary' ? 'Summary' : tab === 'equity' ? 'Equity Curve' : tab === 'trades' ? `Trades (${sells.length})` : tab === 'session' ? 'Session' : `Signal Trace (${signal_trace!.length})`}
             </button>
           ))}
         </div>
@@ -417,8 +417,11 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
               </div>
             )
           })()}
-          <SessionAnalytics data={result.session_analytics} />
         </div>
+      )}
+
+      {activeTab === 'session' && (
+        <SessionAnalytics data={result.session_analytics} />
       )}
 
       {activeTab === 'equity' && (
@@ -860,7 +863,7 @@ function SessionAnalytics({ data }: { data?: SessionAnalyticsBucket[] | null }) 
           const color = winRateColor(b.win_rate)
           return (
             <div key={b.bucket} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 20 }}>
-              <span style={{ fontSize: 11, color: '#8b949e', width: 38, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{b.bucket}</span>
+              <span style={{ fontSize: 11, color: '#8b949e', width: 90, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{fmtBucketRange(b.bucket)}</span>
               <div style={{ flex: 1, height: 14, background: '#21262d', borderRadius: 2, overflow: 'hidden' }}>
                 {b.trade_count > 0 && (
                   <div style={{ width: `${barWidth}%`, height: '100%', background: color, borderRadius: 2 }} />
