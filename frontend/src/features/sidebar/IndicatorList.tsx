@@ -7,7 +7,7 @@ interface IndicatorListProps {
   onChange: React.Dispatch<React.SetStateAction<IndicatorInstance[]>>
 }
 
-const AVAILABLE_TYPES: IndicatorType[] = ['rsi', 'macd', 'bb', 'atr', 'ma', 'volume']
+const AVAILABLE_TYPES: IndicatorType[] = ['rsi', 'macd', 'bb', 'atr', 'ma', 'volume', 'stochastic', 'vwap', 'adx']
 
 const PRESET_COLORS = ['#f0883e', '#58a6ff', '#a371f7', '#3fb950', '#f85149', '#d2a8ff', '#79c0ff', '#ffa657', '#ff7b72', '#7ee787']
 const SUPPORTS_COLOR = new Set<IndicatorType>(['ma', 'rsi', 'atr', 'macd'])

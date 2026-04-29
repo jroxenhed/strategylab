@@ -19,7 +19,7 @@ export interface TimeValue {
 export type MAType = 'sma' | 'ema' | 'rma'
 
 export interface Rule {
-  indicator: 'macd' | 'rsi' | 'price' | 'ma' | 'bb' | 'atr' | 'atr_pct' | 'volume'
+  indicator: 'macd' | 'rsi' | 'price' | 'ma' | 'bb' | 'atr' | 'atr_pct' | 'volume' | 'stochastic' | 'adx'
   condition: string
   value?: number
   param?: string
