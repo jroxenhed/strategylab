@@ -1,43 +1,40 @@
-import { useState, useEffect } from 'react'
-import { Plus } from 'lucide-react'
-import { fetchWatchlist, saveWatchlist, scanSignals, placeBuy, placeSell, type SignalResult } from '../../api/trading'
-import type { Rule } from '../../shared/types'
-import RuleRow, { emptyRule } from '../strategy/RuleRow'
-import { fmtTimeET, fmtShortET, tzLabel, useTimezone } from '../../shared/utils/time'
+import { useState, useEffect, useMemo } from 'react'
+import { fetchWatchlist, saveWatchlist, batchQuickBacktest } from '../../api/trading'
+import type { QuickBacktestResult } from '../../api/trading'
+import type { SavedStrategy } from '../../shared/types'
 import { apiErrorDetail } from '../../shared/utils/errors'
 
-const SCANNER_STORAGE_KEY = 'strategylab-scanner'
+const SAVED_KEY = 'strategylab-saved-strategies'
 
-function loadScannerSettings() {
+const LOOKBACK_OPTIONS: { label: string; days: number }[] = [
+  { label: '30d', days: 30 },
+  { label: '60d', days: 60 },
+  { label: '90d', days: 90 },
+  { label: '180d', days: 180 },
+  { label: '1Y', days: 365 },
+]
+
+type SortKey = 'symbol' | 'signal' | 'return_pct' | 'sharpe' | 'win_rate_pct' | 'num_trades' | 'max_drawdown_pct'
+
+function loadStrategies(): SavedStrategy[] {
   try {
-    const raw = localStorage.getItem(SCANNER_STORAGE_KEY)
-    return raw ? JSON.parse(raw) : null
-  } catch { return null }
+    const raw = localStorage.getItem(SAVED_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch { return [] }
 }
 
-export default function SignalScanner() {
-  useTimezone()
-  const saved = useState(() => loadScannerSettings())[0]
+export default function SignalScanner({ onSpawnBot }: { onSpawnBot?: (symbol: string, strategyName: string) => void }) {
   const [symbols, setSymbols] = useState('')
-  const [interval, setInterval] = useState('15m')
-  const [buyRules, setBuyRules] = useState<Rule[]>(saved?.buyRules ?? [{ indicator: 'rsi', condition: 'turns_up_below', value: 30 }])
-  const [sellRules, setSellRules] = useState<Rule[]>(saved?.sellRules ?? [{ indicator: 'rsi', condition: 'turns_down_above', value: 70 }])
-  const [buyLogic, setBuyLogic] = useState<'AND' | 'OR'>(saved?.buyLogic ?? 'AND')
-  const [sellLogic, setSellLogic] = useState<'AND' | 'OR'>(saved?.sellLogic ?? 'AND')
-  const [saving, setSaving] = useState(false)
   const [loaded, setLoaded] = useState(false)
+  const [strategies] = useState<SavedStrategy[]>(loadStrategies)
+  const [selectedIdx, setSelectedIdx] = useState(-1)
+  const [lookback, setLookback] = useState(90)
   const [scanning, setScanning] = useState(false)
-  const [results, setResults] = useState<SignalResult[]>([])
-  const [scannedAt, setScannedAt] = useState<string | null>(null)
+  const [results, setResults] = useState<QuickBacktestResult[]>([])
   const [scanError, setScanError] = useState<string | null>(null)
-  const [positionSize, setPositionSize] = useState(saved?.positionSize ?? 5000)
-  const [stopLossPct, setStopLossPct] = useState<number | ''>(saved?.stopLossPct ?? 2)
-  const [executing, setExecuting] = useState<string | null>(null)
-  const [executeMsg, setExecuteMsg] = useState<string | null>(null)
-
-  useEffect(() => {
-    localStorage.setItem(SCANNER_STORAGE_KEY, JSON.stringify({ buyRules, sellRules, buyLogic, sellLogic, positionSize, stopLossPct }))
-  }, [buyRules, sellRules, buyLogic, sellLogic, positionSize, stopLossPct])
+  const [sortKey, setSortKey] = useState<SortKey>('return_pct')
+  const [sortAsc, setSortAsc] = useState(false)
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     fetchWatchlist().then(list => {
@@ -58,52 +55,74 @@ export default function SignalScanner() {
   }
 
   const handleScan = async () => {
+    if (selectedIdx < 0) { setScanError('Select a strategy first'); return }
+    const strategy = strategies[selectedIdx]
+    const list = symbols.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+    if (list.length === 0) { setScanError('No symbols in watchlist'); return }
+
     setScanning(true)
     setScanError(null)
-    const list = symbols.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
     try {
-      const res = await scanSignals({
+      const res = await batchQuickBacktest({
         symbols: list,
-        interval,
-        buy_rules: buyRules,
-        sell_rules: sellRules,
-        buy_logic: buyLogic,
-        sell_logic: sellLogic,
+        interval: strategy.interval ?? '1d',
+        lookback_days: lookback,
+        buy_rules: strategy.buyRules,
+        sell_rules: strategy.sellRules,
+        buy_logic: strategy.buyLogic,
+        sell_logic: strategy.sellLogic,
+        direction: strategy.direction ?? 'long',
       })
-      setResults(res.signals)
-      setScannedAt(res.scanned_at)
+      setResults(res)
     } catch (e) {
       setScanError(apiErrorDetail(e, 'Scan failed'))
     }
     setScanning(false)
   }
 
-  const handleExecute = async (symbol: string, signal: 'BUY' | 'SELL', price: number) => {
-    setExecuting(symbol)
-    setExecuteMsg(null)
-    try {
-      if (signal === 'BUY') {
-        const qty = Math.floor(positionSize / price)
-        if (qty < 1) { setExecuteMsg(`Position size too small for ${symbol}`); setExecuting(null); return }
-        const slp = typeof stopLossPct === 'number' && stopLossPct > 0 ? stopLossPct : undefined
-        await placeBuy(symbol, qty, slp)
-        setExecuteMsg(`Bought ${qty} ${symbol}`)
-      } else {
-        await placeSell(symbol)
-        setExecuteMsg(`Sold ${symbol}`)
+  const selectedStrategy = selectedIdx >= 0 ? strategies[selectedIdx] : null
+
+  const sorted = useMemo(() => {
+    if (results.length === 0) return results
+    return [...results].sort((a, b) => {
+      let av: number | string | null = null
+      let bv: number | string | null = null
+      if (sortKey === 'symbol') { av = a.ticker; bv = b.ticker }
+      else if (sortKey === 'signal') { av = a.signal_now ? 1 : 0; bv = b.signal_now ? 1 : 0 }
+      else { av = a[sortKey]; bv = b[sortKey] }
+
+      if (av === null && bv === null) return 0
+      if (av === null) return 1
+      if (bv === null) return -1
+      if (typeof av === 'string' && typeof bv === 'string') {
+        return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av)
       }
-    } catch (e) {
-      setExecuteMsg(apiErrorDetail(e, `Failed to ${signal.toLowerCase()} ${symbol}`))
-    }
-    setExecuting(null)
+      return sortAsc ? (av as number) - (bv as number) : (bv as number) - (av as number)
+    })
+  }, [results, sortKey, sortAsc])
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortAsc(a => !a)
+    else { setSortKey(key); setSortAsc(false) }
   }
+
+  const colHeaders: { key: SortKey; label: string }[] = [
+    { key: 'symbol', label: 'Symbol' },
+    { key: 'signal', label: 'Signal' },
+    { key: 'return_pct', label: 'Return %' },
+    { key: 'sharpe', label: 'Sharpe' },
+    { key: 'win_rate_pct', label: 'Win Rate' },
+    { key: 'num_trades', label: 'Trades' },
+    { key: 'max_drawdown_pct', label: 'Max DD' },
+  ]
 
   return (
     <div style={styles.section}>
       <div style={styles.header}>
-        <span style={styles.title}>Signal Scanner</span>
+        <span style={styles.title}>Strategy Scanner</span>
       </div>
 
+      {/* Controls row */}
       <div style={styles.controls}>
         <div style={styles.field}>
           <label style={styles.label}>Watchlist</label>
@@ -111,137 +130,151 @@ export default function SignalScanner() {
             style={styles.input}
             value={symbols}
             onChange={e => setSymbols(e.target.value)}
-            placeholder="AAPL, ENPH, TSLA..."
+            placeholder="AAPL, TSLA, NVDA..."
           />
         </div>
 
         <div style={styles.field}>
-          <label style={styles.label}>Interval</label>
+          <label style={styles.label}>Strategy</label>
           <select
-            style={styles.select}
-            value={interval}
-            onChange={e => setInterval(e.target.value)}
+            style={{ ...styles.select, width: 180 }}
+            value={selectedIdx}
+            onChange={e => setSelectedIdx(+e.target.value)}
           >
-            <option value="5m">5m</option>
-            <option value="15m">15m</option>
-            <option value="1h">1h</option>
+            <option value={-1}>— select strategy —</option>
+            {strategies.map((s, i) => (
+              <option key={i} value={i}>{s.name}</option>
+            ))}
           </select>
         </div>
 
         <div style={styles.field}>
-          <label style={styles.label}>Position ($)</label>
-          <input
-            type="number"
-            style={{ ...styles.select, width: 80 }}
-            value={positionSize}
-            onChange={e => setPositionSize(+e.target.value)}
-          />
-        </div>
-
-        <div style={styles.field}>
-          <label style={styles.label}>Stop Loss %</label>
-          <input
-            type="number"
-            style={{ ...styles.select, width: 60 }}
-            value={stopLossPct}
-            step={0.5}
-            min={0}
-            placeholder="Off"
-            onChange={e => setStopLossPct(e.target.value === '' ? '' : +e.target.value)}
-          />
+          <label style={styles.label}>Lookback</label>
+          <select
+            style={styles.select}
+            value={lookback}
+            onChange={e => setLookback(+e.target.value)}
+          >
+            {LOOKBACK_OPTIONS.map(o => (
+              <option key={o.days} value={o.days}>{o.label}</option>
+            ))}
+          </select>
         </div>
 
         <button style={styles.saveBtn} onClick={handleSave} disabled={saving || !loaded}>
-          {saving ? '...' : 'Save'}
+          {saving ? '...' : 'Save Watchlist'}
         </button>
 
-        <button style={styles.scanBtn} onClick={handleScan} disabled={scanning || !loaded}>
-          {scanning ? 'Scanning...' : 'Scan Now'}
+        <button
+          style={{ ...styles.scanBtn, opacity: !loaded || scanning ? 0.6 : 1 }}
+          onClick={handleScan}
+          disabled={!loaded || scanning}
+        >
+          {scanning ? 'Scanning...' : 'Scan'}
         </button>
       </div>
 
-      {/* Rule editors */}
-      <div style={styles.rulesArea}>
-        <div style={styles.rulePanel}>
-          <div style={styles.rulePanelHeader}>
-            <span style={{ color: '#26a641', fontWeight: 600, fontSize: 12 }}>BUY when</span>
-            <div style={styles.logicToggle}>
-              {(['AND', 'OR'] as const).map(l => (
-                <button key={l} onClick={() => setBuyLogic(l)} style={{ ...styles.logicBtn, ...(buyLogic === l ? styles.logicBtnActive : {}) }}>{l}</button>
+      {/* Selected strategy rules read-only */}
+      {selectedStrategy && (
+        <div style={styles.rulesPreview}>
+          <div style={styles.ruleGroup}>
+            <span style={styles.ruleGroupLabel}>BUY ({selectedStrategy.buyLogic})</span>
+            <div style={styles.rulePills}>
+              {selectedStrategy.buyRules.map((r, i) => (
+                <span key={i} style={{ ...styles.rulePill, background: '#1a2d1a', color: '#3fb950' }}>
+                  {r.negated ? <span style={{ color: '#f0883e', marginRight: 3 }}>NOT</span> : null}
+                  {r.indicator} {r.condition} {r.value ?? ''}
+                </span>
               ))}
             </div>
-            <button onClick={() => setBuyRules(r => [...r, emptyRule()])} style={styles.addBtn}><Plus size={13} /> Add</button>
           </div>
-          {buyRules.map((r, i) => (
-            <RuleRow key={i} rule={r}
-              onChange={nr => setBuyRules(rules => rules.map((x, j) => j === i ? nr : x))}
-              onDelete={() => setBuyRules(rules => rules.filter((_, j) => j !== i))} />
-          ))}
-        </div>
-        <div style={styles.rulePanel}>
-          <div style={styles.rulePanelHeader}>
-            <span style={{ color: '#f85149', fontWeight: 600, fontSize: 12 }}>SELL when</span>
-            <div style={styles.logicToggle}>
-              {(['AND', 'OR'] as const).map(l => (
-                <button key={l} onClick={() => setSellLogic(l)} style={{ ...styles.logicBtn, ...(sellLogic === l ? styles.logicBtnActive : {}) }}>{l}</button>
+          <div style={styles.ruleGroup}>
+            <span style={styles.ruleGroupLabel}>SELL ({selectedStrategy.sellLogic})</span>
+            <div style={styles.rulePills}>
+              {selectedStrategy.sellRules.map((r, i) => (
+                <span key={i} style={{ ...styles.rulePill, background: '#2d1a1a', color: '#f85149' }}>
+                  {r.negated ? <span style={{ color: '#f0883e', marginRight: 3 }}>NOT</span> : null}
+                  {r.indicator} {r.condition} {r.value ?? ''}
+                </span>
               ))}
             </div>
-            <button onClick={() => setSellRules(r => [...r, emptyRule()])} style={styles.addBtn}><Plus size={13} /> Add</button>
           </div>
-          {sellRules.map((r, i) => (
-            <RuleRow key={i} rule={r}
-              onChange={nr => setSellRules(rules => rules.map((x, j) => j === i ? nr : x))}
-              onDelete={() => setSellRules(rules => rules.filter((_, j) => j !== i))} />
-          ))}
+          <span style={styles.ruleGroupLabel}>
+            Interval: {selectedStrategy.interval ?? '1d'} &nbsp;|&nbsp; Direction: {selectedStrategy.direction ?? 'long'}
+          </span>
         </div>
-      </div>
-
-      {scanError && (
-        <div style={{ padding: '8px 16px', color: '#f85149', fontSize: 12 }}>{scanError}</div>
       )}
 
-      {results.length > 0 && (
+      {scanError && (
+        <div style={styles.errorBar}>{scanError}</div>
+      )}
+
+      {/* Results table */}
+      {sorted.length > 0 && (
         <div style={styles.results}>
-          {scannedAt && (
-            <div style={styles.scannedAt}>
-              Scanned at {fmtTimeET(scannedAt)} {tzLabel()}
-            </div>
-          )}
-          {executeMsg && (
-            <div style={{ padding: '6px 16px', fontSize: 11, color: '#8b949e' }}>{executeMsg}</div>
-          )}
           <div style={styles.headRow}>
-            {['Symbol', 'Signal', 'Price', 'RSI', 'EMA50', 'Last Bar', ''].map(h => (
-              <span key={h} style={styles.headCell}>{h}</span>
+            {colHeaders.map(h => (
+              <button
+                key={h.key}
+                style={{ ...styles.headCell, cursor: 'pointer', background: 'none', border: 'none', padding: 0, textAlign: 'left' as const }}
+                onClick={() => toggleSort(h.key)}
+              >
+                {h.label}
+                {sortKey === h.key ? (sortAsc ? ' ↑' : ' ↓') : ''}
+              </button>
             ))}
+            <span style={styles.headCell}>Action</span>
           </div>
-          {results.map(r => {
-            const signalColor = r.signal === 'BUY' ? '#26a641'
-              : r.signal === 'SELL' ? '#f85149'
-              : r.signal === 'ERROR' ? '#f0883e'
-              : '#8b949e'
-            const canExecute = r.signal === 'BUY' || r.signal === 'SELL'
+
+          {sorted.map(r => {
+            const hasError = !!r.error
+            const ret = r.return_pct
+            const retColor = ret === null ? '#8b949e' : ret > 0 ? '#3fb950' : ret < 0 ? '#f85149' : '#8b949e'
+            const dd = r.max_drawdown_pct
+            const ddColor = dd === null ? '#8b949e' : dd < -20 ? '#f85149' : dd < -10 ? '#f0883e' : '#8b949e'
+
             return (
-              <div key={r.symbol} style={styles.row}>
-                <span style={{ ...styles.cell, color: '#58a6ff', fontWeight: 600 }}>{r.symbol}</span>
-                <span style={{ ...styles.cell, color: signalColor, fontWeight: 700 }}>{r.signal}</span>
-                <span style={styles.cell}>{r.price != null ? `$${r.price.toFixed(2)}` : '—'}</span>
-                <span style={styles.cell}>{r.rsi != null ? r.rsi.toFixed(1) : '—'}</span>
-                <span style={styles.cell}>{r.ema50 != null ? `$${r.ema50.toFixed(2)}` : '—'}</span>
-                <span style={styles.cell}>{r.error ?? (r.last_bar ? fmtShortET(r.last_bar) : '—')}</span>
+              <div key={r.ticker} style={styles.row}>
+                <span style={{ ...styles.cell, color: '#58a6ff', fontWeight: 600 }}>{r.ticker}</span>
                 <span style={styles.cell}>
-                  {canExecute && (
-                    <button
-                      onClick={() => handleExecute(r.symbol, r.signal as 'BUY' | 'SELL', r.price!)}
-                      disabled={executing === r.symbol}
-                      style={{
-                        ...styles.execBtn,
-                        background: r.signal === 'BUY' ? '#238636' : '#da3633',
-                      }}
-                    >
-                      {executing === r.symbol ? '...' : r.signal === 'BUY' ? 'Buy' : 'Sell'}
-                    </button>
+                  {hasError ? (
+                    <span style={{ color: '#f0883e', fontSize: 11 }}>ERR</span>
+                  ) : r.signal_now ? (
+                    <span style={{ color: '#3fb950', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#3fb950', display: 'inline-block' }} />
+                      BUY
+                    </span>
+                  ) : (
+                    <span style={{ color: '#484f58' }}>—</span>
                   )}
+                </span>
+                <span style={{ ...styles.cell, color: retColor }}>
+                  {ret !== null ? `${ret > 0 ? '+' : ''}${ret.toFixed(1)}%` : '—'}
+                </span>
+                <span style={styles.cell}>
+                  {r.sharpe !== null ? r.sharpe.toFixed(2) : '—'}
+                </span>
+                <span style={styles.cell}>
+                  {r.win_rate_pct !== null ? `${r.win_rate_pct.toFixed(0)}%` : '—'}
+                </span>
+                <span style={styles.cell}>
+                  {r.num_trades !== null ? r.num_trades : '—'}
+                </span>
+                <span style={{ ...styles.cell, color: ddColor }}>
+                  {dd !== null ? `${dd.toFixed(1)}%` : '—'}
+                </span>
+                <span style={styles.cell}>
+                  <button
+                    style={{
+                      ...styles.spawnBtn,
+                      opacity: selectedStrategy ? 1 : 0.4,
+                      cursor: selectedStrategy ? 'pointer' : 'default',
+                    }}
+                    disabled={!selectedStrategy}
+                    onClick={() => selectedStrategy && onSpawnBot?.(r.ticker, selectedStrategy.name)}
+                  >
+                    Spawn Bot
+                  </button>
                 </span>
               </div>
             )
@@ -260,7 +293,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   title: { fontSize: 13, fontWeight: 600, color: '#e6edf3' },
   controls: {
-    display: 'flex', alignItems: 'flex-end', gap: 12,
+    display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' as const,
     padding: '12px 16px',
   },
   field: { display: 'flex', flexDirection: 'column', gap: 4 },
@@ -268,7 +301,7 @@ const styles: Record<string, React.CSSProperties> = {
   input: {
     fontSize: 12, padding: '5px 8px', borderRadius: 4,
     background: '#161b22', color: '#e6edf3', border: '1px solid #30363d',
-    outline: 'none', width: 260,
+    outline: 'none', width: 280,
   },
   select: {
     fontSize: 12, padding: '5px 8px', borderRadius: 4,
@@ -281,34 +314,45 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer', fontWeight: 500, whiteSpace: 'nowrap' as const,
   },
   scanBtn: {
-    fontSize: 12, padding: '5px 14px', borderRadius: 6,
+    fontSize: 12, padding: '5px 16px', borderRadius: 6,
     background: '#238636', color: '#fff', border: 'none',
     cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' as const,
   },
-  rulesArea: { display: 'flex', gap: 0, padding: '0 0 8px', borderBottom: '1px solid #21262d' },
-  rulePanel: { minWidth: 280, padding: '0 16px', borderRight: '1px solid #21262d' },
-  rulePanelHeader: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, paddingTop: 8 },
-  logicToggle: { display: 'flex', borderRadius: 4, overflow: 'hidden', border: '1px solid #30363d' },
-  logicBtn: { padding: '2px 8px', fontSize: 11, background: '#0d1117', color: '#8b949e', border: 'none', cursor: 'pointer' },
-  logicBtnActive: { background: '#58a6ff', color: '#000' },
-  addBtn: { display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, color: '#58a6ff', padding: '2px 6px', border: '1px solid #30363d', borderRadius: 4, background: '#0d1117', cursor: 'pointer' },
-  results: { overflowX: 'auto' },
-  scannedAt: { padding: '6px 16px', fontSize: 10, color: '#484f58' },
+  rulesPreview: {
+    display: 'flex', gap: 16, flexWrap: 'wrap' as const, alignItems: 'center',
+    padding: '8px 16px', borderBottom: '1px solid #21262d',
+    background: '#0d1117',
+  },
+  ruleGroup: { display: 'flex', alignItems: 'center', gap: 6 },
+  ruleGroupLabel: { fontSize: 10, color: '#8b949e', textTransform: 'uppercase' as const, letterSpacing: '0.04em', whiteSpace: 'nowrap' as const },
+  rulePills: { display: 'flex', gap: 4, flexWrap: 'wrap' as const },
+  rulePill: {
+    fontSize: 11, padding: '2px 7px', borderRadius: 4,
+    border: '1px solid #30363d', whiteSpace: 'nowrap' as const,
+  },
+  errorBar: { padding: '8px 16px', color: '#f85149', fontSize: 12 },
+  results: { overflowX: 'auto' as const },
   headRow: {
-    display: 'flex', gap: 4, padding: '4px 16px',
-    borderBottom: '1px solid #21262d',
+    display: 'flex', gap: 0, padding: '6px 16px',
+    borderBottom: '1px solid #21262d', background: '#0d1117',
   },
   headCell: {
-    fontSize: 10, color: '#8b949e', width: 100, flexShrink: 0,
+    fontSize: 10, color: '#8b949e', width: 90, flexShrink: 0,
     textTransform: 'uppercase' as const, letterSpacing: '0.03em',
   },
   row: {
-    display: 'flex', gap: 4, padding: '5px 16px',
+    display: 'flex', gap: 0, padding: '6px 16px',
     borderBottom: '1px solid #161b22',
   },
-  cell: { fontSize: 12, color: '#e6edf3', width: 100, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
-  execBtn: {
-    fontSize: 11, padding: '2px 10px', borderRadius: 4,
-    color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 600,
+  cell: {
+    fontSize: 12, color: '#e6edf3', width: 90, flexShrink: 0,
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
+    display: 'flex', alignItems: 'center',
+  },
+  spawnBtn: {
+    fontSize: 11, padding: '2px 8px', borderRadius: 4,
+    background: '#1c2d40', color: '#58a6ff',
+    border: '1px solid #2a4060',
+    fontWeight: 500,
   },
 }

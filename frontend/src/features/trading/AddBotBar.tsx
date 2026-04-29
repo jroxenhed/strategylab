@@ -47,7 +47,28 @@ export default function AddBotBar({
     } catch {}
   }
 
-  useEffect(() => { loadStrategies() }, [])
+  useEffect(() => {
+    loadStrategies()
+    // Check for pending spawn from Discovery tab
+    try {
+      const pending = localStorage.getItem('strategylab-pending-spawn')
+      if (pending) {
+        localStorage.removeItem('strategylab-pending-spawn')
+        const { symbol: pendingSymbol, strategyName } = JSON.parse(pending)
+        const raw = localStorage.getItem(SAVED_KEY)
+        const strats: SavedStrategy[] = raw ? JSON.parse(raw) : []
+        const idx = strats.findIndex(s => s.name === strategyName)
+        if (idx >= 0) {
+          setStrategies(strats)
+          setSelectedIdx(idx)
+          setSymbol(pendingSymbol ?? strats[idx].ticker ?? '')
+          setInterval(strats[idx].interval ?? '15m')
+        } else if (pendingSymbol) {
+          setSymbol(pendingSymbol)
+        }
+      }
+    } catch {}
+  }, [])
 
   const onStrategyChange = (idx: number) => {
     setSelectedIdx(idx)

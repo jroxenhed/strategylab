@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-**69 / 92 shipped.** Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+**70 / 92 shipped.** Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -112,8 +112,9 @@ Own multi-session research project. Needs its own design work before implementat
 - [ ] **E2** Batch backtesting (efficiency-critical)
 - [ ] **E3** AI/ML assisted parameter tweaking
 - [ ] **E4** Pipeline: present candidates -> spawn bot army
-- [ ] **E5** Reframe SignalScanner as research, not execution. Current page duplicates bot logic (manual Buy/Sell, own position size + stop) and skips direction, slippage/cost model, trailing stops, journal scoping, broker/data-source choice. Replace with: pick a saved strategy (no inline rule editing), show live signal + mini backtest stats per ticker (return / Sharpe / win rate over configurable lookback), per-row action becomes **Spawn Bot** that pre-fills AddBotBar (symbol, strategy, broker, data source). Drop Position $ and Stop Loss % inputs entirely. Prereq for E4.
+- [x] **E5** Reframe SignalScanner as research, not execution. Current page duplicates bot logic (manual Buy/Sell, own position size + stop) and skips direction, slippage/cost model, trailing stops, journal scoping, broker/data-source choice. Replace with: pick a saved strategy (no inline rule editing), show live signal + mini backtest stats per ticker (return / Sharpe / win rate over configurable lookback), per-row action becomes **Spawn Bot** that pre-fills AddBotBar (symbol, strategy, broker, data source). Drop Position $ and Stop Loss % inputs entirely. Prereq for E4.
   - [x] Backend: `POST /api/backtest/quick` + `POST /api/backtest/quick/batch` — summary stats only (`backend/routes/backtest_quick.py`)
+  - [x] Frontend: SignalScanner rewritten — saved strategy dropdown, lookback selector, sortable results table, Spawn Bot pre-fills AddBotBar via localStorage
 - [x] **E6** Clean up bot page, move signal scanner to new Discovery page
 
 ## F — Architecture & housekeeping

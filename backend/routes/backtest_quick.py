@@ -198,5 +198,9 @@ def quick_backtest_batch(req: BatchQuickBacktestRequest):
             stop_loss_pct=req.stop_loss_pct,
             trailing_stop=req.trailing_stop,
         )
-        results.append(_run_quick(single_req))
+        try:
+            result = _run_quick(single_req)
+        except Exception as e:
+            result = QuickBacktestResult(ticker=symbol.upper(), error=str(e))
+        results.append(result)
     return {"results": results}

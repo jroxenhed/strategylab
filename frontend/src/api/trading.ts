@@ -220,3 +220,33 @@ export async function setBroker(broker: string): Promise<BrokerInfo> {
   const { data } = await api.put('/api/broker', { broker })
   return data
 }
+
+// --- Quick batch backtest ---
+
+export interface QuickBacktestResult {
+  ticker: string
+  return_pct: number | null
+  sharpe: number | null
+  win_rate_pct: number | null
+  num_trades: number | null
+  max_drawdown_pct: number | null
+  signal_now: boolean | null
+  last_signal_date: string | null
+  error: string | null
+}
+
+export interface BatchQuickBacktestRequest {
+  symbols: string[]
+  interval: string
+  lookback_days: number
+  buy_rules: Rule[]
+  sell_rules: Rule[]
+  buy_logic: 'AND' | 'OR'
+  sell_logic: 'AND' | 'OR'
+  direction?: 'long' | 'short'
+}
+
+export async function batchQuickBacktest(req: BatchQuickBacktestRequest): Promise<QuickBacktestResult[]> {
+  const { data } = await api.post('/api/backtest/quick/batch', req)
+  return data.results ?? []
+}

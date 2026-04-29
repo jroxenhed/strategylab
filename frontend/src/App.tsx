@@ -270,7 +270,11 @@ export default function App() {
           <PaperTrading />
         </div>
         <div style={{ height: '100%', display: activeTab === 'discovery' ? 'block' : 'none' }}>
-          <Discovery />
+          <Discovery onSpawnBot={(symbol, strategyName) => {
+            localStorage.setItem('strategylab-pending-spawn', JSON.stringify({ symbol, strategyName }))
+            setActiveTab('trading')
+            localStorage.setItem('activeTab', 'trading')
+          }} />
         </div>
       </div>
     </div>

@@ -1,10 +1,10 @@
 import SignalScanner from './SignalScanner'
 import PerformanceComparison from './PerformanceComparison'
 
-export default function Discovery() {
+export default function Discovery({ onSpawnBot }: { onSpawnBot?: (symbol: string, strategyName: string) => void }) {
   return (
     <div style={styles.container}>
-      <SignalScanner />
+      <SignalScanner onSpawnBot={onSpawnBot} />
       <PerformanceComparison />
     </div>
   )
