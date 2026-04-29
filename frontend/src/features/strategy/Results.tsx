@@ -3,7 +3,7 @@ import { createChart, BaselineSeries, LineSeries, HistogramSeries, ColorType } f
 import type { IChartApi } from 'lightweight-charts'
 import type { BacktestResult, SignalTraceEntry, StrategyRequest } from '../../shared/types'
 import { useMacro } from '../../shared/hooks/useMacro'
-import { fmtDateTimeET } from '../../shared/utils/time'
+import { fmtDateTimeET, toDisplayTime } from '../../shared/utils/time'
 import { normaliseToPercent, applyLog } from '../../shared/utils/chartScale'
 import PnlHistogram from './PnlHistogram'
 import MacroEquityChart from './MacroEquityChart'
@@ -92,11 +92,13 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       },
     })
 
-    // Prepare equity data, downsampled to match chart view interval
+    // Prepare equity data, downsampled to match chart view interval.
+    // Timestamps are shifted to display-timezone wall-clock (same as main chart's
+    // toET transform) so that pan/zoom and crosshair sync work correctly.
     const needsDownsample = viewInterval !== backtestInterval
     let rawEquity = equity_curve
       .filter(d => d.value !== null)
-      .map(d => ({ time: d.time as any, value: d.value as number }))
+      .map(d => ({ time: toDisplayTime(d.time as any) as any, value: d.value as number }))
     if (needsDownsample) {
       rawEquity = downsampleEquity(rawEquity, viewInterval)
     }
@@ -113,7 +115,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       if (result.baseline_curve && result.baseline_curve.length > 0) {
         let rawBaseline = result.baseline_curve
           .filter(d => d.value !== null)
-          .map(d => ({ time: d.time as any, value: d.value as number }))
+          .map(d => ({ time: toDisplayTime(d.time as any) as any, value: d.value as number }))
         if (needsDownsample) rawBaseline = downsampleEquity(rawBaseline, viewInterval)
         baselineData = normaliseToPercent(rawBaseline)
       }
@@ -190,7 +192,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
           const pnl = s.pnl ?? 0
           const intensity = 0.3 + 0.7 * Math.min(1, Math.abs(pnl) / maxPnl)
           return {
-            time: s.date as any,
+            time: toDisplayTime(s.date as any) as any,
             value: 1,
             color: pnl >= 0
               ? `rgba(38, 166, 65, ${intensity})`

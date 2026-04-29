@@ -65,3 +65,31 @@ export function tzLabel(): string {
       .find(p => p.type === 'timeZoneName')?.value ?? 'Local'
   } catch { return 'Local' }
 }
+
+// Shift unix timestamps to the display timezone's wall-clock time by
+// reconstructing them as UTC so lightweight-charts displays e.g. 9:30 for NYSE open.
+// Date strings (daily+) pass through unchanged.
+// Mirrors Chart.tsx toET() — kept in sync with that function.
+const _fmtCache = new Map<string, Intl.DateTimeFormat>()
+const _localTz = Intl.DateTimeFormat().resolvedOptions().timeZone
+function _getFormatter(tzName: string): Intl.DateTimeFormat {
+  let f = _fmtCache.get(tzName)
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-US', {
+      timeZone: tzName,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    })
+    _fmtCache.set(tzName, f)
+  }
+  return f
+}
+
+export function toDisplayTime(time: string | number): any {
+  if (typeof time !== 'number') return time
+  const tzName = current === 'ET' ? 'America/New_York' : _localTz
+  const parts = _getFormatter(tzName).formatToParts(new Date(time * 1000))
+  const get = (type: string) => parseInt(parts.find(p => p.type === type)?.value ?? '0')
+  return Date.UTC(get('year'), get('month') - 1, get('day'), get('hour') % 24, get('minute'), get('second')) / 1000
+}
