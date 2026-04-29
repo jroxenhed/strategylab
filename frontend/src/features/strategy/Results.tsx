@@ -3,7 +3,7 @@ import { createChart, BaselineSeries, LineSeries, HistogramSeries, ColorType } f
 import type { IChartApi } from 'lightweight-charts'
 import type { BacktestResult, SignalTraceEntry, StrategyRequest } from '../../shared/types'
 import { useMacro } from '../../shared/hooks/useMacro'
-import { fmtDateTimeET, toDisplayTime } from '../../shared/utils/time'
+import { fmtDateTimeET, toDisplayTime, useTimezone } from '../../shared/utils/time'
 import { normaliseToPercent, applyLog } from '../../shared/utils/chartScale'
 import PnlHistogram from './PnlHistogram'
 import MacroEquityChart from './MacroEquityChart'
@@ -75,6 +75,7 @@ function autoDefaultBucket(equityLength: number): string {
 
 export default function Results({ result, mainChart, activeTab, onTabChange, bucket, onBucketChange, lastRequest, showBaseline, onShowBaselineChange, logScale, onLogScaleChange, viewInterval, backtestInterval }: Props) {
   const { summary, trades, equity_curve, signal_trace } = result
+  const [tzMode] = useTimezone()
   const chartRef = useRef<HTMLDivElement>(null)
   const sells = trades.filter(t => t.type === 'sell' || t.type === 'cover')
   const { data: macroData, isLoading: macroLoading } = useMacro(lastRequest, bucket)
@@ -261,7 +262,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       chart.remove()
       ro.disconnect()
     }
-  }, [activeTab, bucket, equity_curve, summary.total_return_pct, mainChart, showBaseline, result.baseline_curve, logScale, viewInterval, backtestInterval])
+  }, [activeTab, bucket, equity_curve, summary.total_return_pct, mainChart, showBaseline, result.baseline_curve, logScale, viewInterval, backtestInterval, tzMode])
 
   return (
     <div style={styles.container}>
