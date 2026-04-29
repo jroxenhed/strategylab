@@ -7,6 +7,7 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 ## 2026-04-29
 
 - **[E5](TODO.md#e--discovery)** Quick backtest endpoint. New `POST /api/backtest/quick` returns summary-only stats (return %, Sharpe, win rate, num trades, max drawdown, `signal_now`, `last_signal_date`) without equity curve or trade list. Batch variant `POST /api/backtest/quick/batch` runs sequentially over a symbol list. Registered in `main.py` alongside existing routers. Route file: `backend/routes/backtest_quick.py`.
+- **[D20](TODO.md#d--bots-live-trading)** Bot alerting via ntfy.sh. New `backend/notifications.py` with fire-and-forget `notify()` + four typed helpers (`notify_entry`, `notify_exit`, `notify_stop`, `notify_error`). Hooked into `bot_runner.py` at entry fill, detected exit, IBKR structural error, and MAX_CONSEC_ERRORS backoff. Enable by setting `NOTIFY_URL=https://ntfy.sh/your-topic` in `backend/.env`. New endpoints: `GET /api/notifications/status` and `GET /api/notifications/test`.
 
 - **[B4](TODO.md#b--strategy-engine--rules)** Per-rule signal visualization. Eye icon toggle on each rule row; backend emits `rule_signals` in backtest response (per-bar signal data for visualized rules with negation/muted handling); Chart.tsx merges signals into main markers as colored circles with legend overlay. Review-driven fixes: negation inversion, rule_index offset for sell rules, muted guard, variable shadow, React key collision, lucide-react Eye icon.
 

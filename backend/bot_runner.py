@@ -22,6 +22,7 @@ from shared import _fetch
 from broker import get_trading_provider, OrderRequest as BrokerOrderRequest, OrderResult
 from journal import _log_trade, compute_realized_pnl
 from post_loss import is_post_loss_trigger
+from notifications import notify_entry, notify_exit, notify_stop, notify_error
 
 # Poll interval per bar cadence (seconds)
 POLL_INTERVALS = {"1m": 10, "5m": 15, "15m": 20, "30m": 30, "1h": 60}
@@ -235,6 +236,24 @@ class BotRunner:
                 except Exception:
                     pass
 
+                await notify_exit(
+                    symbol=cfg.symbol,
+                    direction=cfg.direction,
+                    qty=sell_qty,
+                    price=exit_price,
+                    pnl=pnl,
+                    reason=exit_reason,
+                    bot_id=cfg.bot_id,
+                )
+                if exit_reason in ("stop_loss", "trailing_stop"):
+                    await notify_stop(
+                        symbol=cfg.symbol,
+                        direction=cfg.direction,
+                        price=exit_price,
+                        stop_type=exit_reason,
+                        bot_id=cfg.bot_id,
+                    )
+
                 state.equity_snapshots.append({
                     "time": datetime.now(timezone.utc).isoformat(),
                     "value": round(compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id, since=cfg.pnl_epoch), 2),
@@ -368,6 +387,15 @@ class BotRunner:
                                direction=cfg.direction, bot_id=cfg.bot_id, broker=cfg.broker)
                 except Exception:
                     pass
+
+                await notify_entry(
+                    symbol=cfg.symbol,
+                    direction=cfg.direction,
+                    qty=qty,
+                    price=fill_price,
+                    strategy_name=cfg.strategy_name,
+                    bot_id=cfg.bot_id,
+                )
 
                 self.manager.save()
 
@@ -582,6 +610,11 @@ class BotRunner:
             self.state.pause_reason = f"IBKR reject: {errorString} (code {errorCode})"
             self.state.error_message = self.state.pause_reason
             self.manager.save()
+            asyncio.ensure_future(notify_error(
+                symbol=self.config.symbol,
+                error_msg=self.state.pause_reason,
+                bot_id=self.config.bot_id,
+            ))
         else:
             self._log("WARN", f"IBKR transient code={errorCode}: {errorString}")
 
@@ -637,6 +670,11 @@ class BotRunner:
                         self._log("WARN", f"Backing off {RECOVERY_WAIT}s after {MAX_CONSEC_ERRORS} consecutive failures")
                         self.state.error_message = f"Recovering: {e}"
                         self.manager.save()
+                        await notify_error(
+                            symbol=self.config.symbol,
+                            error_msg=f"{MAX_CONSEC_ERRORS} consecutive tick failures: {e}",
+                            bot_id=self.config.bot_id,
+                        )
                         await asyncio.sleep(RECOVERY_WAIT)
                         consec_errors = 0
                         self._log("INFO", "Resuming after recovery backoff")
