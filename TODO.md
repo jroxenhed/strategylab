@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-**68 / 88 shipped.** Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+**69 / 92 shipped.** Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -38,7 +38,7 @@
 - [x] **B1** Skip N trades after SL + configurable DS trigger — `BotConfig.skip_after_stop` + `BotState.skip_remaining`, shared `is_post_loss_trigger` helper, honored by both backtester and bot runner; StrategyBuilder skip-after-stop block + DS trigger selector; AddBotBar passes through from preset.
 - [x] **B2** Extended hours — fully wired. Yahoo/IBKR native, Alpaca client-side RTH filter (9:30-16:00 ET). Cache keys already include `extended_hours`.
 - [x] **B3** New rule conditions — MA8/MA21 slope (`turns_up`/`turns_down`) + `decelerating` via Savitzky-Golay second derivative; N-bar lookback for slope confirmation + min move % threshold; backtest respects sidebar S-G toggles.
-- [ ] **B4** Per-rule signal visualization toggles — eye icon on each rule row in strategy builder; when enabled, that rule's signals show as markers on the main chart during/after backtest. Replaces current hardcoded signal marker behavior. State stored with rule fields, persists with save/load. No global master toggle.
+- [x] **B4** Per-rule signal visualization toggles — eye icon on each rule row in strategy builder; when enabled, that rule's signals show as markers on the main chart during/after backtest. Replaces current hardcoded signal marker behavior. State stored with rule fields, persists with save/load. No global master toggle.
 - [ ] **B5** Borrow cost estimation (for live short positions on real accounts)
 - [x] **B6** Realistic cost model in backtester — IBKR Fixed per-share commission (`per_share_rate` + `min_per_order`), empirical per-symbol slippage via `GET /api/slippage/{symbol}` + `useEmpiricalSlippage` hook, short borrow cost (`borrow_rate_annual`). Results shows Borrow column + Cost Breakdown block.
 - [x] **B7** Slippage model redesign — separate *measured* slippage (diagnostics) from *modeled* slippage (backtest assumption). Always ≥ 0 everywhere it surfaces. Floor empirical at default, gate on minimum fill_count, single shared signed-cost helper in `backend/slippage.py`. Fixes journal display (wrong sign for sells/shorts), bot runner log sign drift, and the "favorable empirical auto-carries into Capital & Fees" pitfall. [plan](docs/superpowers/plans/2026-04-15-b7-slippage-redesign.md)
@@ -58,6 +58,7 @@
 - [x] **B17** Hover-to-inspect trade markers — tooltip was already implemented (B18 shipped it). Stripped text labels from main-chart markers; subpane markers retain labels. Arrows colored by P&L outcome. [Spec](docs/superpowers/specs/2026-04-23-b17-hover-trade-markers-design.md)
 - [x] **B18** Triggering rules in trade tooltip — extend B17 tooltip to show which buy/sell rules fired for each trade. Backend tags each trade with `rules` field via `_fired_rules()`. Entries show buy rules, exits show sell rules (or "stop loss"/"trailing stop"/"time stop" for mechanical exits).
 - [x] **B19** Implement shorting — direction field, backtest + bot runner, chart markers, bot card refresh
+- [ ] **B20** Multi-timeframe confirmation — rules evaluate on a single interval today. Add "confirm on higher timeframe" option (e.g., enter on 5m signal only if 1h trend agrees). Requires fetching a second OHLCV series at the confirmation interval, computing indicators on it, and adding a `confirm_interval` + `confirm_rules` field to StrategyRequest. Common quant pattern that expands strategy sophistication significantly.
 
 ## C — Strategy Summary & Analytics
 
@@ -69,6 +70,8 @@
 - [x] **C6** Strategy summary: min/max/avg gain and loss
 - [x] **C7** Summary readability pass — dropped `(mean)` suffix on EV/PF, renamed Max/Min gain/loss to Biggest/Smallest win/loss, added size hierarchy to top metrics row (Return + Final Value 22px primary, rest 13px secondary), removed median secondary values from avg rows
 - [x] **C8** B&H value in summary was inconsistent for short strategies with open positions at end — `final_value` used long formula (`capital + position * price`) instead of short formula (`capital + position * entry_price + unrealized`). Fixed to match equity curve calculation.
+- [ ] **C9** Strategy comparison mode — load 2-3 saved strategies, run them on the same ticker/period, see equity curves overlaid + metric table side-by-side. Mostly frontend composition over existing backtest engine and equity rendering. Makes parameter tuning much faster than running backtests one at a time.
+- [ ] **C10** Intraday session analytics — break down strategy performance by time-of-day (30-min buckets). Heatmap or histogram of win rate / EV by session window (open, midday, power hour). Trade timestamps already exist; cheap to compute, actionable for trading hours filters.
 
 ## D — Bots (live trading)
 
@@ -89,6 +92,7 @@
 - [x] **D16** Make allocation and strategy editable in-place on bot card (click when stopped)
 - [x] **D17** Global start/stop all bots
 - [x] **D18** Bot sparkline: global toggle for local vs aligned timescale
+- [ ] **D20** Bot alerting / notifications — push bot events (entry, exit, stop hit, error) to phone/desktop. Webhook to Pushover/ntfy.sh or Telegram bot. Critical for running US market bots from Sweden — knowing instantly when something fires.
 - [x] **D19** Bot card redesign — responsive sparkline (was fixed 60%), columnar stats (label above value), compact mode kebab dropdown (replaces inline buttons), portfolio strip alignment, shared `ui.tsx` for layout primitives. 106 tests.
 
 ### Pre-numbering

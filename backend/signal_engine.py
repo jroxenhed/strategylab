@@ -11,6 +11,7 @@ class Rule(BaseModel):
     threshold: Optional[float] = None  # min move % for turns_up/turns_down
     muted: bool = False
     negated: bool = False
+    visualize: bool = False
     params: Optional[dict] = None
 
 

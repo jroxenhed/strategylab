@@ -26,6 +26,7 @@ export interface Rule {
   threshold?: number
   muted?: boolean
   negated?: boolean
+  visualize?: boolean
   params?: Record<string, any>
 }
 
@@ -138,6 +139,13 @@ export interface EMAOverlay {
   side: 'buy' | 'sell'
 }
 
+export interface RuleSignal {
+  rule_index: number
+  label: string
+  side: 'buy' | 'sell'
+  signals: Array<{ time: number | string; price: number }>
+}
+
 export interface BacktestResult {
   summary: {
     initial_capital: number
@@ -161,6 +169,7 @@ export interface BacktestResult {
   baseline_curve?: TimeValue[]
   ema_overlays?: EMAOverlay[]
   signal_trace?: SignalTraceEntry[]
+  rule_signals?: RuleSignal[]
 }
 
 export interface MacroCurvePoint {

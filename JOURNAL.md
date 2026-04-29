@@ -6,6 +6,8 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-04-29
 
+- **[B4](TODO.md#b--strategy-engine--rules)** Per-rule signal visualization. Eye icon toggle on each rule row; backend emits `rule_signals` in backtest response (per-bar signal data for visualized rules with negation/muted handling); Chart.tsx merges signals into main markers as colored circles with legend overlay. Review-driven fixes: negation inversion, rule_index offset for sell rules, muted guard, variable shadow, React key collision, lucide-react Eye icon.
+
 - **[C8](TODO.md#c--strategy-summary--analytics)** Fix short strategy final value mismatch. `final_value` used long formula for shorts with open positions, causing wrong Return % and vs B&H. Now matches equity curve calculation.
 
 - **[A7](TODO.md#a--charts--indicators)** New chart indicators: Stochastic (%K/%D lines + 80/20 reference), VWAP (main chart overlay, orange), ADX (ADX/+DI/-DI lines + 25 trend reference). Full sidebar param editing + indicator registry. Three parallel worktree agents for backend compute, frontend rendering, and signal engine.

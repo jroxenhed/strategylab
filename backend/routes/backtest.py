@@ -427,6 +427,31 @@ def run_backtest(req: StrategyRequest):
             for i in range(len(df))
         ]
 
+        # Per-rule signal tracking for visualized rules
+        rule_signals = []
+        viz_rules = [
+            ("buy", i, r) for i, r in enumerate(buy_rules) if r.visualize and not r.muted
+        ] + [
+            ("sell", len(buy_rules) + i, r) for i, r in enumerate(sell_rules) if r.visualize and not r.muted
+        ]
+        if viz_rules:
+            for side, rule_index, rule in viz_rules:
+                signals = []
+                for bar_idx in range(1, len(df)):
+                    raw = eval_rule(rule, indicators, bar_idx)
+                    fired = (not raw) if (rule.negated and bar_idx >= 1) else raw
+                    if fired:
+                        signals.append({
+                            "time": _format_time(df.index[bar_idx], req.interval),
+                            "price": round(float(close.iloc[bar_idx]), 4),
+                        })
+                rule_signals.append({
+                    "rule_index": rule_index,
+                    "label": _rule_desc(rule),
+                    "side": side,
+                    "signals": signals,
+                })
+
         # Cache raw data for macro endpoint re-aggregation
         _backtest_cache.clear()
         _backtest_cache.update({
@@ -458,6 +483,8 @@ def run_backtest(req: StrategyRequest):
             result["ema_overlays"] = ema_overlays
         if signal_trace is not None:
             result["signal_trace"] = signal_trace
+        if rule_signals:
+            result["rule_signals"] = rule_signals
         return result
     except HTTPException:
         raise

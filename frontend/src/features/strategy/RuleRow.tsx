@@ -1,4 +1,4 @@
-import { Trash2, VolumeX, Volume2 } from 'lucide-react'
+import { Trash2, VolumeX, Volume2, Eye } from 'lucide-react'
 import type { Rule } from '../../shared/types'
 
 export const INDICATORS = ['macd', 'rsi', 'price', 'ma', 'bb', 'atr', 'atr_pct', 'volume', 'stochastic', 'adx'] as const
@@ -183,6 +183,7 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
   const needsValue = NEEDS_VALUE.includes(rule.condition) && !forcedParam && !hasParam
   const optionalValue = OPTIONAL_VALUE.includes(rule.condition)
   const negated = rule.negated ?? false
+  const visualize = rule.visualize ?? false
 
   return (
     <div style={{ ...styles.ruleRow, opacity: muted ? 0.4 : 1 }}>
@@ -506,6 +507,11 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
           />
         </>
       )}
+      <button
+        onClick={() => onChange({ ...rule, visualize: !visualize })}
+        title={visualize ? 'Hide signals on chart' : 'Show signals on chart'}
+        style={{ color: visualize ? '#58a6ff' : '#8b949e', padding: '4px 6px', opacity: visualize ? 1 : 0.35, cursor: 'pointer', background: 'transparent', border: 'none', fontSize: 14, lineHeight: 1 }}
+      ><Eye size={13} /></button>
       <button onClick={onDelete} style={{ color: '#f85149', padding: '4px 6px' }}><Trash2 size={13} /></button>
     </div>
   )

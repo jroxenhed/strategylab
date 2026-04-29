@@ -8,7 +8,7 @@ import {
   ColorType,
 } from 'lightweight-charts'
 import type { IChartApi, ISeriesApi } from 'lightweight-charts'
-import type { OHLCVBar, IndicatorInstance, EMAOverlay, Trade } from '../../shared/types'
+import type { OHLCVBar, IndicatorInstance, EMAOverlay, Trade, RuleSignal } from '../../shared/types'
 import { INDICATOR_DEFS } from '../../shared/types/indicators'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import SubPane from './SubPane'
@@ -27,6 +27,7 @@ interface ChartProps {
   instanceData: Record<string, Record<string, { time: string; value: number | null }[]>>
   trades?: Trade[]
   emaOverlays?: EMAOverlay[]
+  ruleSignals?: RuleSignal[]
   viewInterval: string
   backtestInterval: string
   onChartReady?: (chart: IChartApi | null) => void
@@ -37,6 +38,9 @@ const GRID = '#1c2128'
 const TEXT = '#8b949e'
 const UP = '#26a641'
 const DOWN = '#f85149'
+
+// Distinct from trade green/red; indexed by rule_index mod length
+const RULE_SIGNAL_COLORS = ['#58a6ff', '#d2a8ff', '#f0883e', '#56d364', '#e5534b', '#768390', '#f778ba', '#a5d6ff']
 
 const chartOptions = {
   layout: { background: { type: ColorType.Solid, color: CHART_BG }, textColor: TEXT },
@@ -107,7 +111,7 @@ function buildMarkers(trades: Trade[], subPane = false) {
   })
 }
 
-export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, trades, emaOverlays, viewInterval, backtestInterval, onChartReady }: ChartProps) {
+export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, trades, emaOverlays, ruleSignals, viewInterval, backtestInterval, onChartReady }: ChartProps) {
   const [tzMode] = useTimezone()
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -201,6 +205,28 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     },
     [trades, isAggregated, candleTimeIndex, viewInterval, backtestInterval, tzMode],
   )
+
+  // Rule signal markers — one circle per signal, colored by rule index
+  const ruleSignalMarkers = useMemo(() => {
+    if (!ruleSignals || ruleSignals.length === 0) return []
+    const out: any[] = []
+    for (const rs of ruleSignals) {
+      const color = RULE_SIGNAL_COLORS[rs.rule_index % RULE_SIGNAL_COLORS.length]
+      const position = rs.side === 'buy' ? 'belowBar' : 'aboveBar'
+      for (const sig of rs.signals) {
+        out.push({
+          time: toET(sig.time as any) as any,
+          position,
+          color,
+          shape: 'circle' as const,
+          size: 0.6,
+        })
+      }
+    }
+    // lightweight-charts requires markers sorted by time ascending
+    out.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0))
+    return out
+  }, [ruleSignals, tzMode])
 
   const tradeLookup = useMemo(() => {
     if (!trades || trades.length === 0 || candleData.length === 0) return null
@@ -573,21 +599,24 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     return () => { for (const s of created) { try { chart.removeSeries(s) } catch {} } }
   }, [emaOverlays, isAggregated, tzMode, subPaneCount])
 
-  // Trade markers — update via plugin ref so trades arriving post-backtest
-  // don't force a series rebuild. candleData is in deps so the effect re-runs
-  // after series.setData() — otherwise a plugin attached before the series has
-  // its data (or attached to a pre-StrictMode-remount series) paints nothing.
+  // Trade + rule-signal markers — merged into one sorted array and pushed to a
+  // single plugin instance. candleData in deps ensures the effect re-runs after
+  // series.setData() so the plugin paints correctly post-mount.
   const mainMarkersPluginRef = useRef<any>(null)
   useEffect(() => {
     const series = candleSeriesRef.current
     if (!series) return
-    const markers = (mainMarkers ?? []) as any[]
+    // Merge trade markers and rule-signal markers into one time-sorted array.
+    const tradeMs = (mainMarkers ?? []) as any[]
+    const merged = [...tradeMs, ...ruleSignalMarkers].sort(
+      (a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0)
+    )
     if (!mainMarkersPluginRef.current) {
-      mainMarkersPluginRef.current = createSeriesMarkers(series, markers as any)
+      mainMarkersPluginRef.current = createSeriesMarkers(series, merged as any)
     } else {
-      mainMarkersPluginRef.current.setMarkers(markers as any)
+      mainMarkersPluginRef.current.setMarkers(merged as any)
     }
-  }, [mainMarkers, candleData, subPaneCount])
+  }, [mainMarkers, ruleSignalMarkers, candleData, subPaneCount])
 
   // Compute default panel sizes based on sub-pane count (matches original ratios)
   const defaultSizes = useMemo(() => {
@@ -682,6 +711,36 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
                 candleTimeIndex={candleTimeIndex}
                 toET={toET}
               />
+            )}
+            {ruleSignals && ruleSignals.length > 0 && (
+              <div style={{
+                position: 'absolute', top: 8, left: 8,
+                background: 'rgba(13,17,23,0.82)',
+                border: '1px solid #30363d',
+                borderRadius: 4,
+                padding: '5px 8px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 3,
+                pointerEvents: 'none',
+                zIndex: 10,
+                maxWidth: 200,
+              }}>
+                {ruleSignals.map(rs => (
+                  <div key={rs.side + '-' + rs.rule_index} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <span style={{
+                      display: 'inline-block',
+                      width: 8, height: 8,
+                      borderRadius: '50%',
+                      background: RULE_SIGNAL_COLORS[rs.rule_index % RULE_SIGNAL_COLORS.length],
+                      flexShrink: 0,
+                    }} />
+                    <span style={{ color: '#c9d1d9', fontSize: 11, lineHeight: 1.3, wordBreak: 'break-word' }}>
+                      {rs.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </Panel>
