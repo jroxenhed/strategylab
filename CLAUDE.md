@@ -25,8 +25,7 @@ Interactive trading strategy backtester + live paper trading platform. Read this
   9. Repeat
 - **Pipeline parallelism across tasks.** Don't wait for Task A's full cycle before starting Task B. While Task A is in review (the slowest phase), Task B can be in explore/implement — as long as their files don't overlap. The orchestrator tracks multiple tasks at different pipeline stages. Typical overlap: Task A in review + Task B in implement = ~2x wall-clock speedup on multi-task sessions. Use `run_in_background: true` on review agents, then dispatch the next task's explore+implement while reviews run. When review results arrive, synthesize and fix Task A, then move to Task B's review.
 - **Model routing for subagents.** haiku for reads/exploration, sonnet for coding/implementation/review, opus only when complexity demands it. Set the `model` parameter on every Agent call.
-- **Review dispatch rules.** Pass file paths and intent to reviewers — not diff content. Let reviewers read files themselves. Always use absolute paths in verification commands. Prefer "read these files" over "run git diff" in agent prompts — file reads don't require shell permissions.
-- **Review loop for non-trivial work.** Implement → parallel review agents → synthesize → fix agent → verify. Skip for trivial (<10 line) changes. For medium changes, a single reviewer suffices. For large/multi-file changes, run parallel reviewers across correctness, maintainability, project-standards, and domain personas.
+- **Review rules.** Pass file paths and intent to reviewers, not diff content. Always use absolute paths. Skip review for trivial (<10 line) changes; single reviewer for medium; parallel personas for large.
 - **Anti-patterns to avoid:**
   - "Just check one thing" trap — any investigation in the main session is a delegation failure; dispatch a haiku agent instead
   - Reading full diffs into orchestrator context — wasteful; pass file paths, let reviewers gather evidence
@@ -70,12 +69,7 @@ Key files (others are standard-named, discoverable by grep):
 - `backend/broker.py` — TradingProvider protocol + broker registry
 - `backend/journal.py` — log_trade(), compute_realized_pnl()
 
-This is the most complex file. Read it before editing.
-
-Three separate `IChartApi` instances rendered as a flex column:
-- **Main chart** (`containerRef`) — candlesticks, SPY/QQQ overlays, EMA, BB, Volume
-- **MACD pane** (`macdContainerRef`) — histogram + MACD/Signal lines
-- **RSI pane** (`rsiContainerRef`) — RSI line + 70/30 reference lines
+Three `IChartApi` instances as a flex column (main + sub-panes). Read Chart.tsx before editing.
 
 ### Pane synchronization
 
@@ -95,18 +89,8 @@ In v5, `addSeries()` without an explicit `priceScaleId` creates an **independent
 - QQQ → `priceScaleId: 'qqq-scale'` (hidden, real close prices)
 - Volume → `priceScaleId: 'volume'` (hidden, `scaleMargins: { top: 0.75, bottom: 0 }`)
 
-
-### Indicator pane height split
-
-| Active panes | Main | Sub |
-|---|---|---|
-| Neither | 100% | — |
-| One | 65% | 35% |
-| Both | 50% | 25% each |
-
 ## Backend Notes
 
-- **CRITICAL: Never use `yf.download()`** — it shares global state and returns wrong data under concurrent requests. Always use `yf.Ticker(symbol).history()` via the `_fetch()` helper.
 - `_fetch()` auto-clamps date ranges to yfinance limits for intraday intervals (1m=7d, 5m/15m/30m=60d, 1h=730d)
 - `_format_time()` returns `"YYYY-MM-DD"` strings for daily+ intervals and **unix timestamps** (seconds, UTC) for intraday — lightweight-charts requires unique timestamps per bar
 - `_series_to_list()` lives in `routes/indicators.py`; preserves null values (for indicator warmup periods) so the frontend can use whitespace data for bar alignment
@@ -125,13 +109,7 @@ When Alpaca `end` date is today or future, the provider substitutes `now` so int
 
 ### `_fetch()` TTL cache
 
-`shared.py` has an in-memory TTL cache on `_fetch()`:
-- **2 min TTL** for live intraday (interval in `_INTRADAY_INTERVALS` and end ≥ today)
-- **1 hour TTL** for fully historical data
-- Max 100 entries; evicts expired first, then oldest on overflow
-- Logs `[cache HIT]` / `[cache MISS]` to stdout for debugging
-- `GET /api/cache` returns current cache state (count, entries, ages, TTLs)
-- **Note:** cache is in-process memory — server restart (including `--reload` on file change) clears it
+`shared.py` has an in-memory TTL cache on `_fetch()` (2 min intraday, 1 hour historical). **Cache is in-process memory — server restart clears it.** `GET /api/cache` for diagnostics.
 
 ### Timezone handling in Chart.tsx
 
@@ -145,8 +123,6 @@ lightweight-charts v5 has **no `localization.timeZone` support**. All unix times
 
 **Rule negation (NOT):** `Rule.negated: bool`. Applied in `eval_rules()` — if `negated` and `i >= 1`, the rule result is inverted. Guard condition (`i < 1`) always returns False regardless of negation. UI: small **NOT** button on each rule row in RuleRow.tsx, orange when active.
 
-S-G (Savitzky-Golay) smoothing for MA8/MA21 exists but is experimental — revisit only on explicit request.
-
 ## Backtester Cost Model
 
 `StrategyRequest` cost fields:
@@ -155,9 +131,7 @@ S-G (Savitzky-Golay) smoothing for MA8/MA21 exists but is experimental — revis
 - `borrow_rate_annual` (default `0.5` %) — annual short borrow rate. `borrow_cost(...)` computes `shares * entry_price * (rate/100/365) * hold_days` and deducts from short PnL. Zero for longs.
 - Each trade carries `slippage`, `commission`, and `borrow_cost` fields. Journal rows additionally cache `slippage_bps` (unsigned cost) when `expected_price` is set.
 
-Slippage endpoint: `GET /api/slippage/{symbol}` returns `{modeled_bps, measured_bps, fill_bias_bps, fill_count, source}` where `source` is `'default' | 'empirical'`. Frontend hook: `useSlippage` (`shared/hooks/useSlippage.ts`). StrategyBuilder displays modeled bps with source label; TradeJournal shows unsigned per-fill cost in bps; BotCard surfaces `avg_cost_bps`. Results has a Borrow column + Cost Breakdown summary (commission / borrow / slippage / total drag %).
-
-Deferred to v2 (see TODO): debit-balance margin interest, IBKR Tiered pricing, hard-to-borrow dynamic rates, FX conversion.
+Slippage endpoint: `GET /api/slippage/{symbol}` returns `{modeled_bps, measured_bps, fill_bias_bps, fill_count, source}`.
 
 ## Short Selling (direction field)
 
