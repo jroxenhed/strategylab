@@ -536,8 +536,17 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   useEffect(() => {
     const chart = chartRef.current
     if (!chart || !emaOverlays || emaOverlays.length === 0 || isAggregated) return
+    // Only render overlays whose corresponding MA indicator is enabled in the sidebar.
+    // overlay.indicator is formatted as "ma_{period}_{type}" (e.g. "ma_200_sma").
+    const enabledOverlays = emaOverlays.filter(o => {
+      const parts = o.indicator.split('_')
+      if (parts.length < 3 || parts[0] !== 'ma') return true // non-MA overlays pass through
+      const period = Number(parts[1])
+      const type = parts.slice(2).join('_')
+      return indicators.some(i => i.type === 'ma' && i.enabled && Number(i.params.period) === period && i.params.type === type)
+    })
     const created: ISeriesApi<any>[] = []
-    for (const overlay of emaOverlays) {
+    for (const overlay of enabledOverlays) {
       const activeColor = overlay.side === 'buy' ? '#26a641' : '#f85149'
       const inactiveColor = '#484f58'
       const label = `${overlay.indicator.toUpperCase()} ${overlay.condition === 'rising_over' ? '↑' : '↓'}${overlay.lookback}`
@@ -598,7 +607,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       created.push(sInactive)
     }
     return () => { for (const s of created) { try { chart.removeSeries(s) } catch {} } }
-  }, [emaOverlays, isAggregated, tzMode, subPaneCount])
+  }, [emaOverlays, isAggregated, tzMode, subPaneCount, indicators])
 
   // Trade + rule-signal markers — merged into one sorted array and pushed to a
   // single plugin instance. candleData in deps ensures the effect re-runs after

@@ -18,11 +18,11 @@ Interactive trading strategy backtester + live paper trading platform. Read this
   2. Explore (haiku) — map current code, understand dependencies
   3. Spec (orchestrator) — write tight brief from exploration results
   4. Implement (parallel sonnet) — backend + frontend simultaneously when independent
-  5. Verify (orchestrator) — grep key changes, run tsc, spot-check with absolute paths
+  5. Verify (orchestrator) — grep key changes, run `npm run build` (not `tsc --noEmit`), spot-check with absolute paths
   6. Review (parallel sonnet) — 4–7 persona agents via ce:review
   7. Synthesize (orchestrator) — merge findings, classify fix vs defer
   8. Fix (sonnet) — apply all safe_auto findings in one pass
-  9. Verify + commit (orchestrator) — check fixes, update TODO/JOURNAL atomically, push
+  9. Verify + commit (orchestrator) — run `npm run build`, check fixes, update TODO/JOURNAL atomically, push
   10. Repeat
 - **Model routing for subagents.** haiku for reads/exploration, sonnet for coding/implementation/review, opus only when complexity demands it. Set the `model` parameter on every Agent call.
 - **Review dispatch rules.** Pass file paths and intent to reviewers — not diff content. Let reviewers read files themselves. Always use absolute paths in verification commands. Prefer "read these files" over "run git diff" in agent prompts — file reads don't require shell permissions.
@@ -32,6 +32,9 @@ Interactive trading strategy backtester + live paper trading platform. Read this
   - Reading full diffs into orchestrator context — wasteful; pass file paths, let reviewers gather evidence
   - Relative paths in verification — always use absolute paths; agents do not maintain working directory
   - "Run git diff" in review prompts — reviewers may lack shell access; use "read these files" instead
+  - `tsc --noEmit` as verification — misses `verbatimModuleSyntax` errors that cause blank pages. Always use `npm run build` (runs `tsc -b`).
+  - Implementation agents committing — agents follow CLAUDE.md literally and will commit+push. Always include "Do NOT commit or push" in implementation agent prompts. The orchestrator owns commit decisions.
+  - System `python` for syntax checks — macOS system Python is 2.7. Always use `python3` explicitly.
 - Visually verify UI changes in browser or flag "not visually verified." Journal to `JOURNAL.md` at session end.
 
 ## Handoff Contract
