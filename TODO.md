@@ -72,8 +72,8 @@
 - [x] **C8** B&H value in summary was inconsistent for short strategies with open positions at end — `final_value` used long formula (`capital + position * price`) instead of short formula (`capital + position * entry_price + unrealized`). Fixed to match equity curve calculation.
 - [ ] **C9** Strategy comparison mode — load 2-3 saved strategies, run them on the same ticker/period, see equity curves overlaid + metric table side-by-side. Mostly frontend composition over existing backtest engine and equity rendering. Makes parameter tuning much faster than running backtests one at a time.
 - [ ] **C10** Intraday session analytics — break down strategy performance by time-of-day (30-min buckets). Heatmap or histogram of win rate / EV by session window (open, midday, power hour). Trade timestamps already exist; cheap to compute, actionable for trading hours filters.
-- [ ] **C11** Monte Carlo simulation — run N random permutations of trade sequence to estimate confidence intervals on returns, max drawdown, and probability of ruin. Critical for small-account sizing where a single bad drawdown sequence matters.
-- [ ] **C12** Rolling performance window — show Sharpe, win rate, and return over rolling N-trade windows overlaid on equity curve. Reveals regime changes and strategy decay that aggregate stats hide.
+- [ ] [next] **C11** Monte Carlo simulation — run N random permutations of trade sequence to estimate confidence intervals on returns, max drawdown, and probability of ruin. Critical for small-account sizing where a single bad drawdown sequence matters.
+- [ ] [next] **C12** Rolling performance window — show Sharpe, win rate, and return over rolling N-trade windows overlaid on equity curve. Reveals regime changes and strategy decay that aggregate stats hide.
 
 ## D — Bots (live trading)
 
@@ -95,7 +95,7 @@
 - [x] **D17** Global start/stop all bots
 - [x] **D18** Bot sparkline: global toggle for local vs aligned timescale
 - [x] **D20** Bot alerting / notifications — push bot events (entry, exit, stop hit, error) to phone/desktop. Webhook to Pushover/ntfy.sh or Telegram bot. Critical for running US market bots from Sweden — knowing instantly when something fires.
-- [ ] **D21** Strategy auto-pause on drawdown — automatically pause a bot when cumulative loss from peak exceeds a configurable threshold (e.g., 5% of allocated capital). Safety net for unattended bots during US market hours.
+- [ ] [next] **D21** Strategy auto-pause on drawdown — automatically pause a bot when cumulative loss from peak exceeds a configurable threshold (e.g., 5% of allocated capital). Safety net for unattended bots during US market hours.
 - [x] **D19** Bot card redesign — responsive sparkline (was fixed 60%), columnar stats (label above value), compact mode kebab dropdown (replaces inline buttons), portfolio strip alignment, shared `ui.tsx` for layout primitives. 106 tests.
 
 ### Pre-numbering
