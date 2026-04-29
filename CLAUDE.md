@@ -17,11 +17,11 @@ Interactive trading strategy backtester + live paper trading platform. Read this
   1. Pick task from TODO
   2. Explore (haiku) — map current code, understand dependencies
   3. Spec (orchestrator) — write tight brief from exploration results
-  4. Implement (parallel sonnet) — backend + frontend simultaneously when independent
+  4. Implement (parallel sonnet) — backend + frontend simultaneously when independent. Before dispatching, verify file independence: list target files per agent, confirm zero overlap. If files overlap, sequence those agents.
   5. Verify (orchestrator) — grep key changes, run `npm run build` (not `tsc --noEmit`), spot-check with absolute paths
   6. Review (parallel sonnet) — 4–7 persona agents via ce:review
   7. Synthesize (orchestrator) — merge findings, classify fix vs defer
-  8. Fix (sonnet) — apply all safe_auto findings in one pass
+  8. Fix (sonnet) — dispatch ONE fixer agent with ALL findings. A single fixer can make holistic decisions (e.g., extract a shared module that resolves 3 findings at once). Never dispatch per-finding fixers.
   9. Verify + commit (orchestrator) — run `npm run build`, check fixes, update TODO/JOURNAL atomically, push
   10. Repeat
 - **Model routing for subagents.** haiku for reads/exploration, sonnet for coding/implementation/review, opus only when complexity demands it. Set the `model` parameter on every Agent call.
@@ -185,3 +185,5 @@ These document **why** certain patterns exist in the code:
 - **Bot P&L leak across recreations**: `compute_realized_pnl` filtered journal rows by `(symbol, direction)` only, so a new bot on the same symbol inherited the old (deleted) bot's P&L and sizing. Fixed by tagging every `_log_trade` with `bot_id` and filtering by it.
 - **Silent drop of bot config fields**: `AddBotRequest` in `routes/bots.py` duplicated `BotConfig` fields; any field missing from the duplicate was silently dropped by Pydantic's `extra="ignore"` default and replaced by the `BotConfig` default. Fixed by using `BotConfig` directly as the POST body schema.
 - **Chart teardown race on ticker change**: when the main chart and sibling panes (MACD/RSI/Results overlay) unmount concurrently, late callbacks can hit an already-removed `IChartApi` and throw from `paneWidgets[0]` internal state, blanking the React tree. Fixed by reading `chartRef.current` dynamically in `syncWidths` (not via closure) + try/catch body, nulling refs *before* `chart.remove()` in every cleanup, and try/catch around `setVisibleLogicalRange` / `unsubscribe*` calls on siblings. Don't "clean up" these guards.
+- **Fire-and-forget notifications must use `asyncio.create_task()`, not `await`**: `await notify_*()` inside `bot_runner._tick()` blocks the polling loop — a slow or down ntfy.sh causes the bot to miss ticks (up to 10s per notification call with the httpx timeout). `create_task()` schedules the coroutine without blocking. Never `await` a non-critical side-effect in a polling loop.
+- **Sync callbacks need `run_coroutine_threadsafe`, not `ensure_future`**: ib_insync dispatches error callbacks on its EReader thread, which has no running asyncio event loop. `asyncio.ensure_future()` from that thread raises `RuntimeError: no running event loop` and silently drops the notification. Fix: store `self._loop = asyncio.get_running_loop()` in the async `run()` method, then use `asyncio.run_coroutine_threadsafe(coro, self._loop)` from any sync callback.
