@@ -14,6 +14,29 @@ Interactive trading strategy backtester + live paper trading platform. Read this
 - **Key Bugs Fixed is authoritative.** If code appears to invite a "simpler" approach that conflicts with that section, don't take it — those patterns exist for non-obvious runtime reasons.
 - **Subagent-first workflow.** Prefer subagents for anything beyond trivial (<10 line) fixes. Main session orchestrates: pick tasks, write specs, brief agents (what/why/verify/report), dispatch, verify diffs, commit. Review loop for non-trivial work (write → review subagents → incorporate → repeat). Visually verify UI changes in browser or flag "not visually verified." Journal to `JOURNAL.md` at session end.
 
+## Handoff Contract
+
+Every agent session (interactive or automated) follows this protocol to prevent cross-session drift.
+
+### On Start
+1. Read `TODO.md` — identify unchecked items, note the shipped/total count
+2. Read `JOURNAL.md` (last entry only) — understand what was just shipped
+3. If working on a specific TODO item, check for a linked spec/plan in `docs/superpowers/`
+
+### On End
+1. Update `TODO.md` — check off completed items, add new items if work surfaced them
+2. Append to `JOURNAL.md` — reuse today's date header if it exists, one bullet per shipped item with bold **[ID]** cross-reference
+3. Both updates in the **same commit** as the code changes (atomic)
+
+### Priority tags in TODO.md
+- `[next]` — highest-priority unchecked item(s), auto-picked by chain runner
+- `[easy]` / `[medium]` / `[hard]` — optional difficulty hint for model routing
+
+### Rules
+- Never commit code without updating the tracking files.
+- Never update tracking files without corresponding code.
+- If all `[next]` items are done, fall back to unchecked items in section order (A before B, etc.).
+
 ## Chart.tsx Architecture
 
 Key files (others are standard-named, discoverable by grep):
