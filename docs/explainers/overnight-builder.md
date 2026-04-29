@@ -168,3 +168,24 @@ The overnight builder handles the "known work" — tasks with clear scope that d
 | `CLAUDE.md` | Project context and orchestrator workflow (builder reads this) |
 | `TODO.md` | Task backlog — `[next]` tags queue work for the builder |
 | `JOURNAL.md` | Ship log — builder appends entries here |
+
+## Private Repo Gotcha
+
+Claude Code routines can't clone private repos via OAuth alone. The repo must be **public** for the remote agent to access it. Your secrets (API keys, webhook URLs) are safe — they're in `backend/.env` which is gitignored.
+
+If Anthropic adds private repo support for routines in the future, switch back to private.
+
+## Slack Setup
+
+1. Go to https://api.slack.com/apps → Create New App → From scratch
+2. Name: `StrategyLab Builder`, pick your workspace
+3. Incoming Webhooks → Activate → Add New Webhook to Workspace
+4. Pick your channel (e.g., `#strategylab-builds`)
+5. Copy the webhook URL
+6. Add to `.env`:
+   ```
+   echo 'SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/URL/HERE' >> backend/.env
+   ```
+7. Test: `bash bin/slack-report.sh "test notification"`
+
+The builder calls `bin/slack-report.sh` after each run. If `SLACK_WEBHOOK_URL` isn't set, it silently skips — no error.
