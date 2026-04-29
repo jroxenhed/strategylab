@@ -12,9 +12,27 @@ Interactive trading strategy backtester + live paper trading platform. Read this
 - Don't trust line numbers in docs/plans — they drift. Grep for the string anchor, then edit.
 - Output reasoning progressively to avoid API stream idle timeouts; never go silent for >60s.
 - **Key Bugs Fixed is authoritative.** If code appears to invite a "simpler" approach that conflicts with that section, don't take it — those patterns exist for non-obvious runtime reasons.
-- **Subagent-first workflow.** Prefer subagents for anything beyond trivial (<10 line) fixes. Main session orchestrates: pick tasks, write specs, brief agents (what/why/verify/report), dispatch, verify diffs, commit. Visually verify UI changes in browser or flag "not visually verified." Journal to `JOURNAL.md` at session end.
-- **Model routing for subagents.** haiku for reads/exploration, sonnet for coding/implementation, opus for reviews. Override upward only when complexity demands it. Set the `model` parameter on every Agent call.
-- **Review loop for non-trivial work.** Implement → review subagent → incorporate findings → repeat until clean. Skip for trivial (<10 line) changes. For medium changes, a single reviewer suffices. For large/multi-file changes, run parallel reviewers (correctness + maintainability).
+- **Subagent-first workflow.** Main session is a pure orchestrator — delegate ALL work to subagents. The only exception is single-line edits to tracking files (TODO.md, JOURNAL.md). Never debug, explore, or implement in the main session. The orchestrator's job is judgment (what to build, what to fix, what to defer) and verification (did agents do what was asked).
+- **Orchestrator cycle (follow this for every task):**
+  1. Pick task from TODO
+  2. Explore (haiku) — map current code, understand dependencies
+  3. Spec (orchestrator) — write tight brief from exploration results
+  4. Implement (parallel sonnet) — backend + frontend simultaneously when independent
+  5. Verify (orchestrator) — grep key changes, run tsc, spot-check with absolute paths
+  6. Review (parallel sonnet) — 4–7 persona agents via ce:review
+  7. Synthesize (orchestrator) — merge findings, classify fix vs defer
+  8. Fix (sonnet) — apply all safe_auto findings in one pass
+  9. Verify + commit (orchestrator) — check fixes, update TODO/JOURNAL atomically, push
+  10. Repeat
+- **Model routing for subagents.** haiku for reads/exploration, sonnet for coding/implementation/review, opus only when complexity demands it. Set the `model` parameter on every Agent call.
+- **Review dispatch rules.** Pass file paths and intent to reviewers — not diff content. Let reviewers read files themselves. Always use absolute paths in verification commands. Prefer "read these files" over "run git diff" in agent prompts — file reads don't require shell permissions.
+- **Review loop for non-trivial work.** Implement → parallel review agents → synthesize → fix agent → verify. Skip for trivial (<10 line) changes. For medium changes, a single reviewer suffices. For large/multi-file changes, run parallel reviewers across correctness, maintainability, project-standards, and domain personas.
+- **Anti-patterns to avoid:**
+  - "Just check one thing" trap — any investigation in the main session is a delegation failure; dispatch a haiku agent instead
+  - Reading full diffs into orchestrator context — wasteful; pass file paths, let reviewers gather evidence
+  - Relative paths in verification — always use absolute paths; agents do not maintain working directory
+  - "Run git diff" in review prompts — reviewers may lack shell access; use "read these files" instead
+- Visually verify UI changes in browser or flag "not visually verified." Journal to `JOURNAL.md` at session end.
 
 ## Handoff Contract
 
