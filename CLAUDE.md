@@ -12,7 +12,9 @@ Interactive trading strategy backtester + live paper trading platform. Read this
 - Don't trust line numbers in docs/plans — they drift. Grep for the string anchor, then edit.
 - Output reasoning progressively to avoid API stream idle timeouts; never go silent for >60s.
 - **Key Bugs Fixed is authoritative.** If code appears to invite a "simpler" approach that conflicts with that section, don't take it — those patterns exist for non-obvious runtime reasons.
-- **Subagent-first workflow.** Prefer subagents for anything beyond trivial (<10 line) fixes. Main session orchestrates: pick tasks, write specs, brief agents (what/why/verify/report), dispatch, verify diffs, commit. Review loop for non-trivial work (write → review subagents → incorporate → repeat). Visually verify UI changes in browser or flag "not visually verified." Journal to `JOURNAL.md` at session end.
+- **Subagent-first workflow.** Prefer subagents for anything beyond trivial (<10 line) fixes. Main session orchestrates: pick tasks, write specs, brief agents (what/why/verify/report), dispatch, verify diffs, commit. Visually verify UI changes in browser or flag "not visually verified." Journal to `JOURNAL.md` at session end.
+- **Model routing for subagents.** haiku for reads/exploration, sonnet for coding/implementation, opus for reviews. Override upward only when complexity demands it. Set the `model` parameter on every Agent call.
+- **Review loop for non-trivial work.** Implement → review subagent → incorporate findings → repeat until clean. Skip for trivial (<10 line) changes. For medium changes, a single reviewer suffices. For large/multi-file changes, run parallel reviewers (correctness + maintainability).
 
 ## Handoff Contract
 
