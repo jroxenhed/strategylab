@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { MoreHorizontal } from 'lucide-react'
 import type { BotSummary, BotDetail, BotActivityEntry, SavedStrategy } from '../../shared/types'
 import { fetchBotDetail } from '../../api/bots'
 import { fmtUsd, fmtPnl } from '../../shared/utils/format'
@@ -6,26 +7,11 @@ import { statusColor, levelColor } from '../../shared/utils/colors'
 import { fmtTimeET } from '../../shared/utils/time'
 import MiniSparkline from './MiniSparkline'
 import { useBroker } from '../../shared/hooks/useOHLCV'
+import { INFO_COLUMN_FLEX, StatCell, btnStyle } from './ui'
 
 const SAVED_KEY = 'strategylab-saved-strategies'
 
 const POLL_SECONDS: Record<string, number> = { '1m': 10, '5m': 15, '15m': 20, '30m': 30, '1h': 60 }
-
-// ---------------------------------------------------------------------------
-// Shared button style
-// ---------------------------------------------------------------------------
-
-export function btnStyle(bg: string, disabled = false): React.CSSProperties {
-  return {
-    background: disabled ? '#1a1a1a' : bg,
-    color: disabled ? '#444' : '#ccc',
-    border: '1px solid #2a3040',
-    borderRadius: 4,
-    padding: '4px 10px',
-    fontSize: 12,
-    cursor: disabled ? 'not-allowed' : 'pointer',
-  }
-}
 
 // ---------------------------------------------------------------------------
 // ActivityLog
@@ -91,13 +77,28 @@ export default function BotCard({
   const [editingSpread, setEditingSpread] = useState(false)
   const [spreadValue, setSpreadValue] = useState('')
   const [editingStrategy, setEditingStrategy] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
 
   const { adaptiveInterval } = useBroker()
   const running = summary.status === 'running'
   const stopped = summary.status === 'stopped'
 
+  // Reset kebab menu when switching between compact/expanded mode
+  useEffect(() => { setMenuOpen(false) }, [compact])
+
+  // Click-outside for kebab menu — only registered while menu is open
   useEffect(() => {
-    if (!expanded) return
+    if (!menuOpen) return
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [menuOpen])
+
+  useEffect(() => {
+    if (!expanded) { setDetail(null); return }
     let active = true
     const load = async () => {
       if (document.hidden) return
@@ -110,10 +111,15 @@ export default function BotCard({
     const id = setInterval(load, adaptiveInterval(5000))
     return () => { active = false; clearInterval(id) }
   }, [expanded, summary.bot_id, adaptiveInterval])
-  const pnlColor = summary.total_pnl >= 0 ? '#26a69a' : '#ef5350'
 
+  const pnlColor = summary.total_pnl >= 0 ? '#26a69a' : '#ef5350'
   const dir = summary.direction ?? 'long'
   const bgTint = dir === 'short' ? 'rgba(239, 83, 80, 0.08)' : 'rgba(38, 166, 154, 0.05)'
+
+  // Guard division-by-zero for P&L percentage
+  const pnlPct = summary.allocated_capital > 0
+    ? (summary.total_pnl / summary.allocated_capital * 100).toFixed(1)
+    : '0.0'
 
   // ---- Compact layout ----
   if (compact) {
@@ -123,7 +129,7 @@ export default function BotCard({
         border: '1px solid #1e2530', borderRadius: 4,
         display: 'flex', flexDirection: 'column',
       }}>
-        {/* Compact two-column row (mirrors expanded layout structure) */}
+        {/* Compact two-column row */}
         <div
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
@@ -132,7 +138,7 @@ export default function BotCard({
           onClick={() => setExpanded(e => !e)}
         >
           {/* Left column — text info */}
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <div style={{ flex: INFO_COLUMN_FLEX, display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
             {/* Drag handle */}
             {dragHandleProps && (
               <div
@@ -175,7 +181,7 @@ export default function BotCard({
             <span style={{ fontSize: 12, color: pnlColor, flexShrink: 0 }}>
               {fmtPnl(summary.total_pnl)}
               <span style={{ color: pnlColor, opacity: 0.7, marginLeft: 3 }}>
-                ({(summary.total_pnl / summary.allocated_capital * 100).toFixed(1)}%)
+                ({pnlPct}%)
               </span>
             </span>
 
@@ -187,35 +193,94 @@ export default function BotCard({
               {summary.status}
             </span>
 
-            {/* Action buttons — inline, same as expanded, right-aligned */}
-            <div style={{ display: 'flex', gap: 3, flexShrink: 0, marginLeft: 'auto' }} onClick={e => e.stopPropagation()}>
-              <button onClick={onBacktest} disabled={running}
-                style={{ ...btnStyle('#1e3a5f', running), padding: '2px 6px', fontSize: 10, lineHeight: 1 }}>Backtest</button>
-              {stopped ? (
-                <button onClick={onStart} style={{ ...btnStyle('#1a3a2a'), padding: '2px 6px', fontSize: 10, lineHeight: 1 }}>Start</button>
-              ) : (
-                <button onClick={onStop} style={{ ...btnStyle('#3a1a1a'), padding: '2px 6px', fontSize: 10, lineHeight: 1 }}>Stop</button>
-              )}
-              <button onClick={onManualBuy} disabled={!running || summary.has_position}
-                style={{ ...btnStyle('#1a3a2a', !running || summary.has_position), padding: '2px 6px', fontSize: 10, lineHeight: 1 }}>
-                {dir === 'short' ? 'Short' : 'Buy'}
+            {/* Kebab menu — replaces inline buttons */}
+            <div
+              ref={menuRef}
+              style={{ position: 'relative', marginLeft: 'auto', flexShrink: 0 }}
+              onClick={e => e.stopPropagation()}
+            >
+              <button
+                onClick={() => setMenuOpen(o => !o)}
+                style={{
+                  background: 'none', border: '1px solid #2a3040', borderRadius: 4,
+                  color: '#8b949e', cursor: 'pointer', padding: '1px 4px',
+                  display: 'flex', alignItems: 'center',
+                }}
+                title="Actions"
+              >
+                <MoreHorizontal size={14} />
               </button>
-              <button onClick={() => {
-                if (confirm('Reset P&L for this bot? Journal rows are kept; the display starts fresh from now.')) onResetPnl()
-              }} style={{ ...btnStyle('#3a2e1a'), padding: '2px 6px', fontSize: 10, lineHeight: 1 }}>Reset</button>
-              {stopped && (
-                <button onClick={onDelete} style={{ ...btnStyle('#3a1a1a'), padding: '2px 6px', fontSize: 10, lineHeight: 1 }}>Delete</button>
+
+              {menuOpen && (
+                <div style={{
+                  position: 'absolute', top: '100%', right: 0,
+                  background: '#161b22', border: '1px solid #2a3040',
+                  borderRadius: 4, boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+                  zIndex: 100, minWidth: 120, marginTop: 2,
+                }}>
+                  {[
+                    {
+                      label: 'Backtest',
+                      disabled: running,
+                      action: () => { onBacktest(); setMenuOpen(false) },
+                    },
+                    {
+                      label: stopped ? 'Start' : 'Stop',
+                      disabled: false,
+                      action: () => { stopped ? onStart() : onStop(); setMenuOpen(false) },
+                    },
+                    {
+                      label: dir === 'short' ? 'Short' : 'Buy',
+                      disabled: !running || summary.has_position,
+                      action: () => { onManualBuy(); setMenuOpen(false) },
+                    },
+                    {
+                      label: expanded ? 'Hide Log' : 'Show Log',
+                      disabled: false,
+                      action: () => { setExpanded(e => !e); setMenuOpen(false) },
+                    },
+                    {
+                      label: 'Reset P&L',
+                      disabled: false,
+                      action: () => {
+                        if (confirm('Reset P&L for this bot? Journal rows are kept; the display starts fresh from now.')) onResetPnl()
+                        setMenuOpen(false)
+                      },
+                    },
+                    ...(stopped ? [{
+                      label: 'Delete',
+                      disabled: false,
+                      action: () => { onDelete(); setMenuOpen(false) },
+                    }] : []),
+                  ].map(item => (
+                    <button
+                      key={item.label}
+                      onClick={item.action}
+                      disabled={item.disabled}
+                      style={{
+                        display: 'block', width: '100%', textAlign: 'left',
+                        background: 'none', border: 'none', padding: '6px 12px',
+                        fontSize: 12, color: item.disabled ? '#444' : '#ccc',
+                        cursor: item.disabled ? 'not-allowed' : 'pointer',
+                      }}
+                      onMouseEnter={e => { if (!item.disabled) (e.target as HTMLElement).style.background = '#1e2530' }}
+                      onMouseLeave={e => { (e.target as HTMLElement).style.background = 'none' }}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
           </div>
 
-          {/* Right column — sparkline (fixed 60%, matches expanded mode) */}
-          <div style={{ flex: '0 0 60%', height: 24 }} onClick={e => e.stopPropagation()}>
+          {/* Right column — sparkline (matches expanded proportions) */}
+          <div style={{ flex: 1, minWidth: 120, height: 24 }} onClick={e => e.stopPropagation()}>
             <MiniSparkline equityData={detail?.state.equity_snapshots ?? summary.equity_snapshots ?? []} alignedRange={alignedRange} height={24} />
           </div>
         </div>
 
-        {/* Expandable activity log (below the compact row) */}
+        {/* Expandable activity log */}
         {expanded && (
           <div style={{ padding: '0 8px 8px' }}>
             <ActivityLog entries={detail?.state.activity_log ?? []} />
@@ -248,7 +313,7 @@ export default function BotCard({
           </div>
         )}
         {/* Left column */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+        <div style={{ flex: INFO_COLUMN_FLEX, display: 'flex', flexDirection: 'column', gap: 6, minWidth: 120 }}>
           {/* Header row */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {/* Heartbeat dot */}
@@ -260,7 +325,7 @@ export default function BotCard({
                 boxShadow: running ? `0 0 6px ${heartbeatColor(summary, detail)}` : 'none',
               }}
             />
-            <span style={{ color: '#e6edf3', fontWeight: 600, flex: 1 }}>
+            <span style={{ color: '#e6edf3', fontWeight: 600 }}>
               {editingStrategy ? (
                 <select
                   autoFocus
@@ -315,65 +380,83 @@ export default function BotCard({
             </span>
           </div>
 
-          {/* Stats row */}
-          <div style={{ display: 'flex', gap: 16, fontSize: 12 }}>
-            <span style={{ color: '#666' }}>Allocated: {editingAlloc ? (
-              <input
-                autoFocus
-                type="number"
-                value={allocValue}
-                onChange={e => setAllocValue(e.target.value)}
-                onBlur={() => {
-                  const v = parseFloat(allocValue)
-                  if (!isNaN(v) && v > 0) onUpdate({ allocated_capital: v })
-                  setEditingAlloc(false)
-                }}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-                  if (e.key === 'Escape') setEditingAlloc(false)
-                }}
-                style={{ width: 80, fontSize: 12, background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3, padding: '1px 4px' }}
-              />
-            ) : (
-              <span
-                style={{ color: stopped ? '#58a6ff' : '#aaa', cursor: stopped ? 'pointer' : 'default', borderBottom: stopped ? '1px dashed #58a6ff' : 'none' }}
-                onClick={() => { if (stopped) { setAllocValue(String(summary.allocated_capital)); setEditingAlloc(true) } }}
-                title={stopped ? 'Click to edit' : 'Stop bot to edit'}
-              >{fmtUsd(summary.allocated_capital)}</span>
-            )}</span>
-            <span style={{ color: '#666' }}>Trades: <span style={{ color: '#aaa' }}>{summary.trades_count}</span></span>
-            <span style={{ color: '#666' }}>P&L: <span style={{ color: pnlColor }}>{fmtPnl(summary.total_pnl)} ({(summary.total_pnl / summary.allocated_capital * 100).toFixed(1)}%)</span></span>
-            <span style={{ color: '#666', textTransform: 'capitalize' }}>
-              Status: <span style={{ color: statusColor(summary.status) }}>{summary.status}</span>
-            </span>
+          {/* Stats row — columnar layout */}
+          <div style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '4px 10px',
+            fontSize: 12,
+          }}>
+            <StatCell
+              label="Allocated"
+              value={editingAlloc ? (
+                <input
+                  autoFocus
+                  type="number"
+                  value={allocValue}
+                  onChange={e => setAllocValue(e.target.value)}
+                  onBlur={() => {
+                    const v = parseFloat(allocValue)
+                    if (!isNaN(v) && v > 0) onUpdate({ allocated_capital: v })
+                    setEditingAlloc(false)
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                    if (e.key === 'Escape') setEditingAlloc(false)
+                  }}
+                  style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3, padding: '1px 4px' }}
+                />
+              ) : (
+                <span
+                  style={{ color: stopped ? '#58a6ff' : '#aaa', cursor: stopped ? 'pointer' : 'default', borderBottom: stopped ? '1px dashed #58a6ff' : 'none' }}
+                  onClick={() => { if (stopped) { setAllocValue(String(summary.allocated_capital)); setEditingAlloc(true) } }}
+                  title={stopped ? 'Click to edit' : 'Stop bot to edit'}
+                >{fmtUsd(summary.allocated_capital)}</span>
+              )}
+            />
+            <StatCell label="Trades" value={<span style={{ color: '#aaa' }}>{summary.trades_count}</span>} />
+            <StatCell
+              label="P&L"
+              value={<span style={{ color: pnlColor }}>{fmtPnl(summary.total_pnl)} ({pnlPct}%)</span>}
+            />
+            <StatCell
+              label="Status"
+              value={<span style={{ color: statusColor(summary.status), textTransform: 'capitalize' }}>{summary.status}</span>}
+            />
             {summary.avg_cost_bps != null && (
-              <span style={{ color: '#666' }}>Slippage: <span style={{ color: summary.avg_cost_bps > 5 ? '#f85149' : '#8b949e' }}>{summary.avg_cost_bps.toFixed(1)} bps</span></span>
-            )}
-            <span style={{ color: '#666' }}>Spread cap: {editingSpread ? (
-              <input
-                autoFocus
-                type="number"
-                value={spreadValue}
-                min={0}
-                onChange={e => setSpreadValue(e.target.value)}
-                onBlur={() => {
-                  const v = spreadValue === '' ? 0 : parseFloat(spreadValue)
-                  if (!isNaN(v) && v >= 0) onUpdate({ max_spread_bps: v })
-                  setEditingSpread(false)
-                }}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-                  if (e.key === 'Escape') setEditingSpread(false)
-                }}
-                style={{ width: 50, fontSize: 12, background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3, padding: '1px 4px' }}
+              <StatCell
+                label="Slippage"
+                value={<span style={{ color: summary.avg_cost_bps > 5 ? '#f85149' : '#8b949e' }}>{summary.avg_cost_bps.toFixed(1)} bps</span>}
               />
-            ) : (
-              <span
-                style={{ color: stopped ? '#58a6ff' : '#aaa', cursor: stopped ? 'pointer' : 'default', borderBottom: stopped ? '1px dashed #58a6ff' : 'none' }}
-                onClick={() => { if (stopped) { setSpreadValue(summary.max_spread_bps ? String(summary.max_spread_bps) : ''); setEditingSpread(true) } }}
-                title={stopped ? 'Click to edit (empty = disabled)' : 'Stop bot to edit'}
-              >{summary.max_spread_bps ? `${summary.max_spread_bps} bps` : 'off'}</span>
-            )}</span>
+            )}
+            <StatCell
+              label="Spread cap"
+              value={editingSpread ? (
+                <input
+                  autoFocus
+                  type="number"
+                  value={spreadValue}
+                  min={0}
+                  onChange={e => setSpreadValue(e.target.value)}
+                  onBlur={() => {
+                    const v = spreadValue === '' ? 0 : parseFloat(spreadValue)
+                    if (!isNaN(v) && v >= 0) onUpdate({ max_spread_bps: v })
+                    setEditingSpread(false)
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                    if (e.key === 'Escape') setEditingSpread(false)
+                  }}
+                  style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3, padding: '1px 4px' }}
+                />
+              ) : (
+                <span
+                  style={{ color: stopped ? '#58a6ff' : '#aaa', cursor: stopped ? 'pointer' : 'default', borderBottom: stopped ? '1px dashed #58a6ff' : 'none' }}
+                  onClick={() => { if (stopped) { setSpreadValue(summary.max_spread_bps ? String(summary.max_spread_bps) : ''); setEditingSpread(true) } }}
+                  title={stopped ? 'Click to edit (empty = disabled)' : 'Stop bot to edit'}
+                >{summary.max_spread_bps ? `${summary.max_spread_bps} bps` : 'off'}</span>
+              )}
+            />
           </div>
 
           {/* Pause reason (structural IBKR reject) */}
@@ -432,7 +515,7 @@ export default function BotCard({
         </div>
 
         {/* Right column: mini chart */}
-        <div style={{ flex: '0 0 60%', minHeight: 60 }}>
+        <div style={{ flex: 1, minWidth: 120, minHeight: 60 }}>
           <MiniSparkline equityData={detail?.state.equity_snapshots ?? summary.equity_snapshots ?? []} alignedRange={alignedRange} />
         </div>
       </div>

@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-**67 / 87 shipped.** Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+**68 / 88 shipped.** Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -89,6 +89,7 @@
 - [x] **D16** Make allocation and strategy editable in-place on bot card (click when stopped)
 - [x] **D17** Global start/stop all bots
 - [x] **D18** Bot sparkline: global toggle for local vs aligned timescale
+- [x] **D19** Bot card redesign — responsive sparkline (was fixed 60%), columnar stats (label above value), compact mode kebab dropdown (replaces inline buttons), portfolio strip alignment, shared `ui.tsx` for layout primitives. 106 tests.
 
 ### Pre-numbering
 - [x] Verify allocation logic — was position_size=10.0, added validator to clamp 0.01-1.0

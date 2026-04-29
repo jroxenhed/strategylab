@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { BotFundStatus, SavedStrategy } from '../../shared/types'
 import { fmtUsd } from '../../shared/utils/format'
 import { apiErrorDetail } from '../../shared/utils/errors'
-import { btnStyle } from './BotCard'
+import { btnStyle } from './ui'
 
 const SAVED_KEY = 'strategylab-saved-strategies'
 const INTERVALS = ['1m', '5m', '15m', '30m', '1h']

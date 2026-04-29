@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import type { BotSummary } from '../../shared/types'
 import { fmtUsd, fmtPnl } from '../../shared/utils/format'
 import MiniSparkline from './MiniSparkline'
+import { INFO_COLUMN_FLEX, StatCell } from './ui'
 
 interface Props {
   bots: BotSummary[]
@@ -57,17 +58,24 @@ export default function PortfolioStrip({ bots, alignedRange }: Props) {
       border: '1px solid #1e2530', borderRadius: 6,
       padding: '12px 8px', display: 'flex', flexDirection: 'column', gap: 8,
     }}>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+      <div style={{ display: 'flex', gap: 12 }}>
+        {/* Left column — header + stats grid */}
+        <div style={{ flex: INFO_COLUMN_FLEX, display: 'flex', flexDirection: 'column', gap: 8, minWidth: 120 }}>
           <span style={{ color: '#e6edf3', fontWeight: 600 }}>Portfolio</span>
-          <div style={{ display: 'flex', gap: 16, fontSize: 12 }}>
-            <span style={{ color: '#666' }}>Allocated: <span style={{ color: '#aaa' }}>{fmtUsd(stats.totalAllocated)}</span></span>
-            <span style={{ color: '#666' }}>P&L: <span style={{ color: pnlColor }}>{fmtPnl(stats.totalPnl)} ({stats.pnlPct.toFixed(1)}%)</span></span>
-            <span style={{ color: '#666' }}>Running: <span style={{ color: '#aaa' }}>{stats.runningCount} / {stats.totalCount}</span></span>
-            <span style={{ color: '#666' }}>Profitable: <span style={{ color: '#aaa' }}>{stats.profitableCount} / {stats.tradedCount} bots</span></span>
+          <div style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '4px 10px',
+            fontSize: 12,
+          }}>
+            <StatCell label="Allocated" value={<span style={{ color: '#aaa' }}>{fmtUsd(stats.totalAllocated)}</span>} />
+            <StatCell label="P&L" value={<span style={{ color: pnlColor }}>{fmtPnl(stats.totalPnl)} ({stats.pnlPct.toFixed(1)}%)</span>} />
+            <StatCell label="Running" value={<span style={{ color: '#aaa' }}>{stats.runningCount} / {stats.totalCount}</span>} />
+            <StatCell label="Profitable" value={<span style={{ color: '#aaa' }}>{stats.profitableCount} / {stats.tradedCount} bots</span>} />
           </div>
         </div>
-        <div style={{ flex: '0 0 60%', minHeight: 90 }}>
+        {/* Right column — sparkline */}
+        <div style={{ flex: 1, minWidth: 120, minHeight: 90 }}>
           <MiniSparkline equityData={equityData} alignedRange={alignedRange} height={90} />
         </div>
       </div>

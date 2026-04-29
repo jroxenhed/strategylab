@@ -12,6 +12,8 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 - **[B14](TODO.md#b--strategy-engine--rules)** Stochastic + ADX as rule indicators. Backend: `compute_stochastic`, `compute_vwap`, `compute_adx` in `indicators.py`. Signal engine: stoch/adx specs, resolve_series/resolve_ref with %K/%D crossover pattern (matching MACD). Frontend: RuleRow with param UIs, NEEDS_PARAM for stochastic crossovers.
 
+- **[D19](TODO.md#d--bots-live-trading)** Bot card redesign — responsive sparkline columns (fixed 60% → flex 35/65 split), columnar stats (label above value with flex-wrap), compact mode kebab dropdown replacing inline buttons, portfolio strip column alignment. Shared `ui.tsx` for layout primitives (`btnStyle`, `StatCell`, `INFO_COLUMN_FLEX`). Fixes: P&L division-by-zero guard, stale detail cleanup on collapse, menuOpen reset on mode toggle. 106 tests across 3 new test files.
+
 ## 2026-04-28
 
 - **[D10](TODO.md#d--bots-live-trading)** compact sparkline alignment fix. Multiple iterations. Real root cause: compact row was a flat flex layout where sparkline position depended on variable-width text before it. Fix: restructured to two-column layout mirroring expanded mode — `flex: 1` left column (text/buttons) + `flex: 0 0 60%` right column (sparkline). Also fixed overflow menu z-index (removed `scale: '1'` creating stacking contexts on idle SortableBotCard wrappers) and moved buttons before sparkline.
