@@ -146,6 +146,17 @@ export interface RuleSignal {
   signals: Array<{ time: number | string; price: number }>
 }
 
+export interface SessionAnalyticsBucket {
+  bucket: string
+  trade_count: number
+  wins: number
+  losses: number
+  win_rate: number
+  avg_pnl: number
+  total_pnl: number
+  avg_pnl_pct: number
+}
+
 export interface BacktestResult {
   summary: {
     initial_capital: number
@@ -170,6 +181,7 @@ export interface BacktestResult {
   ema_overlays?: EMAOverlay[]
   signal_trace?: SignalTraceEntry[]
   rule_signals?: RuleSignal[]
+  session_analytics?: SessionAnalyticsBucket[] | null
 }
 
 export interface MacroCurvePoint {

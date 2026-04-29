@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
 
 import httpx
 
@@ -18,11 +17,11 @@ _client = httpx.AsyncClient(timeout=5.0)
 
 # Cached result of reading NOTIFY_URL.
 # False = not yet read; None = read, not set; str = read, has value.
-_notify_url: Optional[str] = None
+_notify_url: str | None = None
 _notify_url_checked: bool = False
 
 
-def _get_notify_url() -> Optional[str]:
+def _get_notify_url() -> str | None:
     """Read NOTIFY_URL from environment, cache result. Returns None if not set."""
     global _notify_url, _notify_url_checked
     if not _notify_url_checked:
@@ -81,10 +80,13 @@ async def notify_exit(
     pnl: float,
     reason: str,
     bot_id: str,
+    priority: str = "default",
 ) -> None:
-    """Notify on successful trade exit."""
+    """Notify on trade exit. Stop exits use priority='high' and a rotating_light tag."""
     side = "COVER" if direction == "short" else "SELL"
-    tag = "moneybag" if pnl > 0 else "money_with_wings"
+    is_stop = reason in ("stop_loss", "trailing_stop")
+    tag = "rotating_light" if is_stop else ("moneybag" if pnl > 0 else "money_with_wings")
+    effective_priority = "high" if is_stop else priority
     pnl_sign = "+" if pnl >= 0 else ""
     title = f"{side} exit: {symbol} ({pnl_sign}${pnl:.2f})"
     message = (
@@ -92,24 +94,7 @@ async def notify_exit(
         f"PnL: {pnl_sign}${pnl:.2f} | Reason: {reason}\n"
         f"Bot: {bot_id}"
     )
-    await notify(title, message, priority="default", tags=tag)
-
-
-async def notify_stop(
-    symbol: str,
-    direction: str,
-    price: float,
-    stop_type: str,
-    bot_id: str,
-) -> None:
-    """Notify when a stop is triggered."""
-    title = f"Stop triggered: {symbol}"
-    message = (
-        f"{stop_type.replace('_', ' ').title()} hit on {symbol} ({direction})\n"
-        f"Price: ${price:.2f}\n"
-        f"Bot: {bot_id}"
-    )
-    await notify(title, message, priority="high", tags="rotating_light")
+    await notify(title, message, priority=effective_priority, tags=tag)
 
 
 async def notify_error(
@@ -124,3 +109,28 @@ async def notify_error(
         f"Bot: {bot_id}"
     )
     await notify(title, message, priority="urgent", tags="warning")
+
+
+async def notify_test(
+    title: str,
+    message: str,
+    priority: str = "default",
+    tags: str = "",
+) -> None:
+    """Send a test notification. Unlike notify(), re-raises on failure so the caller can detect it."""
+    url = _get_notify_url()
+    if url is None:
+        return
+    headers = {"Title": title, "Priority": priority}
+    if tags:
+        headers["Tags"] = tags
+    try:
+        await _client.post(url, content=message.encode(), headers=headers)
+    except Exception as exc:
+        logger.warning("notify_test: failed to send notification: %s", exc)
+        raise
+
+
+async def close_client() -> None:
+    """Close the shared httpx client. Call from FastAPI lifespan on shutdown."""
+    await _client.aclose()

@@ -4,6 +4,7 @@ import json
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from shared import _fetch, _format_time, _INTRADAY_INTERVALS
 from signal_engine import Rule, compute_indicators, eval_rules, eval_rule, migrate_rule, resolve_series
 from routes.indicators import _series_to_list
@@ -72,6 +73,82 @@ def _edge_stats(gains: list[float], losses: list[float], num_sells: int) -> dict
         "ev_per_trade": ev_per_trade,
         "profit_factor": profit_factor,
     }
+
+
+_DAILY_INTERVALS = {'1d', '1wk', '1mo'}
+_ET = ZoneInfo('America/New_York')
+_SESSION_BUCKETS = [
+    "09:30", "10:00", "10:30", "11:00", "11:30",
+    "12:00", "12:30", "13:00", "13:30", "14:00",
+    "14:30", "15:00", "15:30",
+]
+
+
+def compute_session_analytics(trades: list, interval: str) -> list | None:
+    """Break down trade performance by 30-min ET time-of-day bucket.
+
+    Trades alternate buy/sell (even indices = entries, odd = exits).
+    Only computed for intraday intervals; returns None for daily+.
+    """
+    if interval in _DAILY_INTERVALS:
+        return None
+
+    # Build a dict keyed by bucket label with running totals
+    buckets: dict[str, dict] = {
+        b: {"trade_count": 0, "wins": 0, "losses": 0, "total_pnl": 0.0, "total_pnl_pct": 0.0}
+        for b in _SESSION_BUCKETS
+    }
+
+    # Pair consecutive entry (even index) + exit (odd index) trades
+    i = 0
+    while i + 1 < len(trades):
+        entry = trades[i]
+        exit_ = trades[i + 1]
+        i += 2
+
+        ts = entry.get("date")
+        pnl = exit_.get("pnl", 0) or 0
+        pnl_pct = exit_.get("pnl_pct", 0) or 0
+
+        if ts is None or not isinstance(ts, (int, float)):
+            continue
+
+        dt_et = datetime.fromtimestamp(ts, tz=_ET)
+        # Compute 30-min bucket: floor minutes to 0 or 30
+        minute_bucket = (dt_et.minute // 30) * 30
+        label = f"{dt_et.hour:02d}:{minute_bucket:02d}"
+
+        if label not in buckets:
+            continue  # outside standard session hours
+
+        b = buckets[label]
+        b["trade_count"] += 1
+        b["total_pnl"] += pnl
+        b["total_pnl_pct"] += pnl_pct
+        if pnl > 0:
+            b["wins"] += 1
+        elif pnl < 0:
+            b["losses"] += 1
+
+    result = []
+    for label in _SESSION_BUCKETS:
+        b = buckets[label]
+        count = b["trade_count"]
+        wins = b["wins"]
+        win_rate = round(wins / count * 100, 1) if count > 0 else 0.0
+        avg_pnl = round(b["total_pnl"] / count, 2) if count > 0 else 0.0
+        avg_pnl_pct = round(b["total_pnl_pct"] / count, 2) if count > 0 else 0.0
+        result.append({
+            "bucket": label,
+            "trade_count": count,
+            "wins": wins,
+            "losses": b["losses"],
+            "win_rate": win_rate,
+            "avg_pnl": avg_pnl,
+            "total_pnl": round(b["total_pnl"], 2),
+            "avg_pnl_pct": avg_pnl_pct,
+        })
+    return result
 
 
 @router.post("/api/backtest")
@@ -478,6 +555,7 @@ def run_backtest(req: StrategyRequest):
             "trades": trades,
             "equity_curve": equity,
             "baseline_curve": baseline_curve,
+            "session_analytics": compute_session_analytics(trades, req.interval),
         }
         if ema_overlays:
             result["ema_overlays"] = ema_overlays

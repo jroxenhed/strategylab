@@ -8,7 +8,7 @@ Endpoints:
 
 from fastapi import APIRouter
 
-from notifications import _get_notify_url, notify
+from notifications import _get_notify_url, notify_test
 
 router = APIRouter(prefix="/api/notifications")
 
@@ -17,10 +17,7 @@ router = APIRouter(prefix="/api/notifications")
 async def get_notification_status():
     """Return whether push notifications are configured."""
     url = _get_notify_url()
-    return {
-        "enabled": url is not None,
-        "url": url if url else None,
-    }
+    return {"enabled": url is not None}
 
 
 @router.get("/test")
@@ -33,12 +30,12 @@ async def send_test_notification():
             "reason": "NOTIFY_URL is not set in .env — add it and restart the server",
         }
     try:
-        await notify(
+        await notify_test(
             title="StrategyLab test",
             message="Notifications are working! Your bot alerts are active.",
             priority="default",
             tags="white_check_mark",
         )
-        return {"sent": True, "url": url}
+        return {"sent": True}
     except Exception as exc:
         return {"sent": False, "reason": str(exc)}

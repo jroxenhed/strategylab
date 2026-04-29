@@ -9,6 +9,7 @@ import Sidebar from './features/sidebar/Sidebar'
 import Chart from './features/chart/Chart'
 import StrategyBuilder from './features/strategy/StrategyBuilder'
 import Results from './features/strategy/Results'
+import StrategyComparison from './features/strategy/StrategyComparison'
 import PaperTrading from './features/trading/PaperTrading'
 import Discovery from './features/discovery/Discovery'
 import WatchlistPanel from './features/watchlist/WatchlistPanel'
@@ -48,6 +49,7 @@ export default function App() {
   const [macroBucket, setMacroBucket] = useState<string | null>(null)
   const [showBaseline, setShowBaseline] = useState(false)
   const [logScale, setLogScale] = useState(false)
+  const [compareMode, setCompareMode] = useState(false)
   const [activeTab, setActiveTab] = useState<AppTab>(() => {
     const s = localStorage.getItem('activeTab')
     return s === 'chart' || s === 'trading' || s === 'discovery' ? s : 'chart'
@@ -207,35 +209,63 @@ export default function App() {
                   {/* BOTTOM PANE: Strategy rules + Results */}
                   <Panel defaultSize="50%" minSize="30%" collapsible>
                     <div style={{ height: '100%', overflowY: 'auto', display: 'flex', flexDirection: 'column', background: 'var(--bg-main)' }}>
-                      <StrategyBuilder
-                        ticker={ticker}
-                        start={start}
-                        end={end}
-                        interval={interval}
-                        onResult={(result, req) => {
-                          setBacktestResult(result)
-                          if (req) setLastRequest(req)
-                        }}
-                        dataSource={dataSource}
-                        settingsPortalId="strategy-settings-portal"
-                        extendedHours={extendedHours}
-                      />
-                      {backtestResult && (
-                        <Results
-                          result={backtestResult}
-                          mainChart={mainChart}
-                          activeTab={resultsTab}
-                          onTabChange={setResultsTab}
-                          bucket={macroBucket}
-                          onBucketChange={setMacroBucket}
-                          lastRequest={lastRequest}
-                          showBaseline={showBaseline}
-                          onShowBaselineChange={setShowBaseline}
-                          logScale={logScale}
-                          onLogScaleChange={setLogScale}
-                          viewInterval={viewInterval}
-                          backtestInterval={interval}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '4px 8px', borderBottom: '1px solid #21262d', background: '#0d1117', flexShrink: 0 }}>
+                        <button
+                          onClick={() => setCompareMode(m => !m)}
+                          style={{
+                            fontSize: 11, padding: '3px 10px', borderRadius: 4,
+                            background: compareMode ? 'rgba(88,166,255,0.15)' : '#21262d',
+                            color: compareMode ? '#58a6ff' : '#8b949e',
+                            border: compareMode ? '1px solid #58a6ff55' : '1px solid #30363d',
+                            cursor: 'pointer', fontWeight: 600,
+                          }}
+                          title="Compare saved strategies side-by-side"
+                        >
+                          ⇄ Compare
+                        </button>
+                      </div>
+                      {compareMode ? (
+                        <StrategyComparison
+                          ticker={ticker}
+                          start={start}
+                          end={end}
+                          interval={interval}
+                          dataSource={dataSource}
+                          extendedHours={extendedHours}
                         />
+                      ) : (
+                        <>
+                          <StrategyBuilder
+                            ticker={ticker}
+                            start={start}
+                            end={end}
+                            interval={interval}
+                            onResult={(result, req) => {
+                              setBacktestResult(result)
+                              if (req) setLastRequest(req)
+                            }}
+                            dataSource={dataSource}
+                            settingsPortalId="strategy-settings-portal"
+                            extendedHours={extendedHours}
+                          />
+                          {backtestResult && (
+                            <Results
+                              result={backtestResult}
+                              mainChart={mainChart}
+                              activeTab={resultsTab}
+                              onTabChange={setResultsTab}
+                              bucket={macroBucket}
+                              onBucketChange={setMacroBucket}
+                              lastRequest={lastRequest}
+                              showBaseline={showBaseline}
+                              onShowBaselineChange={setShowBaseline}
+                              logScale={logScale}
+                              onLogScaleChange={setLogScale}
+                              viewInterval={viewInterval}
+                              backtestInterval={interval}
+                            />
+                          )}
+                        </>
                       )}
                     </div>
                   </Panel>

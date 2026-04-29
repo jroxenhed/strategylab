@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { createChart, BaselineSeries, LineSeries, HistogramSeries, ColorType } from 'lightweight-charts'
 import type { IChartApi } from 'lightweight-charts'
-import type { BacktestResult, SignalTraceEntry, StrategyRequest } from '../../shared/types'
+import type { BacktestResult, SignalTraceEntry, StrategyRequest, SessionAnalyticsBucket } from '../../shared/types'
 import { useMacro } from '../../shared/hooks/useMacro'
 import { fmtDateTimeET, toDisplayTime, useTimezone } from '../../shared/utils/time'
 import { normaliseToPercent, applyLog } from '../../shared/utils/chartScale'
@@ -417,6 +417,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
               </div>
             )
           })()}
+          <SessionAnalytics data={result.session_analytics} />
         </div>
       )}
 
@@ -807,6 +808,97 @@ function EvWaterfall({
       >
         {fmtSigned(netContribution)}
       </span>
+    </div>
+  )
+}
+
+function winRateColor(rate: number): string {
+  // Interpolate: 0% = red (#f85149), 50% = #8b949e (gray), 100% = green (#26a641)
+  if (rate <= 50) {
+    const t = rate / 50
+    const r = Math.round(248 + (139 - 248) * t)
+    const g = Math.round(81 + (148 - 81) * t)
+    const b = Math.round(73 + (158 - 73) * t)
+    return `rgb(${r},${g},${b})`
+  } else {
+    const t = (rate - 50) / 50
+    const r = Math.round(139 + (38 - 139) * t)
+    const g = Math.round(148 + (166 - 148) * t)
+    const b = Math.round(158 + (65 - 158) * t)
+    return `rgb(${r},${g},${b})`
+  }
+}
+
+function SessionAnalytics({ data }: { data?: SessionAnalyticsBucket[] | null }) {
+  if (!data || data.length === 0) return null
+  const withTrades = data.filter(b => b.trade_count > 0)
+  if (withTrades.length === 0) return null
+
+  const maxCount = Math.max(...data.map(b => b.trade_count), 1)
+
+  const best = withTrades.reduce((a, b) => b.win_rate > a.win_rate ? b : a)
+  const worst = withTrades.reduce((a, b) => b.win_rate < a.win_rate ? b : a)
+
+  function fmtBucketRange(b: string): string {
+    const parts = b.split(':').map(Number)
+    if (parts.length !== 2 || isNaN(parts[0]) || isNaN(parts[1])) return b
+    const [h, m] = parts
+    const totalMins = h * 60 + m + 30
+    const eh = Math.floor(totalMins / 60)
+    const em = totalMins % 60
+    return `${b}–${String(eh).padStart(2, '0')}:${String(em).padStart(2, '0')}`
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', padding: '12px 16px', borderTop: '1px solid #21262d', gap: 6 }}>
+      <div style={{ marginBottom: 4 }}>
+        <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase', letterSpacing: 0.5 }}>Session Analytics</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {data.map(b => {
+          const barWidth = b.trade_count === 0 ? 0 : (b.trade_count / maxCount) * 100
+          const color = winRateColor(b.win_rate)
+          return (
+            <div key={b.bucket} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 20 }}>
+              <span style={{ fontSize: 11, color: '#8b949e', width: 38, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{b.bucket}</span>
+              <div style={{ flex: 1, height: 14, background: '#21262d', borderRadius: 2, overflow: 'hidden' }}>
+                {b.trade_count > 0 && (
+                  <div style={{ width: `${barWidth}%`, height: '100%', background: color, borderRadius: 2 }} />
+                )}
+              </div>
+              {b.trade_count > 0 ? (
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+                  <span style={{ fontSize: 11, color: '#8b949e', width: 18, textAlign: 'right' }}>{b.trade_count}</span>
+                  <span style={{ fontSize: 11, color: color, width: 38, textAlign: 'right' }}>{b.win_rate.toFixed(0)}%</span>
+                  <span style={{ fontSize: 11, color: b.avg_pnl >= 0 ? '#26a641' : '#f85149', width: 52, textAlign: 'right' }}>
+                    {b.avg_pnl >= 0 ? '+' : ''}${b.avg_pnl.toFixed(2)}
+                  </span>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                  <span style={{ fontSize: 11, color: '#30363d', width: 18, textAlign: 'right' }}>—</span>
+                  <span style={{ fontSize: 11, color: '#30363d', width: 38, textAlign: 'right' }}>—</span>
+                  <span style={{ fontSize: 11, color: '#30363d', width: 52, textAlign: 'right' }}>—</span>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      {withTrades.length >= 2 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 4, paddingTop: 6, borderTop: '1px solid #21262d' }}>
+          <div style={{ fontSize: 11, color: '#8b949e' }}>
+            <span style={{ color: '#26a641', fontWeight: 600 }}>Best: </span>
+            {fmtBucketRange(best.bucket)} ({best.win_rate.toFixed(0)}% win rate,{' '}
+            {best.avg_pnl >= 0 ? '+' : ''}${best.avg_pnl.toFixed(2)} avg)
+          </div>
+          <div style={{ fontSize: 11, color: '#8b949e' }}>
+            <span style={{ color: '#f85149', fontWeight: 600 }}>Worst: </span>
+            {fmtBucketRange(worst.bucket)} ({worst.win_rate.toFixed(0)}% win rate,{' '}
+            {worst.avg_pnl >= 0 ? '+' : ''}${worst.avg_pnl.toFixed(2)} avg)
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -57,6 +57,8 @@ async def lifespan(app: FastAPI):
     finally:
         await manager.shutdown()
         await monitor.stop()
+        from notifications import close_client
+        await close_client()
         from shared import get_ibkr_connection
         ib = get_ibkr_connection()
         if ib is not None:

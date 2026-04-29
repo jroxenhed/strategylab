@@ -22,7 +22,7 @@ from shared import _fetch
 from broker import get_trading_provider, OrderRequest as BrokerOrderRequest, OrderResult
 from journal import _log_trade, compute_realized_pnl
 from post_loss import is_post_loss_trigger
-from notifications import notify_entry, notify_exit, notify_stop, notify_error
+from notifications import notify_entry, notify_exit, notify_error
 
 # Poll interval per bar cadence (seconds)
 POLL_INTERVALS = {"1m": 10, "5m": 15, "15m": 20, "30m": 30, "1h": 60}
@@ -36,6 +36,7 @@ class BotRunner:
         self._error_listener = None  # bound IBKR error callback
         self._active_order_ids: set[str] = set()  # order IDs placed by this bot
         self._last_broker_qty: int | None = None  # for partial-position reconciliation
+        self._loop: asyncio.AbstractEventLoop | None = None  # set in run() for thread-safe scheduling
 
     def _log(self, level: str, msg: str):
         entry = {"time": datetime.now(timezone.utc).isoformat(), "msg": msg, "level": level}
@@ -236,7 +237,7 @@ class BotRunner:
                 except Exception:
                     pass
 
-                await notify_exit(
+                asyncio.create_task(notify_exit(
                     symbol=cfg.symbol,
                     direction=cfg.direction,
                     qty=sell_qty,
@@ -244,15 +245,7 @@ class BotRunner:
                     pnl=pnl,
                     reason=exit_reason,
                     bot_id=cfg.bot_id,
-                )
-                if exit_reason in ("stop_loss", "trailing_stop"):
-                    await notify_stop(
-                        symbol=cfg.symbol,
-                        direction=cfg.direction,
-                        price=exit_price,
-                        stop_type=exit_reason,
-                        bot_id=cfg.bot_id,
-                    )
+                ))
 
                 state.equity_snapshots.append({
                     "time": datetime.now(timezone.utc).isoformat(),
@@ -388,14 +381,14 @@ class BotRunner:
                 except Exception:
                     pass
 
-                await notify_entry(
+                asyncio.create_task(notify_entry(
                     symbol=cfg.symbol,
                     direction=cfg.direction,
                     qty=qty,
                     price=fill_price,
                     strategy_name=cfg.strategy_name,
                     bot_id=cfg.bot_id,
-                )
+                ))
 
                 self.manager.save()
 
@@ -580,6 +573,16 @@ class BotRunner:
                 except Exception:
                     pass
 
+                asyncio.create_task(notify_exit(
+                    symbol=cfg.symbol,
+                    direction=cfg.direction,
+                    qty=broker_qty,
+                    price=sell_fill,
+                    pnl=pnl,
+                    reason=exit_reason,
+                    bot_id=cfg.bot_id,
+                ))
+
                 state.equity_snapshots.append({
                     "time": datetime.now(timezone.utc).isoformat(),
                     "value": round(compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id, since=cfg.pnl_epoch), 2),
@@ -610,11 +613,12 @@ class BotRunner:
             self.state.pause_reason = f"IBKR reject: {errorString} (code {errorCode})"
             self.state.error_message = self.state.pause_reason
             self.manager.save()
-            asyncio.ensure_future(notify_error(
-                symbol=self.config.symbol,
-                error_msg=self.state.pause_reason,
-                bot_id=self.config.bot_id,
-            ))
+            if self._loop is not None:
+                asyncio.run_coroutine_threadsafe(notify_error(
+                    symbol=self.config.symbol,
+                    error_msg=self.state.pause_reason,
+                    bot_id=self.config.bot_id,
+                ), self._loop)
         else:
             self._log("WARN", f"IBKR transient code={errorCode}: {errorString}")
 
@@ -639,6 +643,7 @@ class BotRunner:
         self._error_listener = None
 
     async def run(self):
+        self._loop = asyncio.get_running_loop()
         self.state.status = "running"
         self.state.pause_reason = None
         self.state.started_at = datetime.now(timezone.utc).isoformat()
