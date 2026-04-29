@@ -1,4 +1,4 @@
-export type IndicatorType = 'rsi' | 'macd' | 'bb' | 'atr' | 'ma' | 'volume'
+export type IndicatorType = 'rsi' | 'macd' | 'bb' | 'atr' | 'ma' | 'volume' | 'stochastic' | 'vwap' | 'adx'
 
 export type IndicatorInstance = {
   id: string
@@ -99,6 +99,30 @@ export const INDICATOR_DEFS: Record<IndicatorType, IndicatorTypeDef> = {
         { value: 'candle', label: 'By candle' },
       ]},
     ],
+  },
+  stochastic: {
+    type: 'stochastic', label: 'Stochastic',
+    defaultParams: { k_period: 14, d_period: 3, smooth_k: 3 },
+    pane: 'sub',
+    paramFields: [
+      { key: 'k_period', label: 'K Period', kind: 'number', min: 2 },
+      { key: 'd_period', label: 'D Period', kind: 'number', min: 2 },
+      { key: 'smooth_k', label: 'Smooth K', kind: 'number', min: 1 },
+    ],
+    subPaneSharing: 'shared',
+  },
+  vwap: {
+    type: 'vwap', label: 'VWAP',
+    defaultParams: {},
+    pane: 'main',
+    paramFields: [],
+  },
+  adx: {
+    type: 'adx', label: 'ADX',
+    defaultParams: { period: 14 },
+    pane: 'sub',
+    paramFields: [{ key: 'period', label: 'Period', kind: 'number', min: 2 }],
+    subPaneSharing: 'shared',
   },
 }
 

@@ -361,7 +361,11 @@ def run_backtest(req: StrategyRequest):
 
         # Close open position at last price
         final_price = close.iloc[-1]
-        final_value = capital + position * final_price
+        if is_short and position > 0:
+            unrealized = position * (entry_price - final_price)
+            final_value = capital + position * entry_price + unrealized
+        else:
+            final_value = capital + position * final_price
 
         total_return = (final_value - req.initial_capital) / req.initial_capital * 100
         buy_hold_return = (close.iloc[-1] - close.iloc[0]) / close.iloc[0] * 100

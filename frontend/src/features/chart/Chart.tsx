@@ -442,10 +442,11 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         }
       } else {
         const paramStr = Object.values(inst.params).join(',')
-        const color = inst.color ?? '#f0883e'
+        const defaultColor = inst.type === 'vwap' ? '#ff9800' : '#f0883e'
+        const color = inst.color ?? defaultColor
         const s = chart.addSeries(LineSeries, {
           color, lineWidth: 1,
-          title: `${inst.type.toUpperCase()}(${paramStr})`,
+          title: inst.type === 'vwap' ? 'VWAP' : `${inst.type.toUpperCase()}(${paramStr})`,
           priceScaleId: 'right',
         })
         seriesMap.set(inst.id, s)

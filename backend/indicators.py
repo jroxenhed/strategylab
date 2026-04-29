@@ -90,6 +90,55 @@ def compute_volume(ohlcv: OHLCVSeries, params: dict) -> dict[str, pd.Series]:
     return {"volume": ohlcv.volume}
 
 
+def compute_stochastic(ohlcv: OHLCVSeries, params: dict) -> dict[str, pd.Series]:
+    k_period = int(params.get("k_period", 14))
+    d_period = int(params.get("d_period", 3))
+    smooth_k = int(params.get("smooth_k", 3))
+    lowest_low = ohlcv.low.rolling(k_period).min()
+    highest_high = ohlcv.high.rolling(k_period).max()
+    raw_k = (ohlcv.close - lowest_low) / (highest_high - lowest_low) * 100
+    k = raw_k.rolling(smooth_k).mean()
+    d = k.rolling(d_period).mean()
+    return {"k": k, "d": d}
+
+
+def compute_vwap(ohlcv: OHLCVSeries, params: dict) -> dict[str, pd.Series]:
+    typical_price = (ohlcv.high + ohlcv.low + ohlcv.close) / 3
+    cum_tp_vol = (typical_price * ohlcv.volume).cumsum()
+    cum_vol = ohlcv.volume.cumsum()
+    vwap = cum_tp_vol / cum_vol
+    return {"vwap": vwap}
+
+
+def compute_adx(ohlcv: OHLCVSeries, params: dict) -> dict[str, pd.Series]:
+    period = int(params.get("period", 14))
+    high = ohlcv.high
+    low = ohlcv.low
+    close = ohlcv.close
+    prev_high = high.shift(1)
+    prev_low = low.shift(1)
+    prev_close = close.shift(1)
+    plus_dm = (high - prev_high).clip(lower=0)
+    minus_dm = (prev_low - low).clip(lower=0)
+    # Zero out the smaller of the two; if equal, both zero
+    plus_dm = plus_dm.where(plus_dm > minus_dm, 0)
+    minus_dm = minus_dm.where(minus_dm > plus_dm, 0)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    alpha = 1 / period
+    smoothed_tr = tr.ewm(alpha=alpha, adjust=False).mean()
+    smoothed_plus_dm = plus_dm.ewm(alpha=alpha, adjust=False).mean()
+    smoothed_minus_dm = minus_dm.ewm(alpha=alpha, adjust=False).mean()
+    plus_di = 100 * smoothed_plus_dm / smoothed_tr
+    minus_di = 100 * smoothed_minus_dm / smoothed_tr
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    adx = dx.ewm(alpha=alpha, adjust=False).mean()
+    return {"adx": adx, "plus_di": plus_di, "minus_di": minus_di}
+
+
 INDICATOR_REGISTRY: dict[str, Callable[[OHLCVSeries, dict], dict[str, pd.Series]]] = {
     "rsi": compute_rsi,
     "macd": compute_macd,
@@ -98,6 +147,9 @@ INDICATOR_REGISTRY: dict[str, Callable[[OHLCVSeries, dict], dict[str, pd.Series]
     "ma": compute_ma,
     "ema": compute_ema,
     "volume": compute_volume,
+    "stochastic": compute_stochastic,
+    "vwap": compute_vwap,
+    "adx": compute_adx,
 }
 
 
@@ -107,6 +159,8 @@ PARAM_CONSTRAINTS: dict[str, dict[str, tuple[float, float]]] = {
     "bb":    {"period": (2, 500), "stddev": (0.5, 5)},
     "atr":   {"period": (2, 500)},
     "ma":    {"period": (2, 500)},
+    "stochastic": {"k_period": (2, 500), "d_period": (2, 500), "smooth_k": (1, 50)},
+    "adx":   {"period": (2, 500)},
 }
 
 

@@ -176,6 +176,48 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
         for vp in vol_sma_periods:
             result[f"volume_sma_{vp}"] = ohlcv.volume.rolling(vp).mean()
 
+    # --- Stochastic ---
+    stoch_specs: set[tuple[int, int, int]] = set()
+    for rule in rules:
+        if rule.indicator == "stochastic":
+            kp = rule.params.get("k_period", 14) if rule.params else 14
+            dp = rule.params.get("d_period", 3) if rule.params else 3
+            sk = rule.params.get("smooth_k", 3) if rule.params else 3
+            stoch_specs.add((int(kp), int(dp), int(sk)))
+        if rule.param and rule.param.startswith("stoch:"):
+            parts = rule.param.split(":")
+            if len(parts) >= 4:
+                try:
+                    stoch_specs.add((int(parts[1]), int(parts[2]), int(parts[3])))
+                except ValueError:
+                    pass
+
+    for kp, dp, sk in stoch_specs:
+        stoch_result = compute_instance("stochastic", {"k_period": kp, "d_period": dp, "smooth_k": sk}, ohlcv)
+        prefix = f"stoch_{kp}_{dp}_{sk}"
+        result[f"{prefix}_k"] = stoch_result["k"]
+        result[f"{prefix}_d"] = stoch_result["d"]
+
+    # --- ADX ---
+    adx_specs: set[int] = set()
+    for rule in rules:
+        if rule.indicator == "adx":
+            p = rule.params.get("period", 14) if rule.params else 14
+            adx_specs.add(int(p))
+        if rule.param and rule.param.startswith("adx:"):
+            parts = rule.param.split(":")
+            if len(parts) >= 2:
+                try:
+                    adx_specs.add(int(parts[1]))
+                except ValueError:
+                    pass
+
+    for adx_period in adx_specs:
+        adx_result = compute_instance("adx", {"period": adx_period}, ohlcv)
+        result[f"adx_{adx_period}"] = adx_result["adx"]
+        result[f"adx_{adx_period}_plus_di"] = adx_result["plus_di"]
+        result[f"adx_{adx_period}_minus_di"] = adx_result["minus_di"]
+
     return result
 
 
@@ -205,6 +247,21 @@ def resolve_series(rule: Rule, indicators: dict[str, pd.Series]) -> pd.Series | 
             p = rule.params.get("period", 20) if rule.params else 20
             return indicators.get(f"volume_sma_{p}")
         return indicators.get("volume_raw")
+    if rule.indicator == "stochastic":
+        kp = rule.params.get("k_period", 14) if rule.params else 14
+        dp = rule.params.get("d_period", 3) if rule.params else 3
+        sk = rule.params.get("smooth_k", 3) if rule.params else 3
+        return indicators.get(f"stoch_{kp}_{dp}_{sk}_k")
+    if rule.indicator == "adx":
+        p = rule.params.get("period", 14) if rule.params else 14
+        component = rule.param or "adx"
+        if component == "adx":
+            return indicators.get(f"adx_{p}")
+        elif component == "plus_di":
+            return indicators.get(f"adx_{p}_plus_di")
+        elif component == "minus_di":
+            return indicators.get(f"adx_{p}_minus_di")
+        return indicators.get(f"adx_{p}")
     fixed = {"macd": "macd", "price": "close"}
     return indicators.get(fixed.get(rule.indicator, rule.indicator))
 
@@ -217,6 +274,11 @@ def resolve_ref(rule: Rule, indicators: dict[str, pd.Series]) -> pd.Series | Non
         return indicators.get("signal")
     if rule.param == "close":
         return indicators.get("close")
+    if rule.param == "d" and rule.indicator == "stochastic":
+        kp = rule.params.get("k_period", 14) if rule.params else 14
+        dp = rule.params.get("d_period", 3) if rule.params else 3
+        sk = rule.params.get("smooth_k", 3) if rule.params else 3
+        return indicators.get(f"stoch_{kp}_{dp}_{sk}_d")
     if rule.param.startswith("ma:"):
         parts = rule.param.split(":", 2)
         if len(parts) == 3:
@@ -250,6 +312,25 @@ def resolve_ref(rule: Rule, indicators: dict[str, pd.Series]) -> pd.Series | Non
             try:
                 return indicators.get(f"volume_sma_{int(parts[1])}")
             except ValueError:
+                return None
+    # Stochastic as reference: stoch:kp:dp:sk:component
+    if rule.param.startswith("stoch:"):
+        parts = rule.param.split(":")
+        if len(parts) >= 5:
+            try:
+                return indicators.get(f"stoch_{int(parts[1])}_{int(parts[2])}_{int(parts[3])}_{parts[4]}")
+            except (ValueError, IndexError):
+                return None
+    # ADX as reference: adx:period:component
+    if rule.param.startswith("adx:"):
+        parts = rule.param.split(":")
+        if len(parts) >= 3:
+            try:
+                component = parts[2]
+                if component in ("plus_di", "minus_di"):
+                    return indicators.get(f"adx_{int(parts[1])}_{component}")
+                return indicators.get(f"adx_{int(parts[1])}")
+            except (ValueError, IndexError):
                 return None
     return None
 

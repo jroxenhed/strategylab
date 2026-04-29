@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-**64 / 86 shipped.** Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+**67 / 87 shipped.** Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -21,7 +21,7 @@
 - [x] **A4** Indicator system redesign — replaced hardcoded indicator toggles with instance-based model (`IndicatorInstance[]`, `INDICATOR_DEFS` registry, generic `SubPane` + `PaneRegistry`). Add/remove/configure multiple instances of RSI, MACD, BB, ATR, MA, Volume with inline param editing. POST-based indicator endpoint, collapsible sidebar sections, chart-disabled gating. [Recap](docs/misc/A4-indicator-system-redesign-recap.md) · [Spec](docs/superpowers/specs/2026-04-20-indicator-system-redesign-design.md) · [Plan](docs/superpowers/plans/2026-04-20-indicator-system-redesign.md)
 - [x] **A5** Resizable, collapsible, double-click-to-maximize individual chart panes — react-resizable-panels with drag dividers, double-click maximize/restore (TV style), localStorage persistence via autoSaveId.
 - [x] **A6** Watchlist — right sidebar panel (TV style) with resizable divider, compact rows (price + daily change %), click-to-switch, batch quote endpoint with 30s polling, localStorage persistence.
-- [ ] **A7** [next] [easy] New indicator types via registry: Stochastic, VWAP (ATR shipped with A4)
+- [x] **A7** New indicator types via registry: Stochastic (%K/%D with 80/20 refs), VWAP (main chart overlay), ADX (+DI/-DI with 25 trend ref). Full chart rendering + param editing in sidebar.
 - [ ] **A8** Chart performance — large dataset optimizations (100K+ 5-min bars):
   - [ ] Equity curve detail mode should downsample to match chart view interval. Current attempt in Results.tsx `downsampleEquity()` doesn't take effect — needs debugging (effect may not re-fire, or chart instance not recreating). The macro buckets (D/W/M/Q/Y) work fine; only Detail mode is broken.
   - [ ] Viewport-only rendering — only pass the visible bar range to indicator series and markers instead of all 100K bars. lightweight-charts handles panning via `subscribeVisibleLogicalRangeChange`; feed data on demand.
@@ -52,7 +52,7 @@
 - [x] **B11** Saved-strategy library UX — inline rename + pin-to-top. Pinned strategies sort first (prefix in dropdown). Rename validates non-empty, no duplicates. Backward-compatible with old saves.
 - [x] **B12** Parameterized MAs in strategy rules — replace 5 hardcoded MA entries (ma8, ma21, ema20, ema50, ema200) with generic `ma(period, type)`. User picks any period + SMA/EMA. Backend computes on demand. Removes all Savitzky-Golay smoothing code. Foundation for B13/B14. [Ideation](docs/ideas/2026-04-21-strategy-builder-indicators-ideation.md) · [Spec](docs/superpowers/specs/2026-04-21-b12-parameterized-ma-rules-design.md) · [Plan](docs/superpowers/plans/2026-04-21-b12-parameterized-ma-rules.md)
 - [x] **B13** BB / ATR / ATR% / Volume as rule indicators — multi-output addressing in signal engine (BB upper/lower/middle/bandwidth/%B, ATR, ATR as % of close, Volume raw + SMA). Cross-reference support (price vs BB band, volume vs SMA). Frontend rule builder with param UIs for each.
-- [ ] **B14** [next] [medium] Stochastic + ADX rule indicators — new compute functions + registry entries. Stochastic %K/%D crossovers + overbought/oversold. ADX trend strength + directional (+DI/-DI). Exercises multi-output pattern from B13.
+- [x] **B14** Stochastic + ADX rule indicators — compute functions in `indicators.py`, signal engine integration (compute_indicators, resolve_series, resolve_ref), RuleRow UI with param editing. Stochastic: %K/%D crossover + overbought/oversold conditions. ADX: component selector (ADX/+DI/-DI) + trend strength conditions.
 - [x] **B15** Fix MACD crossover bug — auto-set `param: 'signal'` for MACD crossover conditions in `emptyRule()`, indicator change handler, condition change handler, and `migrateRule()` for existing saved strategies.
 - [x] **B16** Ghost trade markers — verified fixed. Interval change clears backtestResult (markers), view interval change recomputes markers via useMemo. No stale markers survive.
 - [x] **B17** Hover-to-inspect trade markers — tooltip was already implemented (B18 shipped it). Stripped text labels from main-chart markers; subpane markers retain labels. Arrows colored by P&L outcome. [Spec](docs/superpowers/specs/2026-04-23-b17-hover-trade-markers-design.md)
@@ -68,6 +68,7 @@
 - [x] **C5** Expected value / trade + profit factor — EV + PF headline numbers, 3-row decomposition waterfall (Wins / Losses / Net) inline with StatRows + histogram, mean/median toggle dropped in favor of inline dual values
 - [x] **C6** Strategy summary: min/max/avg gain and loss
 - [x] **C7** Summary readability pass — dropped `(mean)` suffix on EV/PF, renamed Max/Min gain/loss to Biggest/Smallest win/loss, added size hierarchy to top metrics row (Return + Final Value 22px primary, rest 13px secondary), removed median secondary values from avg rows
+- [x] **C8** B&H value in summary was inconsistent for short strategies with open positions at end — `final_value` used long formula (`capital + position * price`) instead of short formula (`capital + position * entry_price + unrealized`). Fixed to match equity curve calculation.
 
 ## D — Bots (live trading)
 

@@ -1,7 +1,7 @@
 import { Trash2, VolumeX, Volume2 } from 'lucide-react'
 import type { Rule } from '../../shared/types'
 
-export const INDICATORS = ['macd', 'rsi', 'price', 'ma', 'bb', 'atr', 'atr_pct', 'volume'] as const
+export const INDICATORS = ['macd', 'rsi', 'price', 'ma', 'bb', 'atr', 'atr_pct', 'volume', 'stochastic', 'adx'] as const
 
 export const CONDITIONS: Record<string, string[]> = {
   macd: ['crossover_up', 'crossover_down', 'crosses_above', 'crosses_below', 'above', 'below'],
@@ -13,6 +13,8 @@ export const CONDITIONS: Record<string, string[]> = {
   atr: ['above', 'below', 'crosses_above', 'crosses_below', 'rising', 'falling'],
   atr_pct: ['above', 'below', 'crosses_above', 'crosses_below', 'rising', 'falling'],
   volume: ['above', 'below', 'crosses_above', 'crosses_below', 'rising', 'falling'],
+  stochastic: ['crossover_up', 'crossover_down', 'above', 'below', 'crosses_above', 'crosses_below', 'turns_up_below', 'turns_down_above'],
+  adx: ['above', 'below', 'crosses_above', 'crosses_below', 'rising', 'falling'],
 }
 
 export const CONDITION_LABELS: Record<string, string> = {
@@ -39,6 +41,7 @@ export const OPTIONAL_VALUE = ['turns_up', 'turns_down']
 
 export const NEEDS_PARAM: Record<string, string[]> = {
   macd: ['crossover_up', 'crossover_down'],
+  stochastic: ['crossover_up', 'crossover_down'],
 }
 
 export const CAN_USE_PARAM: Record<string, string[]> = {
@@ -66,6 +69,14 @@ const INDICATOR_DISPLAY: Record<string, string> = {
   atr: 'ATR',
   atr_pct: 'ATR%',
   volume: 'VOL',
+  stochastic: 'STOCH',
+  adx: 'ADX',
+}
+
+const ADX_PARAM_LABELS: Record<string, string> = {
+  adx: 'ADX',
+  plus_di: '+DI',
+  minus_di: '-DI',
 }
 
 function indicatorLabel(rule: Rule): string {
@@ -94,14 +105,26 @@ function indicatorLabel(rule: Rule): string {
     }
     return 'Volume'
   }
+  if (rule.indicator === 'stochastic') {
+    const kp = rule.params?.k_period ?? 14
+    const dp = rule.params?.d_period ?? 3
+    const sk = rule.params?.smooth_k ?? 3
+    return `Stoch %K (${kp},${dp},${sk})`
+  }
+  if (rule.indicator === 'adx') {
+    const p = rule.params?.period ?? 14
+    const component = ADX_PARAM_LABELS[rule.param || 'adx'] || 'ADX'
+    return `${component} (${p})`
+  }
   return INDICATOR_DISPLAY[rule.indicator] || rule.indicator.toUpperCase()
 }
 
 function isRefParam(param?: string): boolean {
   if (!param) return false
   // These are cross-reference params that substitute for a numeric value
-  return param === 'signal' || param === 'close' || param.startsWith('ma:') ||
-    param.startsWith('bb:') || param.startsWith('atr:') || param.startsWith('volume_sma:')
+  return param === 'signal' || param === 'close' || param === 'd' || param.startsWith('ma:') ||
+    param.startsWith('bb:') || param.startsWith('atr:') || param.startsWith('volume_sma:') ||
+    param.startsWith('stoch:') || param.startsWith('adx:')
 }
 
 export function validateRules(rules: Rule[], label: string): string | null {
@@ -182,7 +205,9 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
         onChange={e => {
           const newInd = e.target.value as Rule['indicator']
           const firstCond = CONDITIONS[newInd][0]
-          const autoParam = NEEDS_PARAM[newInd]?.includes(firstCond) ? 'signal' : undefined
+          const autoParam = NEEDS_PARAM[newInd]?.includes(firstCond)
+            ? (newInd === 'stochastic' ? 'd' : 'signal')
+            : undefined
           const update: Partial<Rule> = { indicator: newInd, condition: firstCond, value: undefined, param: autoParam }
           if (newInd === 'ma') {
             update.params = { period: 20, type: 'ema' }
@@ -196,6 +221,12 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
           } else if (newInd === 'volume') {
             update.param = 'raw'
             update.params = { period: 20 }
+          } else if (newInd === 'stochastic') {
+            update.params = { k_period: 14, d_period: 3, smooth_k: 3 }
+            update.param = NEEDS_PARAM['stochastic']?.includes(firstCond) ? 'd' : undefined
+          } else if (newInd === 'adx') {
+            update.params = { period: 14 }
+            update.param = 'adx'
           } else {
             update.params = undefined
           }
@@ -308,10 +339,49 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
           style={{ ...styles.ruleSelect, width: 45 }}
         />
       )}
+      {rule.indicator === 'stochastic' && (
+        <>
+          <input type="number" min={2} max={500}
+            value={rule.params?.k_period ?? 14}
+            onChange={e => onChange({ ...rule, params: { ...rule.params, k_period: parseInt(e.target.value) || 14 } })}
+            style={{ ...styles.ruleSelect, width: 40 }} title="K Period"
+          />
+          <input type="number" min={2} max={500}
+            value={rule.params?.d_period ?? 3}
+            onChange={e => onChange({ ...rule, params: { ...rule.params, d_period: parseInt(e.target.value) || 3 } })}
+            style={{ ...styles.ruleSelect, width: 35 }} title="D Period"
+          />
+          <input type="number" min={1} max={50}
+            value={rule.params?.smooth_k ?? 3}
+            onChange={e => onChange({ ...rule, params: { ...rule.params, smooth_k: parseInt(e.target.value) || 3 } })}
+            style={{ ...styles.ruleSelect, width: 35 }} title="Smooth K"
+          />
+        </>
+      )}
+      {rule.indicator === 'adx' && (
+        <>
+          <select
+            value={rule.param || 'adx'}
+            onChange={e => onChange({ ...rule, param: e.target.value })}
+            style={styles.ruleSelect}
+          >
+            <option value="adx">ADX</option>
+            <option value="plus_di">+DI</option>
+            <option value="minus_di">-DI</option>
+          </select>
+          <input type="number" min={2} max={500}
+            value={rule.params?.period ?? 14}
+            onChange={e => onChange({ ...rule, params: { period: parseInt(e.target.value) || 14 } })}
+            style={{ ...styles.ruleSelect, width: 45 }}
+          />
+        </>
+      )}
       <select value={rule.condition} onChange={e => {
         const newCond = e.target.value
         const keepParam = CAN_USE_PARAM[rule.indicator]?.includes(newCond)
-        const forceParam = NEEDS_PARAM[rule.indicator]?.includes(newCond) ? 'signal' : undefined
+        const forceParam = NEEDS_PARAM[rule.indicator]?.includes(newCond)
+          ? (rule.indicator === 'stochastic' ? 'd' : 'signal')
+          : undefined
         onChange({ ...rule, condition: newCond, param: forceParam ?? (keepParam ? rule.param : undefined) })
       }} style={styles.ruleSelect}>
         {conditions.map(c => <option key={c} value={c}>{CONDITION_LABELS[c] || c}</option>)}

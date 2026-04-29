@@ -15,7 +15,7 @@ def _series_to_list(index, interval, series):
     ]
 
 
-IndicatorTypeLiteral = Literal["rsi", "macd", "bb", "atr", "ma", "volume"]
+IndicatorTypeLiteral = Literal["rsi", "macd", "bb", "atr", "ma", "volume", "stochastic", "vwap", "adx"]
 
 
 class InstanceRequest(BaseModel):

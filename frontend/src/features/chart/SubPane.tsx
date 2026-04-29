@@ -95,6 +95,27 @@ export default function SubPane({
       seriesMap.set(`${inst.id}:macd`, macdLine)
       const signalLine = chart.addSeries(LineSeries, { color: '#f0883e', lineWidth: 1, title: 'Signal' })
       seriesMap.set(`${inst.id}:signal`, signalLine)
+    } else if (indicatorType === 'stochastic') {
+      const inst = instances[0]
+      const kLine = chart.addSeries(LineSeries, { color: '#2962FF', lineWidth: 1, title: '%K' })
+      seriesMap.set(`${inst.id}:k`, kLine)
+      firstSeries = kLine
+      const dLine = chart.addSeries(LineSeries, { color: '#FF6D00', lineWidth: 1, title: '%D' })
+      seriesMap.set(`${inst.id}:d`, dLine)
+      // 80/20 reference lines
+      seriesMap.set('__ref80', chart.addSeries(LineSeries, { color: '#f85149', lineWidth: 1, lineStyle: 2 }))
+      seriesMap.set('__ref20', chart.addSeries(LineSeries, { color: '#26a641', lineWidth: 1, lineStyle: 2 }))
+    } else if (indicatorType === 'adx') {
+      const inst = instances[0]
+      const adxLine = chart.addSeries(LineSeries, { color: '#2962FF', lineWidth: 1, title: 'ADX' })
+      seriesMap.set(`${inst.id}:adx`, adxLine)
+      firstSeries = adxLine
+      const plusDI = chart.addSeries(LineSeries, { color: '#26a69a', lineWidth: 1, title: '+DI' })
+      seriesMap.set(`${inst.id}:plus_di`, plusDI)
+      const minusDI = chart.addSeries(LineSeries, { color: '#ef5350', lineWidth: 1, title: '-DI' })
+      seriesMap.set(`${inst.id}:minus_di`, minusDI)
+      // 25 reference line (above = trending)
+      seriesMap.set('__ref25', chart.addSeries(LineSeries, { color: '#8b949e', lineWidth: 1, lineStyle: 2 }))
     } else {
       instances.forEach((inst, idx) => {
         const color = inst.color ?? SUB_COLORS[idx % SUB_COLORS.length]
@@ -185,6 +206,32 @@ export default function SubPane({
       }
       sMap.get(`${inst.id}:macd`)?.setData(toLineData(data.macd ?? [], toET))
       sMap.get(`${inst.id}:signal`)?.setData(toLineData(data.signal ?? [], toET))
+    } else if (indicatorType === 'stochastic') {
+      const inst = instances[0]
+      const data = subData[inst.id]
+      if (!data) return
+      sMap.get(`${inst.id}:k`)?.setData(toLineData(data.k ?? [], toET))
+      sMap.get(`${inst.id}:d`)?.setData(toLineData(data.d ?? [], toET))
+      // 80/20 reference lines
+      const kArr = data.k ?? []
+      if (kArr.length > 0) {
+        const first = kArr[0].time, last = kArr[kArr.length - 1].time
+        sMap.get('__ref80')?.setData([{ time: toET(first as any) as any, value: 80 }, { time: toET(last as any) as any, value: 80 }])
+        sMap.get('__ref20')?.setData([{ time: toET(first as any) as any, value: 20 }, { time: toET(last as any) as any, value: 20 }])
+      }
+    } else if (indicatorType === 'adx') {
+      const inst = instances[0]
+      const data = subData[inst.id]
+      if (!data) return
+      sMap.get(`${inst.id}:adx`)?.setData(toLineData(data.adx ?? [], toET))
+      sMap.get(`${inst.id}:plus_di`)?.setData(toLineData(data.plus_di ?? [], toET))
+      sMap.get(`${inst.id}:minus_di`)?.setData(toLineData(data.minus_di ?? [], toET))
+      // 25 reference line
+      const adxArr = data.adx ?? []
+      if (adxArr.length > 0) {
+        const first = adxArr[0].time, last = adxArr[adxArr.length - 1].time
+        sMap.get('__ref25')?.setData([{ time: toET(first as any) as any, value: 25 }, { time: toET(last as any) as any, value: 25 }])
+      }
     } else {
       for (const inst of instances) {
         const data = subData[inst.id]

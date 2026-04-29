@@ -4,6 +4,14 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-04-29
+
+- **[C8](TODO.md#c--strategy-summary--analytics)** Fix short strategy final value mismatch. `final_value` used long formula for shorts with open positions, causing wrong Return % and vs B&H. Now matches equity curve calculation.
+
+- **[A7](TODO.md#a--charts--indicators)** New chart indicators: Stochastic (%K/%D lines + 80/20 reference), VWAP (main chart overlay, orange), ADX (ADX/+DI/-DI lines + 25 trend reference). Full sidebar param editing + indicator registry. Three parallel worktree agents for backend compute, frontend rendering, and signal engine.
+
+- **[B14](TODO.md#b--strategy-engine--rules)** Stochastic + ADX as rule indicators. Backend: `compute_stochastic`, `compute_vwap`, `compute_adx` in `indicators.py`. Signal engine: stoch/adx specs, resolve_series/resolve_ref with %K/%D crossover pattern (matching MACD). Frontend: RuleRow with param UIs, NEEDS_PARAM for stochastic crossovers.
+
 ## 2026-04-28
 
 - **[D10](TODO.md#d--bots-live-trading)** compact sparkline alignment fix. Multiple iterations. Real root cause: compact row was a flat flex layout where sparkline position depended on variable-width text before it. Fix: restructured to two-column layout mirroring expanded mode — `flex: 1` left column (text/buttons) + `flex: 0 0 60%` right column (sparkline). Also fixed overflow menu z-index (removed `scale: '1'` creating stacking contexts on idle SortableBotCard wrappers) and moved buttons before sparkline.
