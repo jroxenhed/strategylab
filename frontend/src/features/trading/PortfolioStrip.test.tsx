@@ -8,7 +8,6 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { createElement } from 'react'
 import type { BotSummary } from '../../shared/types'
-import { INFO_COLUMN_FLEX } from './ui'
 
 // ---------------------------------------------------------------------------
 // Mock: lightweight-charts (MiniSparkline dependency)
