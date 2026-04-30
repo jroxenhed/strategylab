@@ -83,6 +83,17 @@ Go through this checklist against every changed file:
 | P2 | Edge case, perf issue, maintainability trap | Fix if straightforward, otherwise note in PR |
 | P3 | Minor, cosmetic | Defer |
 
+## Fix-Review Iteration Loop
+
+Fixes can introduce new bugs. After applying safe_auto fixes:
+
+1. Re-run `npm run build`. If it fails, fix and rebuild.
+2. Re-run **Pass 1 (Correctness)** and **Pass 2 (Integration)** on the lines you just changed. Only the changed lines — don't re-review the entire file.
+3. If new findings emerge, fix them and repeat from step 1.
+4. **Max 2 iterations.** If you're still finding issues after 2 fix-review cycles, stop — flag the remaining findings in NEXT_RUN.md for human review rather than risk an infinite loop of cascading fixes.
+
+The goal: every line of code that ships has been reviewed at least once after its final edit.
+
 ## Autofix Rules
 
 - **safe_auto**: Fix immediately. Local, deterministic, no behavior change for correct inputs. Examples: missing null check, wrong import path, missing type export.
