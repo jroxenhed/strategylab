@@ -1,14 +1,16 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createChart, BaselineSeries, LineSeries, HistogramSeries, ColorType } from 'lightweight-charts'
 import type { IChartApi } from 'lightweight-charts'
-import type { BacktestResult, SignalTraceEntry, StrategyRequest, SessionAnalyticsBucket } from '../../shared/types'
+import type { BacktestResult, SignalTraceEntry, StrategyRequest, SessionAnalyticsBucket, MonteCarloResult } from '../../shared/types'
 import { useMacro } from '../../shared/hooks/useMacro'
 import { fmtDateTimeET, toDisplayTime, useTimezone } from '../../shared/utils/time'
 import { normaliseToPercent, applyLog } from '../../shared/utils/chartScale'
 import PnlHistogram from './PnlHistogram'
 import MacroEquityChart from './MacroEquityChart'
+import MonteCarloChart from './MonteCarloChart'
+import RollingWindowChart from './RollingWindowChart'
 
-export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace' | 'session'
+export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace' | 'session' | 'monte_carlo' | 'rolling'
 
 function fmtDate(d: string | number | undefined): string {
   if (typeof d === 'number') return fmtDateTimeET(d)
@@ -79,6 +81,25 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
   const chartRef = useRef<HTMLDivElement>(null)
   const sells = trades.filter(t => t.type === 'sell' || t.type === 'cover')
   const { data: macroData, isLoading: macroLoading } = useMacro(lastRequest, bucket)
+
+  const [mcResult, setMcResult] = useState<MonteCarloResult | null>(null)
+  const [mcLoading, setMcLoading] = useState(false)
+
+  async function fetchMonteCarlo() {
+    if (mcLoading || sells.length < 2) return
+    const pnls = sells.map(t => t.pnl ?? 0)
+    setMcLoading(true)
+    try {
+      const res = await fetch('/api/backtest/montecarlo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pnls, initial_capital: summary.initial_capital, n_simulations: 1000 }),
+      })
+      if (res.ok) setMcResult(await res.json())
+    } finally {
+      setMcLoading(false)
+    }
+  }
 
   useEffect(() => {
     if (activeTab !== 'equity' || bucket !== null || !chartRef.current || equity_curve.length === 0) return
@@ -264,17 +285,39 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
     }
   }, [activeTab, bucket, equity_curve, summary.total_return_pct, mainChart, showBaseline, result.baseline_curve, logScale, viewInterval, backtestInterval, tzMode])
 
+  useEffect(() => {
+    setMcResult(null)
+    setMcLoading(false)
+  }, [result])
+
+  useEffect(() => {
+    if (activeTab === 'monte_carlo' && !mcResult && !mcLoading) {
+      fetchMonteCarlo()
+    }
+  }, [activeTab])
+
   return (
     <div style={styles.container}>
       <div style={{ ...styles.tabBar, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex' }}>
-          {(['summary', 'equity', 'trades', ...(signal_trace ? ['trace'] : []), ...(result.session_analytics && result.session_analytics.length > 0 ? ['session'] : [])] as ResultsTab[]).map(tab => (
+          {(['summary', 'equity', 'trades',
+             ...(signal_trace ? ['trace'] : []),
+             ...(result.session_analytics && result.session_analytics.length > 0 ? ['session'] : []),
+             ...(sells.length >= 2 ? ['monte_carlo'] : []),
+             ...(sells.length >= 5 ? ['rolling'] : []),
+          ] as ResultsTab[]).map(tab => (
             <button
               key={tab}
               onClick={() => onTabChange(tab)}
               style={{ ...styles.tab, ...(activeTab === tab ? styles.tabActive : {}) }}
             >
-              {tab === 'summary' ? 'Summary' : tab === 'equity' ? 'Equity Curve' : tab === 'trades' ? `Trades (${sells.length})` : tab === 'session' ? 'Session' : `Signal Trace (${signal_trace!.length})`}
+              {tab === 'summary' ? 'Summary'
+                : tab === 'equity' ? 'Equity Curve'
+                : tab === 'trades' ? `Trades (${sells.length})`
+                : tab === 'session' ? 'Session'
+                : tab === 'monte_carlo' ? 'Monte Carlo'
+                : tab === 'rolling' ? 'Rolling'
+                : `Signal Trace (${signal_trace!.length})`}
             </button>
           ))}
         </div>
@@ -524,6 +567,29 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
               )
             })}
           </>)}
+        </div>
+      )}
+
+      {activeTab === 'monte_carlo' && (
+        <div style={{ padding: '0 16px 16px' }}>
+          {mcLoading && <div style={{ color: '#8b949e', fontSize: 12, padding: 16 }}>Running {(1000).toLocaleString()} simulations…</div>}
+          {!mcLoading && !mcResult && (
+            <div style={{ padding: 16 }}>
+              <button
+                onClick={fetchMonteCarlo}
+                style={{ padding: '6px 14px', fontSize: 12, background: '#21262d', border: '1px solid #30363d', borderRadius: 6, color: '#e6edf3', cursor: 'pointer' }}
+              >
+                Run Monte Carlo (1,000 simulations)
+              </button>
+            </div>
+          )}
+          {mcResult && <MonteCarloChart mcResult={mcResult} initialCapital={summary.initial_capital} />}
+        </div>
+      )}
+
+      {activeTab === 'rolling' && (
+        <div style={{ padding: '0 16px 16px' }}>
+          <RollingWindowChart trades={trades} />
         </div>
       )}
 

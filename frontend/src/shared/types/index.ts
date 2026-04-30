@@ -157,6 +157,21 @@ export interface SessionAnalyticsBucket {
   avg_pnl_pct: number
 }
 
+export interface MonteCarloResult {
+  num_simulations: number
+  num_trades: number
+  curves: {
+    p5: number[]
+    p25: number[]
+    p50: number[]
+    p75: number[]
+    p95: number[]
+  }
+  final_value: { p5: number; p25: number; p50: number; p75: number; p95: number }
+  max_drawdown_pct: { p5: number; p25: number; p50: number; p75: number; p95: number }
+  ruin_probability: number
+}
+
 export interface BacktestResult {
   summary: {
     initial_capital: number
