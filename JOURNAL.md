@@ -4,6 +4,12 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-04-30
+
+- **[C11](TODO.md#c--strategy-summary--analytics)** Monte Carlo simulation. New `POST /api/backtest/montecarlo` endpoint (`backend/routes/monte_carlo.py`) accepts a list of exit-trade PnLs + initial capital, runs 1,000 random shuffles, and returns percentile curves (p5/p25/p50/p75/p95) over the trade sequence plus final-value percentiles, max-drawdown percentiles, and probability of ruin. New `MonteCarloChart.tsx` SVG component renders shaded percentile bands. New "Monte Carlo" tab in Results appears when ≥ 2 completed trades; auto-fetches on first visit, resets on new backtest run.
+
+- **[C12](TODO.md#c--strategy-summary--analytics)** Rolling performance window. New `RollingWindowChart.tsx` computes rolling win rate, avg PnL, and Sharpe ratio over a sliding N-trade window entirely client-side from the existing trades array. Window selector (5 / 10 / 20 / 50 trades). Three stacked SVG mini-charts with reference lines (50% win rate, $0 PnL, 1.0 Sharpe). New "Rolling" tab in Results appears when ≥ 5 completed trades.
+
 ## 2026-04-29
 
 - **[E5](TODO.md#e--discovery)** Quick backtest endpoint. New `POST /api/backtest/quick` returns summary-only stats (return %, Sharpe, win rate, num trades, max drawdown, `signal_now`, `last_signal_date`) without equity curve or trade list. Batch variant `POST /api/backtest/quick/batch` runs sequentially over a symbol list. Registered in `main.py` alongside existing routers. Route file: `backend/routes/backtest_quick.py`.
