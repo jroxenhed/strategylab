@@ -59,6 +59,12 @@ Do NOT flag:
 - Generic "consider adding" without a concrete failure mode
 - Suggestions that restate what the code already does
 
+## Known Pitfalls (from past overnight builds)
+
+Flag these if introduced:
+- **Raw `fetch()` instead of `api` client** — the project uses an axios client at `frontend/src/api/client.ts` with `baseURL: 'http://localhost:8000'`. Raw `fetch('/api/...')` hits the Vite dev server (port 5173) in development, not the backend. Always use `import { api } from '../../api/client'` and `api.get()` / `api.post()`.
+- **Missing error handling on API calls** — `if (res.ok)` with no else/catch means failures are invisible to the user. At minimum, reset loading state in a `finally` block.
+
 ## Diff Scope Tiers
 
 - **Primary**: Lines added or modified. Main focus. Full confidence.

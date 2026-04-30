@@ -1,37 +1,43 @@
-# Overnight Builder — Next Steps (2026-04-30)
+# Overnight Builder — Status (2026-04-30)
 
-## Where we left off
+## Current State: Operational
 
-The overnight builder **works** — it explored, implemented, build-verified, and committed C11, C12, and D21 in a single autonomous run. The only blocker is **git push fails with 403** from the remote sandbox's git proxy. The OAuth token doesn't have write scope.
+The overnight builder is fully working end-to-end. It picks tasks from TODO.md, implements them, self-reviews, pushes to a `claude/` branch, and opens a PR on GitHub.
 
-## What needs fixing
+**First successful delivery:** PR #4 — C11 (Monte Carlo simulation) + C12 (Rolling performance window). Merged same day.
 
-1. **Push credentials for remote routines.** Filed with Anthropic (see below). Until fixed, the builder can implement and commit but can't push.
+## Setup Checklist (for reference)
 
-2. **Workaround: `gh pr create` instead of `git push`.** The GitHub CLI might use a different auth path. Update the routine prompt to create a PR instead of pushing to main. You'd merge the PR manually (or auto-merge). This is actually safer anyway — you review the PR before it hits main.
+1. **Claude GitHub App** — must be installed on your GitHub account at https://github.com/apps/claude with Contents: Read & write permission. Without this, the sandbox git proxy can't authenticate pushes (403).
+2. **Routine permissions** — "Allow unrestricted git push" toggle ON in the routine's Permissions tab at https://claude.ai/code/routines. Without this, only `claude/` prefixed branches are allowed.
+3. **Branch naming** — routine prompt uses `claude/overnight-YYYY-MM-DD`. The `claude/` prefix is required by the sandbox git proxy's default branch restrictions.
 
-3. **Second run (1:33) also stranded.** Same 403. Those commits are lost when the sandbox expires.
+## Routine
 
-## To resume
+- **ID:** `trig_01VAJyHdiq4TKiCiBbp1wCu3`
+- **Schedule:** 00:00 UTC / 02:00 CEST daily
+- **Model:** Sonnet 4.6
+- **Manage:** https://claude.ai/code/routines
 
-1. Check if Anthropic responded to the support request
-2. Try updating the routine to use `gh pr create` instead of `git push origin main`
-3. If that works, enable the nightly schedule
-4. If not, wait for Anthropic to fix push credentials
+## Daily Workflow
 
-## What the builder successfully did (first run)
+1. Tag TODO items with `[next]` (max 3 per run)
+2. Builder runs at 02:00 CEST
+3. Morning: check GitHub for PR from `claude/overnight-*` branch
+4. Review diff, merge if good
+5. Pull locally, test, fix any issues
 
-- Read CLAUDE.md, NEXT_RUN.md, TODO.md, JOURNAL.md
-- Picked C11, C12, D21 (all [next] tagged)
-- Implemented C11: Monte Carlo backend endpoint + MonteCarloResults.tsx frontend
-- Implemented C12: Rolling performance endpoint + RollingChart.tsx
-- Implemented D21: Auto-pause on drawdown in bot_runner
-- Build-verified all three (npm run build passed)
-- Self-reviewed using overnight-review-protocol.md
-- Committed all changes (6 commits locally)
-- Failed to push (403 from git proxy)
+## Known Issues Found in First Delivery
 
-## Routine ID
+- **`fetch()` vs `api` client** — the builder used raw `fetch('/api/...')` instead of the project's axios `api` client. Raw fetch hits the Vite dev server (port 5173), not the backend (8000). No proxy is configured. Silently fails. Fixed manually post-merge. The review protocol now flags this pattern.
+- **Monte Carlo percentile bug** — all final value percentiles show the same number. Tagged as C13 `[next]` for the builder to fix.
 
-`trig_01VAJyHdiq4TKiCiBbp1wCu3`
-https://claude.ai/code/routines
+## Steering
+
+Edit `NEXT_RUN.md` to override task selection, add constraints, or skip items for the next run.
+
+## Resolved Issues
+
+- ~~Push 403 from sandbox git proxy~~ — Root cause: Claude GitHub App not installed. Installed at https://github.com/apps/claude with write access.
+- ~~Branch prefix restriction~~ — Default sandbox only allows `claude/` prefixed branches. Toggle or use the prefix.
+- ~~`gh pr create` also 403'd~~ — Same root cause (missing GitHub App). Both `git push` and `gh` work now.
