@@ -36,4 +36,21 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-_Updated automatically by the overnight builder._
+**Date:** 2026-04-30
+**Branch:** `claude/dreamy-albattani-cDc4K`
+**Commit:** `499f53e`
+
+**Shipped:**
+- **C11** Monte Carlo simulation — `POST /api/backtest/montecarlo`, percentile bands (p5–p95), probability of ruin, `MonteCarloChart.tsx` SVG component, new Results tab
+- **C12** Rolling performance window — client-side rolling win rate / avg PnL / Sharpe over N-trade windows, `RollingWindowChart.tsx`, new Results tab
+
+**Self-review fixes applied:**
+- Reset `mcResult` state when backtest result changes (stale data after re-run)
+- Renamed `window` → `windowSize` in RollingWindowChart (shadowed browser global)
+
+**Deferred:**
+- D21 (strategy auto-pause on drawdown) — still tagged `[next]`, pick up next run
+
+**Review concerns flagged:** None above P2 threshold. Both P2/P3 findings were safe_auto and applied before commit.
+
+**Next up:** D21 — strategy auto-pause on drawdown (bot safety net)
