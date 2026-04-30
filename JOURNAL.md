@@ -6,6 +6,10 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-04-30
 
+- **Overnight builder operational.** Push auth resolved — required installing the Claude GitHub App on GitHub (`github.com/apps/claude`) with Contents: Read & write permission. Routine prompt updated to use `claude/` prefixed branches + `gh pr create`. First successful delivery: PR #4 (C11 + C12) merged.
+
+- **[C13](TODO.md#c--strategy-summary--analytics)** Monte Carlo bug fix: overnight builder used raw `fetch()` instead of project `api` client — requests hit Vite dev server (port 5173) instead of backend (8000), failing silently. Fixed to use `api.post()`.
+
 - **[C11](TODO.md#c--strategy-summary--analytics)** Monte Carlo simulation. New `POST /api/backtest/montecarlo` endpoint (`backend/routes/monte_carlo.py`) accepts a list of exit-trade PnLs + initial capital, runs 1,000 random shuffles, and returns percentile curves (p5/p25/p50/p75/p95) over the trade sequence plus final-value percentiles, max-drawdown percentiles, and probability of ruin. New `MonteCarloChart.tsx` SVG component renders shaded percentile bands. New "Monte Carlo" tab in Results appears when ≥ 2 completed trades; auto-fetches on first visit, resets on new backtest run.
 
 - **[C12](TODO.md#c--strategy-summary--analytics)** Rolling performance window. New `RollingWindowChart.tsx` computes rolling win rate, avg PnL, and Sharpe ratio over a sliding N-trade window entirely client-side from the existing trades array. Window selector (5 / 10 / 20 / 50 trades). Three stacked SVG mini-charts with reference lines (50% win rate, $0 PnL, 1.0 Sharpe). New "Rolling" tab in Results appears when ≥ 5 completed trades.

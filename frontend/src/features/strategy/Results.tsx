@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createChart, BaselineSeries, LineSeries, HistogramSeries, ColorType } from 'lightweight-charts'
 import type { IChartApi } from 'lightweight-charts'
 import type { BacktestResult, SignalTraceEntry, StrategyRequest, SessionAnalyticsBucket, MonteCarloResult } from '../../shared/types'
+import { api } from '../../api/client'
 import { useMacro } from '../../shared/hooks/useMacro'
 import { fmtDateTimeET, toDisplayTime, useTimezone } from '../../shared/utils/time'
 import { normaliseToPercent, applyLog } from '../../shared/utils/chartScale'
@@ -90,12 +91,9 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
     const pnls = sells.map(t => t.pnl ?? 0)
     setMcLoading(true)
     try {
-      const res = await fetch('/api/backtest/montecarlo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pnls, initial_capital: summary.initial_capital, n_simulations: 1000 }),
-      })
-      if (res.ok) setMcResult(await res.json())
+      const res = await api.post('/api/backtest/montecarlo', { pnls, initial_capital: summary.initial_capital, n_simulations: 1000 })
+      setMcResult(res.data)
+    } catch {
     } finally {
       setMcLoading(false)
     }

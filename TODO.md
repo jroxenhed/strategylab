@@ -74,6 +74,7 @@
 - [ ] **C10** Intraday session analytics — break down strategy performance by time-of-day (30-min buckets). Heatmap or histogram of win rate / EV by session window (open, midday, power hour). Trade timestamps already exist; cheap to compute, actionable for trading hours filters.
 - [x] **C11** Monte Carlo simulation — run N random permutations of trade sequence to estimate confidence intervals on returns, max drawdown, and probability of ruin. Critical for small-account sizing where a single bad drawdown sequence matters.
 - [x] **C12** Rolling performance window — show Sharpe, win rate, and return over rolling N-trade windows overlaid on equity curve. Reveals regime changes and strategy decay that aggregate stats hide.
+- [ ] [next] **C13** Monte Carlo bug fixes — (1) final value percentiles all show the same number (should spread); header stats may be pulling from wrong field. (2) Used raw `fetch()` instead of project `api` client (already fixed locally, needs committing).
 
 ## D — Bots (live trading)
 
