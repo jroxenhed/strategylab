@@ -1,106 +1,100 @@
 # Overnight Builder Review Protocol
 
-Distilled from ce:review's methodology. The overnight builder reads this file and includes it in review agent prompts.
+Single-pass self-review protocol for the overnight builder. No subagents available — this protocol compensates by being structured and exhaustive. Read this file before reviewing your own changes.
+
+## How to Use
+
+After implementing a feature and before committing:
+1. Run through each review pass below **in order**
+2. For each pass, re-read every changed file with that lens
+3. Log findings using the output format
+4. Fix anything classified as `safe_auto`
+5. If any P0 findings: commit to a separate branch, do NOT push to main
+
+The passes are ordered from highest-value (catches real bugs) to lowest (catches style issues). Don't skip passes — the `fetch()` vs `api` bug that shipped in the first overnight build would have been caught by Pass 3 (Project Standards).
 
 ## Output Format
 
-Return JSON:
-```json
-{
-  "reviewer": "correctness",
-  "findings": [
-    {
-      "title": "Short issue title (10 words max)",
-      "severity": "P0|P1|P2|P3",
-      "file": "relative/path.tsx",
-      "line": 42,
-      "confidence": 0.85,
-      "autofix_class": "safe_auto|gated_auto|manual|advisory",
-      "suggested_fix": "Concrete fix or null",
-      "pre_existing": false
-    }
-  ],
-  "residual_risks": ["..."],
-  "testing_gaps": ["..."]
-}
+After all passes, write a summary in this format (as a comment in the commit message or in NEXT_RUN.md):
+
 ```
+Review: X findings (P0: N, P1: N, P2: N), Y auto-fixed
+```
+
+For P1+ findings, include one-line descriptions. This gives the human reviewer a quick signal of review quality.
+
+## Pass 1: Correctness (re-read every changed file)
+
+Ask these questions for every function/block you wrote:
+
+- **Off-by-one**: Are loop bounds correct? Is `>=` vs `>` right? Array index 0 vs 1?
+- **Null/undefined paths**: What happens if the data is empty, null, or missing a field? Does `?.` or a guard exist where needed?
+- **State management**: Does React state update correctly? Are `useState` initial values right? Do `useEffect` dependency arrays include all referenced variables?
+- **Edge cases**: What if there are 0 trades? 1 trade? 10,000 trades? Does the code handle the boundaries the UI gates don't cover?
+- **Logic inversion**: Is the conditional checking what you think? `&&` vs `||`, `>` vs `<`, `true` vs `false`?
+- **Async correctness**: Are promises awaited? Can race conditions occur between concurrent calls? Is loading state reset in `finally`?
+- **Type mismatches**: Are numbers being compared to strings? Is a value that could be `undefined` being used without a check?
+
+## Pass 2: Integration (how your code connects to existing code)
+
+- **Import paths**: Do all imports resolve? Are you importing from the right module?
+- **API contract**: Does the frontend send exactly what the backend expects? Field names, types, nesting?
+- **API client**: All frontend HTTP calls MUST use `import { api } from '../../api/client'` (axios, baseURL `http://localhost:8000`). NEVER use raw `fetch('/api/...')` — it hits the Vite dev server in development and silently fails. This is the #1 pitfall from past builds.
+- **Response handling**: Does the frontend handle the actual response shape the backend returns? Check field names match between Pydantic model and TypeScript type.
+- **Props threading**: Are all required props passed to components? Does the parent have the data the child expects?
+- **Type definitions**: If you added a new type to `shared/types/index.ts`, did you export it? If the backend returns new fields, did you add them to the TypeScript type?
+
+## Pass 3: Project Standards (re-read CLAUDE.md, check each rule)
+
+Go through this checklist against every changed file:
+
+- [ ] **Timezone**: All unix timestamps displayed to the user pass through `toET()` or `toDisplayTime()`. Daily date strings pass through unchanged.
+- [ ] **priceScaleId**: Any new chart series has an explicit `priceScaleId` (v5 creates independent scales without one).
+- [ ] **yf.download()**: Never used — always `yf.Ticker(symbol).history()` via `_fetch()`.
+- [ ] **Fire-and-forget**: Non-critical async side-effects use `asyncio.create_task()`, never `await` in polling loops.
+- [ ] **Sync callbacks**: Callbacks from non-asyncio threads use `asyncio.run_coroutine_threadsafe(coro, self._loop)`, not `ensure_future`.
+- [ ] **Bot ID tagging**: All `_log_trade()` calls include `bot_id`. All `compute_realized_pnl()` calls filter by `bot_id`.
+- [ ] **Chart teardown**: Refs nulled before `chart.remove()`. `syncWidths` reads refs dynamically. Try/catch around sibling chart operations.
+- [ ] **Build command**: Verified with `npm run build` (runs `tsc -b`), NOT `tsc --noEmit`.
+
+## Pass 4: Completeness (does the code do what the TODO says?)
+
+- Re-read the TODO item description. Does the implementation match the spec?
+- Are there UI elements described in the TODO that you didn't build?
+- Are there backend fields that the frontend ignores or vice versa?
+- Does the feature gate correctly (e.g., "visible when ≥3 trades" — is that check present)?
+- Is loading state shown while async work happens?
+- Is error state handled (not just swallowed silently)?
+
+## Pass 5: Robustness
+
+- **Division by zero**: Any arithmetic with user-derived denominators (trade count, price, percentage)?
+- **Large data**: Will this work with 1,000 trades? 10,000? Does it create unnecessary copies of large arrays?
+- **Memory**: Are there event listeners or subscriptions that need cleanup? `useEffect` return functions?
+- **Re-render safety**: Will this cause infinite re-renders? (e.g., creating new objects/arrays in render that trigger `useEffect`)
+- **SVG/chart rendering**: Does the chart handle empty data gracefully? Zero-height? Missing labels?
 
 ## Severity Scale
 
 | Level | Meaning | Action |
 |-------|---------|--------|
-| P0 | Critical breakage, data loss, exploitable vulnerability | Must fix before push |
-| P1 | High-impact defect hit in normal usage | Should fix |
-| P2 | Moderate issue (edge case, perf, maintainability trap) | Fix if straightforward |
-| P3 | Low-impact, minor | Defer |
+| P0 | Critical breakage, data loss, security hole | Must fix. Commit to separate branch if uncertain. |
+| P1 | Bug hit in normal usage | Fix before push |
+| P2 | Edge case, perf issue, maintainability trap | Fix if straightforward, otherwise note in PR |
+| P3 | Minor, cosmetic | Defer |
 
-## Confidence Gate
+## Autofix Rules
 
-- Below 0.60: Do NOT report. Too speculative.
-- 0.60-0.69: Only if clearly actionable with evidence.
-- 0.70-0.84: Real and important. Report.
-- 0.85-1.00: Certain. Report.
-- Exception: P0 at 0.50+ survives the gate.
+- **safe_auto**: Fix immediately. Local, deterministic, no behavior change for correct inputs. Examples: missing null check, wrong import path, missing type export.
+- **gated_auto**: Fix exists but changes API contract or user-visible behavior. Flag in commit message.
+- **manual**: Needs design decision. Note in NEXT_RUN.md for human review.
 
-## Autofix Classification
+## Known Pitfalls (accumulated from past builds)
 
-- **safe_auto**: Local, deterministic fix. Examples: missing null check, off-by-one, dead code removal, extract duplicated helper. The fixer applies these automatically.
-- **gated_auto**: Fix exists but changes contracts/behavior/permissions. Commit but do NOT push — flag for human review.
-- **manual**: Needs design decisions. Flag in report, don't fix.
-- **advisory**: Informational only. No code action.
+These are real bugs that shipped. Check for them explicitly:
 
-## False-Positive Suppression
+1. **Raw `fetch()` instead of `api` client** — P1, silent failure in dev. Use `api.get()` / `api.post()` from `frontend/src/api/client.ts`.
+2. **Silent error swallowing** — `if (res.ok) setResult(data)` with no else means the user sees nothing on failure. At minimum, reset loading state in `finally`. Prefer showing an error message.
+3. **Identical percentile values** — When computing percentiles across simulations, verify the shuffle actually produces different sequences. If all percentiles are identical, the randomization or aggregation has a bug.
 
-Do NOT flag:
-- Pre-existing issues unrelated to this diff
-- Style nitpicks a linter/formatter would catch
-- Code that looks wrong but is intentional (check Key Bugs Fixed in CLAUDE.md)
-- Issues already handled elsewhere (check callers, guards, middleware)
-- Generic "consider adding" without a concrete failure mode
-- Suggestions that restate what the code already does
-
-## Known Pitfalls (from past overnight builds)
-
-Flag these if introduced:
-- **Raw `fetch()` instead of `api` client** — the project uses an axios client at `frontend/src/api/client.ts` with `baseURL: 'http://localhost:8000'`. Raw `fetch('/api/...')` hits the Vite dev server (port 5173) in development, not the backend. Always use `import { api } from '../../api/client'` and `api.get()` / `api.post()`.
-- **Missing error handling on API calls** — `if (res.ok)` with no else/catch means failures are invisible to the user. At minimum, reset loading state in a `finally` block.
-
-## Diff Scope Tiers
-
-- **Primary**: Lines added or modified. Main focus. Full confidence.
-- **Secondary**: Unchanged code in the same function that interacts with changes. Report if the change creates the bug.
-- **Pre-existing**: Issues in unchanged, unrelated code. Mark `pre_existing: true`. Don't count toward verdict.
-
-## Intent Verification
-
-Compare code against the task description from TODO.md. If the code does something the task doesn't describe, or fails to do what the task promises, flag it. Mismatches between intent and implementation are the highest-value findings.
-
-## Review Personas
-
-Dispatch these as parallel agents. Each gets the diff, file list, intent, and this protocol.
-
-### Always-on (every review):
-
-**Correctness** — Logic errors, edge cases, state management bugs, error propagation failures, off-by-ones, null/undefined paths, race conditions.
-
-**Maintainability** — Dead code, coupling between unrelated modules, duplicated logic, naming that obscures intent, premature abstraction, unnecessary indirection.
-
-**Project Standards** — Read CLAUDE.md. Check: timezone handling (toET/toDisplayTime on all timestamps), priceScaleId rules, Key Bugs Fixed patterns (yf.download, create_task not await, run_coroutine_threadsafe, bot_id tagging). Flag violations of any documented pattern.
-
-### Conditional (add when relevant):
-
-**Security** — When diff touches endpoints, user input, external API calls, auth, env vars.
-
-**Reliability** — When diff touches async code, error handling, retries, polling loops, external service calls.
-
-**TypeScript** — When diff touches .ts/.tsx. Type safety, React hooks (dependency arrays, cleanup), unsafe casts, proper use of lightweight-charts API.
-
-**Python** — When diff touches .py. Type hints, async patterns, Pythonic idioms, proper exception handling.
-
-## Synthesis Rules
-
-After all reviewers return:
-1. Deduplicate: same file + line ±3 + similar title = merge, keep highest severity/confidence
-2. Cross-reviewer agreement: 2+ reviewers flag same issue → boost confidence by 0.10
-3. Route: safe_auto → fixer queue. gated_auto/P0 → commit but don't push. advisory → report only.
-4. Sort: P0 first → confidence desc → file → line
+As new pitfalls are discovered, add them here so future builds check for them.
