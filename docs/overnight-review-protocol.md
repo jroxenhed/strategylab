@@ -107,5 +107,6 @@ These are real bugs that shipped. Check for them explicitly:
 1. **Raw `fetch()` instead of `api` client** — P1, silent failure in dev. Use `api.get()` / `api.post()` from `frontend/src/api/client.ts`.
 2. **Silent error swallowing** — `if (res.ok) setResult(data)` with no else means the user sees nothing on failure. At minimum, reset loading state in `finally`. Prefer showing an error message.
 3. **Identical percentile values** — When computing percentiles across simulations, verify the shuffle actually produces different sequences. If all percentiles are identical, the randomization or aggregation has a bug.
+4. **Missing fields in `UpdateBotRequest`** — When adding a new field to `BotConfig`, you MUST also add it to `UpdateBotRequest` in `backend/routes/bots.py`. Pydantic's `extra="ignore"` silently drops unknown fields, so the frontend edit appears to work but the value is never saved. This is documented in CLAUDE.md Key Bugs Fixed ("Silent drop of bot config fields") and has shipped twice now.
 
 As new pitfalls are discovered, add them here so future builds check for them.

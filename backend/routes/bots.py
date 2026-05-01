@@ -50,6 +50,7 @@ class UpdateBotRequest(BaseModel):
     buy_logic: Optional[str] = None
     sell_logic: Optional[str] = None
     max_spread_bps: Optional[float] = None
+    drawdown_threshold_pct: Optional[float] = None
     data_source: Optional[str] = None
     direction: Optional[str] = None
     broker: Optional[str] = None
