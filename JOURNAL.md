@@ -4,6 +4,14 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-01
+
+- **[C13](TODO.md#c--strategy-summary--analytics)** Monte Carlo bug fixes. (1) `final_value` percentile stats were all identical — replaced with `min_equity` (minimum equity touched during each simulation), which spreads meaningfully across shuffles. Backend: `min_equities` tracked per-sim, returned as `min_equity` in response. Frontend: MonteCarloChart.tsx updated to display min equity stats with correct color semantics (p5=red worst, p95=green best). (2) `fetch()` → `api.post()` fix was already committed in prior session.
+
+- **[C14](TODO.md#c--strategy-summary--analytics)** Trade duration histogram. New `TradeHoldDurationHistogram.tsx` component (207 lines): SVG histogram of hold times, buckets colored by win/loss dominance, summary row showing median/avg-win/avg-loss hold times. Intraday uses hours (unix timestamp diff / 3600), daily uses calendar days. "Hold Time" tab in Results appears when ≥2 completed trades.
+
+- **[D21](TODO.md#d--bots-live-trading)** Strategy auto-pause on drawdown. `BotConfig.drawdown_threshold_pct: Optional[float]`. When set, `_tick()` checks peak-to-trough PnL vs `allocated_capital` after each position closes — pauses bot with `status="error"` + `pause_reason` message and fires `notify_error` (fire-and-forget) if threshold exceeded. Covers both long-exit and short-exit paths; state fields cleared before save. Frontend: AddBotBar "Max DD %" input + BotCard inline-editable field (pattern from allocated_capital).
+
 ## 2026-04-30
 
 - **Overnight builder operational.** Push auth resolved — required installing the Claude GitHub App on GitHub (`github.com/apps/claude`) with Contents: Read & write permission. Routine prompt updated to use `claude/` prefixed branches + `gh pr create`. First successful delivery: PR #4 (C11 + C12) merged.

@@ -252,6 +252,30 @@ class BotRunner:
                     "value": round(compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id, since=cfg.pnl_epoch), 2),
                 })
 
+                if cfg.drawdown_threshold_pct and state.equity_snapshots:
+                    snaps = [s["value"] for s in state.equity_snapshots]
+                    peak_pnl = max(snaps)
+                    current_pnl = snaps[-1]
+                    drawdown_pct = (peak_pnl - current_pnl) / cfg.allocated_capital * 100
+                    if drawdown_pct >= cfg.drawdown_threshold_pct:
+                        state.status = "error"
+                        state.pause_reason = f"Auto-paused: drawdown {drawdown_pct:.1f}% exceeded threshold {cfg.drawdown_threshold_pct:.1f}%"
+                        self._log("WARN", state.pause_reason)
+                        asyncio.create_task(notify_error(
+                            symbol=cfg.symbol,
+                            error_msg=state.pause_reason,
+                            bot_id=cfg.bot_id,
+                        ))
+                        state.entry_price = None
+                        state.entry_bar_count = 0
+                        state.trail_peak = None
+                        state.trail_stop_price = None
+                        state.pending_close_order_id = None
+                        state.pending_close_reason = None
+                        self._last_broker_qty = None
+                        self.manager.save()
+                        return
+
                 self.manager.save()
 
             state.entry_price = None
@@ -587,6 +611,31 @@ class BotRunner:
                     "time": datetime.now(timezone.utc).isoformat(),
                     "value": round(compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id, since=cfg.pnl_epoch), 2),
                 })
+
+                if cfg.drawdown_threshold_pct and state.equity_snapshots:
+                    snaps = [s["value"] for s in state.equity_snapshots]
+                    peak_pnl = max(snaps)
+                    current_pnl = snaps[-1]
+                    drawdown_pct = (peak_pnl - current_pnl) / cfg.allocated_capital * 100
+                    if drawdown_pct >= cfg.drawdown_threshold_pct:
+                        state.status = "error"
+                        state.pause_reason = f"Auto-paused: drawdown {drawdown_pct:.1f}% exceeded threshold {cfg.drawdown_threshold_pct:.1f}%"
+                        self._log("WARN", state.pause_reason)
+                        asyncio.create_task(notify_error(
+                            symbol=cfg.symbol,
+                            error_msg=state.pause_reason,
+                            bot_id=cfg.bot_id,
+                        ))
+                        state.entry_price = None
+                        state.entry_bar_count = 0
+                        state.trail_peak = None
+                        state.trail_stop_price = None
+                        state.pending_close_order_id = None
+                        state.pending_close_reason = None
+                        self._last_broker_qty = None
+                        self._active_order_ids.clear()
+                        self.manager.save()
+                        return
 
                 state.entry_price = None
                 state.entry_bar_count = 0

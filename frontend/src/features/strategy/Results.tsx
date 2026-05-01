@@ -10,8 +10,9 @@ import PnlHistogram from './PnlHistogram'
 import MacroEquityChart from './MacroEquityChart'
 import MonteCarloChart from './MonteCarloChart'
 import RollingWindowChart from './RollingWindowChart'
+import TradeHoldDurationHistogram from './TradeHoldDurationHistogram'
 
-export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace' | 'session' | 'monte_carlo' | 'rolling'
+export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace' | 'session' | 'monte_carlo' | 'rolling' | 'hold_duration'
 
 function fmtDate(d: string | number | undefined): string {
   if (typeof d === 'number') return fmtDateTimeET(d)
@@ -303,6 +304,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
              ...(result.session_analytics && result.session_analytics.length > 0 ? ['session'] : []),
              ...(sells.length >= 2 ? ['monte_carlo'] : []),
              ...(sells.length >= 5 ? ['rolling'] : []),
+             ...(sells.length >= 2 ? ['hold_duration'] : []),
           ] as ResultsTab[]).map(tab => (
             <button
               key={tab}
@@ -315,6 +317,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
                 : tab === 'session' ? 'Session'
                 : tab === 'monte_carlo' ? 'Monte Carlo'
                 : tab === 'rolling' ? 'Rolling'
+                : tab === 'hold_duration' ? 'Hold Time'
                 : `Signal Trace (${signal_trace!.length})`}
             </button>
           ))}
@@ -588,6 +591,12 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       {activeTab === 'rolling' && (
         <div style={{ padding: '0 16px 16px' }}>
           <RollingWindowChart trades={trades} />
+        </div>
+      )}
+
+      {activeTab === 'hold_duration' && (
+        <div style={{ padding: '0 16px 16px' }}>
+          <TradeHoldDurationHistogram trades={trades} interval={backtestInterval} />
         </div>
       )}
 

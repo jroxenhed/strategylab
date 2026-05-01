@@ -63,6 +63,7 @@ class BotConfig(BaseModel):
     trading_hours: Optional[TradingHoursConfig] = None
     slippage_bps: float = Field(default=2.0, ge=0.0)
     max_spread_bps: Optional[float] = None  # skip entries when bid/ask spread exceeds this; None = disabled
+    drawdown_threshold_pct: Optional[float] = None  # auto-pause if peak-to-trough exceeds this % of allocated_capital
     pnl_epoch: Optional[str] = None          # ISO timestamp; only journal rows >= this count toward displayed P&L
     data_source: str = "alpaca-iex"    # yahoo | alpaca | alpaca-iex | ibkr
     direction: str = "long"            # "long" | "short"
@@ -408,6 +409,7 @@ class BotManager:
                 "broker": config.broker,
                 "avg_cost_bps": compute_bot_avg_cost_bps(config.symbol, bot_id=bot_id, since=epoch, trades=all_trades)[0],
                 "max_spread_bps": config.max_spread_bps,
+                "drawdown_threshold_pct": config.drawdown_threshold_pct,
                 "has_position": state.entry_price is not None,
                 "first_trade_time": first_trade_time,
                 "pnl_epoch": epoch,

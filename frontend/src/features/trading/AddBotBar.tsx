@@ -38,6 +38,7 @@ export default function AddBotBar({
   const [broker, setBroker] = useState<'alpaca' | 'ibkr'>('alpaca')
   const [direction, setDirection] = useState<'long' | 'short'>('long')
   const [maxSpreadBps, setMaxSpreadBps] = useState('50')
+  const [maxDrawdownPct, setMaxDrawdownPct] = useState('')
   const [error, setError] = useState('')
 
   const loadStrategies = () => {
@@ -107,6 +108,7 @@ export default function AddBotBar({
         trading_hours: s.tradingHours ?? null,
         slippage_bps: typeof s.slippageBps === 'number' ? s.slippageBps : 2.0,
         max_spread_bps: maxSpreadBps ? parseFloat(maxSpreadBps) || null : null,
+        drawdown_threshold_pct: maxDrawdownPct ? parseFloat(maxDrawdownPct) || null : null,
         data_source: dataSource,
         direction,
         broker,
@@ -202,6 +204,18 @@ export default function AddBotBar({
           onChange={e => setMaxSpreadBps(e.target.value)}
           style={{ ...inputStyle, width: 70 }}
           title="Skip entries when bid/ask spread exceeds this (bps). Empty = disabled."
+        />
+
+        {/* Max Drawdown */}
+        <input
+          type="number"
+          placeholder="Max DD %"
+          value={maxDrawdownPct}
+          min={0}
+          step={0.1}
+          onChange={e => setMaxDrawdownPct(e.target.value)}
+          style={{ ...inputStyle, width: 70 }}
+          title="Auto-pause bot when cumulative drawdown from peak exceeds this % of allocated capital. Empty = disabled."
         />
 
         <button
