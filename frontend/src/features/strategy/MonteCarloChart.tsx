@@ -16,7 +16,7 @@ function fmtPct(v: number): string {
 }
 
 export default function MonteCarloChart({ mcResult, initialCapital }: Props) {
-  const { curves, num_simulations, num_trades, final_value, max_drawdown_pct, ruin_probability } = mcResult
+  const { curves, num_simulations, num_trades, min_equity, max_drawdown_pct, ruin_probability } = mcResult
 
   // SVG dimensions
   const W = 560, H = 200
@@ -55,14 +55,17 @@ export default function MonteCarloChart({ mcResult, initialCapital }: Props) {
 
   return (
     <div style={{ padding: '16px 0' }}>
-      {/* Stats row */}
+      {/* Stats row - Min Equity During Simulation */}
       <div style={{ display: 'flex', gap: 32, marginBottom: 12, flexWrap: 'wrap' }}>
+        <div style={{ width: '100%', marginBottom: -4 }}>
+          <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase', letterSpacing: 0.5 }}>Min Equity During Simulation</span>
+        </div>
         {([
-          ['5th pct (worst)', final_value.p5, '#f85149'],
-          ['25th pct', final_value.p25, '#e5c07b'],
-          ['Median (50th)', final_value.p50, '#8b949e'],
-          ['75th pct', final_value.p75, '#26a641'],
-          ['95th pct (best)', final_value.p95, '#39d353'],
+          ['Worst case min', min_equity.p5, '#f85149'],
+          ['25th pct min', min_equity.p25, '#e5c07b'],
+          ['Median min equity', min_equity.p50, '#8b949e'],
+          ['75th pct min', min_equity.p75, '#8b949e'],
+          ['Best case min', min_equity.p95, '#26a641'],
         ] as [string, number, string][]).map(([label, val, color]) => (
           <div key={label}>
             <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>{label}</div>

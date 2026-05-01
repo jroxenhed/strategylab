@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*72 / 95 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*75 / 95 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -74,8 +74,8 @@
 - [ ] **C10** Intraday session analytics — break down strategy performance by time-of-day (30-min buckets). Heatmap or histogram of win rate / EV by session window (open, midday, power hour). Trade timestamps already exist; cheap to compute, actionable for trading hours filters.
 - [x] **C11** Monte Carlo simulation — run N random permutations of trade sequence to estimate confidence intervals on returns, max drawdown, and probability of ruin. Critical for small-account sizing where a single bad drawdown sequence matters.
 - [x] **C12** Rolling performance window — show Sharpe, win rate, and return over rolling N-trade windows overlaid on equity curve. Reveals regime changes and strategy decay that aggregate stats hide.
-- [ ] [next] **C13** Monte Carlo bug fixes — (1) final value percentiles all show the same number (should spread); header stats may be pulling from wrong field. (2) Used raw `fetch()` instead of project `api` client (already fixed locally, needs committing).
-- [ ] [next] **C14** Trade duration histogram — distribution of hold times (bars or hours/days) as SVG histogram in Results. Spots if strategy holds losers too long. Pure frontend from existing trade timestamps. [easy]
+- [x] **C13** Monte Carlo bug fixes — (1) final value percentiles all show the same number (should spread); header stats may be pulling from wrong field. (2) Used raw `fetch()` instead of project `api` client (already fixed locally, needs committing).
+- [x] **C14** Trade duration histogram — distribution of hold times (bars or hours/days) as SVG histogram in Results. Spots if strategy holds losers too long. Pure frontend from existing trade timestamps. [easy]
 - [ ] **C15** Win/loss streak analysis — max consecutive wins/losses, average streak length, streak distribution mini-chart. Reveals if strategy clusters wins or has brutal losing runs. Small panel in Summary tab. [easy]
 - [ ] **C16** Risk-adjusted position sizing calculator — Kelly criterion + fixed-fractional sizing based on backtest win rate and avg win/loss ratio. Shows "optimal" bet size given your edge. Small panel in Summary tab. [easy]
 - [ ] **C17** Correlation to benchmark — compute beta and R² vs SPY returns alongside strategy equity curve. SPY data already loads via existing infrastructure. New stats row in Summary. [medium]
@@ -102,7 +102,7 @@
 - [x] **D17** Global start/stop all bots
 - [x] **D18** Bot sparkline: global toggle for local vs aligned timescale
 - [x] **D20** Bot alerting / notifications — push bot events (entry, exit, stop hit, error) to phone/desktop. Webhook to Pushover/ntfy.sh or Telegram bot. Critical for running US market bots from Sweden — knowing instantly when something fires.
-- [ ] [next] **D21** Strategy auto-pause on drawdown — automatically pause a bot when cumulative loss from peak exceeds a configurable threshold (e.g., 5% of allocated capital). Safety net for unattended bots during US market hours.
+- [x] **D21** Strategy auto-pause on drawdown — automatically pause a bot when cumulative loss from peak exceeds a configurable threshold (e.g., 5% of allocated capital). Safety net for unattended bots during US market hours.
 - [x] **D19** Bot card redesign — responsive sparkline (was fixed 60%), columnar stats (label above value), compact mode kebab dropdown (replaces inline buttons), portfolio strip alignment, shared `ui.tsx` for layout primitives. 106 tests.
 - [ ] **D22** Trade journal CSV export — download button on TradeJournal for tax prep or external analysis in spreadsheets. [easy]
 - [ ] **D23** Bot daily P&L summary — small calendar heatmap or daily bar chart on BotCard showing per-day returns. Visual pattern recognition for "which days does this bot print?" [medium]

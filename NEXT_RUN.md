@@ -36,21 +36,20 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-04-30
-**Branch:** `claude/dreamy-albattani-cDc4K`
-**Commit:** `499f53e`
+**Date:** 2026-05-01
+**Branch:** `claude/overnight-2026-05-01`
 
 **Shipped:**
-- **C11** Monte Carlo simulation — `POST /api/backtest/montecarlo`, percentile bands (p5–p95), probability of ruin, `MonteCarloChart.tsx` SVG component, new Results tab
-- **C12** Rolling performance window — client-side rolling win rate / avg PnL / Sharpe over N-trade windows, `RollingWindowChart.tsx`, new Results tab
+- **C13** Monte Carlo bug fix — `min_equity` percentile stats replace misleading `final_value` (identical across shuffles); MonteCarloChart color semantics corrected (p5=worst/red, p95=best/green)
+- **C14** Trade duration histogram — `TradeHoldDurationHistogram.tsx`, "Hold Time" tab in Results, win/loss bucket coloring, avg hold time split
+- **D21** Strategy auto-pause on drawdown — `BotConfig.drawdown_threshold_pct`, `_tick()` check at both exit paths, state cleanup on pause, `notify_error` fire-and-forget; AddBotBar + BotCard UI
 
-**Self-review fixes applied:**
-- Reset `mcResult` state when backtest result changes (stale data after re-run)
-- Renamed `window` → `windowSize` in RollingWindowChart (shadowed browser global)
+**Self-review findings: 2 (P0: 0, P1: 2, P2: 0), 2 auto-fixed, 1 iteration**
+- P1: MonteCarloChart min_equity color labels inverted — auto-fixed
+- P1: First auto-pause branch missing state cleanup before return — auto-fixed
 
-**Deferred:**
-- D21 (strategy auto-pause on drawdown) — still tagged `[next]`, pick up next run
+**Deferred:** None. All 3 `[next]` items shipped.
 
-**Review concerns flagged:** None above P2 threshold. Both P2/P3 findings were safe_auto and applied before commit.
+**Review concerns flagged:** None.
 
-**Next up:** D21 — strategy auto-pause on drawdown (bot safety net)
+**Next up:** C15 (win/loss streak analysis), C16 (Kelly sizing), D22 (trade journal CSV export) — all tagged [easy]

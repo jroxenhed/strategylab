@@ -76,6 +76,8 @@ export default function BotCard({
   const [allocValue, setAllocValue] = useState('')
   const [editingSpread, setEditingSpread] = useState(false)
   const [spreadValue, setSpreadValue] = useState('')
+  const [editingDD, setEditingDD] = useState(false)
+  const [ddValue, setDdValue] = useState('')
   const [editingStrategy, setEditingStrategy] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -455,6 +457,35 @@ export default function BotCard({
                   onClick={() => { if (stopped) { setSpreadValue(summary.max_spread_bps ? String(summary.max_spread_bps) : ''); setEditingSpread(true) } }}
                   title={stopped ? 'Click to edit (empty = disabled)' : 'Stop bot to edit'}
                 >{summary.max_spread_bps ? `${summary.max_spread_bps} bps` : 'off'}</span>
+              )}
+            />
+            <StatCell
+              label="Max DD"
+              value={editingDD ? (
+                <input
+                  autoFocus
+                  type="number"
+                  value={ddValue}
+                  min={0}
+                  step={0.1}
+                  onChange={e => setDdValue(e.target.value)}
+                  onBlur={() => {
+                    const v = ddValue === '' ? 0 : parseFloat(ddValue)
+                    if (!isNaN(v) && v >= 0) onUpdate({ drawdown_threshold_pct: v > 0 ? v : undefined })
+                    setEditingDD(false)
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                    if (e.key === 'Escape') setEditingDD(false)
+                  }}
+                  style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3, padding: '1px 4px' }}
+                />
+              ) : (
+                <span
+                  style={{ color: stopped ? '#58a6ff' : '#aaa', cursor: stopped ? 'pointer' : 'default', borderBottom: stopped ? '1px dashed #58a6ff' : 'none' }}
+                  onClick={() => { if (stopped) { setDdValue(summary.drawdown_threshold_pct ? String(summary.drawdown_threshold_pct) : ''); setEditingDD(true) } }}
+                  title={stopped ? 'Click to edit (empty = disabled)' : 'Stop bot to edit'}
+                >{summary.drawdown_threshold_pct ? `${summary.drawdown_threshold_pct}%` : '—'}</span>
               )}
             />
           </div>

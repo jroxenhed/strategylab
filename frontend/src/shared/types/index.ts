@@ -167,7 +167,7 @@ export interface MonteCarloResult {
     p75: number[]
     p95: number[]
   }
-  final_value: { p5: number; p25: number; p50: number; p75: number; p95: number }
+  min_equity: { p5: number; p25: number; p50: number; p75: number; p95: number }
   max_drawdown_pct: { p5: number; p25: number; p50: number; p75: number; p95: number }
   ruin_probability: number
 }
@@ -285,6 +285,7 @@ export interface BotConfig {
   trading_hours?: TradingHoursConfig
   slippage_bps?: number
   max_spread_bps?: number | null
+  drawdown_threshold_pct?: number | null
   data_source?: string
   direction?: 'long' | 'short'
   broker?: string
@@ -333,6 +334,7 @@ export interface BotSummary {
   direction?: 'long' | 'short'
   broker?: string
   max_spread_bps?: number | null
+  drawdown_threshold_pct?: number | null
   first_trade_time?: string | null
   last_tick?: string
   pause_reason?: string

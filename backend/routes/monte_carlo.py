@@ -33,6 +33,7 @@ def run_monte_carlo(req: MonteCarloRequest):
     all_curves: list[list[float]] = []
     max_drawdowns: list[float] = []
     final_values: list[float] = []
+    min_equities: list[float] = []
     ruin_count = 0
 
     pnls = list(req.pnls)
@@ -42,6 +43,7 @@ def run_monte_carlo(req: MonteCarloRequest):
         equity = req.initial_capital
         peak = equity
         max_dd = 0.0
+        min_eq = req.initial_capital
         curve = [round(equity, 2)]
         for pnl in pnls:
             equity += pnl
@@ -51,10 +53,13 @@ def run_monte_carlo(req: MonteCarloRequest):
                 dd = (peak - equity) / peak * 100
                 if dd > max_dd:
                     max_dd = dd
+            if equity < min_eq:
+                min_eq = equity
             curve.append(round(equity, 2))
         all_curves.append(curve)
         max_drawdowns.append(max_dd)
         final_values.append(equity)
+        min_equities.append(min_eq)
         if equity <= 0:
             ruin_count += 1
 
@@ -71,7 +76,7 @@ def run_monte_carlo(req: MonteCarloRequest):
         "num_simulations": n_sim,
         "num_trades": n_trades,
         "curves": pct_curves,
-        "final_value": _percentiles(final_values),
+        "min_equity": _percentiles(min_equities),
         "max_drawdown_pct": _percentiles(max_drawdowns),
         "ruin_probability": round(ruin_count / n_sim * 100, 2),
     }
