@@ -31,7 +31,11 @@ An autonomous Claude Code agent that picks tasks from TODO.md, implements them, 
                     │  │ 7. Verify + commit + push│    │
                     │  └──────────────────────────┘    │
                     │                                  │
-                    │  Update NEXT_RUN.md with report   │
+                    │  After all tasks:                 │
+                    │  - Suggest new TODO items from    │
+                    │    gaps found during impl         │
+                    │  - Tag [next] for next run        │
+                    │  - Update NEXT_RUN.md with report │
                     │  Slack notification (if wired)    │
                     └──────────────┬──────────────────┘
                                    │

@@ -46,9 +46,10 @@ Every agent session (interactive or automated) follows this protocol to prevent 
 3. If working on a specific TODO item, check for a linked spec/plan in `docs/superpowers/`
 
 ### On End
-1. Update `TODO.md` — check off completed items, add new items if work surfaced them
+1. Update `TODO.md` — check off completed items, add new items if work surfaced them (gaps, edge cases, natural follow-ups discovered during implementation — not speculative feature requests)
 2. Append to `JOURNAL.md` — reuse today's date header if it exists, one bullet per shipped item with bold **[ID]** cross-reference
-3. Both updates in the **same commit** as the code changes (atomic)
+3. Tag suitable unchecked items `[next]` for the next overnight run (prefer prereqs of in-progress work, then `[easy]` items)
+4. Both updates in the **same commit** as the code changes (atomic)
 
 ### Priority tags in TODO.md
 - `[next]` — highest-priority unchecked item(s), auto-picked by chain runner
