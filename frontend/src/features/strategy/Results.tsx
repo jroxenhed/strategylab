@@ -409,7 +409,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       )}
 
       {activeTab === 'summary' && (
-        <div style={{ display: 'flex', flexDirection: 'column', height: 250, minHeight: 100, maxHeight: 600, resize: 'vertical', overflow: 'auto' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'auto' }}>
           {summary.num_trades > 0 && (summary.gain_stats || summary.loss_stats) && (
             <div style={{ display: 'flex', flexDirection: 'column', padding: '12px 16px', borderTop: '1px solid #21262d' }}>
               <div style={{ marginBottom: 8 }}>
@@ -440,6 +440,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
               </div>
             </div>
           )}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 0 }}>
           {(() => {
             const buys = trades.filter(t => t.type === 'buy' || t.type === 'short')
             const sellsList = trades.filter(t => t.type === 'sell' || t.type === 'cover')
@@ -465,6 +466,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
           })()}
           <StreakPanel trades={result.trades} />
           {summary.num_trades >= 5 && <KellySizing summary={summary} />}
+          </div>
         </div>
       )}
 
