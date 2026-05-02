@@ -451,3 +451,78 @@ def is_retryable_error(e: Exception) -> bool:
     return ("Connection aborted" in msg
             or "RemoteDisconnected" in msg
             or "ConnectionError" in type(e).__name__)
+
+
+# ---------------------------------------------------------------------------
+# Multi-timeframe (HTF) helpers
+# ---------------------------------------------------------------------------
+
+def htf_lookback_days(indicator: str, params: dict) -> int:
+    """Return the number of calendar days of HTF data needed to warm up an indicator.
+
+    Formula: int(max_period * 1.5 * 365/252 + 30)
+    Converts a trading-day period to calendar days with a 1.5x buffer and 30-day extra.
+    """
+    if indicator in {"ma", "rsi", "bb", "atr", "vwap"}:
+        max_period = params.get("period", 20)
+    elif indicator == "macd":
+        max_period = max(params.get("fast", 12), params.get("slow", 26), params.get("signal", 9))
+    elif indicator in {"stochastic"}:
+        max_period = params.get("k_period", 14)
+    elif indicator in {"adx"}:
+        max_period = params.get("period", 14)
+    else:
+        max_period = params.get("period", 20)
+
+    return int(max_period * 1.5 * 365 / 252 + 30)
+
+
+def fetch_higher_tf(ticker: str, start: str, end: str, htf_interval: str, source: str = "yahoo") -> pd.DataFrame:
+    """Thin wrapper over _fetch() for higher-timeframe data.
+
+    The caller is responsible for extending `start` by htf_lookback_days()
+    to ensure enough warmup data is fetched.
+    """
+    return _fetch(ticker, start, end, htf_interval, source=source)
+
+
+def align_htf_to_ltf(htf_series: pd.Series, ltf_index: pd.DatetimeIndex) -> pd.Series:
+    """Align HTF values to LTF bar index with strict anti-lookahead.
+
+    Day D's HTF close maps to day D+1's intraday bars (never to day D's own bars).
+    This is enforced via shift(1) on the HTF series before merging.
+
+    Both sides are normalized to UTC for cross-timezone comparison.
+    yfinance daily bars are already tz-aware (America/New_York), so tz_convert is used,
+    not tz_localize.
+
+    NaN is returned for LTF bars before the first HTF bar (warmup period).
+    """
+    if htf_series.empty:
+        return pd.Series([float('nan')] * len(ltf_index), index=ltf_index, dtype=float)
+
+    # Anti-lookahead: shift by 1 so day D's value only maps to day D+1's intraday bars
+    shifted = htf_series.shift(1)
+
+    # Normalize both sides to UTC for cross-timezone comparison
+    # Use tz_convert (not tz_localize) — yfinance daily is already tz-aware
+    htf_idx = shifted.index
+    if getattr(htf_idx, 'tz', None) is not None:
+        htf_idx = htf_idx.tz_convert('UTC')
+
+    ltf_idx = ltf_index
+    if getattr(ltf_idx, 'tz', None) is not None:
+        ltf_idx = ltf_idx.tz_convert('UTC')
+
+    htf_df = pd.DataFrame({'ts': htf_idx, 'val': shifted.values})
+    htf_df = htf_df.sort_values('ts', ignore_index=True)
+    ltf_df = pd.DataFrame({'ts': ltf_idx})
+
+    merged = pd.merge_asof(
+        ltf_df,
+        htf_df,
+        on='ts',
+        direction='backward'
+    )
+
+    return pd.Series(merged['val'].values, index=ltf_index, dtype=float)

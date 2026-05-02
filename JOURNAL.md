@@ -4,6 +4,14 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-02
+
+- **[A13a](TODO.md#a--charts--indicators)** Multi-TF data foundation. Three new functions in `backend/shared.py`: `htf_lookback_days(indicator, params)` computes calendar-day warmup window (`int(period * 1.5 * 365/252 + 30)`); `fetch_higher_tf()` thin wrapper over `_fetch()` for HTF data; `align_htf_to_ltf(htf_series, ltf_index)` aligns daily values to intraday bars with strict anti-lookahead via `shift(1)` + UTC normalization + `pd.merge_asof(direction='backward')`. Handles weekend/holiday gaps and tz-aware/naive inputs. 6 exhaustive tests in `backend/tests/test_htf_alignment.py` (6/6 pass) covering lookahead, forward mapping, weekend gap, empty series, warmup NaN, lookback formula. Shared prereq for A13b, B21, D24.
+
+- **[C15](TODO.md#c--strategy-summary--analytics)** Win/loss streak analysis panel. New `streakUtils.ts` (streak computation: max/avg win+loss streaks) and `StreakPanel.tsx` (UI panel). Inserted into Summary tab in Results.tsx. Shows max consecutive wins/losses (large colored numbers), avg streak lengths, and mini SVG distribution charts (120×36px, shown when ≥2 streaks). Gated on closed trades presence.
+
+- **[D22](TODO.md#d--bots-live-trading)** Trade journal CSV export. Already shipped as part of D13 (verified: `exportCsv()` function at TradeJournal.tsx:140, download button at line 198). Checked off.
+
 ## 2026-05-01
 
 - **[C13](TODO.md#c--strategy-summary--analytics)** Monte Carlo bug fixes. (1) `final_value` percentile stats were all identical — replaced with `min_equity` (minimum equity touched during each simulation), which spreads meaningfully across shuffles. Backend: `min_equities` tracked per-sim, returned as `min_equity` in response. Frontend: MonteCarloChart.tsx updated to display min equity stats with correct color semantics (p5=red worst, p95=green best). (2) `fetch()` → `api.post()` fix was already committed in prior session.

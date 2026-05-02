@@ -11,6 +11,7 @@ import MacroEquityChart from './MacroEquityChart'
 import MonteCarloChart from './MonteCarloChart'
 import RollingWindowChart from './RollingWindowChart'
 import TradeHoldDurationHistogram from './TradeHoldDurationHistogram'
+import StreakPanel from './StreakPanel'
 
 export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace' | 'session' | 'monte_carlo' | 'rolling' | 'hold_duration'
 
@@ -461,6 +462,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
               </div>
             )
           })()}
+          <StreakPanel trades={result.trades} />
         </div>
       )}
 
