@@ -36,20 +36,18 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-05-01
-**Branch:** `claude/overnight-2026-05-01`
+**Date:** 2026-05-02
+**Branch:** `claude/overnight-2026-05-02`
 
 **Shipped:**
-- **C13** Monte Carlo bug fix — `min_equity` percentile stats replace misleading `final_value` (identical across shuffles); MonteCarloChart color semantics corrected (p5=worst/red, p95=best/green)
-- **C14** Trade duration histogram — `TradeHoldDurationHistogram.tsx`, "Hold Time" tab in Results, win/loss bucket coloring, avg hold time split
-- **D21** Strategy auto-pause on drawdown — `BotConfig.drawdown_threshold_pct`, `_tick()` check at both exit paths, state cleanup on pause, `notify_error` fire-and-forget; AddBotBar + BotCard UI
+- **A13a** Multi-TF data foundation — `fetch_higher_tf()`, `align_htf_to_ltf()`, `htf_lookback_days()` in `backend/shared.py`. Anti-lookahead via `shift(1)` + UTC normalization + `merge_asof(backward)`. 6/6 tests in `test_htf_alignment.py`. Prereq for A13b, B21, D24.
+- **C15** Win/loss streak analysis panel — `streakUtils.ts` + `StreakPanel.tsx`, inserted in Summary tab. Max consecutive wins/losses, avg streak, mini distribution charts.
+- **D22** Verified already shipped in D13 (exportCsv at TradeJournal.tsx:140). Checked off.
 
-**Self-review findings: 2 (P0: 0, P1: 2, P2: 0), 2 auto-fixed, 1 iteration**
-- P1: MonteCarloChart min_equity color labels inverted — auto-fixed
-- P1: First auto-pause branch missing state cleanup before return — auto-fixed
+**Self-review findings: 0 (P0: 0, P1: 0, P2: 0), 0 auto-fixed, 0 iterations**
 
-**Deferred:** None. All 3 `[next]` items shipped.
+**Deferred:** None. All 3 tasks shipped (A13a was the [next] tag, C15 + D22 were the NEXT_RUN suggestions).
 
 **Review concerns flagged:** None.
 
-**Next up:** C15 (win/loss streak analysis), C16 (Kelly sizing), D22 (trade journal CSV export) — all tagged [easy]
+**Next up:** A13b (multi-TF indicator overlay, prereq A13a now done), C16 (Kelly criterion sizing), C17 (SPY correlation/beta) — suggest tagging A13b [next] since A13a just landed
