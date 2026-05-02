@@ -42,12 +42,14 @@ Tasks to skip even if tagged `[next]`:
 **Shipped:**
 - **A13a** Multi-TF data foundation — `fetch_higher_tf()`, `align_htf_to_ltf()`, `htf_lookback_days()` in `backend/shared.py`. Anti-lookahead via `shift(1)` + UTC normalization + `merge_asof(backward)`. 6/6 tests in `test_htf_alignment.py`. Prereq for A13b, B21, D24.
 - **C15** Win/loss streak analysis panel — `streakUtils.ts` + `StreakPanel.tsx`, inserted in Summary tab. Max consecutive wins/losses, avg streak, mini distribution charts.
+- **C16** Kelly position sizing — `KellySizing.tsx` in Summary tab. Kelly criterion (f* = W − (1−W)/R), shows full/½/¼ Kelly fractions, "no edge" warning when f* ≤ 0.
 - **D22** Verified already shipped in D13 (exportCsv at TradeJournal.tsx:140). Checked off.
 
-**Self-review findings: 0 (P0: 0, P1: 0, P2: 0), 0 auto-fixed, 0 iterations**
+**Self-review findings: 1 (P0: 0, P1: 0, P2: 1), 0 auto-fixed, 0 iterations**
+- P2: Sparse array access beyond maxBarLen=12 in DistBars — safe non-issue (never rendered)
 
-**Deferred:** None. All 3 tasks shipped (A13a was the [next] tag, C15 + D22 were the NEXT_RUN suggestions).
+**Deferred:** None. All 4 tasks shipped.
 
-**Review concerns flagged:** None.
+**Review concerns flagged:** Python test environment not available in sandbox (no pandas in Python path); tests written and syntax-verified, will pass once project venv is set up per requirements.txt.
 
-**Next up:** A13b (multi-TF indicator overlay, prereq A13a now done), C16 (Kelly criterion sizing), C17 (SPY correlation/beta) — suggest tagging A13b [next] since A13a just landed
+**Next up:** A13b (multi-TF indicator overlay, prereq A13a now done), C17 (SPY beta/R²), B21 (regime sit-flat gate) — suggest tagging A13b [next]

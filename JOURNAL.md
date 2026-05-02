@@ -12,6 +12,8 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 - **[D22](TODO.md#d--bots-live-trading)** Trade journal CSV export. Already shipped as part of D13 (verified: `exportCsv()` function at TradeJournal.tsx:140, download button at line 198). Checked off.
 
+- **[C16](TODO.md#c--strategy-summary--analytics)** Kelly position sizing. New `KellySizing.tsx` component embedded in Summary tab when ≥5 completed trades. Computes Kelly criterion (`f* = W − (1−W)/R`) from backtest win rate and avg win/loss ratio. Displays full Kelly, ½ Kelly (recommended), ¼ Kelly fractions. Shows "no edge" warning with 0% size recommendation when f* ≤ 0.
+
 ## 2026-05-01
 
 - **[C13](TODO.md#c--strategy-summary--analytics)** Monte Carlo bug fixes. (1) `final_value` percentile stats were all identical — replaced with `min_equity` (minimum equity touched during each simulation), which spreads meaningfully across shuffles. Backend: `min_equities` tracked per-sim, returned as `min_equity` in response. Frontend: MonteCarloChart.tsx updated to display min equity stats with correct color semantics (p5=red worst, p95=green best). (2) `fetch()` → `api.post()` fix was already committed in prior session.

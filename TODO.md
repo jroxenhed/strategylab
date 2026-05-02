@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*78 / 101 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*79 / 101 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -32,7 +32,7 @@
 - [x] **A10** Equity curve: normalised B&H comparison toggle + log scale toggle
 - [x] **A11** MA8 / MA21 with SMA/EMA/RMA type selector + S-G smoothed variants (independent window/poly per MA, raw curve toggles, dashed S-G lines)
 - [x] **A12** Backtest equity curve: baseline (buy & hold) overlay toggle
-- [x] **A13a** Multi-TF data foundation — `fetch_higher_tf()`, `align_htf_to_ltf()`, `htf_lookback_days()` in `backend/shared.py`. Anti-lookahead alignment: daily MA for day D maps to day D+1's intraday bars (strict `<`, UTC-normalized). Weekend/holiday gap handling (Monday → Friday's close). Exhaustive alignment tests in `backend/tests/test_htf_alignment.py`. Shared prereq for A13b, B21, D24. [medium] [next] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
+- [x] **A13a** Multi-TF data foundation — `fetch_higher_tf()`, `align_htf_to_ltf()`, `htf_lookback_days()` in `backend/shared.py`. Anti-lookahead alignment: daily MA for day D maps to day D+1's intraday bars (strict `<`, UTC-normalized). Weekend/holiday gap handling (Monday → Friday's close). Exhaustive alignment tests in `backend/tests/test_htf_alignment.py`. Shared prereq for A13b, B21, D24. [medium] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
 - [ ] **A13b** Multi-TF indicator overlay — see daily/weekly indicators stepped onto intraday charts. HTF indicator endpoint (`routes/indicators.py` + `htf_interval` param), per-instance timeframe selector in sidebar ("Same"/"1D"/"1W"), stepped overlay rendering via `LineType.WithSteps`, grouped HTF data fetching in `useOHLCV`. Prereq: A13a. [medium] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
 
 ## B — Strategy Engine & Rules
@@ -82,7 +82,7 @@
 - [x] **C13** Monte Carlo bug fixes — (1) final value percentiles all show the same number (should spread); header stats may be pulling from wrong field. (2) Used raw `fetch()` instead of project `api` client (already fixed locally, needs committing).
 - [x] **C14** Trade duration histogram — distribution of hold times (bars or hours/days) as SVG histogram in Results. Spots if strategy holds losers too long. Pure frontend from existing trade timestamps. [easy]
 - [x] **C15** Win/loss streak analysis — max consecutive wins/losses, average streak length, streak distribution mini-chart. Reveals if strategy clusters wins or has brutal losing runs. Small panel in Summary tab. [easy]
-- [ ] **C16** Risk-adjusted position sizing calculator — Kelly criterion + fixed-fractional sizing based on backtest win rate and avg win/loss ratio. Shows "optimal" bet size given your edge. Small panel in Summary tab. [easy]
+- [x] **C16** Risk-adjusted position sizing calculator — Kelly criterion + fixed-fractional sizing based on backtest win rate and avg win/loss ratio. Shows "optimal" bet size given your edge. Small panel in Summary tab. [easy]
 - [ ] **C17** Correlation to benchmark — compute beta and R² vs SPY returns alongside strategy equity curve. SPY data already loads via existing infrastructure. New stats row in Summary. [medium]
 - [ ] **C18** Parameter sensitivity sweep — re-run backtest with ±N variations of one indicator param, show results in a table/heatmap. Answers "how fragile is this edge?" [medium]
 - [ ] **C19** Backtest result persistence — save/load backtest results to localStorage so you can compare across sessions without re-running. [medium]

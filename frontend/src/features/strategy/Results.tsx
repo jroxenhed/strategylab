@@ -12,6 +12,7 @@ import MonteCarloChart from './MonteCarloChart'
 import RollingWindowChart from './RollingWindowChart'
 import TradeHoldDurationHistogram from './TradeHoldDurationHistogram'
 import StreakPanel from './StreakPanel'
+import KellySizing from './KellySizing'
 
 export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace' | 'session' | 'monte_carlo' | 'rolling' | 'hold_duration'
 
@@ -463,6 +464,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
             )
           })()}
           <StreakPanel trades={result.trades} />
+          {summary.num_trades >= 5 && <KellySizing summary={summary} />}
         </div>
       )}
 
