@@ -102,3 +102,53 @@ No big bang. No grand architecture. Just small steps with a clear direction.
 **The "board of directors" role, made concrete.** A board doesn't write code or pick trades. The weekly check-in is: review P&L, review regime states, kill decayed strategies, approve new deployments from the discovery pipeline. Everything else is delegated. The human stays in the loop at the approval and risk-limit layer, not the execution layer.
 
 **Context from lived experience:** Portfolio peaked +95% then halved in the chop. The discretionary version of "can't manage positions in a hostile regime" is exactly what the regime filter solves. The discovery pipeline needs the same discipline — knowing when an edge has decayed and cutting it, automatically.
+
+## The Confidence Layers
+
+You can never prove a strategy will work in the future. But you can build layers of confidence, each reducing the odds you're fooling yourself.
+
+**Layer 1: Out-of-sample testing.** Split the data — optimize on 2021–2024, test on 2025–2026. If it only works on the tuning window, it's curve-fitted garbage. Walk-forward validation automates this: optimize on window 1, test on window 2, slide forward, repeat. A strategy that survives walk-forward across multiple windows is meaningfully more trustworthy.
+
+**Layer 2: Monte Carlo.** Already shipped (C11). Doesn't test whether the edge is real, but tests whether the returns are robust to sequencing. A strategy that backtests +90% but has 30% probability of ruin under Monte Carlo isn't deployable regardless of how real the edge is.
+
+**Layer 3: Cross-symbol validation.** If a stochastic strategy on RIVN also works on LCID, TSLA, and F — different companies, same sector — the edge is probably structural (how momentum works in EV stocks), not idiosyncratic (RIVN's order flow in Q3 2024). If it *only* works on one symbol, be suspicious.
+
+**Layer 4: Paper trading with live data.** Where StrategyLab is now. Tests things backtesting literally cannot: real-time data gaps, API latency, fill quality, slippage divergence from modeled assumptions, behavior around earnings and halt events. Paper trading isn't backtesting on new data — it's testing the *infrastructure* as much as the strategy.
+
+**Layer 5: Micro-live.** Deploy with the smallest position size that still generates meaningful data. You're not trying to get rich on the first deployment — you're buying information. Does the live Sharpe match the backtest Sharpe within some tolerance band? Does real slippage match the model? Does the win rate converge toward the backtest expectation as trade count grows? If after 50 live trades the metrics are within one standard deviation of the backtest, you've got something. If they're wildly off, you learned that cheaply.
+
+**Layer 6: The meta-question — does the edge make sense?** This is the one most people skip, and it's the most important. Every strategy that works is exploiting *someone else's mistake or structural constraint*. Can you articulate whose? If you can't explain *why* the edge exists — if the backtest just "found something" through parameter sweeping — that's when you should be most worried. Markets change. Regimes shift. The specific pattern your optimizer found in 2022–2024 data might have been a liquidity artifact from the Fed hiking cycle. When the macro regime changes, poof.
+
+**Layer 6 is the one that can't be automated.** The system can find candidates, but only the human can answer "whose mistake is this strategy exploiting, and will that mistake persist?" This is where the "board of directors" role is permanent.
+
+## The Discovery Funnel
+
+The pipeline shouldn't just find strategies that *performed well*. It should find strategies that performed well AND survived walk-forward AND work across multiple symbols AND have a plausible reason for existing. Each filter kills most candidates. What survives is worth deploying at micro-live scale. What proves itself at micro-live gets sized up.
+
+```
+1000 parameter combinations tested
+  → 50 pass Sharpe/drawdown thresholds
+    → 12 survive walk-forward validation
+      → 5 work on 3+ symbols
+        → 2 you can explain WHY they work
+          → 1 deployed at micro-live
+            → confirmed or killed by real data
+```
+
+That last step — real market data generating real fills — is the only thing that actually answers the question "will this work going forward?" Everything before it is just increasingly sophisticated ways of *not fooling yourself*. The paper trading and micro-live phases are where backtesting ends and evidence begins.
+
+## What's Buildable Now
+
+Most of this funnel maps to existing or planned infrastructure:
+
+| Funnel stage | StrategyLab feature | Status |
+|---|---|---|
+| Parameter sweep | C18 (parameter sensitivity) | TODO |
+| Sharpe/drawdown threshold | Backtest summary stats | Shipped |
+| Walk-forward validation | New — split backtest into windows | Not started |
+| Cross-symbol | E2 batch backtesting | TODO, endpoint exists |
+| Edge explanation | Human judgment | Permanent |
+| Micro-live deployment | Bot system + Kelly sizing | Shipped |
+| Live confirmation | Bot P&L tracking + drawdown pause | Shipped |
+
+The minimum viable discovery: 10 symbols, one strategy template, rank by Sharpe. One session of work. Immediately surfaces whether automated ranking produces anything worth trusting with real money.
