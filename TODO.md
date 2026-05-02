@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*75 / 95 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*75 / 101 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -32,6 +32,8 @@
 - [x] **A10** Equity curve: normalised B&H comparison toggle + log scale toggle
 - [x] **A11** MA8 / MA21 with SMA/EMA/RMA type selector + S-G smoothed variants (independent window/poly per MA, raw curve toggles, dashed S-G lines)
 - [x] **A12** Backtest equity curve: baseline (buy & hold) overlay toggle
+- [ ] **A13a** Multi-TF data foundation — `fetch_higher_tf()`, `align_htf_to_ltf()`, `htf_lookback_days()` in `backend/shared.py`. Anti-lookahead alignment: daily MA for day D maps to day D+1's intraday bars (strict `<`, UTC-normalized). Weekend/holiday gap handling (Monday → Friday's close). Exhaustive alignment tests in `backend/tests/test_htf_alignment.py`. Shared prereq for A13b, B21, D24. [medium] [next] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
+- [ ] **A13b** Multi-TF indicator overlay — see daily/weekly indicators stepped onto intraday charts. HTF indicator endpoint (`routes/indicators.py` + `htf_interval` param), per-instance timeframe selector in sidebar ("Same"/"1D"/"1W"), stepped overlay rendering via `LineType.WithSteps`, grouped HTF data fetching in `useOHLCV`. Prereq: A13a. [medium] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
 
 ## B — Strategy Engine & Rules
 
@@ -59,6 +61,9 @@
 - [x] **B18** Triggering rules in trade tooltip — extend B17 tooltip to show which buy/sell rules fired for each trade. Backend tags each trade with `rules` field via `_fired_rules()`. Entries show buy rules, exits show sell rules (or "stop loss"/"trailing stop"/"time stop" for mechanical exits).
 - [x] **B19** Implement shorting — direction field, backtest + bot runner, chart markers, bot card refresh
 - [ ] **B20** Multi-timeframe confirmation — rules evaluate on a single interval today. Add "confirm on higher timeframe" option (e.g., enter on 5m signal only if 1h trend agrees). Requires fetching a second OHLCV series at the confirmation interval, computing indicators on it, and adding a `confirm_interval` + `confirm_rules` field to StrategyRequest. Common quant pattern that expands strategy sophistication significantly.
+- [ ] **B21** Regime filter: sit-flat gate + `is_short` refactor — `RegimeConfig` model, refactor backtest `is_short` → `position_direction` (behavioral no-op for single direction), regime gate in backtest (`buy_fires AND regime_active[i]`), regime chart shading (histogram on hidden scale), regime UI section in StrategyBuilder (collapsible, with stop-loss warning), `regime_active` in backtest response, regime in saved strategies, bot runner rejects `regime.enabled` until D24 ships. Prereq: A13a. [large] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
+- [ ] **B22** Regime: symmetric direction switching (backtest) — `on_flip` behavior (close_only default / close_and_reverse / hold), per-bar `position_direction` switching driven by regime, per-trade direction in trade records. Uses same rules for both directions (no dual rule sets yet). UI: on_flip dropdown, direction toggle hidden when on_flip != hold. PnL sign correctness tests against known price sequences. Prereq: B21. [medium] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
+- [ ] **B23** Regime: dual rule sets — `long_buy_rules`/`long_sell_rules`/`short_buy_rules`/`short_sell_rules` in schema + backtest. Three-state regime (long/short/flat based on dual rule presence). Long/Short tab split in StrategyBuilder — each direction gets independent entry/exit rules with different indicators (e.g. MA-based long, RSI/Stochastic short). Prereq: B22. [medium] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
 
 ## C — Strategy Summary & Analytics
 
@@ -106,6 +111,7 @@
 - [x] **D19** Bot card redesign — responsive sparkline (was fixed 60%), columnar stats (label above value), compact mode kebab dropdown (replaces inline buttons), portfolio strip alignment, shared `ui.tsx` for layout primitives. 106 tests.
 - [ ] **D22** Trade journal CSV export — download button on TradeJournal for tax prep or external analysis in spreadsheets. [easy]
 - [ ] **D23** Bot daily P&L summary — small calendar heatmap or daily bar chart on BotCard showing per-day returns. Visual pattern recognition for "which days does this bot print?" [medium]
+- [ ] **D24** Regime filter: live bot integration — regime evaluation in `bot_runner._tick()`, `is_short` → `position_direction` refactor in bot_runner, position flip sequence (close → verify → reverse entry on same tick), `pending_regime_flip` retry logic, BotState regime+direction fields, `compute_bidirectional_pnl` in journal.py (no existing callers change), bidirectional same-symbol guard (regime bot gets exclusive symbol access), regime status on bot card (Active/Flat/Pending + position direction), AddBotBar regime passthrough. Prereq: B23. [large] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
 
 ### Pre-numbering
 - [x] Verify allocation logic — was position_size=10.0, added validator to clamp 0.01-1.0
