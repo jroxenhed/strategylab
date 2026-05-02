@@ -92,3 +92,13 @@ No big bang. No grand architecture. Just small steps with a clear direction.
 - What's the risk budget model? Fixed-fractional of total capital? Kelly on the portfolio level?
 - When does a bot get killed? Drawdown auto-pause is temporary. When does the system decide a strategy is dead and deallocate?
 - How much autonomy is too much? The overnight builder suggests TODOs. The discovery pipeline would suggest strategies. Where's the line between "helpful automation" and "I have no idea what my bots are doing"?
+
+## Critical Pushback (from brainstorm review)
+
+**The overfitting trap.** Automated parameter sweeps will *always* find something that backtests well. That's not alpha — it's overfitting dressed up as alpha. Without a rigorous overfitting gate, the auto-deploy pipeline becomes an automated way to lose money confidently. The walk-forward / out-of-sample / Monte Carlo question above isn't optional — it's the most important technical decision in the entire discovery pipeline.
+
+**Bot correlation is the hidden portfolio risk.** Five bots that all go long on momentum stocks aren't diversified — they're the same bet five times. The ranking engine (Sharpe * sqrt(trades) * Kelly, penalized by drawdown) rewards individual strategy quality, but the portfolio-level risk budget needs a correlation check. If new bot candidate correlates >0.7 with existing deployed bots, it adds concentration risk, not diversification. Need a correlation gate before auto-deploy.
+
+**The "board of directors" role, made concrete.** A board doesn't write code or pick trades. The weekly check-in is: review P&L, review regime states, kill decayed strategies, approve new deployments from the discovery pipeline. Everything else is delegated. The human stays in the loop at the approval and risk-limit layer, not the execution layer.
+
+**Context from lived experience:** Portfolio peaked +95% then halved in the chop. The discretionary version of "can't manage positions in a hostile regime" is exactly what the regime filter solves. The discovery pipeline needs the same discipline — knowing when an edge has decayed and cutting it, automatically.
