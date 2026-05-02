@@ -33,7 +33,7 @@
 - [x] **A11** MA8 / MA21 with SMA/EMA/RMA type selector + S-G smoothed variants (independent window/poly per MA, raw curve toggles, dashed S-G lines)
 - [x] **A12** Backtest equity curve: baseline (buy & hold) overlay toggle
 - [x] **A13a** Multi-TF data foundation — `fetch_higher_tf()`, `align_htf_to_ltf()`, `htf_lookback_days()` in `backend/shared.py`. Anti-lookahead alignment: daily MA for day D maps to day D+1's intraday bars (strict `<`, UTC-normalized). Weekend/holiday gap handling (Monday → Friday's close). Exhaustive alignment tests in `backend/tests/test_htf_alignment.py`. Shared prereq for A13b, B21, D24. [medium] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
-- [ ] **A13b** Multi-TF indicator overlay — see daily/weekly indicators stepped onto intraday charts. HTF indicator endpoint (`routes/indicators.py` + `htf_interval` param), per-instance timeframe selector in sidebar ("Same"/"1D"/"1W"), stepped overlay rendering via `LineType.WithSteps`, grouped HTF data fetching in `useOHLCV`. Prereq: A13a. [medium] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
+- [ ] **A13b** Multi-TF indicator overlay — see daily/weekly indicators stepped onto intraday charts. HTF indicator endpoint (`routes/indicators.py` + `htf_interval` param), per-instance timeframe selector in sidebar ("Same"/"1D"/"1W"), stepped overlay rendering via `LineType.WithSteps`, grouped HTF data fetching in `useOHLCV`. Prereq: A13a. [medium] [next] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
 
 ## B — Strategy Engine & Rules
 
