@@ -50,6 +50,7 @@ Every agent session (interactive or automated) follows this protocol to prevent 
 2. Append to `JOURNAL.md` — reuse today's date header if it exists, one bullet per shipped item with bold **[ID]** cross-reference
 3. Tag suitable unchecked items `[next]` for the next overnight run (prefer prereqs of in-progress work, then `[easy]` items)
 4. Both updates in the **same commit** as the code changes (atomic)
+5. Send Slack summary: `bash bin/slack-report.sh "Overnight build: shipped [IDs]. Next: [tagged IDs]."` (silently skips if webhook not configured)
 
 ### Priority tags in TODO.md
 - `[next]` — highest-priority unchecked item(s), auto-picked by chain runner
