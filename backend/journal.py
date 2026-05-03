@@ -2,6 +2,7 @@
 
 import json
 import os
+import tempfile
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -190,4 +191,14 @@ def _log_trade(symbol: str, side: str, qty: float, price: float | None,
             "bot_id": bot_id,
             "broker": broker,
         })
-        JOURNAL_PATH.write_text(json.dumps(journal, indent=2))
+        fd = tempfile.NamedTemporaryFile(
+            mode='w', dir=str(JOURNAL_PATH.parent), suffix='.tmp', delete=False
+        )
+        try:
+            fd.write(json.dumps(journal, indent=2))
+            fd.close()
+            os.replace(fd.name, str(JOURNAL_PATH))
+        except Exception:
+            fd.close()
+            os.unlink(fd.name)
+            raise

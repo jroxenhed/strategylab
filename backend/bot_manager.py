@@ -12,6 +12,7 @@ import json
 import logging
 import math
 import os
+import tempfile
 import uuid
 from dataclasses import dataclass, field
 
@@ -526,10 +527,17 @@ class BotManager:
                 for config, state in self.bots.values()
             ],
         }
-        tmp = DATA_PATH + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(data, f, indent=2, default=str)
-        os.replace(tmp, DATA_PATH)
+        fd = tempfile.NamedTemporaryFile(
+            mode='w', dir=os.path.dirname(DATA_PATH), suffix='.tmp', delete=False
+        )
+        try:
+            json.dump(data, fd, indent=2, default=str)
+            fd.close()
+            os.replace(fd.name, DATA_PATH)
+        except:
+            fd.close()
+            os.unlink(fd.name)
+            raise
 
     def load(self):
         if not os.path.exists(DATA_PATH):
