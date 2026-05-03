@@ -4,6 +4,22 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-03 (overnight build 7)
+
+- **[F6](TODO.md#f--architecture--housekeeping)** Split `shared/types/index.ts` into domain files. Created `chart.ts` (OHLCV, TimeValue, Macro* types), `strategy.ts` (Rule, StrategyRequest, BacktestResult, etc.), `trading.ts` (BotConfig, BotState, BotSummary, etc.). `index.ts` now a barrel re-export — all 30+ external imports unchanged, no consumer updates needed.
+
+- **[D23](TODO.md#d--bots-live-trading)** Bot daily P&L bar chart on BotCard. `DailyPnlChart` component: groups equity_snapshots by ET date, computes per-day P&L as day-over-day delta, renders as SVG bar chart (green/red, last 30 days, zero-line, date labels). Shown in BotCard expanded view when ≥2 snapshots available. Pure frontend, no new API calls.
+
+- **[C18](TODO.md#c--strategy-summary--analytics)** Parameter sensitivity sweep. `POST /api/backtest/sweep` endpoint (`routes/backtest_sweep.py`): accepts base StrategyRequest + `param_path` + `values[]`, runs up to 25 backtest variants with one parameter varied, returns summary stats per variant. Supports `stop_loss_pct`, `trailing_stop_value`, `slippage_bps`, `buy_rule_{i}_value`, `sell_rule_{i}_value`. Frontend: `SensitivityPanel` component with param dropdown, min/max/steps inputs, color-coded results table (green=best, red=worst per column). New "Sensitivity" tab in Results, gated on `lastRequest` being available. Not visually verified.
+
+- **[F17](TODO.md#f--architecture--housekeeping)** Bot auto-resume flag. Added `was_running: bool = False` to `BotState`. `BotManager.load()` now sets `state.was_running = state.status == "running"` before resetting all statuses to "stopped". Persisted to bots.json; `from_dict()` picks it up via the generic setattr loop. UI exposure deferred to F22.
+
+- **[F18](TODO.md#f--architecture--housekeeping)** Cap equity_snapshots growth. All 3 `equity_snapshots.append()` sites in `bot_runner.py` now trim to `[-500:]` after each append. Prevents bots.json from growing unboundedly with active bots.
+
+- **[D24c](TODO.md#d--bots-live-trading)** Regime HTF fetch timeout. Wrapped the `fetch_higher_tf` executor call in `asyncio.wait_for(..., timeout=15.0)`. On timeout logs WARN and returns `"flat"` (conservative gate-closed). Prevents a hanging data provider from blocking `_tick()` and stalling stop-loss checks for open positions.
+
+- **[F20](TODO.md#f--architecture--housekeeping)** bot_runner test harness. `backend/tests/test_bot_runner.py`: 7 tests covering key `_tick()` state transitions — no-entry-outside-hours, entry-on-buy-signal, no-entry-when-positioned, stop-loss-exit (long), sell-signal-exit, time-stop-exit, skip-entry-cooldown. `MockProvider` with call-count-aware `get_positions` (models the 3-call pattern: initial check, pre-close safety check, post-close verification). `_direct_executor` patch skips thread pool in tests. All 7 pass in 0.81s.
+
 ## 2026-05-03 (overnight build 6)
 
 - **[F14](TODO.md#f--architecture--housekeeping)** Atomic bots.json writes. `BotManager.save()` now writes to a temp file (`DATA_PATH + ".tmp"`) then calls `os.replace()` (atomic on POSIX) so a crash during write can't corrupt or truncate `bots.json`.

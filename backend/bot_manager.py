@@ -129,6 +129,7 @@ class BotState:
     regime_direction: Optional[str] = None   # "long" | "short" | "flat" — current evaluated regime
     position_direction: Optional[str] = None  # direction of current open position (None when flat)
     pending_regime_flip: bool = False          # True = close failed last tick, retry next tick
+    was_running: bool = False                  # True if bot was running when server last restarted
 
     def to_dict(self) -> dict:
         return {
@@ -157,6 +158,7 @@ class BotState:
             "regime_direction": self.regime_direction,
             "position_direction": self.position_direction,
             "pending_regime_flip": self.pending_regime_flip,
+            "was_running": self.was_running,
         }
 
     @classmethod
@@ -558,6 +560,7 @@ class BotManager:
                         cfg_dict[key] = [migrate_rule(Rule(**r)).model_dump() for r in cfg_dict[key]]
                 config = BotConfig(**cfg_dict)
                 state = BotState.from_dict(entry.get("state", {}))
+                state.was_running = state.status == "running"
                 state.status = "stopped"  # always start stopped after server restart
                 self.bots[config.bot_id] = (config, state)
             if self.bots:
