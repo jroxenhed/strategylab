@@ -4,6 +4,14 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-03 (review session 2)
+
+- PR #12 (build 7) review: 3 P1 fixes (await→create_task notify_error, negative sweep guard, was_running in list_bots API).
+- PR #13 (build 8) review: clean — 0 P0/P1, merged as-is.
+- PR #14 (F21 bot_runner split) review: 1 P1 fix (regime.py inline imports bypassing `_br()` pattern). Tests pass 7/7 post-fix.
+- PR #15 (build 9) review: 2 P1 fixes (float→int period params for BB/ATR/Stochastic/ADX sweep, skip invalid values instead of aborting sweep).
+- Added C24 (regime/short direction-aware analytics), A8d (indicator resample on coarser view).
+
 ## 2026-05-03 (overnight build 9)
 
 - **[C21](TODO.md#c--strategy-summary--analytics)** Sensitivity sweep param bug — (1) fixed error swallowing in sweep loop (HTTPException from run_backtest now propagates instead of returning silent zero-result rows); (2) added `rule.params` sweep support in backend `_apply_param` (`buy_rule_{i}_params_{key}`, `sell_rule_{i}_params_{key}`) and frontend `buildParamOptions` (sweeps MA period, RSI period, Stochastic k/d, ADX period, BB std_dev etc.); (3) three P2 review fixes: max_drawdown color `highIsGood=true`, integer rounding for period linspace values, selectedPath reset on lastRequest change.

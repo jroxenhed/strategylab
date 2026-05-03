@@ -54,4 +54,4 @@ Tasks to skip even if tagged `[next]`:
 **Review concerns flagged:**
 - C21 changes not visually verified — test sensitivity sweep with MA rule: `period` should appear as sweep option, values should be integers.
 
-**Next up:** C22 [large] (auto-optimizer), B26 [medium] (sweep from rule row), or any [easy] items in section order.
+**Next up:** C24 [medium] (regime/short direction-aware analytics — priority), C23 [easy] (sweep error banner), A8d [medium] (indicator resample on coarser view), B26 [medium] (sweep from rule row).
