@@ -92,7 +92,7 @@ def _apply_param(base: StrategyRequest, param_path: str, value: float) -> Strate
             raise HTTPException(status_code=400, detail=f"buy_rule index {idx} out of range")
         rules = list(modified.buy_rules)
         existing_params = dict(rules[idx].params) if rules[idx].params else {}
-        existing_params[param_key] = value
+        existing_params[param_key] = int(round(value)) if value == int(value) else value
         rules[idx] = rules[idx].model_copy(update={"params": existing_params})
         modified = modified.model_copy(update={"buy_rules": rules})
 
@@ -108,7 +108,7 @@ def _apply_param(base: StrategyRequest, param_path: str, value: float) -> Strate
             raise HTTPException(status_code=400, detail=f"sell_rule index {idx} out of range")
         rules = list(modified.sell_rules)
         existing_params = dict(rules[idx].params) if rules[idx].params else {}
-        existing_params[param_key] = value
+        existing_params[param_key] = int(round(value)) if value == int(value) else value
         rules[idx] = rules[idx].model_copy(update={"params": existing_params})
         modified = modified.model_copy(update={"sell_rules": rules})
 
@@ -145,6 +145,6 @@ def sweep_backtest(req: SweepRequest) -> list[SweepPoint]:
                 ev_per_trade=s.get("ev_per_trade"),
             ))
         except HTTPException:
-            raise
+            continue  # skip invalid parameter values (e.g. RSI period=1)
 
     return results
