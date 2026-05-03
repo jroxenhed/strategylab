@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*110 / 133 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*111 / 133 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -91,8 +91,9 @@
 - [x] **C17** Correlation to benchmark — compute beta and R² vs SPY returns alongside strategy equity curve. `_compute_spy_correlation()` in `backtest.py` (daily return alignment, SPY cached fetch), panel in Summary tab. [medium]
 - [x] **C17a** Fix SPY correlation: beta/R² always 0 — switched from daily equity-curve returns to per-trade returns aligned to SPY over the same holding periods. Returns None (hidden panel) for strategies with <3 closed trades or intraday-only activity (near-zero SPY variance). [easy]
 - [x] **C18** Parameter sensitivity sweep — re-run backtest with ±N variations of one indicator param, show results in a table/heatmap. Answers "how fragile is this edge?" `POST /api/backtest/sweep` + SensitivityPanel in Results (Sensitivity tab). [medium]
-- [ ] **C20** Equity curve chart blank after F6 types split — stats render but no line drawn. Likely a broken import or missing type re-export from the F6 split. Regression from build 7. [easy] [next]
+- [x] **C20** Equity curve chart blank after F6 types split — investigated: build 7 diff shows no equity-curve changes; code, types, and conditional render all correct; build passes clean. User confirmed equity curve works in local tests — likely a transient/one-off issue. Closing.
 - [x] **C21** Sweep param_path bug — (1) fixed error swallowing in sweep loop (propagate HTTPException instead of returning zeros); (2) added `rule.params` sweep support for indicator params (MA/RSI/Stochastic/ADX periods etc.) in backend `_apply_param` + frontend `buildParamOptions`. Also fixed max_drawdown color inversion (highIsGood=true for negative series), integer rounding for period params in linspace, and stale selectedPath reset when lastRequest changes.
+- [ ] **C23** Sweep: surface `run_backtest` error message in SensitivityPanel when sweep fails — currently the UI just shows nothing if sweep returns HTTP 4xx/5xx after C21's error-propagation fix. Show an error banner with the detail string. [easy] [next]
 - [ ] **C22** Auto-optimizer — run sensitivity sweeps automatically across multiple parameters, find the combination that maximizes Sharpe / return / win rate. Like C18 but multi-dimensional: sweep param A, pick best, sweep param B, iterate. Show a ranked table of top N parameter combos. Could use grid search for small spaces or Bayesian optimization for larger ones. The "push button, get optimized strategy" workflow. [large]
 - [x] **C19** Backtest result persistence — save/load backtest results to localStorage. Auto-save on each backtest; auto-restore on page load when ticker/dates/interval match saved settings. Graceful fallback on quota exceeded. [medium]
 
@@ -175,4 +176,4 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] **F22** Surface `was_running` in BotCard UI — F17 persists the flag to bots.json but nothing in the UI reads it. Show a small warning badge (e.g. "⚡ Was running") on stopped bots with `was_running=True`, prompting restart decision. Requires adding `was_running` to `BotSummary` API response. [easy]
 - [x] **F23** Add `was_running` to frontend `BotSummary` TypeScript type + `list_bots()` API response — shipped in PR #12 review fixes. [easy]
 - [x] **C18b** Sensitivity sweep sparkline — add a mini line chart above the results table showing `total_return_pct` vs `param_value`. Makes the sensitivity curve shape immediately visible (cliff-edge vs smooth plateau). Pure frontend from existing `SweepPoint[]` data. [easy]
-- [ ] **B26** Sweep from rule row — "Sweep this value" button on rule rows in StrategyBuilder with a numeric threshold, automatically selects the matching `param_path` in the Sensitivity tab and suggests a ±50% range. Eliminates manual tab-switching and path selection. [medium]
+- [ ] **B26** Sweep from rule row — "Sweep this value" button on rule rows in StrategyBuilder with a numeric threshold, automatically selects the matching `param_path` in the Sensitivity tab and suggests a ±50% range. Eliminates manual tab-switching and path selection. [medium] [next]
