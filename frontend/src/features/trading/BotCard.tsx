@@ -425,6 +425,26 @@ export default function BotCard({
               label="Status"
               value={<span style={{ color: statusColor(summary.status), textTransform: 'capitalize' }}>{summary.status}</span>}
             />
+            {summary.regime_direction != null && (
+              <StatCell
+                label="Regime"
+                value={
+                  summary.pending_regime_flip ? (
+                    <span style={{ color: '#f0b74e' }}>⏳ Pending flip</span>
+                  ) : (
+                    <span style={{
+                      color: summary.regime_direction === 'long' ? '#26a69a'
+                           : summary.regime_direction === 'short' ? '#ef5350'
+                           : '#666',
+                    }}>
+                      {summary.regime_direction === 'long' ? '▲ Long'
+                       : summary.regime_direction === 'short' ? '▼ Short'
+                       : '⊘ Flat'}
+                    </span>
+                  )
+                }
+              />
+            )}
             {summary.avg_cost_bps != null && (
               <StatCell
                 label="Slippage"

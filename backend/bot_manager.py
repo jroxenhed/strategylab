@@ -28,7 +28,9 @@ from routes.backtest import run_backtest
 from signal_engine import migrate_rule, Rule
 from shared import _fetch
 from broker import get_trading_provider, OrderRequest as BrokerOrderRequest
-from journal import _log_trade, _load_trades, compute_realized_pnl, first_bot_entry_time, compute_bot_avg_cost_bps, DATA_DIR
+from journal import (_log_trade, _load_trades, compute_realized_pnl, first_bot_entry_time,
+                     compute_bidirectional_pnl, first_bot_bidirectional_entry_time,
+                     compute_bot_avg_cost_bps, DATA_DIR)
 from bot_runner import BotRunner
 
 
@@ -69,6 +71,15 @@ class BotConfig(BaseModel):
     direction: str = "long"            # "long" | "short"
     broker: str = "alpaca"             # "alpaca" | "ibkr" — which broker executes orders
     regime: Optional[RegimeConfig] = None
+    # B23/D24: dual rule sets for regime bots (None = use buy_rules/sell_rules)
+    long_buy_rules: Optional[list[Rule]] = None
+    long_sell_rules: Optional[list[Rule]] = None
+    long_buy_logic: str = "AND"
+    long_sell_logic: str = "AND"
+    short_buy_rules: Optional[list[Rule]] = None
+    short_sell_rules: Optional[list[Rule]] = None
+    short_buy_logic: str = "AND"
+    short_sell_logic: str = "AND"
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +124,11 @@ class BotState:
     error_message: Optional[str] = None
     pause_reason: Optional[str] = None   # set by IBKR error handler on structural rejects
 
+    # D24: regime live bot state
+    regime_direction: Optional[str] = None   # "long" | "short" | "flat" — current evaluated regime
+    position_direction: Optional[str] = None  # direction of current open position (None when flat)
+    pending_regime_flip: bool = False          # True = close failed last tick, retry next tick
+
     def to_dict(self) -> dict:
         return {
             "status": self.status,
@@ -137,6 +153,9 @@ class BotState:
             "activity_log": self.activity_log,
             "error_message": self.error_message,
             "pause_reason": self.pause_reason,
+            "regime_direction": self.regime_direction,
+            "position_direction": self.position_direction,
+            "pending_regime_flip": self.pending_regime_flip,
         }
 
     @classmethod
@@ -216,14 +235,25 @@ class BotManager:
         config, state = self.bots[bot_id]
         if bot_id in self.tasks and not self.tasks[bot_id].done():
             raise ValueError(f"Bot {bot_id} is already running")
-        # Guard: no two bots on the same symbol AND direction
+        # Guard: regime bots require exclusive symbol access; non-regime bots block same direction
         for bid, task in self.tasks.items():
             if bid != bot_id and not task.done():
                 other_cfg, _ = self.bots[bid]
-                if other_cfg.symbol == config.symbol and other_cfg.direction == config.direction:
-                    raise ValueError(
-                        f"Bot {bid} is already running {config.direction} on {config.symbol}"
-                    )
+                if other_cfg.symbol == config.symbol:
+                    if config.regime and config.regime.enabled:
+                        raise ValueError(
+                            f"Regime bot on {config.symbol} requires exclusive symbol access "
+                            f"(bot {bid} is already running on {config.symbol})"
+                        )
+                    if other_cfg.regime and other_cfg.regime.enabled:
+                        raise ValueError(
+                            f"Bot {bid} has regime enabled on {config.symbol} — "
+                            f"regime bots require exclusive symbol access"
+                        )
+                    if other_cfg.direction == config.direction:
+                        raise ValueError(
+                            f"Bot {bid} is already running {config.direction} on {config.symbol}"
+                        )
         runner = BotRunner(config, state, self)
         task = asyncio.create_task(runner.run())
         self.tasks[bot_id] = task
@@ -392,7 +422,13 @@ class BotManager:
         result = []
         for bot_id, (config, state) in self.bots.items():
             epoch = config.pnl_epoch
-            first_trade_time = first_bot_entry_time(config.symbol, config.direction, bot_id=bot_id, since=epoch, trades=all_trades)
+            is_regime = bool(config.regime and config.regime.enabled)
+            if is_regime:
+                total_pnl = round(compute_bidirectional_pnl(config.symbol, bot_id, since=epoch, trades=all_trades), 2)
+                first_trade_time = first_bot_bidirectional_entry_time(config.symbol, bot_id, since=epoch, trades=all_trades)
+            else:
+                total_pnl = round(compute_realized_pnl(config.symbol, config.direction, bot_id=bot_id, since=epoch, trades=all_trades), 2)
+                first_trade_time = first_bot_entry_time(config.symbol, config.direction, bot_id=bot_id, since=epoch, trades=all_trades)
             if first_trade_time is None and state.equity_snapshots:
                 first_trade_time = state.equity_snapshots[0]["time"]
             result.append({
@@ -403,7 +439,7 @@ class BotManager:
                 "allocated_capital": config.allocated_capital,
                 "status": state.status,
                 "trades_count": state.trades_count,
-                "total_pnl": round(compute_realized_pnl(config.symbol, config.direction, bot_id=bot_id, since=epoch, trades=all_trades), 2),
+                "total_pnl": total_pnl,
                 "backtest_summary": state.backtest_summary,
                 "data_source": config.data_source,
                 "direction": config.direction,
@@ -417,6 +453,9 @@ class BotManager:
                 "last_tick": state.last_tick,
                 "pause_reason": state.pause_reason,
                 "equity_snapshots": state.equity_snapshots,
+                "regime_direction": state.regime_direction,
+                "position_direction": state.position_direction,
+                "pending_regime_flip": state.pending_regime_flip,
             })
         return result
 

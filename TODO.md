@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*89 / 103 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*91 / 113 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -90,7 +90,7 @@
 - [x] **C16** Risk-adjusted position sizing calculator — Kelly criterion + fixed-fractional sizing based on backtest win rate and avg win/loss ratio. Shows "optimal" bet size given your edge. Small panel in Summary tab. [easy]
 - [x] **C17** Correlation to benchmark — compute beta and R² vs SPY returns alongside strategy equity curve. `_compute_spy_correlation()` in `backtest.py` (daily return alignment, SPY cached fetch), panel in Summary tab. [medium]
 - [x] **C17a** Fix SPY correlation: beta/R² always 0 — switched from daily equity-curve returns to per-trade returns aligned to SPY over the same holding periods. Returns None (hidden panel) for strategies with <3 closed trades or intraday-only activity (near-zero SPY variance). [easy]
-- [ ] **C18** Parameter sensitivity sweep — re-run backtest with ±N variations of one indicator param, show results in a table/heatmap. Answers "how fragile is this edge?" [medium]
+- [ ] **C18** Parameter sensitivity sweep — re-run backtest with ±N variations of one indicator param, show results in a table/heatmap. Answers "how fragile is this edge?" [medium] [next]
 - [x] **C19** Backtest result persistence — save/load backtest results to localStorage. Auto-save on each backtest; auto-restore on page load when ticker/dates/interval match saved settings. Graceful fallback on quota exceeded. [medium]
 
 ## D — Bots (live trading)
@@ -117,7 +117,9 @@
 - [x] **D19** Bot card redesign — responsive sparkline (was fixed 60%), columnar stats (label above value), compact mode kebab dropdown (replaces inline buttons), portfolio strip alignment, shared `ui.tsx` for layout primitives. 106 tests.
 - [x] **D22** Trade journal CSV export — download button on TradeJournal for tax prep or external analysis in spreadsheets. [easy]
 - [ ] **D23** Bot daily P&L summary — small calendar heatmap or daily bar chart on BotCard showing per-day returns. Visual pattern recognition for "which days does this bot print?" [medium]
-- [ ] **D24** Regime filter: live bot integration — regime evaluation in `bot_runner._tick()`, `is_short` → `position_direction` refactor in bot_runner, position flip sequence (close → verify → reverse entry on same tick), `pending_regime_flip` retry logic, BotState regime+direction fields, `compute_bidirectional_pnl` in journal.py (no existing callers change), bidirectional same-symbol guard (regime bot gets exclusive symbol access), regime status on bot card (Active/Flat/Pending + position direction), AddBotBar regime passthrough. Prereq: B23. [large] [next] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
+- [ ] **D24a** Regime bot backtest_bot() method — `bot_manager.backtest_bot()` doesn't pass regime/dual-rule fields to `StrategyRequest`; regime bots silently backtest without their regime config. [easy] [next]
+- [ ] **D24b** Regime bot visual verification — D24 not visually verified. Need to run a regime bot in paper trading to confirm flip sequence, pending_regime_flip retry, and BotCard regime status display. Manual QA item.
+- [x] **D24** Regime filter: live bot integration — regime evaluation in `bot_runner._tick()`, `is_short` → `position_direction` refactor in bot_runner, position flip sequence (close → verify → reverse entry on same tick), `pending_regime_flip` retry logic, BotState regime+direction fields, `compute_bidirectional_pnl` in journal.py (no existing callers change), bidirectional same-symbol guard (regime bot gets exclusive symbol access), regime status on bot card (Active/Flat/Pending + position direction), AddBotBar regime passthrough. Prereq: B23. [large] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
 
 ### Pre-numbering
 - [x] Verify allocation logic — was position_size=10.0, added validator to clamp 0.01-1.0

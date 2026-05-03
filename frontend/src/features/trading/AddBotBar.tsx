@@ -90,6 +90,7 @@ export default function AddBotBar({
     if (alloc > available) { setError(`Max available: ${fmtUsd(available)}`); return }
     const s = strategies[selectedIdx]
     try {
+      const hasRegime = !!(s.regime && s.regime.enabled)
       await onAdd({
         strategy_name: s.name,
         symbol: symbol.toUpperCase(),
@@ -98,6 +99,15 @@ export default function AddBotBar({
         sell_rules: s.sellRules,
         buy_logic: s.buyLogic ?? 'AND',
         sell_logic: s.sellLogic ?? 'AND',
+        // Dual rule sets (for regime bots with B23 dual strategies)
+        long_buy_rules: s.longBuyRules ?? null,
+        long_sell_rules: s.longSellRules ?? null,
+        long_buy_logic: s.longBuyLogic ?? 'AND',
+        long_sell_logic: s.longSellLogic ?? 'AND',
+        short_buy_rules: s.shortBuyRules ?? null,
+        short_sell_rules: s.shortSellRules ?? null,
+        short_buy_logic: s.shortBuyLogic ?? 'AND',
+        short_sell_logic: s.shortSellLogic ?? 'AND',
         allocated_capital: alloc,
         position_size: 1.0,
         stop_loss_pct: typeof s.stopLoss === 'number' ? s.stopLoss : null,
@@ -110,8 +120,9 @@ export default function AddBotBar({
         max_spread_bps: maxSpreadBps ? parseFloat(maxSpreadBps) || null : null,
         drawdown_threshold_pct: maxDrawdownPct ? parseFloat(maxDrawdownPct) || null : null,
         data_source: dataSource,
-        direction,
+        direction: hasRegime ? (s.direction ?? direction) : direction,
         broker,
+        regime: hasRegime ? s.regime : null,
       })
       setAllocation('')
     } catch (e) {

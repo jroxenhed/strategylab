@@ -306,6 +306,14 @@ export interface BotConfig {
   sell_rules: Rule[]
   buy_logic: 'AND' | 'OR'
   sell_logic: 'AND' | 'OR'
+  long_buy_rules?: Rule[]
+  long_sell_rules?: Rule[]
+  long_buy_logic?: 'AND' | 'OR'
+  long_sell_logic?: 'AND' | 'OR'
+  short_buy_rules?: Rule[]
+  short_sell_rules?: Rule[]
+  short_buy_logic?: 'AND' | 'OR'
+  short_sell_logic?: 'AND' | 'OR'
   allocated_capital: number
   position_size: number
   stop_loss_pct?: number
@@ -320,6 +328,7 @@ export interface BotConfig {
   data_source?: string
   direction?: 'long' | 'short'
   broker?: string
+  regime?: RegimeConfig
 }
 
 export interface BotFundStatus {
@@ -370,6 +379,9 @@ export interface BotSummary {
   last_tick?: string
   pause_reason?: string
   equity_snapshots?: { time: string; value: number }[]
+  regime_direction?: string | null
+  position_direction?: string | null
+  pending_regime_flip?: boolean
 }
 
 export interface BotDetail {

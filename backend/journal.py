@@ -126,6 +126,30 @@ def first_bot_entry_time(symbol: str, direction: str = "long", bot_id: str | Non
     return None
 
 
+def compute_bidirectional_pnl(symbol: str, bot_id: str, since: str | None = None,
+                              *, trades: list[dict] | None = None) -> float:
+    """Sum realized P&L across both directions for a bidirectional (regime) bot."""
+    if trades is None:
+        trades = _load_trades()
+    return (
+        compute_realized_pnl(symbol, "long", bot_id, since, trades=trades)
+        + compute_realized_pnl(symbol, "short", bot_id, since, trades=trades)
+    )
+
+
+def first_bot_bidirectional_entry_time(symbol: str, bot_id: str, since: str | None = None,
+                                       *, trades: list[dict] | None = None) -> str | None:
+    """Return earliest bot entry across both directions for a regime bot."""
+    if trades is None:
+        trades = _load_trades()
+    times = [
+        t for direction in ("long", "short")
+        for t in [first_bot_entry_time(symbol, direction, bot_id, since, trades=trades)]
+        if t is not None
+    ]
+    return min(times) if times else None
+
+
 def _log_trade(symbol: str, side: str, qty: float, price: float | None,
                source: str, stop_loss_price: float | None = None,
                reason: str | None = None, expected_price: float | None = None,

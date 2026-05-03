@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 from signal_engine import compute_indicators, eval_rules, migrate_rule
 from shared import _fetch
 from broker import get_trading_provider, OrderRequest as BrokerOrderRequest, OrderResult
-from journal import _log_trade, compute_realized_pnl
+from journal import _log_trade, compute_realized_pnl, compute_bidirectional_pnl
 from post_loss import is_post_loss_trigger
 from notifications import notify_entry, notify_exit, notify_error
 
@@ -79,15 +79,277 @@ class BotRunner:
                 break
         return expected
 
+    def _bot_pnl(self, cfg, state) -> float:
+        """Compute realized P&L using bidirectional helper for regime bots."""
+        is_regime = bool(cfg.regime and cfg.regime.enabled)
+        if is_regime:
+            return compute_bidirectional_pnl(cfg.symbol, cfg.bot_id, since=cfg.pnl_epoch)
+        return compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id, since=cfg.pnl_epoch)
+
+    async def _eval_regime_direction(self, cfg, df) -> str:
+        """Evaluate current regime direction. Returns 'long', 'short', or 'flat'.
+        Conservative default: 'flat' on any error.
+        """
+        from indicators import compute_instance, OHLCVSeries as _OHLCVSeries
+        from shared import fetch_higher_tf, align_htf_to_ltf, htf_lookback_days
+
+        rc = cfg.regime
+        from datetime import date, timedelta
+        end_date = date.today().isoformat()
+        lookback = htf_lookback_days(rc.indicator, rc.indicator_params)
+        htf_start = (date.today() - timedelta(days=lookback)).isoformat()
+
+        htf_df = await self._run_in_executor(
+            fetch_higher_tf, cfg.symbol, htf_start, end_date, rc.timeframe, cfg.data_source
+        )
+        if htf_df is None or htf_df.empty:
+            self._log("WARN", f"Regime: no HTF data for {rc.timeframe}, gate closed")
+            return "flat"
+
+        vol_col = htf_df["Volume"] if "Volume" in htf_df.columns else htf_df["Close"] * 0
+        ohlcv = _OHLCVSeries(
+            close=htf_df["Close"], high=htf_df["High"], low=htf_df["Low"], volume=vol_col
+        )
+        result = compute_instance(rc.indicator, rc.indicator_params, ohlcv)
+        indicator_key = next(iter(result))
+        indicator_series = result[indicator_key]
+
+        close = htf_df["Close"]
+        if rc.condition == "above":
+            raw_bool = close > indicator_series
+        elif rc.condition == "below":
+            raw_bool = close < indicator_series
+        elif rc.condition == "rising":
+            raw_bool = indicator_series.diff() > 0
+        elif rc.condition == "falling":
+            raw_bool = indicator_series.diff() < 0
+        else:
+            self._log("WARN", f"Unsupported regime condition: {rc.condition!r}")
+            return "flat"
+
+        raw_bool = raw_bool.fillna(False)
+
+        if rc.min_bars > 1:
+            smoothed = raw_bool.astype(int).rolling(rc.min_bars, min_periods=rc.min_bars).min().fillna(0).astype(bool)
+        else:
+            smoothed = raw_bool.astype(bool)
+
+        from shared import align_htf_to_ltf
+        aligned = align_htf_to_ltf(smoothed.astype(float), df.index)
+        aligned = aligned.fillna(0).astype(bool)
+        regime_active = bool(aligned.iloc[-1]) if not aligned.empty else False
+
+        has_dual = bool(cfg.long_buy_rules and cfg.short_buy_rules)
+        if regime_active:
+            return "long"
+        elif has_dual:
+            return "short"
+        else:
+            return "flat"
+
+    async def _handle_regime_flip(self, cfg, state, new_dir: str, price: float,
+                                   broker_qty: int, in_hours: bool, indicators: dict, i: int):
+        """Close current position for a regime flip. Optionally enters the new direction."""
+        old_dir = state.position_direction
+        pos_is_short_now = old_dir == "short"
+        on_flip = cfg.regime.on_flip
+
+        self._log("INFO", f"Regime flip: {old_dir} → {new_dir} ({on_flip})")
+
+        try:
+            provider = get_trading_provider(cfg.broker)
+
+            # Cancel pending stop orders for this symbol
+            try:
+                orders = await self._run_in_executor(
+                    provider.get_orders, "open", [cfg.symbol.upper()], 50
+                )
+                cancel_side = "buy" if pos_is_short_now else "sell"
+                for o in orders:
+                    if o["side"] == cancel_side:
+                        await self._run_in_executor(provider.cancel_order, o["id"])
+                        self._log("INFO", f"Cancelled pending {o['type']} order {o['id']}")
+            except Exception as e:
+                self._log("WARN", f"Cancel orders failed: {e}")
+
+            close_result = await self._run_in_executor(provider.close_position, cfg.symbol.upper())
+        except Exception as e:
+            self._log("ERROR", f"Regime flip close failed: {e}")
+            state.pending_regime_flip = True
+            self.manager.save()
+            return
+
+        order_id = close_result.order_id
+        self._active_order_ids.add(order_id)
+        state.pending_close_order_id = order_id
+        state.pending_close_reason = "regime_flip"
+        self.manager.save()
+
+        sell_fill = await self._get_fill_price_provider(provider, order_id, price) if order_id else price
+
+        # Wait for position to actually clear (up to 3s)
+        still_open = True
+        for _ in range(6):
+            try:
+                post_positions = await self._run_in_executor(provider.get_positions)
+                still_open = any(
+                    p["symbol"] == cfg.symbol.upper() and p["side"] == old_dir
+                    for p in post_positions
+                )
+            except Exception as e:
+                self._log("WARN", f"Regime flip post-close check failed: {e}")
+                state.pending_regime_flip = True
+                self.manager.save()
+                return
+            if not still_open:
+                break
+            await asyncio.sleep(0.5)
+
+        if still_open:
+            self._log("ERROR", f"Regime flip: position not cleared after 3s — setting pending_regime_flip")
+            state.pending_regime_flip = True
+            self.manager.save()
+            return
+
+        # Close confirmed — log and update state
+        pnl = (state.entry_price - sell_fill) * broker_qty if pos_is_short_now else (sell_fill - state.entry_price) * broker_qty
+        exit_label = "COVER" if pos_is_short_now else "SELL"
+        side_key = "cover" if pos_is_short_now else "sell"
+        cost_bps = slippage_cost_bps(side_key, expected=price, fill=sell_fill)
+        bias_bps = fill_bias_bps(side_key, expected=price, fill=sell_fill)
+        state.slippage_bps.append(round(cost_bps, 2))
+        state.last_signal = f"{exit_label} (regime_flip)"
+
+        ds_trigger = cfg.dynamic_sizing.trigger if cfg.dynamic_sizing else "sl"
+        if is_post_loss_trigger("regime_flip", ds_trigger):
+            state.consec_sl_count += 1
+        else:
+            state.consec_sl_count = 0
+
+        self._log(
+            "TRADE",
+            f"{exit_label} {cfg.symbol} @ {sell_fill:.2f} | PnL={pnl:+.2f} | reason=regime_flip "
+            f"(expected={price:.2f}, cost={cost_bps:.1f}bps, bias={bias_bps:+.1f}bps)",
+        )
+
+        try:
+            _log_trade(cfg.symbol, "cover" if pos_is_short_now else "sell", broker_qty, sell_fill,
+                       source="bot", reason="regime_flip", expected_price=price,
+                       direction=old_dir, bot_id=cfg.bot_id, broker=cfg.broker)
+        except Exception:
+            pass
+
+        asyncio.create_task(notify_exit(
+            symbol=cfg.symbol,
+            direction=old_dir,
+            qty=broker_qty,
+            price=sell_fill,
+            pnl=pnl,
+            reason="regime_flip",
+            bot_id=cfg.bot_id,
+        ))
+
+        state.equity_snapshots.append({
+            "time": datetime.now(timezone.utc).isoformat(),
+            "value": round(self._bot_pnl(cfg, state), 2),
+        })
+
+        # Clear position state
+        state.entry_price = None
+        state.entry_bar_count = 0
+        state.trail_peak = None
+        state.trail_stop_price = None
+        state.pending_close_order_id = None
+        state.pending_close_reason = None
+        state.position_direction = None
+        state.pending_regime_flip = False
+        self._last_broker_qty = None
+        self._active_order_ids.clear()
+        self.manager.save()
+
+        # If close_and_reverse and new direction is not flat: immediately enter
+        if on_flip == "close_and_reverse" and new_dir not in ("flat", None) and in_hours:
+            await self._enter_position(cfg, state, new_dir, price, indicators, i)
+
+    async def _enter_position(self, cfg, state, direction: str, price: float, indicators: dict, i: int):
+        """Submit entry order in the given direction and update state."""
+        entry_is_short = direction == "short"
+
+        # Compute effective capital (bidirectional for regime bots)
+        current_capital = cfg.allocated_capital + self._bot_pnl(cfg, state)
+        effective_size = max(current_capital, 0) * cfg.position_size
+        if cfg.dynamic_sizing and cfg.dynamic_sizing.enabled:
+            if state.consec_sl_count >= cfg.dynamic_sizing.consec_sls:
+                effective_size *= (cfg.dynamic_sizing.reduced_pct / 100.0)
+                self._log("INFO", f"Dynamic sizing active: reduced to {cfg.dynamic_sizing.reduced_pct}%")
+
+        qty = math.floor(effective_size / price)
+        if qty < 1:
+            self._log("WARN", f"Position too small: {effective_size:.2f} / {price:.2f} = {qty} shares")
+            return
+
+        try:
+            provider = get_trading_provider(cfg.broker)
+            if entry_is_short:
+                order_req = BrokerOrderRequest(symbol=cfg.symbol.upper(), qty=qty, side="sell")
+            elif cfg.stop_loss_pct and not cfg.trailing_stop:
+                stop_price = round(price * (1 - cfg.stop_loss_pct / 100), 2)
+                order_req = BrokerOrderRequest(
+                    symbol=cfg.symbol.upper(), qty=qty, side="buy",
+                    order_type="stop", stop_price=stop_price,
+                )
+            else:
+                order_req = BrokerOrderRequest(symbol=cfg.symbol.upper(), qty=qty, side="buy")
+
+            result = await self._run_in_executor(provider.submit_order, order_req)
+            self._active_order_ids.add(result.order_id)
+        except Exception as e:
+            self._log("ERROR", f"Entry order failed: {e}")
+            return
+
+        fill_price = await self._get_fill_price_provider(provider, result.order_id, price)
+
+        state.entry_price = fill_price
+        state.entry_bar_count = 0
+        state.trail_peak = fill_price
+        state.position_direction = direction
+        self._last_broker_qty = qty
+        state.trades_count += 1
+        side_label = "SHORT" if entry_is_short else "BUY"
+        state.last_signal = side_label
+        side_key = "short" if entry_is_short else "buy"
+        cost_bps = slippage_cost_bps(side_key, expected=price, fill=fill_price)
+        bias_bps = fill_bias_bps(side_key, expected=price, fill=fill_price)
+        state.slippage_bps.append(round(cost_bps, 2))
+        self._log(
+            "TRADE",
+            f"{side_label} {qty} {cfg.symbol} @ {fill_price:.2f} "
+            f"(expected={price:.2f}, cost={cost_bps:.1f}bps, bias={bias_bps:+.1f}bps)",
+        )
+
+        try:
+            _log_trade(cfg.symbol, "short" if entry_is_short else "buy", qty, fill_price,
+                       source="bot", reason="entry", expected_price=price,
+                       direction=direction, bot_id=cfg.bot_id, broker=cfg.broker)
+        except Exception:
+            pass
+
+        asyncio.create_task(notify_entry(
+            symbol=cfg.symbol,
+            direction=direction,
+            qty=qty,
+            price=fill_price,
+            strategy_name=cfg.strategy_name,
+            bot_id=cfg.bot_id,
+        ))
+
+        self.manager.save()
+
     async def _tick(self):
         cfg = self.config
         state = self.state
-        if cfg.regime and cfg.regime.enabled:
-            raise RuntimeError(
-                "Regime filter is not yet supported for live bots — use backtest to validate. "
-                "Remove the regime config or disable it before starting this bot."
-            )
-        is_short = cfg.direction == "short"
+        is_regime = bool(cfg.regime and cfg.regime.enabled)
+
         buy_rules = [migrate_rule(r) for r in cfg.buy_rules]
         sell_rules = [migrate_rule(r) for r in cfg.sell_rules]
         all_rules = buy_rules + sell_rules
@@ -143,7 +405,21 @@ class BotRunner:
         price = float(df["Close"].iloc[-1])
         state.last_price = price
 
+        # 4b. Regime evaluation — determine entry direction for this tick
+        entry_dir = cfg.direction  # default for non-regime bots
+        if is_regime:
+            try:
+                entry_dir = await self._eval_regime_direction(cfg, df)
+            except Exception as e:
+                self._log("WARN", f"Regime eval failed, gate closed: {e}")
+                entry_dir = "flat"
+            state.regime_direction = entry_dir
+
+        entry_is_short = entry_dir == "short"
+
         # 5. Check broker for existing position (source of truth)
+        # For regime bots, match against current tracked position direction (if known)
+        check_dir = state.position_direction if (is_regime and state.position_direction) else cfg.direction
         has_position = False
         broker_qty = 0
         try:
@@ -151,13 +427,15 @@ class BotRunner:
             positions = await self._run_in_executor(provider.get_positions)
             for pos in positions:
                 if pos["symbol"] == cfg.symbol.upper():
-                    if pos["side"] != cfg.direction:
+                    if pos["side"] != check_dir:
                         continue
                     has_position = True
                     broker_qty = abs(pos["qty"])
                     if state.entry_price is None:
                         state.entry_price = pos["avg_entry"]
                         state.trail_peak = price
+                        if is_regime and not state.position_direction:
+                            state.position_direction = pos["side"]
                         self._log("INFO", f"Resumed tracking position: entry={state.entry_price:.2f}")
                     break
         except Exception as e:
@@ -175,9 +453,42 @@ class BotRunner:
         if has_position:
             self._last_broker_qty = broker_qty
 
+        # 5c. Regime: handle pending flip retry (position not cleared last tick)
+        if is_regime and state.pending_regime_flip:
+            if has_position:
+                # Still open — retry close
+                self._log("INFO", "Retrying pending regime flip close")
+                await self._handle_regime_flip(cfg, state, entry_dir, price, broker_qty, in_hours, indicators, i)
+                return
+            else:
+                # Position cleared between ticks — clean up state, optionally enter new direction
+                self._log("INFO", "Pending regime flip resolved — position cleared between ticks")
+                state.pending_regime_flip = False
+                state.entry_price = None
+                state.position_direction = None
+                state.pending_close_order_id = None
+                state.pending_close_reason = None
+                self._last_broker_qty = None
+                has_position = False
+                self.manager.save()
+                # If close_and_reverse and new direction is valid: enter, then return
+                if cfg.regime.on_flip == "close_and_reverse" and entry_dir not in ("flat", None) and in_hours:
+                    await self._enter_position(cfg, state, entry_dir, price, indicators, i)
+                return
+
+        # 5d. Regime: detect direction flip while positioned (new flip this tick)
+        if is_regime and has_position and state.position_direction is not None:
+            if entry_dir != state.position_direction and cfg.regime.on_flip != "hold":
+                await self._handle_regime_flip(cfg, state, entry_dir, price, broker_qty, in_hours, indicators, i)
+                return
+            # on_flip == "hold" or no flip: fall through to normal exit checks
+
         # ---------------------------------------------------------------
         # 6. No position → evaluate buy rules
         # ---------------------------------------------------------------
+        # Use state.position_direction as direction reference for externally-closed detection
+        pos_is_short = state.position_direction == "short" if state.position_direction else cfg.direction == "short"
+
         if not has_position:
             # Detect externally-closed position (e.g. broker SL fill)
             if state.entry_price is not None:
@@ -189,14 +500,13 @@ class BotRunner:
                     filled_orders = await self._run_in_executor(
                         provider.get_orders, "closed", [cfg.symbol.upper()], 5
                     )
-                    close_side = "buy" if is_short else "sell"
+                    close_side = "buy" if pos_is_short else "sell"
                     for o in filled_orders:
                         if o["side"] == close_side and o.get("filled_avg_price"):
                             exit_price = float(o["filled_avg_price"])
                             exit_qty = float(o.get("qty", 0))
                             order_type = o.get("type", "")
-                            # If this fill matches the bot's own pending close,
-                            # recover the real reason instead of labelling it external.
+                            # If this fill matches the bot's own pending close, recover real reason
                             if state.pending_close_order_id and o.get("id") == state.pending_close_order_id and state.pending_close_reason:
                                 exit_reason = state.pending_close_reason
                             elif order_type in ("stop", "stop_limit"):
@@ -210,7 +520,7 @@ class BotRunner:
                     self._log("WARN", f"Failed to query filled orders: {e}")
 
                 sell_qty = exit_qty or broker_qty or 0
-                if is_short:
+                if pos_is_short:
                     pnl = (state.entry_price - exit_price) * sell_qty if sell_qty else 0
                 else:
                     pnl = (exit_price - state.entry_price) * sell_qty if sell_qty else 0
@@ -225,26 +535,27 @@ class BotRunner:
                         is_post_loss_trigger(exit_reason, cfg.skip_after_stop.trigger):
                     state.skip_remaining = cfg.skip_after_stop.count
 
-                side_label = "COVER" if is_short else "SELL"
+                side_label = "COVER" if pos_is_short else "SELL"
                 self._log("TRADE", f"{side_label} {cfg.symbol} @ {exit_price:.2f} | PnL={pnl:+.2f} | reason={exit_reason} (detected)")
 
                 expected_exit: float | None = None
                 if exit_reason == "stop_loss" and cfg.stop_loss_pct and state.entry_price:
-                    sl_mult = (1 + cfg.stop_loss_pct / 100) if is_short else (1 - cfg.stop_loss_pct / 100)
+                    sl_mult = (1 + cfg.stop_loss_pct / 100) if pos_is_short else (1 - cfg.stop_loss_pct / 100)
                     expected_exit = state.entry_price * sl_mult
                 elif exit_reason == "trailing_stop" and state.trail_stop_price:
                     expected_exit = state.trail_stop_price
 
+                logged_dir = state.position_direction or cfg.direction
                 try:
-                    _log_trade(cfg.symbol, "cover" if is_short else "sell", sell_qty, exit_price,
+                    _log_trade(cfg.symbol, "cover" if pos_is_short else "sell", sell_qty, exit_price,
                                source="bot", reason=exit_reason, expected_price=expected_exit,
-                               direction=cfg.direction, bot_id=cfg.bot_id, broker=cfg.broker)
+                               direction=logged_dir, bot_id=cfg.bot_id, broker=cfg.broker)
                 except Exception:
                     pass
 
                 asyncio.create_task(notify_exit(
                     symbol=cfg.symbol,
-                    direction=cfg.direction,
+                    direction=logged_dir,
                     qty=sell_qty,
                     price=exit_price,
                     pnl=pnl,
@@ -254,7 +565,7 @@ class BotRunner:
 
                 state.equity_snapshots.append({
                     "time": datetime.now(timezone.utc).isoformat(),
-                    "value": round(compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id, since=cfg.pnl_epoch), 2),
+                    "value": round(self._bot_pnl(cfg, state), 2),
                 })
 
                 if cfg.drawdown_threshold_pct and state.equity_snapshots:
@@ -277,6 +588,7 @@ class BotRunner:
                         state.trail_stop_price = None
                         state.pending_close_order_id = None
                         state.pending_close_reason = None
+                        state.position_direction = None
                         self._last_broker_qty = None
                         self.manager.save()
                         return
@@ -289,14 +601,30 @@ class BotRunner:
             state.trail_stop_price = None
             state.pending_close_order_id = None
             state.pending_close_reason = None
+            state.position_direction = None
             self._last_broker_qty = None
 
             if not in_hours:
                 self._log("INFO", "Outside trading hours — skipping entry")
                 return
 
+            # Regime gate: skip entry if regime says flat
+            if is_regime and entry_dir == "flat":
+                return
+
+            # Select buy rules based on direction (dual rule sets for regime bots)
+            if is_regime and entry_is_short and cfg.short_buy_rules:
+                active_buy_rules = [migrate_rule(r) for r in cfg.short_buy_rules]
+                active_buy_logic = cfg.short_buy_logic
+            elif is_regime and not entry_is_short and cfg.long_buy_rules:
+                active_buy_rules = [migrate_rule(r) for r in cfg.long_buy_rules]
+                active_buy_logic = cfg.long_buy_logic
+            else:
+                active_buy_rules = buy_rules
+                active_buy_logic = cfg.buy_logic
+
             buy_signal = await self._run_in_executor(
-                eval_rules, buy_rules, cfg.buy_logic, indicators, i
+                eval_rules, active_buy_rules, active_buy_logic, indicators, i
             )
 
             if buy_signal:
@@ -305,13 +633,12 @@ class BotRunner:
                     self._log("INFO", f"Skipping entry (post-stop cooldown, {state.skip_remaining} left)")
                     return
                 # Safety: skip entry if opposite-direction position exists
-                # (prevents long BUY from netting against short bot's position)
                 try:
                     provider = get_trading_provider(cfg.broker)
                     _positions = await self._run_in_executor(provider.get_positions)
                     for _pos in _positions:
                         if _pos["symbol"] == cfg.symbol.upper():
-                            if _pos["side"] != cfg.direction:
+                            if _pos["side"] != entry_dir:
                                 self._log("WARN", f"Skipping entry — opposite position ({_pos['side']}) exists")
                                 return
                             break
@@ -319,7 +646,6 @@ class BotRunner:
                     pass  # if check fails, proceed cautiously
 
                 # Spread gate: skip entries when bid/ask spread exceeds the configured cap.
-                # Exits are never gated — once we want out, we go out regardless of spread.
                 if cfg.max_spread_bps is not None and cfg.max_spread_bps > 0:
                     try:
                         provider = get_trading_provider(cfg.broker)
@@ -337,101 +663,22 @@ class BotRunner:
                         self._log("WARN", f"Spread check failed ({e}) — skipping entry to stay conservative")
                         return
 
-                # Compute effective position size (compounds P&L like backtest)
-                current_capital = cfg.allocated_capital + compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id, since=cfg.pnl_epoch)
-                effective_size = max(current_capital, 0) * cfg.position_size
-                if cfg.dynamic_sizing and cfg.dynamic_sizing.enabled:
-                    if state.consec_sl_count >= cfg.dynamic_sizing.consec_sls:
-                        effective_size *= (cfg.dynamic_sizing.reduced_pct / 100.0)
-                        self._log("INFO", f"Dynamic sizing active: reduced to {cfg.dynamic_sizing.reduced_pct}%")
-
-                qty = math.floor(effective_size / price)
-                if qty < 1:
-                    self._log("WARN", f"Position too small: {effective_size:.2f} / {price:.2f} = {qty} shares")
-                    return
-
-                try:
-                    provider = get_trading_provider(cfg.broker)
-
-                    if is_short:
-                        order_req = BrokerOrderRequest(
-                            symbol=cfg.symbol.upper(),
-                            qty=qty,
-                            side="sell",
-                        )
-                    elif cfg.stop_loss_pct and not cfg.trailing_stop:
-                        # OTO bracket: provider handles if supported (Alpaca), else plain market
-                        stop_price = round(price * (1 - cfg.stop_loss_pct / 100), 2)
-                        order_req = BrokerOrderRequest(
-                            symbol=cfg.symbol.upper(),
-                            qty=qty,
-                            side="buy",
-                            order_type="stop",
-                            stop_price=stop_price,
-                        )
-                    else:
-                        order_req = BrokerOrderRequest(
-                            symbol=cfg.symbol.upper(),
-                            qty=qty,
-                            side="buy",
-                        )
-
-                    result = await self._run_in_executor(provider.submit_order, order_req)
-                    self._active_order_ids.add(result.order_id)
-                except Exception as e:
-                    self._log("ERROR", f"Buy order failed: {e}")
-                    return
-
-                # Get actual fill price
-                fill_price = await self._get_fill_price_provider(provider, result.order_id, price)
-
-                state.entry_price = fill_price
-                state.entry_bar_count = 0
-                state.trail_peak = fill_price
-                self._last_broker_qty = qty
-                state.trades_count += 1
-                side_label = "SHORT" if is_short else "BUY"
-                state.last_signal = side_label
-                side_key = "short" if is_short else "buy"
-                cost_bps = slippage_cost_bps(side_key, expected=price, fill=fill_price)
-                bias_bps = fill_bias_bps(side_key, expected=price, fill=fill_price)
-                state.slippage_bps.append(round(cost_bps, 2))
-                self._log(
-                    "TRADE",
-                    f"{side_label} {qty} {cfg.symbol} @ {fill_price:.2f} "
-                    f"(expected={price:.2f}, cost={cost_bps:.1f}bps, bias={bias_bps:+.1f}bps)",
-                )
-
-                # Log to trade journal
-                try:
-                    _log_trade(cfg.symbol, "short" if is_short else "buy", qty, fill_price,
-                               source="bot", reason="entry", expected_price=price,
-                               direction=cfg.direction, bot_id=cfg.bot_id, broker=cfg.broker)
-                except Exception:
-                    pass
-
-                asyncio.create_task(notify_entry(
-                    symbol=cfg.symbol,
-                    direction=cfg.direction,
-                    qty=qty,
-                    price=fill_price,
-                    strategy_name=cfg.strategy_name,
-                    bot_id=cfg.bot_id,
-                ))
-
-                self.manager.save()
+                await self._enter_position(cfg, state, entry_dir, price, indicators, i)
 
         # ---------------------------------------------------------------
         # 7. Has position → evaluate exits
         # ---------------------------------------------------------------
         else:
+            # Re-derive pos_is_short from actual position direction
+            pos_is_short = state.position_direction == "short" if state.position_direction else cfg.direction == "short"
+
             state.entry_bar_count += 1
             exit_reason = None
 
             # Update trailing peak/trough
             if cfg.trailing_stop and state.entry_price is not None:
                 ts = cfg.trailing_stop
-                if is_short:
+                if pos_is_short:
                     source_price = float(df["Low"].iloc[-1]) if ts.source == "high" else price
                     activated = (not ts.activate_on_profit) or (
                         source_price <= state.entry_price * (1 - ts.activate_pct / 100)
@@ -463,7 +710,7 @@ class BotRunner:
                             state.trail_stop_price = state.trail_peak - ts.value * atr_val
 
             # Check exits in priority order
-            if is_short:
+            if pos_is_short:
                 if cfg.stop_loss_pct and state.entry_price:
                     if price >= state.entry_price * (1 + cfg.stop_loss_pct / 100):
                         exit_reason = "stop_loss"
@@ -472,8 +719,6 @@ class BotRunner:
                         exit_reason = "trailing_stop"
             else:
                 if cfg.stop_loss_pct and state.entry_price and not cfg.trailing_stop:
-                    # Fixed stop managed by bot (not OTO) — shouldn't normally happen
-                    # but handle gracefully
                     if price <= state.entry_price * (1 - cfg.stop_loss_pct / 100):
                         exit_reason = "stop_loss"
                 if exit_reason is None and cfg.trailing_stop and state.trail_stop_price:
@@ -484,8 +729,19 @@ class BotRunner:
                 exit_reason = "time_stop"
 
             if exit_reason is None:
+                # Select sell rules based on position direction (dual rule sets for regime bots)
+                if is_regime and pos_is_short and cfg.short_sell_rules:
+                    active_sell_rules = [migrate_rule(r) for r in cfg.short_sell_rules]
+                    active_sell_logic = cfg.short_sell_logic
+                elif is_regime and not pos_is_short and cfg.long_sell_rules:
+                    active_sell_rules = [migrate_rule(r) for r in cfg.long_sell_rules]
+                    active_sell_logic = cfg.long_sell_logic
+                else:
+                    active_sell_rules = sell_rules
+                    active_sell_logic = cfg.sell_logic
+
                 sell_signal = await self._run_in_executor(
-                    eval_rules, sell_rules, cfg.sell_logic, indicators, i
+                    eval_rules, active_sell_rules, active_sell_logic, indicators, i
                 )
                 if sell_signal:
                     exit_reason = "signal"
@@ -493,13 +749,14 @@ class BotRunner:
             if exit_reason:
                 try:
                     provider = get_trading_provider(cfg.broker)
-                    # Safety: verify position side matches bot direction
+                    # Safety: verify position side matches tracked direction
+                    pos_dir_ref = state.position_direction or cfg.direction
                     try:
                         positions = await self._run_in_executor(provider.get_positions)
                         pos_match = False
                         for pos in positions:
                             if pos["symbol"] == cfg.symbol.upper():
-                                if pos["side"] == cfg.direction:
+                                if pos["side"] == pos_dir_ref:
                                     pos_match = True
                                 break
                         if not pos_match:
@@ -508,6 +765,7 @@ class BotRunner:
                             state.entry_bar_count = 0
                             state.trail_peak = None
                             state.trail_stop_price = None
+                            state.position_direction = None
                             self._last_broker_qty = None
                             self.manager.save()
                             return
@@ -520,7 +778,7 @@ class BotRunner:
                         orders = await self._run_in_executor(
                             provider.get_orders, "open", [cfg.symbol.upper()], 50
                         )
-                        cancel_side = "buy" if is_short else "sell"
+                        cancel_side = "buy" if pos_is_short else "sell"
                         for o in orders:
                             if o["side"] == cancel_side:
                                 await self._run_in_executor(provider.cancel_order, o["id"])
@@ -536,8 +794,6 @@ class BotRunner:
                 # Get actual fill price
                 order_id = close_result.order_id
                 self._active_order_ids.add(order_id)
-                # Stash pending close so the next tick recognizes the fill as ours
-                # even if the broker hasn't dropped the position from get_positions yet.
                 state.pending_close_order_id = order_id
                 state.pending_close_reason = exit_reason
                 self.manager.save()
@@ -545,16 +801,13 @@ class BotRunner:
                 sell_fill = await self._get_fill_price_provider(provider, order_id, price) if order_id else price
 
                 # Verify the position actually closed before clearing state or journaling.
-                # IBKR placeOrder returns order_id synchronously; rejects/non-fills are async.
-                # Alpaca also lags briefly between fill and position update — retry ~3s
-                # before giving up, otherwise the bot rediscovers its own sale next tick
-                # and labels it "external".
+                pos_dir_ref = state.position_direction or cfg.direction
                 still_open = True
                 for _ in range(6):
                     try:
                         post_positions = await self._run_in_executor(provider.get_positions)
                         still_open = any(
-                            p["symbol"] == cfg.symbol.upper() and p["side"] == cfg.direction
+                            p["symbol"] == cfg.symbol.upper() and p["side"] == pos_dir_ref
                             for p in post_positions
                         )
                     except Exception as e:
@@ -567,11 +820,11 @@ class BotRunner:
                     self._log("ERROR", f"Close order {order_id} did not reduce position after 3s — leaving state intact")
                     return
 
-                if is_short:
+                if pos_is_short:
                     pnl = (state.entry_price - sell_fill) * broker_qty if state.entry_price else 0
                 else:
                     pnl = (sell_fill - state.entry_price) * broker_qty if state.entry_price else 0
-                exit_label = "COVER" if is_short else "SELL"
+                exit_label = "COVER" if pos_is_short else "SELL"
                 state.last_signal = f"{exit_label} ({exit_reason})"
 
                 # Update dynamic sizing counter + skip-after-stop
@@ -585,7 +838,7 @@ class BotRunner:
                         is_post_loss_trigger(exit_reason, cfg.skip_after_stop.trigger):
                     state.skip_remaining = cfg.skip_after_stop.count
 
-                side_key = "cover" if is_short else "sell"
+                side_key = "cover" if pos_is_short else "sell"
                 cost_bps = slippage_cost_bps(side_key, expected=price, fill=sell_fill)
                 bias_bps = fill_bias_bps(side_key, expected=price, fill=sell_fill)
                 state.slippage_bps.append(round(cost_bps, 2))
@@ -595,16 +848,17 @@ class BotRunner:
                     f"(expected={price:.2f}, cost={cost_bps:.1f}bps, bias={bias_bps:+.1f}bps)",
                 )
 
+                logged_dir = state.position_direction or cfg.direction
                 try:
-                    _log_trade(cfg.symbol, "cover" if is_short else "sell", broker_qty, sell_fill,
+                    _log_trade(cfg.symbol, "cover" if pos_is_short else "sell", broker_qty, sell_fill,
                                source="bot", reason=exit_reason, expected_price=price,
-                               direction=cfg.direction, bot_id=cfg.bot_id, broker=cfg.broker)
+                               direction=logged_dir, bot_id=cfg.bot_id, broker=cfg.broker)
                 except Exception:
                     pass
 
                 asyncio.create_task(notify_exit(
                     symbol=cfg.symbol,
-                    direction=cfg.direction,
+                    direction=logged_dir,
                     qty=broker_qty,
                     price=sell_fill,
                     pnl=pnl,
@@ -614,7 +868,7 @@ class BotRunner:
 
                 state.equity_snapshots.append({
                     "time": datetime.now(timezone.utc).isoformat(),
-                    "value": round(compute_realized_pnl(cfg.symbol, cfg.direction, bot_id=cfg.bot_id, since=cfg.pnl_epoch), 2),
+                    "value": round(self._bot_pnl(cfg, state), 2),
                 })
 
                 if cfg.drawdown_threshold_pct and state.equity_snapshots:
@@ -637,6 +891,7 @@ class BotRunner:
                         state.trail_stop_price = None
                         state.pending_close_order_id = None
                         state.pending_close_reason = None
+                        state.position_direction = None
                         self._last_broker_qty = None
                         self._active_order_ids.clear()
                         self.manager.save()
@@ -648,6 +903,7 @@ class BotRunner:
                 state.trail_stop_price = None
                 state.pending_close_order_id = None
                 state.pending_close_reason = None
+                state.position_direction = None
                 self._last_broker_qty = None
                 self._active_order_ids.clear()
                 self.manager.save()
@@ -744,3 +1000,6 @@ class BotRunner:
                 await asyncio.sleep(interval_secs)
         finally:
             self._unregister_error_listener()
+            self.state.status = "stopped"
+            self.state.started_at = None
+            self.manager.save()
