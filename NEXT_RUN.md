@@ -55,4 +55,4 @@ Tasks to skip even if tagged `[next]`:
 - D24 not visually verified — the bot flip sequence requires a live market session with a running regime bot.
 - Smoke test not run (no pandas/uvicorn in sandbox); backend verified by syntax only.
 
-**Next up:** D24a [easy] (backtest_bot regime passthrough), D25 [easy] (opposite-direction guard safety fix), then C18 [medium] (parameter sensitivity sweep).
+**Next up:** D24a [easy], D25 [easy], F6 [easy], C18 [medium], D23 [medium]. Task limit raised to 5.
