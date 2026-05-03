@@ -1008,11 +1008,11 @@ class BotRunner:
                         self._log("WARN", f"Backing off {RECOVERY_WAIT}s after {MAX_CONSEC_ERRORS} consecutive failures")
                         self.state.error_message = f"Recovering: {e}"
                         self.manager.save()
-                        await notify_error(
+                        asyncio.create_task(notify_error(
                             symbol=self.config.symbol,
                             error_msg=f"{MAX_CONSEC_ERRORS} consecutive tick failures: {e}",
                             bot_id=self.config.bot_id,
-                        )
+                        ))
                         await asyncio.sleep(RECOVERY_WAIT)
                         consec_errors = 0
                         self._log("INFO", "Resuming after recovery backoff")

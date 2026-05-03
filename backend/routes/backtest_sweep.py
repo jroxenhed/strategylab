@@ -44,13 +44,13 @@ def _apply_param(base: StrategyRequest, param_path: str, value: float) -> Strate
     modified = base.model_copy(deep=True)
 
     if param_path == "stop_loss_pct":
-        modified = modified.model_copy(update={"stop_loss_pct": value})
+        modified = modified.model_copy(update={"stop_loss_pct": max(0.0, value)})
 
     elif param_path == "trailing_stop_value":
         if modified.trailing_stop is None:
             raise HTTPException(status_code=400, detail="trailing_stop is not configured in base request")
         modified = modified.model_copy(
-            update={"trailing_stop": modified.trailing_stop.model_copy(update={"value": value})}
+            update={"trailing_stop": modified.trailing_stop.model_copy(update={"value": max(0.0, value)})}
         )
 
     elif param_path == "slippage_bps":

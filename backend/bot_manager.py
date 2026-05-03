@@ -474,6 +474,7 @@ class BotManager:
                 "regime_direction": state.regime_direction,
                 "position_direction": state.position_direction,
                 "pending_regime_flip": state.pending_regime_flip,
+                "was_running": state.was_running,
             })
         return result
 
