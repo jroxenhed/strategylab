@@ -220,11 +220,7 @@ class BotRunner:
         state.slippage_bps.append(round(cost_bps, 2))
         state.last_signal = f"{exit_label} (regime_flip)"
 
-        ds_trigger = cfg.dynamic_sizing.trigger if cfg.dynamic_sizing else "sl"
-        if is_post_loss_trigger("regime_flip", ds_trigger):
-            state.consec_sl_count += 1
-        else:
-            state.consec_sl_count = 0
+        state.consec_sl_count = 0
 
         self._log(
             "TRADE",
@@ -269,7 +265,11 @@ class BotRunner:
 
         # If close_and_reverse and new direction is not flat: immediately enter
         if on_flip == "close_and_reverse" and new_dir not in ("flat", None) and in_hours:
-            await self._enter_position(cfg, state, new_dir, price, indicators, i)
+            if state.skip_remaining > 0:
+                state.skip_remaining -= 1
+                self._log("INFO", f"Skipping regime re-entry (post-stop cooldown, {state.skip_remaining} left)")
+            else:
+                await self._enter_position(cfg, state, new_dir, price, indicators, i)
 
     async def _enter_position(self, cfg, state, direction: str, price: float, indicators: dict, i: int):
         """Submit entry order in the given direction and update state."""
@@ -353,6 +353,10 @@ class BotRunner:
         buy_rules = [migrate_rule(r) for r in cfg.buy_rules]
         sell_rules = [migrate_rule(r) for r in cfg.sell_rules]
         all_rules = buy_rules + sell_rules
+        # Include dual rule sets so their indicators are computed
+        for extra in (cfg.long_buy_rules, cfg.long_sell_rules, cfg.short_buy_rules, cfg.short_sell_rules):
+            if extra:
+                all_rules = all_rules + [migrate_rule(r) for r in extra]
         loop = asyncio.get_event_loop()
 
         state.last_tick = datetime.now(timezone.utc).isoformat()
@@ -465,6 +469,9 @@ class BotRunner:
                 self._log("INFO", "Pending regime flip resolved — position cleared between ticks")
                 state.pending_regime_flip = False
                 state.entry_price = None
+                state.entry_bar_count = 0
+                state.trail_peak = None
+                state.trail_stop_price = None
                 state.position_direction = None
                 state.pending_close_order_id = None
                 state.pending_close_reason = None
@@ -473,7 +480,11 @@ class BotRunner:
                 self.manager.save()
                 # If close_and_reverse and new direction is valid: enter, then return
                 if cfg.regime.on_flip == "close_and_reverse" and entry_dir not in ("flat", None) and in_hours:
-                    await self._enter_position(cfg, state, entry_dir, price, indicators, i)
+                    if state.skip_remaining > 0:
+                        state.skip_remaining -= 1
+                        self._log("INFO", f"Skipping regime re-entry (post-stop cooldown, {state.skip_remaining} left)")
+                    else:
+                        await self._enter_position(cfg, state, entry_dir, price, indicators, i)
                 return
 
         # 5d. Regime: detect direction flip while positioned (new flip this tick)

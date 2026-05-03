@@ -269,6 +269,8 @@ class BotManager:
         state.entry_price = None
         state.trail_peak = None
         state.trail_stop_price = None
+        state.position_direction = None
+        state.pending_regime_flip = False
 
         if close_position:
             try:
@@ -361,7 +363,11 @@ class BotManager:
         price = float(df["Close"].iloc[-1])
 
         # Calculate qty
-        current_capital = config.allocated_capital + compute_realized_pnl(config.symbol, config.direction, bot_id=config.bot_id)
+        is_regime = bool(config.regime and config.regime.enabled)
+        if is_regime:
+            current_capital = config.allocated_capital + compute_bidirectional_pnl(config.symbol, config.bot_id, since=config.pnl_epoch)
+        else:
+            current_capital = config.allocated_capital + compute_realized_pnl(config.symbol, config.direction, bot_id=config.bot_id, since=config.pnl_epoch)
         effective_size = max(current_capital, 0) * config.position_size
         qty = math.floor(effective_size / price)
         if qty < 1:
