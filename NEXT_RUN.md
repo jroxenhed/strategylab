@@ -62,4 +62,4 @@ Tasks to skip even if tagged `[next]`:
 - D23 DailyPnlChart not visually verified — pure frontend change, reviewer should check BotCard expanded view with a bot that has equity_snapshots.
 - C18 SensitivityPanel not visually verified — reviewer should run a sweep to confirm results table renders correctly.
 
-**Next up:** F21 [medium] (split bot_runner.py), F22 [easy] (surface was_running in UI), F23 [easy] (BotSummary TS type), D24d [medium] (HTF cache), C18b [easy] (sensitivity sparkline).
+**Next up:** F21 [medium] (split bot_runner.py), F22 [easy] (was_running badge on BotCard), C18b [easy] (sensitivity sparkline). F23 already shipped in PR #12 review fixes.

@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*103 / 131 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*104 / 131 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -170,6 +170,6 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] **F20** bot_runner test harness — 7 tests in `backend/tests/test_bot_runner.py`: no-entry-outside-hours, entry-on-buy-signal, no-entry-when-positioned, stop-loss-exit-long, sell-signal-exit, time-stop-exit, skip-entry-cooldown. MockProvider with call-count-aware `get_positions`, `_direct_executor` patch. All 7 pass in 0.81s. [medium]
 - [ ] **F21** Split bot_runner.py (~1000 lines) — extract `_eval_regime_direction`/`_handle_regime_flip`/`_enter_position` into `regime.py`, exit logic (stop-loss, trailing, time-stop, externally-closed detection) into `exits.py`, keep `_tick()` as the thin orchestrator. Prereq: F20. [medium] [next]
 - [ ] **F22** Surface `was_running` in BotCard UI — F17 persists the flag to bots.json but nothing in the UI reads it. Show a small warning badge (e.g. "⚡ Was running") on stopped bots with `was_running=True`, prompting restart decision. Requires adding `was_running` to `BotSummary` API response. [easy] [next]
-- [ ] **F23** Add `was_running` to frontend `BotSummary` TypeScript type — F17 adds the field to Python BotState/to_dict/list response but the TS interface in `shared/types/trading.ts` doesn't have it yet. Frontend will silently ignore it. [easy] [next]
-- [ ] **C18b** Sensitivity sweep sparkline — add a mini line chart above the results table showing `total_return_pct` vs `param_value`. Makes the sensitivity curve shape immediately visible (cliff-edge vs smooth plateau). Pure frontend from existing `SweepPoint[]` data. [easy]
+- [x] **F23** Add `was_running` to frontend `BotSummary` TypeScript type + `list_bots()` API response — shipped in PR #12 review fixes. [easy]
+- [ ] **C18b** Sensitivity sweep sparkline — add a mini line chart above the results table showing `total_return_pct` vs `param_value`. Makes the sensitivity curve shape immediately visible (cliff-edge vs smooth plateau). Pure frontend from existing `SweepPoint[]` data. [easy] [next]
 - [ ] **B26** Sweep from rule row — "Sweep this value" button on rule rows in StrategyBuilder with a numeric threshold, automatically selects the matching `param_path` in the Sensitivity tab and suggests a ±50% range. Eliminates manual tab-switching and path selection. [medium]
