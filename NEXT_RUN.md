@@ -35,27 +35,24 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-05-03
-**Branch:** `claude/overnight-2026-05-03`
+**Date:** 2026-05-03 (build 5)
+**Branch:** `claude/bold-einstein-MCgOu`
+**Commit:** cbc2bcc
 
 **Shipped:**
-- **B21a** Regime config not restored on refresh — localStorage persistence effect missing regime fields; added `regime` to JSON and dep array.
-- **A8c** (partial) "View as" 1D regime histogram axis fix — `snapRegimeTime` converts intraday unix timestamps to YYYY-MM-DD when displaying at daily scale; fixes axis confusion and thin candles.
-- **B23** Regime dual rule sets — backend `b23_mode` + 8 schema fields; frontend Single/Long/Short tab UI in StrategyBuilder; dual rules sent in backtest request when both long and short buy rules populated.
+- **D24** Regime filter live bot integration — full Stage 5 implementation: regime evaluation per tick, position flip sequence, pending_regime_flip retry, bidirectional P&L helpers, same-symbol guard, regime status on BotCard, AddBotBar passthrough.
 
 **Self-review findings:**
-- P1: `[emptyRule()]` initial state for dual rule arrays would always trigger b23_mode — fixed to `[]`.
-- P2: HTF overlay smooth-vs-stepped when `viewInterval === htfInterval` — deferred as `A8c-htf`, cosmetic.
-- P3: b23_mode + `on_flip = "hold"` doesn't force position exit on regime flip — documented, by-design.
-- Build: clean (tsc -b + vite). Syntax: clean (python3 ast.parse). Not visually verified.
-- Review: 1 P1 auto-fixed, 1 P2 deferred, 1 iteration.
+- P2: `pending_regime_flip` not in list_bots summary → added for "⏳ Pending flip" badge on BotCard. Auto-fixed.
+- Build: clean (tsc -b + vite). Syntax: clean (ast.parse). Not visually verified (live bot paper trading required).
+- Review: 1 finding (P2), 1 auto-fixed, 1 iteration.
 
 **Deferred:**
-- A8c-htf: HTF overlay stepped-vs-smooth when viewInterval matches htfInterval (cosmetic, added to TODO).
+- D24b: Regime bot not visually verified — need paper trading QA to confirm flip sequence, pending flip retry, regime badge.
 
 **Review concerns flagged:**
-- Python smoke test not run (no pandas/uvicorn in sandbox); backend verified by syntax only.
-- B23 UI **not visually verified** — Long/Short tabs, regime tab switching, dual-rule backtest flow need human browser review.
-- b23_mode + `on_flip = "hold"` behavior: existing position stays open when regime flips; new entries after close use new rule set. This is intentional but worth verifying in browser.
+- Backend: `backtest_bot()` in `bot_manager.py` doesn't pass regime/dual-rule fields to StrategyRequest → added as D24a [easy] [next].
+- D24 not visually verified — the bot flip sequence requires a live market session with a running regime bot.
+- Smoke test not run (no pandas/uvicorn in sandbox); backend verified by syntax only.
 
-**Next up:** D24 [next] (regime live bot integration — prereq B23 now shipped). Also C18 and C9 are standalone medium tasks.
+**Next up:** D24a [easy] (backtest_bot regime passthrough — 5 min fix). Then C18 [medium] (parameter sensitivity sweep).
