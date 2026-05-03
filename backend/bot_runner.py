@@ -978,6 +978,7 @@ class BotRunner:
     async def run(self):
         self._loop = asyncio.get_running_loop()
         self.state.status = "running"
+        self.state.was_running = False
         self.state.pause_reason = None
         self.state.started_at = datetime.now(timezone.utc).isoformat()
         self._log("INFO", f"Bot started: {self.config.symbol} {self.config.interval}")

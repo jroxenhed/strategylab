@@ -250,6 +250,43 @@ export default function SensitivityPanel({ lastRequest }: Props) {
 
       {error && <div style={{ color: '#ef5350', fontSize: 12, marginBottom: 8 }}>{error}</div>}
 
+      {/* Sensitivity sparkline — return% vs param value */}
+      {results && results.length > 1 && (() => {
+        const W = 480, H = 64, PAD = 8
+        const xs = results.map(r => r.param_value)
+        const ys = results.map(r => r.total_return_pct)
+        const xMin = Math.min(...xs), xMax = Math.max(...xs)
+        const yMin = Math.min(...ys), yMax = Math.max(...ys)
+        const xRange = xMax - xMin || 1
+        const yRange = yMax - yMin || 1
+        const toX = (v: number) => PAD + (v - xMin) / xRange * (W - 2 * PAD)
+        const toY = (v: number) => H - PAD - (v - yMin) / yRange * (H - 2 * PAD)
+        const pts = results.map(r => `${toX(r.param_value).toFixed(1)},${toY(r.total_return_pct).toFixed(1)}`).join(' ')
+        const zeroY = yMin <= 0 && yMax >= 0 ? toY(0) : null
+        return (
+          <div style={{ marginBottom: 10, background: 'rgba(255,255,255,0.02)', borderRadius: 3, padding: '4px 0' }}>
+            <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: '100%', height: H, display: 'block' }}>
+              {zeroY !== null && (
+                <line x1={PAD} y1={zeroY} x2={W - PAD} y2={zeroY}
+                  stroke="#333" strokeWidth={1} strokeDasharray="3,3" />
+              )}
+              <polyline points={pts} fill="none" stroke="#58a6ff" strokeWidth={1.5} />
+              {results.map((r, i) => (
+                <circle key={i}
+                  cx={toX(r.param_value)} cy={toY(r.total_return_pct)} r={2.5}
+                  fill={r.total_return_pct >= 0 ? '#26a69a' : '#ef5350'}
+                />
+              ))}
+            </svg>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0 8px', color: '#555', fontSize: 10 }}>
+              <span>{xMin.toFixed(2)}</span>
+              <span style={{ color: '#666' }}>Return% vs {paramOptions.find(o => o.path === sweptPath)?.label ?? sweptPath}</span>
+              <span>{xMax.toFixed(2)}</span>
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Results table */}
       {results && results.length > 0 && (
         <div style={{ overflowX: 'auto' }}>
