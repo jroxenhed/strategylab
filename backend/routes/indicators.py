@@ -2,7 +2,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 import pandas as pd
-from shared import _fetch, _format_time, fetch_higher_tf, align_htf_to_ltf, htf_lookback_days
+from shared import _fetch, _format_time, fetch_higher_tf, align_htf_to_ltf, htf_lookback_days, _INTRADAY_INTERVALS
 from indicators import compute_instance, OHLCVSeries
 
 router = APIRouter()
@@ -13,6 +13,13 @@ def _series_to_list(index, interval, series):
         {"time": _format_time(t, interval), "value": round(float(v), 4) if pd.notna(v) else None}
         for t, v in zip(index, series)
     ]
+
+
+_PANDAS_FREQ_MAP = {
+    "1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min",
+    "1h": "1h", "60m": "1h",
+    "1d": "1D", "1wk": "1W", "1mo": "1ME",
+}
 
 
 IndicatorTypeLiteral = Literal["rsi", "macd", "bb", "atr", "ma", "volume", "stochastic", "vwap", "adx"]
@@ -32,6 +39,7 @@ class IndicatorsPostRequest(BaseModel):
     extended_hours: bool = False
     instances: list[InstanceRequest] = Field(max_length=20)
     htf_interval: Optional[str] = None
+    view_interval: Optional[str] = None
 
 
 @router.post("/api/indicators/{ticker}")
@@ -76,14 +84,29 @@ def post_indicators(ticker: str, body: IndicatorsPostRequest):
             low=df["Low"], volume=df["Volume"],
         )
 
+        needs_resample = (
+            body.view_interval
+            and body.view_interval != body.interval
+            and body.view_interval in _PANDAS_FREQ_MAP
+        )
+
         result = {}
         for inst in body.instances:
             try:
                 series_dict = compute_instance(inst.type, inst.params, ohlcv)
-                result[inst.id] = {
-                    key: _series_to_list(df.index, body.interval, series)
-                    for key, series in series_dict.items()
-                }
+                if needs_resample:
+                    freq = _PANDAS_FREQ_MAP[body.view_interval]
+                    resample_kwargs = {'origin': 'start'} if body.view_interval in _INTRADAY_INTERVALS else {}
+                    resampled = {}
+                    for key, series in series_dict.items():
+                        rs = series.resample(freq, **resample_kwargs).last().dropna()
+                        resampled[key] = _series_to_list(rs.index, body.view_interval, rs)
+                    result[inst.id] = resampled
+                else:
+                    result[inst.id] = {
+                        key: _series_to_list(df.index, body.interval, series)
+                        for key, series in series_dict.items()
+                    }
             except ValueError as e:
                 result[inst.id] = {"error": "invalid_params", "detail": str(e)}
             except Exception:
