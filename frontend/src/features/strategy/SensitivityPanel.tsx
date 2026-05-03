@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import type { StrategyRequest, Rule } from '../../shared/types'
 import { api } from '../../api/client'
 import { apiErrorDetail } from '../../shared/utils/errors'
@@ -20,6 +20,7 @@ interface ParamOption {
   defaultMax: number
   defaultSteps: number
   currentValue: number | null
+  isInteger?: boolean
 }
 
 function buildParamOptions(req: StrategyRequest): ParamOption[] {
@@ -67,6 +68,21 @@ function buildParamOptions(req: StrategyRequest): ParamOption[] {
         currentValue: rule.value,
       })
     }
+    if (rule.params) {
+      Object.entries(rule.params).forEach(([key, val]) => {
+        if (typeof val === 'number') {
+          opts.push({
+            path: `buy_rule_${i}_params_${key}`,
+            label: `Buy Rule ${i + 1} ${key} (${rule.indicator.toUpperCase()})`,
+            defaultMin: Math.max(1, Math.round(val * 0.5)),
+            defaultMax: Math.round(val * 2),
+            defaultSteps: 9,
+            currentValue: val,
+            isInteger: Number.isInteger(val),
+          })
+        }
+      })
+    }
   })
 
   req.sell_rules.forEach((rule: Rule, i: number) => {
@@ -78,6 +94,21 @@ function buildParamOptions(req: StrategyRequest): ParamOption[] {
         defaultMax: (rule.value ?? 70) * 1.5,
         defaultSteps: 9,
         currentValue: rule.value,
+      })
+    }
+    if (rule.params) {
+      Object.entries(rule.params).forEach(([key, val]) => {
+        if (typeof val === 'number') {
+          opts.push({
+            path: `sell_rule_${i}_params_${key}`,
+            label: `Sell Rule ${i + 1} ${key} (${rule.indicator.toUpperCase()})`,
+            defaultMin: Math.max(1, Math.round(val * 0.5)),
+            defaultMax: Math.round(val * 2),
+            defaultSteps: 9,
+            currentValue: val,
+            isInteger: Number.isInteger(val),
+          })
+        }
       })
     }
   })
@@ -121,6 +152,13 @@ export default function SensitivityPanel({ lastRequest }: Props) {
   const [results, setResults] = useState<SweepPoint[] | null>(null)
   const [sweptPath, setSweptPath] = useState<string>('')
 
+  // Reset selectedPath when paramOptions changes and current selection is no longer valid
+  useEffect(() => {
+    if (paramOptions.length > 0 && !paramOptions.find(o => o.path === selectedPath)) {
+      setSelectedPath(paramOptions[0].path)
+    }
+  }, [paramOptions])
+
   // Reset inputs when param selection changes
   function handleParamChange(path: string) {
     setSelectedPath(path)
@@ -144,7 +182,8 @@ export default function SensitivityPanel({ lastRequest }: Props) {
       setError('Min must be less than max.')
       return
     }
-    const values = linspace(minN, maxN, stepsN)
+    const rawValues = linspace(minN, maxN, stepsN)
+    const values = selected.isInteger ? rawValues.map(v => Math.round(v)) : rawValues
     setLoading(true)
     setError('')
     setResults(null)
@@ -324,7 +363,7 @@ export default function SensitivityPanel({ lastRequest }: Props) {
                   <td style={{ padding: '3px 8px', textAlign: 'right', color: colorFor(r.win_rate_pct, Math.min(...winRates), Math.max(...winRates), true) }}>
                     {r.win_rate_pct.toFixed(1)}%
                   </td>
-                  <td style={{ padding: '3px 8px', textAlign: 'right', color: colorFor(r.max_drawdown_pct, Math.min(...dds), Math.max(...dds), false) }}>
+                  <td style={{ padding: '3px 8px', textAlign: 'right', color: colorFor(r.max_drawdown_pct, Math.min(...dds), Math.max(...dds), true) }}>
                     {r.max_drawdown_pct.toFixed(1)}%
                   </td>
                   <td style={{ padding: '3px 8px', textAlign: 'right', color: r.ev_per_trade == null ? '#555' : r.ev_per_trade >= 0 ? '#26a69a' : '#ef5350' }}>

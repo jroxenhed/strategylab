@@ -6,11 +6,13 @@ return summary stats for each. Used by the frontend Sensitivity tab to answer
 "how fragile is this edge?"
 
 Supported param_path values:
-  "stop_loss_pct"           — stop-loss percentage
-  "trailing_stop_value"     — trailing stop value (pct or ATR multiplier)
-  "slippage_bps"            — transaction cost assumption
-  "buy_rule_{i}_value"      — .value field of buy rule at index i
-  "sell_rule_{i}_value"     — .value field of sell rule at index i
+  "stop_loss_pct"                — stop-loss percentage
+  "trailing_stop_value"          — trailing stop value (pct or ATR multiplier)
+  "slippage_bps"                 — transaction cost assumption
+  "buy_rule_{i}_value"           — .value field of buy rule at index i
+  "sell_rule_{i}_value"          — .value field of sell rule at index i
+  "buy_rule_{i}_params_{key}"    — named param (e.g. period) in buy rule at index i
+  "sell_rule_{i}_params_{key}"   — named param (e.g. period) in sell rule at index i
 """
 
 from typing import Optional
@@ -78,6 +80,38 @@ def _apply_param(base: StrategyRequest, param_path: str, value: float) -> Strate
         rules[idx] = rules[idx].model_copy(update={"value": value})
         modified = modified.model_copy(update={"sell_rules": rules})
 
+    elif param_path.startswith("buy_rule_") and "_params_" in param_path:
+        # e.g. "buy_rule_0_params_period" → parts = ["buy","rule","0","params","period"]
+        parts = param_path.split("_")
+        try:
+            idx = int(parts[2])
+            param_key = "_".join(parts[4:])  # supports multi-word keys like k_period
+        except (IndexError, ValueError):
+            raise HTTPException(status_code=400, detail=f"Invalid param_path: {param_path}")
+        if idx < 0 or idx >= len(modified.buy_rules):
+            raise HTTPException(status_code=400, detail=f"buy_rule index {idx} out of range")
+        rules = list(modified.buy_rules)
+        existing_params = dict(rules[idx].params) if rules[idx].params else {}
+        existing_params[param_key] = int(round(value)) if value == int(value) else value
+        rules[idx] = rules[idx].model_copy(update={"params": existing_params})
+        modified = modified.model_copy(update={"buy_rules": rules})
+
+    elif param_path.startswith("sell_rule_") and "_params_" in param_path:
+        # e.g. "sell_rule_0_params_period" → parts = ["sell","rule","0","params","period"]
+        parts = param_path.split("_")
+        try:
+            idx = int(parts[2])
+            param_key = "_".join(parts[4:])  # supports multi-word keys like k_period
+        except (IndexError, ValueError):
+            raise HTTPException(status_code=400, detail=f"Invalid param_path: {param_path}")
+        if idx < 0 or idx >= len(modified.sell_rules):
+            raise HTTPException(status_code=400, detail=f"sell_rule index {idx} out of range")
+        rules = list(modified.sell_rules)
+        existing_params = dict(rules[idx].params) if rules[idx].params else {}
+        existing_params[param_key] = int(round(value)) if value == int(value) else value
+        rules[idx] = rules[idx].model_copy(update={"params": existing_params})
+        modified = modified.model_copy(update={"sell_rules": rules})
+
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported param_path: {param_path!r}")
 
@@ -111,15 +145,6 @@ def sweep_backtest(req: SweepRequest) -> list[SweepPoint]:
                 ev_per_trade=s.get("ev_per_trade"),
             ))
         except HTTPException:
-            # Propagate 4xx/5xx from the base backtest on errors
-            results.append(SweepPoint(
-                param_value=v,
-                num_trades=0,
-                total_return_pct=0.0,
-                sharpe_ratio=0.0,
-                win_rate_pct=0.0,
-                max_drawdown_pct=0.0,
-                ev_per_trade=None,
-            ))
+            continue  # skip invalid parameter values (e.g. RSI period=1)
 
     return results

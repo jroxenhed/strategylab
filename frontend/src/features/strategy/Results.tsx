@@ -503,14 +503,20 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       )}
 
       {activeTab === 'equity' && (
-        bucket && macroData ? (
-          <MacroEquityChart
-            macroCurve={macroData.macro_curve}
-            initialCapital={summary.initial_capital}
-            showBaseline={showBaseline}
-            logScale={logScale}
-            baselineCurve={result.baseline_curve}
-          />
+        bucket ? (
+          macroData ? (
+            <MacroEquityChart
+              macroCurve={macroData.macro_curve}
+              initialCapital={summary.initial_capital}
+              showBaseline={showBaseline}
+              logScale={logScale}
+              baselineCurve={result.baseline_curve}
+            />
+          ) : (
+            <div style={{ height: 250, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0d1117' }}>
+              <span style={{ color: '#8b949e', fontSize: 12 }}>{macroLoading ? 'Loading…' : 'No macro data'}</span>
+            </div>
+          )
         ) : (
           <div ref={chartRef} style={{ width: '100%', height: 250, minHeight: 100, maxHeight: 600, resize: 'vertical', overflow: 'hidden' }} />
         )
