@@ -91,6 +91,7 @@
 - [x] **C17** Correlation to benchmark — compute beta and R² vs SPY returns alongside strategy equity curve. `_compute_spy_correlation()` in `backtest.py` (daily return alignment, SPY cached fetch), panel in Summary tab. [medium]
 - [x] **C17a** Fix SPY correlation: beta/R² always 0 — switched from daily equity-curve returns to per-trade returns aligned to SPY over the same holding periods. Returns None (hidden panel) for strategies with <3 closed trades or intraday-only activity (near-zero SPY variance). [easy]
 - [x] **C18** Parameter sensitivity sweep — re-run backtest with ±N variations of one indicator param, show results in a table/heatmap. Answers "how fragile is this edge?" `POST /api/backtest/sweep` + SensitivityPanel in Results (Sensitivity tab). [medium]
+- [ ] **C20** Equity curve chart blank after F6 types split — stats render but no line drawn. Likely a broken import or missing type re-export from the F6 split. Regression from build 7. [easy] [next]
 - [x] **C19** Backtest result persistence — save/load backtest results to localStorage. Auto-save on each backtest; auto-restore on page load when ticker/dates/interval match saved settings. Graceful fallback on quota exceeded. [medium]
 
 ## D — Bots (live trading)
