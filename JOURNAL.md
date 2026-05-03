@@ -4,6 +4,16 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-03 (review sessions)
+
+- **[D24](TODO.md#d--bots-live-trading)** PR #10 review: 6 P1 fixes (dual-rule indicators, stale trail_stop, skip_remaining bypass, consec_sl on regime flip, manual_buy PnL, stop_bot regime state).
+- **[F14](TODO.md#f--architecture--housekeeping)**/**[F15](TODO.md#f--architecture--housekeeping)**/**[F16](TODO.md#f--architecture--housekeeping)** PR #11 review: 2 P1 hardening fixes (unique tempfile paths for concurrent save(), atomic journal writes so readers never see partial JSON).
+- **[F23](TODO.md#f--architecture--housekeeping)** Shipped in PR #12 review: `was_running` added to `list_bots()` response + `BotSummary` TS type.
+- PR #12 review: 3 P1 fixes (await→create_task for notify_error, negative sweep guard, was_running in API).
+- PR #13 review: clean — 0 P0/P1, merged as-is.
+- Architectural audit: added F14-F21 (safety fixes, test harness, bot_runner split). Overnight task limit raised 3→5.
+- Market research: StrategyLab's 10-capability combination (no-code builder + regime filter + multi-broker + Monte Carlo + sensitivity sweep + live bot dashboard) has no retail equivalent.
+
 ## 2026-05-03 (overnight build 8)
 
 - **[F22](TODO.md#f--architecture--housekeeping)** `was_running` badge on BotCard. Stopped bots with `was_running=True` now show an amber "⚡ Was running" badge in both compact and expanded layouts, prompting the user to restart bots that were live before a server restart. Also fixed a P2: `was_running` is now reset to `False` in `BotRunner.run()` so the badge clears once the bot is started and then manually stopped (no stale badge after the first restart cycle).
