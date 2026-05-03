@@ -55,4 +55,4 @@ Tasks to skip even if tagged `[next]`:
 - D24 not visually verified — the bot flip sequence requires a live market session with a running regime bot.
 - Smoke test not run (no pandas/uvicorn in sandbox); backend verified by syntax only.
 
-**Next up:** F14 [easy] (atomic bots.json), F15 [easy] (log journal errors), F16 [easy] (journal write lock), D24a [easy], D25 [easy] — safety-first, then features. F6, C18, D23 also tagged but likely overflow to next run. Task limit raised to 5.
+**Next up:** F14 [easy] (atomic bots.json), F15 [easy] (log journal errors), F16 [easy] (journal write lock), D24a [easy], D25 [easy] — safety-first. Next run after that: F20+F21 (bot_runner tests then split) before more feature work touches that file. F6, C18, D23 also tagged [next] but lower priority.
