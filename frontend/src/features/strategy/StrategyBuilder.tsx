@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Plus, Play } from 'lucide-react'
-import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, SavedStrategy } from '../../shared/types'
+import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, SavedStrategy, RegimeConfig } from '../../shared/types'
 import RuleRow, { emptyRule, validateRules } from './RuleRow'
 import { api } from '../../api/client'
 import { useSlippage } from '../../shared/hooks/useSlippage'
@@ -81,6 +81,11 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [slippageSource, setSlippageSource] = useState<'empirical' | 'default' | 'manual'>('default')
   const { data: slipInfo } = useSlippage(ticker)
   const [direction, setDirection] = useState<'long' | 'short'>(saved?.direction ?? 'long')
+  const [regimeEnabled, setRegimeEnabled] = useState(saved?.regime?.enabled ?? false)
+  const [regimeConfig, setRegimeConfig] = useState<RegimeConfig>(saved?.regime ?? {
+    enabled: false, timeframe: '1d', indicator: 'ma',
+    indicator_params: { period: 200, type: 'sma' }, condition: 'above', min_bars: 3,
+  })
   const [debug, setDebug] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -108,6 +113,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
       trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours,
       slippageBps, commission, direction,
       perShareRate, minPerOrder, borrowRateAnnual,
+      regime: regimeEnabled ? { ...regimeConfig, enabled: true } : undefined,
     }
   }
 
@@ -137,6 +143,12 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     setBorrowRateAnnual(s.borrowRateAnnual ?? 0.5)
     setSlippageSource('manual')
     setDirection(s.direction ?? 'long')
+    if (s.regime) {
+      setRegimeEnabled(s.regime.enabled)
+      setRegimeConfig(s.regime)
+    } else {
+      setRegimeEnabled(false)
+    }
     setActiveStrategyName(s.name)
   }
 
@@ -213,6 +225,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         borrow_rate_annual: direction === 'short' ? borrowRateAnnual : 0,
         source: dataSource, debug, direction,
         extended_hours: extendedHours,
+        regime: regimeEnabled ? { ...regimeConfig, enabled: true } : undefined,
       }
       const { data } = await api.post('/api/backtest', req)
       onResult(data, req)
@@ -546,6 +559,76 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             </button>
           ))}
         </div>
+
+        {/* Regime filter */}
+        <div style={{ padding: '6px 16px 4px', borderBottom: '1px solid #21262d' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: regimeEnabled ? 8 : 0 }}>
+            <button
+              onClick={() => setRegimeEnabled((v: boolean) => !v)}
+              style={{
+                fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, border: 'none',
+                cursor: 'pointer', textTransform: 'uppercase',
+                background: regimeEnabled ? '#1a2a3a' : '#161b22',
+                color: regimeEnabled ? '#58a6ff' : '#555',
+              }}
+            >
+              Regime
+            </button>
+            {regimeEnabled && (
+              <span style={{ fontSize: 11, color: '#8b949e' }}>
+                {regimeConfig.indicator.toUpperCase()}({(regimeConfig.indicator_params as Record<string, unknown>).period as number}) {regimeConfig.condition} · {regimeConfig.timeframe} · {regimeConfig.min_bars}b
+              </span>
+            )}
+          </div>
+          {regimeEnabled && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingBottom: 6 }}>
+              <select
+                value={regimeConfig.timeframe}
+                onChange={e => setRegimeConfig(c => ({ ...c, timeframe: e.target.value }))}
+                style={{ fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}
+              >
+                {['1d', '1W', '1M'].map(tf => <option key={tf} value={tf}>{tf}</option>)}
+              </select>
+              <select
+                value={(regimeConfig.indicator_params as Record<string, unknown>).type as string ?? 'sma'}
+                onChange={e => setRegimeConfig(c => ({ ...c, indicator_params: { ...(c.indicator_params as Record<string, unknown>), type: e.target.value } }))}
+                style={{ fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}
+              >
+                {['sma', 'ema'].map(t => <option key={t} value={t}>{t.toUpperCase()}</option>)}
+              </select>
+              <input
+                type="number" min={1} step={1}
+                value={(regimeConfig.indicator_params as Record<string, unknown>).period as number ?? 200}
+                onChange={e => setRegimeConfig(c => ({ ...c, indicator_params: { ...(c.indicator_params as Record<string, unknown>), period: +e.target.value } }))}
+                style={{ width: 52, fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}
+                placeholder="period"
+              />
+              <select
+                value={regimeConfig.condition}
+                onChange={e => setRegimeConfig(c => ({ ...c, condition: e.target.value as RegimeConfig['condition'] }))}
+                style={{ fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}
+              >
+                <option value="above">Price above</option>
+                <option value="below">Price below</option>
+                <option value="rising">Rising</option>
+                <option value="falling">Falling</option>
+              </select>
+              <label style={{ fontSize: 11, color: '#8b949e', display: 'flex', alignItems: 'center', gap: 4 }}>
+                Min bars
+                <input
+                  type="number" min={1} max={20} step={1}
+                  value={regimeConfig.min_bars}
+                  onChange={e => setRegimeConfig(c => ({ ...c, min_bars: +e.target.value }))}
+                  style={{ width: 38, fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}
+                />
+              </label>
+              {!stopLoss && direction === 'long' && (
+                <span style={{ fontSize: 10, color: '#f0883e', alignSelf: 'center' }}>⚠ Add a stop-loss to limit open-position risk during flat periods</span>
+              )}
+            </div>
+          )}
+        </div>
+
         <div style={styles.panels}>
           {/* BUY */}
           <div style={styles.panel}>

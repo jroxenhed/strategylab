@@ -58,6 +58,15 @@ export interface TradingHoursConfig {
   skip_ranges: string[]   // ET time ranges to skip, e.g. ["12:00-13:00", "15:45-16:00"]
 }
 
+export interface RegimeConfig {
+  enabled: boolean
+  timeframe: string                          // e.g. "1d", "1W"
+  indicator: string                          // e.g. "ma"
+  indicator_params: Record<string, unknown>  // e.g. { period: 200, type: "sma" }
+  condition: 'above' | 'below' | 'rising' | 'falling'
+  min_bars: number
+}
+
 export interface StrategyRequest {
   ticker: string
   start: string
@@ -84,6 +93,7 @@ export interface StrategyRequest {
   debug?: boolean
   direction?: 'long' | 'short'
   extended_hours?: boolean
+  regime?: RegimeConfig
 }
 
 export interface SavedStrategy {
@@ -110,6 +120,7 @@ export interface SavedStrategy {
   borrowRateAnnual?: number
   maxBarsHeld?: number | ''
   direction: 'long' | 'short'
+  regime?: RegimeConfig
   indicators?: IndicatorInstance[]
   pinned?: boolean
 }
@@ -199,6 +210,7 @@ export interface BacktestResult {
   signal_trace?: SignalTraceEntry[]
   rule_signals?: RuleSignal[]
   session_analytics?: SessionAnalyticsBucket[] | null
+  regime_series?: Array<{ time: string | number; direction: string }>
 }
 
 export interface MacroCurvePoint {

@@ -3,12 +3,12 @@ import hashlib
 import json
 import numpy as np
 import pandas as pd
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
-from shared import _fetch, _format_time, _INTRADAY_INTERVALS
+from shared import _fetch, _format_time, _INTRADAY_INTERVALS, fetch_higher_tf, align_htf_to_ltf, htf_lookback_days
 from signal_engine import Rule, compute_indicators, eval_rules, eval_rule, migrate_rule, resolve_series
 from routes.indicators import _series_to_list
-from models import TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, StrategyRequest
+from models import TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, StrategyRequest, RegimeConfig
 from post_loss import is_post_loss_trigger
 
 
@@ -151,58 +151,51 @@ def compute_session_analytics(trades: list, interval: str) -> list | None:
     return result
 
 
-def _compute_spy_correlation(equity: list, start: str, end: str) -> dict:
-    """Compute beta and R-squared of daily strategy returns vs SPY."""
-    if not equity or len(equity) < 3:
-        return {"beta": None, "r_squared": None}
+def _compute_spy_correlation(trades: list, start: str, end: str) -> dict:
+    """Compute beta and R-squared of per-trade returns vs SPY over the same holding periods.
 
-    # Group equity values by ET date (last value per day)
-    eq_by_date: dict[str, float] = {}
-    for pt in equity:
-        t = pt.get("time")
-        v = pt.get("value")
-        if t is None or v is None:
-            continue
-        if isinstance(t, (int, float)):
-            date_str = datetime.fromtimestamp(t, tz=ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
-        else:
-            date_str = str(t)[:10]
-        eq_by_date[date_str] = v
-
-    if len(eq_by_date) < 3:
-        return {"beta": None, "r_squared": None}
-
-    sorted_dates = sorted(eq_by_date)
-    eq_vals = [eq_by_date[d] for d in sorted_dates]
-    prev_vals = eq_vals[:-1]
-    eq_rets_arr = np.array(
-        [(eq_vals[i] - prev_vals[i]) / prev_vals[i] if prev_vals[i] != 0 else 0.0
-         for i in range(len(prev_vals))]
-    )
-    ret_dates = sorted_dates[1:]  # returns correspond to the later date
-
-    if len(eq_rets_arr) < 3:
+    Uses trade-level returns (not daily equity returns) to avoid the zero-return problem
+    when the strategy is flat for most of the period.
+    """
+    entry_trades = [t for t in trades if t.get("type") in ("buy", "short")]
+    exit_trades = [t for t in trades if t.get("type") in ("sell", "cover") and t.get("pnl") is not None]
+    pairs = list(zip(entry_trades, exit_trades))
+    if len(pairs) < 3:
         return {"beta": None, "r_squared": None}
 
     try:
         spy_df = _fetch("SPY", start, end, "1d")
         spy_strs = [str(t)[:10] for t in spy_df.index.astype(str)]
-        spy_close = spy_df["Close"].values.astype(float)
-        spy_ret_by_date = {
-            spy_strs[i]: (spy_close[i] - spy_close[i - 1]) / spy_close[i - 1]
-            for i in range(1, len(spy_strs))
-            if spy_close[i - 1] != 0
-        }
+        spy_close_by_date = {spy_strs[i]: float(spy_df["Close"].values[i]) for i in range(len(spy_strs))}
     except Exception:
         return {"beta": None, "r_squared": None}
 
-    ret_date_idx = {d: i for i, d in enumerate(ret_dates)}
-    common = [d for d in ret_dates if d in spy_ret_by_date]
-    if len(common) < 3:
+    def _to_date(d):
+        if isinstance(d, (int, float)):
+            return datetime.fromtimestamp(d, tz=ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+        return str(d)[:10]
+
+    strat_returns, spy_returns = [], []
+    for entry, exit_t in pairs:
+        entry_value = entry["price"] * entry["shares"]
+        if entry_value == 0:
+            continue
+        entry_date = _to_date(entry["date"])
+        exit_date = _to_date(exit_t["date"])
+        if entry_date not in spy_close_by_date or exit_date not in spy_close_by_date:
+            continue
+        spy_entry = spy_close_by_date[entry_date]
+        spy_exit = spy_close_by_date[exit_date]
+        if spy_entry == 0:
+            continue
+        strat_returns.append(exit_t["pnl"] / entry_value)
+        spy_returns.append((spy_exit - spy_entry) / spy_entry)
+
+    if len(strat_returns) < 3:
         return {"beta": None, "r_squared": None}
 
-    strat_arr = np.array([eq_rets_arr[ret_date_idx[d]] for d in common])
-    spy_arr = np.array([spy_ret_by_date[d] for d in common])
+    strat_arr = np.array(strat_returns)
+    spy_arr = np.array(spy_returns)
 
     var_spy = float(np.var(spy_arr))
     if var_spy < 1e-10:
@@ -210,7 +203,6 @@ def _compute_spy_correlation(equity: list, start: str, end: str) -> dict:
 
     cov = float(np.cov(strat_arr, spy_arr)[0, 1])
     beta = cov / var_spy
-
     corr = float(np.corrcoef(strat_arr, spy_arr)[0, 1])
     r_squared = corr ** 2 if not np.isnan(corr) else None
 
@@ -218,6 +210,60 @@ def _compute_spy_correlation(equity: list, start: str, end: str) -> dict:
         "beta": round(beta, 3),
         "r_squared": round(r_squared, 4) if r_squared is not None else None,
     }
+
+
+def _compute_regime_series(req: StrategyRequest, ltf_df: pd.DataFrame) -> "pd.Series | None":
+    """Compute per-bar regime_active boolean from RegimeConfig.
+
+    Returns a boolean pd.Series indexed on ltf_df.index where True = regime allows entries.
+    Returns None when regime is disabled (gate always open).
+    Raises ValueError when regime is enabled but computation fails.
+    Supported conditions: above, below, rising, falling.
+    """
+    rc = req.regime
+    if not rc or not rc.enabled:
+        return None
+
+    from indicators import compute_instance, OHLCVSeries as _OHLCVSeries  # local import avoids circular dep
+
+    lookback = htf_lookback_days(rc.indicator, rc.indicator_params)
+    htf_start = (datetime.fromisoformat(req.start) - timedelta(days=lookback)).strftime("%Y-%m-%d")
+    htf_df = fetch_higher_tf(req.ticker, htf_start, req.end, rc.timeframe, source=req.source)
+    if htf_df.empty:
+        raise ValueError(f"No HTF data for regime filter ({rc.timeframe})")
+
+    vol_col = htf_df["Volume"] if "Volume" in htf_df.columns else htf_df["Close"] * 0
+    ohlcv = _OHLCVSeries(
+        close=htf_df["Close"],
+        high=htf_df["High"],
+        low=htf_df["Low"],
+        volume=vol_col,
+    )
+    result = compute_instance(rc.indicator, rc.indicator_params, ohlcv)
+    indicator_key = next(iter(result))
+    indicator_series = result[indicator_key]
+
+    close = htf_df["Close"]
+    if rc.condition == "above":
+        raw_bool = close > indicator_series
+    elif rc.condition == "below":
+        raw_bool = close < indicator_series
+    elif rc.condition == "rising":
+        raw_bool = indicator_series.diff() > 0
+    elif rc.condition == "falling":
+        raw_bool = indicator_series.diff() < 0
+    else:
+        raise ValueError(f"Unsupported regime condition for Stage 3: {rc.condition!r}. Use above/below/rising/falling.")
+
+    raw_bool = raw_bool.fillna(False)
+
+    if rc.min_bars > 1:
+        smoothed = raw_bool.astype(int).rolling(rc.min_bars, min_periods=rc.min_bars).min().fillna(0).astype(bool)
+    else:
+        smoothed = raw_bool.astype(bool)
+
+    aligned = align_htf_to_ltf(smoothed.astype(float), ltf_df.index)
+    return aligned.fillna(0).astype(bool)
 
 
 @router.post("/api/backtest")
@@ -245,7 +291,7 @@ def run_backtest(req: StrategyRequest):
         trades = []
         equity = []
 
-        is_short = req.direction == "short"
+        position_direction: str | None = None  # set at entry, cleared at exit
         drag = req.slippage_bps / 10_000.0   # bps → fractional
         ts = req.trailing_stop
         atr = indicators.get("atr")
@@ -256,6 +302,7 @@ def run_backtest(req: StrategyRequest):
         sas = req.skip_after_stop
         skip_remaining = 0  # entries still to skip after a qualifying stop
         is_intraday = req.interval in _INTRADAY_INTERVALS
+        regime_active_series = _compute_regime_series(req, df)
 
         def _rule_desc(r):
             """Short human-readable description of a rule."""
@@ -314,7 +361,8 @@ def run_backtest(req: StrategyRequest):
                             hour_ok = False
                             break
 
-            buy_fires = position == 0 and hour_ok and eval_rules(buy_rules, req.buy_logic, indicators, i)
+            regime_ok = (regime_active_series is None) or bool(regime_active_series.iloc[i])
+            buy_fires = position == 0 and hour_ok and regime_ok and eval_rules(buy_rules, req.buy_logic, indicators, i)
             if buy_fires and skip_remaining > 0:
                 skip_remaining -= 1
                 if signal_trace is not None:
@@ -330,8 +378,10 @@ def run_backtest(req: StrategyRequest):
                 if ds and ds.enabled and consec_sl_count >= ds.consec_sls:
                     effective_size = req.position_size * (ds.reduced_pct / 100)
 
+                # Set position direction at entry; for Stage 3 this always equals req.direction
+                position_direction = req.direction
                 # Slippage: short entry fills lower (worse for seller), long fills higher (worse for buyer)
-                if is_short:
+                if position_direction == "short":
                     fill_price = price * (1 - drag)
                 else:
                     fill_price = price * (1 + drag)
@@ -345,11 +395,11 @@ def run_backtest(req: StrategyRequest):
                 trail_peak = fill_price
                 trail_stop_price = None
                 entry_slippage = abs(shares * (fill_price - price))
-                entry_type = "short" if is_short else "buy"
+                entry_type = "short" if position_direction == "short" else "buy"
                 trades.append({
                     "type": entry_type, "date": date, "price": round(fill_price, 4),
                     "shares": round(shares, 4),
-                    "direction": req.direction,
+                    "direction": position_direction,
                     "slippage": round(entry_slippage, 2),
                     "commission": round(commission, 2),
                     "rules": _fired_rules(buy_rules, indicators, i),
@@ -357,7 +407,7 @@ def run_backtest(req: StrategyRequest):
                 if signal_trace is not None:
                     signal_trace.append({
                         "date": date, "price": round(price, 4), "position": "entered",
-                        "action": "SHORT" if is_short else "BUY",
+                        "action": "SHORT" if position_direction == "short" else "BUY",
                         "buy_rules": _trace_rules(buy_rules, indicators, i, "buy"),
                     })
 
@@ -365,7 +415,7 @@ def run_backtest(req: StrategyRequest):
                 # Update trailing stop peak and compute trail_stop_price
                 trail_hit = False
                 if ts:
-                    if is_short:
+                    if position_direction == "short":
                         # Short: track trough (mirror high→low)
                         source_price = low.iloc[i] if ts.source == "high" else price
                         threshold = entry_price * (1 - ts.activate_pct / 100)
@@ -390,7 +440,7 @@ def run_backtest(req: StrategyRequest):
                         trail_hit = low.iloc[i] <= trail_stop_price
 
                 # Check fixed stop loss
-                if is_short:
+                if position_direction == "short":
                     stop_price_limit = entry_price * (1 + req.stop_loss_pct / 100) if (req.stop_loss_pct and req.stop_loss_pct > 0) else None
                     stop_hit = stop_price_limit is not None and high.iloc[i] >= stop_price_limit
                 else:
@@ -415,7 +465,7 @@ def run_backtest(req: StrategyRequest):
                     exit_reason = "signal"
 
                 # Slippage: short covers at higher price (worse), long sells at lower price (worse)
-                if is_short:
+                if position_direction == "short":
                     exit_price = raw_exit * (1 + drag)
                 else:
                     exit_price = raw_exit * (1 - drag)
@@ -424,15 +474,15 @@ def run_backtest(req: StrategyRequest):
                     exit_slippage = abs(position * (raw_exit - exit_price))
                     commission = per_leg_commission(position, req)
                     bcost = borrow_cost(position, entry_price, entry_ts, df.index[i],
-                                        req.direction, req)
-                    if is_short:
+                                        position_direction, req)
+                    if position_direction == "short":
                         pnl = position * (entry_price - exit_price) - commission - bcost
                         capital += position * entry_price + pnl
                     else:
                         proceeds = position * exit_price
                         pnl = (proceeds - commission) - position * entry_price
                         capital += proceeds - commission
-                    exit_type = "cover" if is_short else "sell"
+                    exit_type = "cover" if position_direction == "short" else "sell"
                     exit_rules: list[str] = []
                     if exit_reason == "stop_loss":
                         exit_rules = ["stop loss"]
@@ -447,7 +497,7 @@ def run_backtest(req: StrategyRequest):
                         "date": date,
                         "price": round(exit_price, 4),
                         "shares": round(position, 4),
-                        "direction": req.direction,
+                        "direction": position_direction,
                         "pnl": round(pnl, 2),
                         "pnl_pct": round(pnl / (position * entry_price) * 100, 2),
                         "stop_loss": exit_reason == "stop_loss",
@@ -457,7 +507,10 @@ def run_backtest(req: StrategyRequest):
                         "borrow_cost": round(bcost, 2),
                         "rules": exit_rules,
                     })
+                    if signal_trace is not None:
+                        action = "STOP_LOSS" if exit_reason == "stop_loss" else "TRAIL_STOP" if exit_reason == "trailing_stop" else ("COVER" if position_direction == "short" else "SELL")
                     position = 0.0
+                    position_direction = None
                     entry_ts = None
                     trail_peak = 0.0
                     trail_stop_price = None
@@ -470,7 +523,6 @@ def run_backtest(req: StrategyRequest):
                     if sas and sas.enabled and is_post_loss_trigger(exit_reason, sas.trigger):
                         skip_remaining = sas.count
                     if signal_trace is not None:
-                        action = "STOP_LOSS" if exit_reason == "stop_loss" else "TRAIL_STOP" if exit_reason == "trailing_stop" else ("COVER" if is_short else "SELL")
                         signal_trace.append({
                             "date": date, "price": round(price, 4), "position": "exited",
                             "action": action,
@@ -498,7 +550,7 @@ def run_backtest(req: StrategyRequest):
                             "sell_rules": sell_details,
                         })
 
-            if is_short and position > 0:
+            if position_direction == "short" and position > 0:
                 unrealized = position * (entry_price - price)
                 total_value = capital + position * entry_price + unrealized
             else:
@@ -507,7 +559,7 @@ def run_backtest(req: StrategyRequest):
 
         # Close open position at last price
         final_price = close.iloc[-1]
-        if is_short and position > 0:
+        if position_direction == "short" and position > 0:
             unrealized = position * (entry_price - final_price)
             final_value = capital + position * entry_price + unrealized
         else:
@@ -527,7 +579,7 @@ def run_backtest(req: StrategyRequest):
         drawdown = (eq_series - peak) / peak
         max_drawdown = float(drawdown.min() * 100)
 
-        exit_type = "cover" if is_short else "sell"
+        exit_type = "cover" if req.direction == "short" else "sell"
         sell_trades = [t for t in trades if t["type"] == exit_type]
         winning = [t for t in sell_trades if t.get("pnl", 0) > 0]
         win_rate = len(winning) / len(sell_trades) * 100 if sell_trades else 0
@@ -606,7 +658,7 @@ def run_backtest(req: StrategyRequest):
             "trades": trades,
         })
 
-        spy_corr = _compute_spy_correlation(equity, req.start, req.end)
+        spy_corr = _compute_spy_correlation(trades, req.start, req.end)
 
         result = {
             "summary": {
@@ -635,6 +687,11 @@ def run_backtest(req: StrategyRequest):
             result["signal_trace"] = signal_trace
         if rule_signals:
             result["rule_signals"] = rule_signals
+        if regime_active_series is not None:
+            result["regime_series"] = [
+                {"time": _format_time(df.index[i], req.interval), "direction": req.direction if bool(regime_active_series.iloc[i]) else "flat"}
+                for i in range(len(df))
+            ]
         return result
     except HTTPException:
         raise

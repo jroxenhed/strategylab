@@ -29,6 +29,7 @@ interface ChartProps {
   trades?: Trade[]
   emaOverlays?: EMAOverlay[]
   ruleSignals?: RuleSignal[]
+  regimeSeries?: Array<{ time: string | number; direction: string }>
   viewInterval: string
   backtestInterval: string
   onChartReady?: (chart: IChartApi | null) => void
@@ -112,7 +113,7 @@ function buildMarkers(trades: Trade[], subPane = false) {
   })
 }
 
-export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, trades, emaOverlays, ruleSignals, viewInterval, backtestInterval, onChartReady }: ChartProps) {
+export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, trades, emaOverlays, ruleSignals, regimeSeries, viewInterval, backtestInterval, onChartReady }: ChartProps) {
   const [tzMode] = useTimezone()
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -122,6 +123,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   const onChartReadyRef = useRef(onChartReady)
   useEffect(() => { onChartReadyRef.current = onChartReady })
   const mainOverlaySeriesRef = useRef<Map<string, ISeriesApi<any>> | null>(null)
+  const regimeBgSeriesRef = useRef<ISeriesApi<any> | null>(null)
   const paneRegistryRef = useRef<PaneRegistry>(new Map())
 
   // SPY/QQQ as real close prices on their own left axis
@@ -379,6 +381,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       // sibling pane teardown) takes the null-guard path instead of throwing.
       chartRef.current = null
       candleSeriesRef.current = null
+      regimeBgSeriesRef.current = null
       mainMarkersPluginRef.current = null
       tradeLookupRef.current = null
       setTooltip(null)
@@ -632,6 +635,35 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       mainMarkersPluginRef.current.setMarkers(merged as any)
     }
   }, [mainMarkers, ruleSignalMarkers, candleData, subPaneCount])
+
+  // Regime background shading — histogram series on hidden scale, green for active long, red for active short
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    if (!regimeSeries || regimeSeries.length === 0) {
+      // Clear existing regime series when result is cleared
+      if (regimeBgSeriesRef.current) {
+        try { chart.removeSeries(regimeBgSeriesRef.current) } catch {}
+        regimeBgSeriesRef.current = null
+      }
+      return
+    }
+    if (!regimeBgSeriesRef.current) {
+      const s = chart.addSeries(HistogramSeries, {
+        priceScaleId: 'regime-bg',
+        lastValueVisible: false,
+        priceLineVisible: false,
+      })
+      s.priceScale().applyOptions({ scaleMargins: { top: 0, bottom: 0 }, visible: false })
+      regimeBgSeriesRef.current = s
+    }
+    const bgData = regimeSeries.map(pt => {
+      const t = toET(pt.time as any) as any
+      const color = pt.direction === 'long' ? '#26a64120' : pt.direction === 'short' ? '#f8514920' : undefined
+      return { time: t, value: color ? 1 : 0, color }
+    }).filter(pt => pt.color !== undefined)
+    try { regimeBgSeriesRef.current.setData(bgData as any) } catch {}
+  }, [regimeSeries, tzMode])
 
   // Compute default panel sizes based on sub-pane count (matches original ratios)
   const defaultSizes = useMemo(() => {

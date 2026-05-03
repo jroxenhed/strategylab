@@ -33,6 +33,15 @@ class TradingHoursConfig(BaseModel):
     skip_ranges: list[str] = []     # ET time ranges to skip, e.g. ["12:00-13:00", "15:45-16:00"]
 
 
+class RegimeConfig(BaseModel):
+    enabled: bool = False
+    timeframe: str = "1d"
+    indicator: str = "ma"
+    indicator_params: dict = Field(default_factory=lambda: {"period": 200, "type": "sma"})
+    condition: str = "above"        # above | below | rising | falling
+    min_bars: int = 3               # consecutive bars required before regime flips
+
+
 class StrategyRequest(BaseModel):
     ticker: str
     start: str = "2023-01-01"
@@ -59,6 +68,7 @@ class StrategyRequest(BaseModel):
     direction: str = "long"  # "long" | "short"
     debug: bool = False
     extended_hours: bool = False
+    regime: Optional[RegimeConfig] = None
 
     @field_validator('position_size')
     @classmethod

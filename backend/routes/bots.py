@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 
 from bot_manager import BotConfig, BotManager
+from models import RegimeConfig
 
 router = APIRouter(prefix="/api/bots")
 
@@ -54,6 +55,7 @@ class UpdateBotRequest(BaseModel):
     data_source: Optional[str] = None
     direction: Optional[str] = None
     broker: Optional[str] = None
+    regime: Optional[RegimeConfig] = None
 
 
 class ReorderBotsRequest(BaseModel):

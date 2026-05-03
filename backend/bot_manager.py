@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from slippage import slippage_cost_bps, fill_bias_bps
 
-from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest
+from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest, RegimeConfig
 from routes.backtest import run_backtest
 from signal_engine import migrate_rule, Rule
 from shared import _fetch
@@ -68,6 +68,7 @@ class BotConfig(BaseModel):
     data_source: str = "alpaca-iex"    # yahoo | alpaca | alpaca-iex | ibkr
     direction: str = "long"            # "long" | "short"
     broker: str = "alpaca"             # "alpaca" | "ibkr" — which broker executes orders
+    regime: Optional[RegimeConfig] = None
 
 
 # ---------------------------------------------------------------------------

@@ -82,6 +82,11 @@ class BotRunner:
     async def _tick(self):
         cfg = self.config
         state = self.state
+        if cfg.regime and cfg.regime.enabled:
+            raise RuntimeError(
+                "Regime filter is not yet supported for live bots — use backtest to validate. "
+                "Remove the regime config or disable it before starting this bot."
+            )
         is_short = cfg.direction == "short"
         buy_rules = [migrate_rule(r) for r in cfg.buy_rules]
         sell_rules = [migrate_rule(r) for r in cfg.sell_rules]

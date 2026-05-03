@@ -117,6 +117,7 @@ export default function App() {
   const trades = useMemo(() => backtestResult?.trades ?? [], [backtestResult])
   const emaOverlays = backtestResult?.ema_overlays
   const ruleSignals = backtestResult?.rule_signals
+  const regimeSeries = backtestResult?.regime_series
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
@@ -226,6 +227,7 @@ export default function App() {
                           trades={trades}
                           emaOverlays={emaOverlays}
                           ruleSignals={ruleSignals}
+                          regimeSeries={regimeSeries}
                           viewInterval={viewInterval}
                           backtestInterval={interval}
                           onChartReady={setMainChart}
