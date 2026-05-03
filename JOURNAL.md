@@ -7,7 +7,7 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 ## 2026-05-03 (overnight build 9)
 
 - **[C21](TODO.md#c--strategy-summary--analytics)** Sensitivity sweep param bug — (1) fixed error swallowing in sweep loop (HTTPException from run_backtest now propagates instead of returning silent zero-result rows); (2) added `rule.params` sweep support in backend `_apply_param` (`buy_rule_{i}_params_{key}`, `sell_rule_{i}_params_{key}`) and frontend `buildParamOptions` (sweeps MA period, RSI period, Stochastic k/d, ADX period, BB std_dev etc.); (3) three P2 review fixes: max_drawdown color `highIsGood=true`, integer rounding for period linspace values, selectedPath reset on lastRequest change.
-- **[C20](TODO.md#c--strategy-summary--analytics)** Equity curve blank investigation — thorough multi-pass code audit found no broken path: build 7 diff shows zero equity-curve changes, types barrel correct, conditional render correct, build clean. User confirmed equity curve works locally — closing as transient/resolved.
+- **[C20](TODO.md#c--strategy-summary--analytics)** Equity curve blank — fixed rendering logic in Results.tsx: `bucket && macroData ? <MacroEquityChart> : <div ref={chartRef}>` created a blank state when macro bucket selected but data still loading (chartRef div rendered but effect returned early). Two-level ternary fix: chartRef div now only renders when `bucket === null`; loading/no-data states show a placeholder.
 
 ## 2026-05-03 (overnight build 8, part 2)
 

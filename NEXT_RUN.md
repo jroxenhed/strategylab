@@ -40,7 +40,7 @@ Tasks to skip even if tagged `[next]`:
 
 **Shipped:**
 - **C21** Sensitivity sweep param bug — fixed error swallowing (propagate HTTPException instead of zero rows), added `rule.params` sweep support for MA/RSI/Stochastic/ADX/BB periods in `_apply_param` (backend) and `buildParamOptions` (frontend). 3 P2s auto-fixed: max_drawdown color direction, integer rounding for period linspace, stale selectedPath reset.
-- **C20** Closed as resolved — thorough code audit found no broken path; user confirmed equity curve works locally; was likely a transient/one-off observation.
+- **C20** Equity curve blank — fixed. `bucket && macroData` ternary had a blind spot during macro data loading. Two-level ternary ensures chartRef div only mounts when `bucket === null`.
 
 **Review findings:**
 - Self-review pass on C21: 3 P2 findings, 0 P0/P1. All P2s auto-fixed.
