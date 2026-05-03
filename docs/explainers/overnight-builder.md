@@ -114,7 +114,7 @@ The builder cannot open a browser. Frontend UI changes are shipped with a "Not v
 
 ### 6. Guard Rails
 
-- **Max 3 tasks per run** — prevents runaway sessions (conservative; may increase once trust is established)
+- **Max 5 tasks per run** — prevents runaway sessions
 - **P0 gate** — anything with critical findings gets committed but NOT pushed to main. You review it manually.
 - **Build verification** — `npm run build` runs before and after fixes. If the build breaks, the task is abandoned and flagged.
 
