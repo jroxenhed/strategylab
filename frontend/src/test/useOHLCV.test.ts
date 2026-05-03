@@ -147,6 +147,71 @@ describe('useInstanceIndicators', () => {
     expect(result.current.fetchStatus).toBe('idle')
     expect(postSpy).not.toHaveBeenCalled()
   })
+
+  it('includes view_interval in API request when viewInterval differs from interval', async () => {
+    const instances = [
+      { id: 'rsi-1', type: 'rsi' as const, params: { period: 14 }, enabled: true, pane: 'sub' as const },
+    ]
+    const responseData = {
+      'rsi-1': { rsi: [{ time: '2024-01-02', value: 55 }] },
+    }
+    postSpy.mockResolvedValueOnce(ok(responseData))
+
+    const { result } = renderHook(
+      () => useInstanceIndicators('AAPL', '2024-01-01', '2024-01-31', '5m', instances, 'yahoo', false, '1h'),
+      { wrapper: createWrapper() },
+    )
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(postSpy).toHaveBeenCalledWith('/api/indicators/AAPL', expect.objectContaining({
+      interval: '5m',
+      view_interval: '1h',
+      instances: [{ id: 'rsi-1', type: 'rsi', params: { period: 14 } }],
+    }))
+  })
+
+  it('omits view_interval when viewInterval equals interval', async () => {
+    const instances = [
+      { id: 'rsi-1', type: 'rsi' as const, params: { period: 14 }, enabled: true, pane: 'sub' as const },
+    ]
+    const responseData = {
+      'rsi-1': { rsi: [{ time: '2024-01-02', value: 55 }] },
+    }
+    postSpy.mockResolvedValueOnce(ok(responseData))
+
+    const { result } = renderHook(
+      () => useInstanceIndicators('AAPL', '2024-01-01', '2024-01-31', '1d', instances, 'yahoo', false, '1d'),
+      { wrapper: createWrapper() },
+    )
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(postSpy).toHaveBeenCalledTimes(1)
+    const callBody = postSpy.mock.calls[0][1]
+    expect(callBody).not.toHaveProperty('view_interval')
+  })
+
+  it('omits view_interval when viewInterval is undefined', async () => {
+    const instances = [
+      { id: 'rsi-1', type: 'rsi' as const, params: { period: 14 }, enabled: true, pane: 'sub' as const },
+    ]
+    const responseData = {
+      'rsi-1': { rsi: [{ time: '2024-01-02', value: 55 }] },
+    }
+    postSpy.mockResolvedValueOnce(ok(responseData))
+
+    const { result } = renderHook(
+      () => useInstanceIndicators('AAPL', '2024-01-01', '2024-01-31', '1d', instances),
+      { wrapper: createWrapper() },
+    )
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(postSpy).toHaveBeenCalledTimes(1)
+    const callBody = postSpy.mock.calls[0][1]
+    expect(callBody).not.toHaveProperty('view_interval')
+  })
 })
 
 /* ── useProviders ────────────────────────────────────────────────── */

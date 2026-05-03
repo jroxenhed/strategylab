@@ -16,8 +16,8 @@ def _series_to_list(index, interval, series):
 
 
 _PANDAS_FREQ_MAP = {
-    "1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min",
-    "1h": "1h", "60m": "1h",
+    "1m": "1min", "2m": "2min", "5m": "5min", "15m": "15min", "30m": "30min",
+    "1h": "1h", "60m": "1h", "90m": "90min",
     "1d": "1D", "1wk": "1W", "1mo": "1ME",
 }
 

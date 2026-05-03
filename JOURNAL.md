@@ -4,6 +4,10 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-04
+
+- **[A8d](TODO.md#a--chart--data)** Same-TF indicator resample to view interval — when "View as" selects a coarser interval, indicators now compute at the backtest interval and resample via backend `view_interval` field, preserving backtest-fidelity values. Frontend `useInstanceIndicators` wired with `viewInterval` param; `_PANDAS_FREQ_MAP` extended with `2m`/`90m`. Truncation from yfinance date limits accepted (partial accurate > full inaccurate). [Plan](docs/superpowers/plans/2026-05-04-a8d-same-tf-indicator-resample.md)
+
 ## 2026-05-03 (review session 2)
 
 - PR #12 (build 7) review: 3 P1 fixes (await→create_task notify_error, negative sweep guard, was_running in list_bots API).

@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*110 / 136 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*111 / 136 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -30,7 +30,7 @@
 - [x] **A8b** Chart display interval ("View as") — decouple chart display from backtest interval. Dropdown on chart header lets user view at coarser resolution (e.g. 1h, 1D) while backtesting on 5m. Trade markers snap to display bars with aggregation (`"2T"`, `"3T"`) and colored by net PnL. EMA overlays gated when intervals differ. [Spec](docs/superpowers/specs/2026-04-25-a8b-chart-display-interval-design.md) · [Plan](docs/superpowers/plans/2026-04-25-a8b-chart-display-interval.md)
 - [x] **A8c** "View as" 1D breaks on intraday backtests (partial) — regime histogram timestamps now snapped to `viewInterval` format via local `snapRegimeTime` helper in Chart.tsx; deduplication via Map (last direction per bucket wins); `viewInterval` added to effect dep array. Fixes the axis confusion (mixed string/number timestamps) and regime shading collapse. Remaining: HTF overlay smooth-vs-stepped when `viewInterval === htfInterval` (cosmetic, deferred → see F3-follow-up below).
 - [x] **A8c-htf** HTF indicator overlay renders as smooth line instead of stepped when `viewInterval === htfInterval` — cosmetic, lower priority. [easy]
-- [ ] **A8d** "Same" TF indicator display on coarser view — resample backtest-interval indicators to align with coarser view candles. First attempt (2026-05-03) reverted: yfinance date limits truncate intraday data (30m→60d, 1h→730d) so the indicator covers a fraction of the chart range, and `pandas.resample()` bins at clock boundaries not candle opens (09:00 vs 09:30), misaligning timestamps. Backend `view_interval` infra + improved resample (`origin='start'`, `.dropna()`) kept in `indicators.py` for next attempt. Proper fix needs: (1) fetch view-interval candle index for timestamp alignment, (2) graceful fallback when backtest-interval data is truncated. [medium]
+- [x] **A8d** "Same" TF indicator display on coarser view — resample backtest-interval indicators to align with coarser view candles. Frontend wires `viewInterval` to `useInstanceIndicators` hook, which passes `view_interval` to backend API. Backend computes at backtest interval, resamples via `pandas.resample(origin='start').last().dropna()`. Data truncation from yfinance interval limits accepted (partial accurate > full inaccurate). `_PANDAS_FREQ_MAP` extended with `2m`/`90m`. [medium]
 - [x] **A9** Date range presets (D/W/M/Q/Y) + period stepping arrows (single, 5x skip)
 - [x] **A10** Equity curve: normalised B&H comparison toggle + log scale toggle
 - [x] **A11** MA8 / MA21 with SMA/EMA/RMA type selector + S-G smoothed variants (independent window/poly per MA, raw curve toggles, dashed S-G lines)

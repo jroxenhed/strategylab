@@ -113,7 +113,7 @@ export default function App() {
   const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', start, end, chartInterval, dataSource, extendedHours, chartEnabled && showQqq)
 
   const { data: instanceData = {}, refetch: refetchIndicators } = useInstanceIndicators(
-    ticker, start, end, chartInterval, chartEnabled ? indicators : [], dataSource, extendedHours,
+    ticker, start, end, interval, chartEnabled ? indicators : [], dataSource, extendedHours, viewInterval,
   )
 
   const refreshChart = useCallback(() => {

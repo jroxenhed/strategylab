@@ -26,6 +26,7 @@ export function useInstanceIndicators(
   instances: IndicatorInstance[],
   source: DataSource = 'yahoo',
   extendedHours: boolean = false,
+  viewInterval?: string,
 ) {
   const enabledInstances = instances.filter(i => i.enabled)
   const regularInstances = enabledInstances.filter(i => !i.htfInterval)
@@ -43,12 +44,16 @@ export function useInstanceIndicators(
   const regularQueryKey = regularInstances.map(i => ({ id: i.id, type: i.type, params: i.params }))
 
   const regularQuery = useQuery<IndicatorData>({
-    queryKey: ['instance-indicators', ticker, start, end, interval, regularQueryKey, source, extendedHours],
+    queryKey: ['instance-indicators', ticker, start, end, interval, viewInterval, regularQueryKey, source, extendedHours],
     queryFn: async () => {
-      const { data } = await api.post(`/api/indicators/${ticker}`, {
+      const body: Record<string, unknown> = {
         start, end, interval, source, extended_hours: extendedHours,
         instances: regularInstances.map(i => ({ id: i.id, type: i.type, params: i.params })),
-      })
+      }
+      if (viewInterval && viewInterval !== interval) {
+        body.view_interval = viewInterval
+      }
+      const { data } = await api.post(`/api/indicators/${ticker}`, body)
       return data
     },
     enabled: !!ticker && regularInstances.length > 0,
