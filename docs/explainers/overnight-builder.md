@@ -25,6 +25,7 @@ An autonomous Claude Code agent that picks tasks from TODO.md, implements them, 
                     │  │ 1. Explore+Spec (haiku)  │    │
                     │  │ 2. Implement (sonnet)    │    │
                     │  │ 3. npm run build         │    │
+                    │  │ 3.5 Smoke test (backend) │    │
                     │  │ 4. Review (3-4 agents)   │    │
                     │  │ 5. Synthesize findings   │    │
                     │  │ 6. Fix (one fixer agent) │    │
@@ -103,9 +104,17 @@ Each reviewer returns structured JSON with severity (P0-P3), confidence (0.0-1.0
 | `P0` | Committed to a branch, NOT pushed to main |
 | `advisory` | Noted in report, no code action |
 
-### 4. Guard Rails
+### 4. Smoke Test
 
-- **Max 5 tasks per run** — prevents runaway sessions
+When backend Python files are modified, the builder starts the server temporarily and runs a backtest via curl to validate that computed values are non-null and non-zero. Catches computation bugs that pass build verification but produce wrong results (e.g., C17 SPY correlation always returning 0 due to flat equity curve between trades). If the smoke test warns, the builder investigates before shipping.
+
+### 5. Visual Verification
+
+The builder cannot open a browser. Frontend UI changes are shipped with a "Not visually verified" note in the PR description. The human reviewer checks UI correctness during morning PR review. This is by design — the builder handles code correctness, the human handles visual correctness.
+
+### 6. Guard Rails
+
+- **Max 3 tasks per run** — prevents runaway sessions (conservative; may increase once trust is established)
 - **P0 gate** — anything with critical findings gets committed but NOT pushed to main. You review it manually.
 - **Build verification** — `npm run build` runs before and after fixes. If the build breaks, the task is abandoned and flagged.
 
