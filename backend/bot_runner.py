@@ -653,8 +653,9 @@ class BotRunner:
                                 self._log("WARN", f"Skipping entry — opposite position ({_pos['side']}) exists")
                                 return
                             break
-                except Exception:
-                    pass  # if check fails, proceed cautiously
+                except Exception as e:
+                    self._log("WARN", f"Skipping entry — position check failed: {e}")
+                    return
 
                 # Spread gate: skip entries when bid/ask spread exceeds the configured cap.
                 if cfg.max_spread_bps is not None and cfg.max_spread_bps > 0:

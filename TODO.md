@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*95 / 127 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*96 / 127 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -121,7 +121,7 @@
 - [ ] **D24b** Regime bot visual verification — D24 not visually verified. Need to run a regime bot in paper trading to confirm flip sequence, pending_regime_flip retry, and BotCard regime status display. Manual QA item.
 - [ ] **D24c** Regime HTF fetch timeout — `_eval_regime_direction()` runs `fetch_higher_tf` in an executor with no timeout. A hanging data provider blocks the entire `_tick()`, stalling stop-loss checks for open positions. Add `asyncio.wait_for` wrapper or executor timeout. [easy]
 - [ ] **D24d** Regime HTF cache staleness — `_fetch()` TTL is 1 hour for daily intervals. Regime direction could lag by up to 1 hour after a real flip. Consider a forced-refresh path or shorter TTL for regime HTF fetches. [medium]
-- [ ] **D25** Opposite-direction entry guard swallows errors — `_tick()` section 6 checks for opposing positions before entry, but the `except` block does `pass` (proceeds with entry). Conservative behavior on broker check failure should be to skip entry, not proceed. Pre-existing issue, amplified by regime bots. [easy] [next]
+- [x] **D25** Opposite-direction entry guard swallows errors — `_tick()` section 6 checks for opposing positions before entry, but the `except` block does `pass` (proceeds with entry). Conservative behavior on broker check failure should be to skip entry, not proceed. Pre-existing issue, amplified by regime bots. [easy]
 - [x] **D24** Regime filter: live bot integration — regime evaluation in `bot_runner._tick()`, `is_short` → `position_direction` refactor in bot_runner, position flip sequence (close → verify → reverse entry on same tick), `pending_regime_flip` retry logic, BotState regime+direction fields, `compute_bidirectional_pnl` in journal.py (no existing callers change), bidirectional same-symbol guard (regime bot gets exclusive symbol access), regime status on bot card (Active/Flat/Pending + position direction), AddBotBar regime passthrough. Prereq: B23. [large] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
 
 ### Pre-numbering
