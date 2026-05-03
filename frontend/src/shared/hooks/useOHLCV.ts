@@ -63,12 +63,12 @@ export function useInstanceIndicators(
   const htfQueryResults = useQueries({
     queries: htfGroups.map(([htfInterval, insts]) => ({
       queryKey: [
-        'instance-indicators-htf', ticker, start, end, interval, htfInterval,
+        'instance-indicators-htf', ticker, start, end, interval, viewInterval, htfInterval,
         insts.map(i => ({ id: i.id, type: i.type, params: i.params })), source, extendedHours,
       ],
       queryFn: async (): Promise<IndicatorData> => {
         const { data } = await api.post(`/api/indicators/${ticker}`, {
-          start, end, interval, source, extended_hours: extendedHours,
+          start, end, interval: viewInterval ?? interval, source, extended_hours: extendedHours,
           htf_interval: htfInterval,
           instances: insts.map(i => ({ id: i.id, type: i.type, params: i.params })),
         })

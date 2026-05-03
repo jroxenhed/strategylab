@@ -96,7 +96,7 @@ def post_indicators(ticker: str, body: IndicatorsPostRequest):
                 series_dict = compute_instance(inst.type, inst.params, ohlcv)
                 if needs_resample:
                     freq = _PANDAS_FREQ_MAP[body.view_interval]
-                    resample_kwargs = {'origin': 'start'} if body.view_interval in _INTRADAY_INTERVALS else {}
+                    resample_kwargs = {}
                     resampled = {}
                     for key, series in series_dict.items():
                         rs = series.resample(freq, **resample_kwargs).last().dropna()

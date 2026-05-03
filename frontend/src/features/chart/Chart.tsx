@@ -217,33 +217,30 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       const color = RULE_SIGNAL_COLORS[rs.rule_index % RULE_SIGNAL_COLORS.length]
       const position = rs.side === 'buy' ? 'belowBar' : 'aboveBar'
       for (const sig of rs.signals) {
-        out.push({
-          time: toET(sig.time as any) as any,
-          position,
-          color,
-          shape: 'circle' as const,
-          size: 0.6,
-        })
+        const time = isAggregated ? snapTimestamp(sig.time, viewInterval, toET) : toET(sig.time as any)
+        out.push({ time: time as any, position, color, shape: 'circle' as const, size: 0.6 })
       }
+    }
+    // Dedup by time+position when aggregated (multiple signals per candle)
+    if (isAggregated) {
+      const seen = new Set<string>()
+      const deduped = out.filter(m => {
+        const key = `${m.time}:${m.position}:${m.color}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+      deduped.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0))
+      return deduped
     }
     // lightweight-charts requires markers sorted by time ascending
     out.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0))
     return out
-  }, [ruleSignals, tzMode])
+  }, [ruleSignals, isAggregated, viewInterval, tzMode])
 
   const tradeLookup = useMemo(() => {
     if (!trades || trades.length === 0 || candleData.length === 0) return null
-    if (isAggregated) {
-      const grouped = new Map<string | number, Trade[]>()
-      for (const t of trades) {
-        const snapped = snapTimestamp(t.date, viewInterval, toET)
-        const existing = grouped.get(snapped)
-        if (existing) existing.push(t)
-        else grouped.set(snapped, [t])
-      }
-      return grouped
-    }
-    const SNAP = 2
+    const SNAP = isAggregated ? 5 : 2
     const byIdx = new Map<number, Trade[]>()
     for (const t of trades) {
       const snapped = snapTimestamp(t.date, viewInterval, toET)
@@ -543,7 +540,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   // to avoid creating hundreds of LineSeries on large datasets.
   useEffect(() => {
     const chart = chartRef.current
-    if (!chart || !emaOverlays || emaOverlays.length === 0 || isAggregated) return
+    if (!chart || !emaOverlays || emaOverlays.length === 0) return
     // Only render overlays whose corresponding MA indicator is enabled in the sidebar.
     // overlay.indicator is formatted as "ma_{period}_{type}" (e.g. "ma_200_sma").
     const enabledOverlays = emaOverlays.filter(o => {
@@ -564,7 +561,9 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
 
       for (let i = 0; i < overlay.series.length; i++) {
         const pt = overlay.series[i]
-        const t = toET(pt.time as any) as any
+        const t = isAggregated
+          ? snapTimestamp(pt.time, viewInterval, toET)
+          : toET(pt.time as any) as any
         if (pt.value === null) {
           activePts.push({ time: t })
           inactivePts.push({ time: t })
@@ -592,6 +591,12 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         }
       }
 
+      const dedup = (pts: Array<{ time: any; value?: number }>) => {
+        const map = new Map<any, { time: any; value?: number }>()
+        for (const p of pts) map.set(p.time, p)
+        return Array.from(map.values())
+      }
+
       const sActive = chart.addSeries(LineSeries, {
         color: activeColor,
         lineWidth: 2,
@@ -600,7 +605,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         lastValueVisible: false,
         priceLineVisible: false,
       })
-      sActive.setData(activePts)
+      sActive.setData(isAggregated ? dedup(activePts) : activePts)
       created.push(sActive)
 
       const sInactive = chart.addSeries(LineSeries, {
@@ -611,11 +616,11 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         lastValueVisible: false,
         priceLineVisible: false,
       })
-      sInactive.setData(inactivePts)
+      sInactive.setData(isAggregated ? dedup(inactivePts) : inactivePts)
       created.push(sInactive)
     }
     return () => { for (const s of created) { try { chart.removeSeries(s) } catch {} } }
-  }, [emaOverlays, isAggregated, tzMode, subPaneCount, indicators])
+  }, [emaOverlays, isAggregated, viewInterval, tzMode, subPaneCount, indicators])
 
   // Trade + rule-signal markers — merged into one sorted array and pushed to a
   // single plugin instance. candleData in deps ensures the effect re-runs after
@@ -657,23 +662,11 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       s.priceScale().applyOptions({ scaleMargins: { top: 0, bottom: 0 }, visible: false })
       regimeBgSeriesRef.current = s
     }
-    const dailyIntervals = ['1m','5m','15m','30m','1h']
-    const isIntraday = dailyIntervals.includes(viewInterval)
-    const snapRegimeTime = (time: any): any => {
-      if (typeof time !== 'number') return time
-      if (!isIntraday) {
-        // Convert unix timestamp to YYYY-MM-DD string matching daily candle format
-        const etTs = toET(time) as number
-        const d = new Date(etTs * 1000)
-        return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`
-      }
-      return toET(time)
-    }
     const deduped = new Map<string | number, { time: any; value: number; color: string }>()
     for (const pt of regimeSeries) {
       const color = pt.direction === 'long' ? '#26a64120' : pt.direction === 'short' ? '#f8514920' : undefined
       if (!color) continue
-      const t = snapRegimeTime(pt.time as any)
+      const t = snapTimestamp(pt.time, viewInterval, toET)
       deduped.set(t, { time: t, value: 1, color })
     }
     const bgData = Array.from(deduped.values()).sort((a, b) => {

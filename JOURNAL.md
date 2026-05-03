@@ -6,7 +6,7 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-04
 
-- **[A8d](TODO.md#a--chart--data)** Same-TF indicator resample to view interval — when "View as" selects a coarser interval, indicators now compute at the backtest interval and resample via backend `view_interval` field, preserving backtest-fidelity values. Frontend `useInstanceIndicators` wired with `viewInterval` param; `_PANDAS_FREQ_MAP` extended with `2m`/`90m`. Truncation from yfinance date limits accepted (partial accurate > full inaccurate). [Plan](docs/superpowers/plans/2026-05-04-a8d-same-tf-indicator-resample.md)
+- **[A8d](TODO.md#a--chart--data)** Same-TF indicator resample to view interval — when "View as" selects a coarser interval, indicators compute at the backtest interval and resample via backend `view_interval` field. Five follow-up fixes during visual testing: (1) removed `origin='start'` from resample — caused 30min offset vs provider clock-hour boundaries; (2) HTF queries use `viewInterval` for alignment so HTF indicators don't inject backtest-interval timestamps; (3) regime background uses `snapTimestamp` (replaces incomplete `snapRegimeTime`); (4) rule signal markers snapped+deduped when aggregated; (5) EMA overlays un-gated and timestamps snapped for coarser views. Trade tooltip SNAP tolerance ±5 candles when aggregated. [Plan](docs/superpowers/plans/2026-05-04-a8d-same-tf-indicator-resample.md)
 
 ## 2026-05-03 (review session 2)
 
