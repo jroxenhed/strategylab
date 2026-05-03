@@ -4,6 +4,10 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-03 (overnight build 8, part 2)
+
+- **[F21](TODO.md#f--architecture--housekeeping)** Split bot_runner.py (1030 → 511 lines). `RegimeMixin` in `regime.py` holds `_eval_regime_direction` + `_handle_regime_flip`. `ExitsMixin` in `exits.py` holds `_detect_external_close` + `_evaluate_exit_reason` + `_execute_exit`. `BotRunner` inherits from both. `_tick()` is now a thin orchestrator. Both mixin files use a `_br()` helper (`sys.modules["bot_runner"]`) so test patches (`patch("bot_runner._log_trade")` etc.) apply correctly at call time. All 7 F20 tests verified green by user before this run.
+
 ## 2026-05-03 (overnight build 8)
 
 - **[F22](TODO.md#f--architecture--housekeeping)** `was_running` badge on BotCard. Stopped bots with `was_running=True` now show an amber "⚡ Was running" badge in both compact and expanded layouts, prompting the user to restart bots that were live before a server restart. Also fixed a P2: `was_running` is now reset to `False` in `BotRunner.run()` so the badge clears once the bot is started and then manually stopped (no stale badge after the first restart cycle).

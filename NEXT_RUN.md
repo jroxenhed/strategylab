@@ -62,4 +62,4 @@ Tasks to skip even if tagged `[next]`:
 - C18b sparkline not visually verified — run a sweep to confirm chart renders above table.
 - A8c-htf not visually verified — toggle a 1D HTF MA overlay with `viewInterval=1d` to confirm smooth line.
 
-**Next up:** F21 [medium] (split bot_runner.py), B26 [medium] (sweep-from-rule-row), C9 [medium] (strategy comparison mode).
+**Next up:** B26 [medium] (sweep-from-rule-row), C9 [medium] (strategy comparison mode), F19 [medium] (migrate bot/journal polling to React Query).
