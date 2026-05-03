@@ -4,6 +4,18 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-03 (overnight build 6)
+
+- **[F14](TODO.md#f--architecture--housekeeping)** Atomic bots.json writes. `BotManager.save()` now writes to a temp file (`DATA_PATH + ".tmp"`) then calls `os.replace()` (atomic on POSIX) so a crash during write can't corrupt or truncate `bots.json`.
+
+- **[F15](TODO.md#f--architecture--housekeeping)** Log journal write errors. Changed all 5 `except Exception: pass` blocks wrapping `_log_trade()` calls (4 in `bot_runner.py`, 1 in `bot_manager.py`) to `except Exception as e: self._log("ERROR", f"Journal write failed: {e}")`. Trade execution at the broker now always surfaces journal failures in the bot's activity log.
+
+- **[F16](TODO.md#f--architecture--housekeeping)** Journal write lock. Added `_journal_lock = threading.Lock()` in `journal.py`. The entire read-modify-write body of `_log_trade()` is now wrapped in `with _journal_lock:`, preventing two bots closing simultaneously from overwriting each other's entries. Slippage computation moved outside the lock (no shared state).
+
+- **[D24a](TODO.md#d--bots-live-trading)** Regime bot backtest_bot() passthrough. Added the 9 missing fields to the `StrategyRequest` constructor in `backtest_bot()`: `regime`, `long_buy_rules`, `long_sell_rules`, `long_buy_logic`, `long_sell_logic`, `short_buy_rules`, `short_sell_rules`, `short_buy_logic`, `short_sell_logic`. Regime bots now backtest with their actual regime + dual-rule config instead of silently ignoring it.
+
+- **[D25](TODO.md#d--bots-live-trading)** Opposite-direction entry guard: skip on error. The `except Exception: pass` block in the position-check guard before entry now logs a WARN and returns (skips entry) instead of proceeding. A broker check failure during a regime bot entry previously risked opening a position that bypassed the opposite-direction guard entirely.
+
 ## 2026-05-03 (review session)
 
 - **[D24](TODO.md#d--bots-live-trading)** PR #10 code review — 4 parallel persona agents (correctness, reliability, adversarial, API contract). Found 6 P1 issues, all fixed in `008e70e`: (1) dual-rule indicators not included in `compute_indicators` call, (2) stale `trail_stop_price`/`trail_peak`/`entry_bar_count` on pending flip resolution, (3) `skip_remaining` cooldown bypassed on `close_and_reverse` re-entry, (4) `consec_sl_count` incorrectly incremented on regime flip, (5) `manual_buy` used unidirectional PnL for regime bots, (6) `stop_bot` didn't clear `position_direction`/`pending_regime_flip`. Added D24c, D24d, D25 to TODO from deferred P2 findings.

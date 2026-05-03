@@ -12,6 +12,7 @@ import json
 import logging
 import math
 import os
+import tempfile
 import uuid
 from dataclasses import dataclass, field
 
@@ -313,6 +314,15 @@ class BotManager:
             slippage_bps=config.slippage_bps,
             source=config.data_source,
             direction=config.direction,
+            regime=config.regime,
+            long_buy_rules=config.long_buy_rules,
+            long_sell_rules=config.long_sell_rules,
+            long_buy_logic=config.long_buy_logic,
+            long_sell_logic=config.long_sell_logic,
+            short_buy_rules=config.short_buy_rules,
+            short_sell_rules=config.short_sell_rules,
+            short_buy_logic=config.short_buy_logic,
+            short_sell_logic=config.short_sell_logic,
         )
 
         try:
@@ -417,8 +427,8 @@ class BotManager:
             _log_trade(config.symbol, "short" if is_short else "buy", qty, fill_price,
                        source="bot", reason="manual_entry", expected_price=price,
                        direction=config.direction, bot_id=config.bot_id)
-        except Exception:
-            pass
+        except Exception as e:
+            runner._log("ERROR", f"Journal write failed: {e}")
 
         self.save()
         return {"qty": qty, "fill_price": fill_price, "slippage_bps": round(cost_bps, 2)}
@@ -517,8 +527,17 @@ class BotManager:
                 for config, state in self.bots.values()
             ],
         }
-        with open(DATA_PATH, "w") as f:
-            json.dump(data, f, indent=2, default=str)
+        fd = tempfile.NamedTemporaryFile(
+            mode='w', dir=os.path.dirname(DATA_PATH), suffix='.tmp', delete=False
+        )
+        try:
+            json.dump(data, fd, indent=2, default=str)
+            fd.close()
+            os.replace(fd.name, DATA_PATH)
+        except:
+            fd.close()
+            os.unlink(fd.name)
+            raise
 
     def load(self):
         if not os.path.exists(DATA_PATH):

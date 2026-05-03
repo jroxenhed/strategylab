@@ -232,8 +232,8 @@ class BotRunner:
             _log_trade(cfg.symbol, "cover" if pos_is_short_now else "sell", broker_qty, sell_fill,
                        source="bot", reason="regime_flip", expected_price=price,
                        direction=old_dir, bot_id=cfg.bot_id, broker=cfg.broker)
-        except Exception:
-            pass
+        except Exception as e:
+            self._log("ERROR", f"Journal write failed: {e}")
 
         asyncio.create_task(notify_exit(
             symbol=cfg.symbol,
@@ -331,8 +331,8 @@ class BotRunner:
             _log_trade(cfg.symbol, "short" if entry_is_short else "buy", qty, fill_price,
                        source="bot", reason="entry", expected_price=price,
                        direction=direction, bot_id=cfg.bot_id, broker=cfg.broker)
-        except Exception:
-            pass
+        except Exception as e:
+            self._log("ERROR", f"Journal write failed: {e}")
 
         asyncio.create_task(notify_entry(
             symbol=cfg.symbol,
@@ -561,8 +561,8 @@ class BotRunner:
                     _log_trade(cfg.symbol, "cover" if pos_is_short else "sell", sell_qty, exit_price,
                                source="bot", reason=exit_reason, expected_price=expected_exit,
                                direction=logged_dir, bot_id=cfg.bot_id, broker=cfg.broker)
-                except Exception:
-                    pass
+                except Exception as e:
+                    self._log("ERROR", f"Journal write failed: {e}")
 
                 asyncio.create_task(notify_exit(
                     symbol=cfg.symbol,
@@ -653,8 +653,9 @@ class BotRunner:
                                 self._log("WARN", f"Skipping entry — opposite position ({_pos['side']}) exists")
                                 return
                             break
-                except Exception:
-                    pass  # if check fails, proceed cautiously
+                except Exception as e:
+                    self._log("WARN", f"Skipping entry — position check failed: {e}")
+                    return
 
                 # Spread gate: skip entries when bid/ask spread exceeds the configured cap.
                 if cfg.max_spread_bps is not None and cfg.max_spread_bps > 0:
@@ -864,8 +865,8 @@ class BotRunner:
                     _log_trade(cfg.symbol, "cover" if pos_is_short else "sell", broker_qty, sell_fill,
                                source="bot", reason=exit_reason, expected_price=price,
                                direction=logged_dir, bot_id=cfg.bot_id, broker=cfg.broker)
-                except Exception:
-                    pass
+                except Exception as e:
+                    self._log("ERROR", f"Journal write failed: {e}")
 
                 asyncio.create_task(notify_exit(
                     symbol=cfg.symbol,
