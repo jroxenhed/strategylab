@@ -52,6 +52,15 @@ class StrategyRequest(BaseModel):
     sell_rules: list[Rule]
     buy_logic: str = "AND"   # AND | OR
     sell_logic: str = "AND"
+    # B23: dual rule sets for regime active (long) vs inactive (short)
+    long_buy_rules: Optional[list[Rule]] = None
+    long_sell_rules: Optional[list[Rule]] = None
+    long_buy_logic: str = "AND"
+    long_sell_logic: str = "AND"
+    short_buy_rules: Optional[list[Rule]] = None
+    short_sell_rules: Optional[list[Rule]] = None
+    short_buy_logic: str = "AND"
+    short_sell_logic: str = "AND"
     initial_capital: float = 10000.0
     position_size: float = 1.0   # fraction of capital per trade (0.01–1.0)
     stop_loss_pct: Optional[float] = None  # e.g. 5.0 means sell if price drops 5% from entry

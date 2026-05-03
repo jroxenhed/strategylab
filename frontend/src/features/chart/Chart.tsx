@@ -657,13 +657,31 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       s.priceScale().applyOptions({ scaleMargins: { top: 0, bottom: 0 }, visible: false })
       regimeBgSeriesRef.current = s
     }
-    const bgData = regimeSeries.map(pt => {
-      const t = toET(pt.time as any) as any
+    const dailyIntervals = ['1m','5m','15m','30m','1h']
+    const isIntraday = dailyIntervals.includes(viewInterval)
+    const snapRegimeTime = (time: any): any => {
+      if (typeof time !== 'number') return time
+      if (!isIntraday) {
+        // Convert unix timestamp to YYYY-MM-DD string matching daily candle format
+        const etTs = toET(time) as number
+        const d = new Date(etTs * 1000)
+        return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`
+      }
+      return toET(time)
+    }
+    const deduped = new Map<string | number, { time: any; value: number; color: string }>()
+    for (const pt of regimeSeries) {
       const color = pt.direction === 'long' ? '#26a64120' : pt.direction === 'short' ? '#f8514920' : undefined
-      return { time: t, value: color ? 1 : 0, color }
-    }).filter(pt => pt.color !== undefined)
+      if (!color) continue
+      const t = snapRegimeTime(pt.time as any)
+      deduped.set(t, { time: t, value: 1, color })
+    }
+    const bgData = Array.from(deduped.values()).sort((a, b) => {
+      if (typeof a.time === 'string' && typeof b.time === 'string') return a.time < b.time ? -1 : a.time > b.time ? 1 : 0
+      return (a.time as number) - (b.time as number)
+    })
     try { regimeBgSeriesRef.current.setData(bgData as any) } catch {}
-  }, [regimeSeries, tzMode])
+  }, [regimeSeries, viewInterval, tzMode])
 
   // Compute default panel sizes based on sub-pane count (matches original ratios)
   const defaultSizes = useMemo(() => {

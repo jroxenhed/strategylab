@@ -56,6 +56,16 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [sellRules, setSellRules] = useState<Rule[]>(saved?.sellRules ?? [{ indicator: 'macd', condition: 'crossover_down' }])
   const [buyLogic, setBuyLogic] = useState<'AND' | 'OR'>(saved?.buyLogic ?? 'AND')
   const [sellLogic, setSellLogic] = useState<'AND' | 'OR'>(saved?.sellLogic ?? 'AND')
+  // B23: dual rule sets for regime long/short modes
+  const [longBuyRules, setLongBuyRules] = useState<Rule[]>(saved?.longBuyRules ?? [])
+  const [longSellRules, setLongSellRules] = useState<Rule[]>(saved?.longSellRules ?? [])
+  const [longBuyLogic, setLongBuyLogic] = useState<'AND' | 'OR'>(saved?.longBuyLogic ?? 'AND')
+  const [longSellLogic, setLongSellLogic] = useState<'AND' | 'OR'>(saved?.longSellLogic ?? 'AND')
+  const [shortBuyRules, setShortBuyRules] = useState<Rule[]>(saved?.shortBuyRules ?? [])
+  const [shortSellRules, setShortSellRules] = useState<Rule[]>(saved?.shortSellRules ?? [])
+  const [shortBuyLogic, setShortBuyLogic] = useState<'AND' | 'OR'>(saved?.shortBuyLogic ?? 'AND')
+  const [shortSellLogic, setShortSellLogic] = useState<'AND' | 'OR'>(saved?.shortSellLogic ?? 'AND')
+  const [activeRuleTab, setActiveRuleTab] = useState<'single' | 'long' | 'short'>('single')
   const [capital, setCapital] = useState(saved?.capital ?? 10000)
   const [posSize, setPosSize] = useState(saved?.posSize ?? 100)
   const [stopLoss, setStopLoss] = useState<number | ''>(saved?.stopLoss ?? '')
@@ -110,6 +120,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
       name, savedAt: new Date().toISOString(),
       ticker, interval,
       buyRules, sellRules, buyLogic, sellLogic,
+      longBuyRules, longSellRules, longBuyLogic, longSellLogic,
+      shortBuyRules, shortSellRules, shortBuyLogic, shortSellLogic,
       capital, posSize, stopLoss, maxBarsHeld,
       trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours,
       slippageBps, commission, direction,
@@ -144,6 +156,10 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     setBorrowRateAnnual(s.borrowRateAnnual ?? 0.5)
     setSlippageSource('manual')
     setDirection(s.direction ?? 'long')
+    setLongBuyRules(s.longBuyRules ?? []); setLongSellRules(s.longSellRules ?? [])
+    setShortBuyRules(s.shortBuyRules ?? []); setShortSellRules(s.shortSellRules ?? [])
+    setLongBuyLogic(s.longBuyLogic ?? 'AND'); setLongSellLogic(s.longSellLogic ?? 'AND')
+    setShortBuyLogic(s.shortBuyLogic ?? 'AND'); setShortSellLogic(s.shortSellLogic ?? 'AND')
     if (s.regime) {
       setRegimeEnabled(s.regime.enabled)
       setRegimeConfig(s.regime)
@@ -198,9 +214,14 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
       buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, maxBarsHeld,
       trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours, slippageBps, commission, direction,
       perShareRate, minPerOrder, borrowRateAnnual,
+      regime: { ...regimeConfig, enabled: regimeEnabled },
+      longBuyRules, longSellRules, longBuyLogic, longSellLogic,
+      shortBuyRules, shortSellRules, shortBuyLogic, shortSellLogic,
     }))
   }, [buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, maxBarsHeld, trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours, slippageBps, commission, direction,
-      perShareRate, minPerOrder, borrowRateAnnual])
+      perShareRate, minPerOrder, borrowRateAnnual, regimeEnabled, regimeConfig,
+      longBuyRules, longSellRules, longBuyLogic, longSellLogic,
+      shortBuyRules, shortSellRules, shortBuyLogic, shortSellLogic])
 
   async function runBacktest() {
     setLoading(true)
@@ -227,6 +248,16 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         source: dataSource, debug, direction,
         extended_hours: extendedHours,
         regime: regimeEnabled ? { ...regimeConfig, enabled: true } : undefined,
+        ...(regimeEnabled && longBuyRules.some(r => r.indicator) && shortBuyRules.some(r => r.indicator) ? {
+          long_buy_rules: longBuyRules,
+          long_sell_rules: longSellRules,
+          long_buy_logic: longBuyLogic,
+          long_sell_logic: longSellLogic,
+          short_buy_rules: shortBuyRules,
+          short_sell_rules: shortSellRules,
+          short_buy_logic: shortBuyLogic,
+          short_sell_logic: shortSellLogic,
+        } : {}),
       }
       const { data } = await api.post('/api/backtest', req)
       onResult(data, req)
@@ -649,8 +680,28 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
           )}
         </div>
 
+        {/* B23: tab selector for single / long / short rule sets when regime is enabled */}
+        {regimeEnabled && (
+          <div style={{ display: 'flex', gap: 4, padding: '6px 16px 0', borderBottom: '1px solid #21262d' }}>
+            {(['single', 'long', 'short'] as const).map(tab => (
+              <button key={tab} onClick={() => setActiveRuleTab(tab)}
+                style={{
+                  fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, border: 'none',
+                  cursor: 'pointer', textTransform: 'uppercase',
+                  background: activeRuleTab === tab ? '#1a2a3a' : '#161b22',
+                  color: activeRuleTab === tab
+                    ? (tab === 'long' ? '#3fb950' : tab === 'short' ? '#f85149' : '#58a6ff')
+                    : '#555',
+                }}>
+                {tab === 'long' ? '▲ Long' : tab === 'short' ? '▼ Short' : 'Single'}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div style={styles.panels}>
-          {/* BUY */}
+          {/* BUY — single mode or regime disabled */}
+          {(!regimeEnabled || activeRuleTab === 'single') && (<>
           <div style={styles.panel}>
             <div style={styles.panelHeader}>
               <span style={{ color: 'var(--accent-green)', fontWeight: 600 }}>{direction === 'short' ? 'Entry Rules' : 'BUY'} when</span>
@@ -668,7 +719,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             ))}
           </div>
 
-          {/* SELL */}
+          {/* SELL — single mode */}
           <div style={styles.panel}>
             <div style={styles.panelHeader}>
               <span style={{ color: 'var(--accent-red)', fontWeight: 600 }}>{direction === 'short' ? 'Exit Rules' : 'SELL'} when</span>
@@ -685,6 +736,79 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
                 onDelete={() => setSellRules(rules => rules.filter((_, j) => j !== i))} />
             ))}
           </div>
+          </>)}
+
+          {/* Long rules tab (regime active = bullish) */}
+          {regimeEnabled && activeRuleTab === 'long' && (<>
+          <div style={styles.panel}>
+            <div style={styles.panelHeader}>
+              <span style={{ color: '#3fb950', fontWeight: 600 }}>▲ Long Entry when</span>
+              <div style={styles.logicToggle}>
+                {(['AND', 'OR'] as const).map(l => (
+                  <button key={l} onClick={() => setLongBuyLogic(l)} style={{ ...styles.logicBtn, ...(longBuyLogic === l ? styles.logicBtnActive : {}) }}>{l}</button>
+                ))}
+              </div>
+              <button onClick={() => setLongBuyRules(r => [...r, emptyRule()])} style={styles.addBtn}><Plus size={13} /> Add</button>
+            </div>
+            {longBuyRules.map((r, i) => (
+              <RuleRow key={i} rule={r}
+                onChange={nr => setLongBuyRules(rules => rules.map((x, j) => j === i ? nr : x))}
+                onDelete={() => setLongBuyRules(rules => rules.filter((_, j) => j !== i))} />
+            ))}
+          </div>
+          <div style={styles.panel}>
+            <div style={styles.panelHeader}>
+              <span style={{ color: 'var(--accent-red)', fontWeight: 600 }}>▲ Long Exit when</span>
+              <div style={styles.logicToggle}>
+                {(['AND', 'OR'] as const).map(l => (
+                  <button key={l} onClick={() => setLongSellLogic(l)} style={{ ...styles.logicBtn, ...(longSellLogic === l ? styles.logicBtnActive : {}) }}>{l}</button>
+                ))}
+              </div>
+              <button onClick={() => setLongSellRules(r => [...r, emptyRule()])} style={styles.addBtn}><Plus size={13} /> Add</button>
+            </div>
+            {longSellRules.map((r, i) => (
+              <RuleRow key={i} rule={r}
+                onChange={nr => setLongSellRules(rules => rules.map((x, j) => j === i ? nr : x))}
+                onDelete={() => setLongSellRules(rules => rules.filter((_, j) => j !== i))} />
+            ))}
+          </div>
+          </>)}
+
+          {/* Short rules tab (regime inactive = bearish) */}
+          {regimeEnabled && activeRuleTab === 'short' && (<>
+          <div style={styles.panel}>
+            <div style={styles.panelHeader}>
+              <span style={{ color: '#f85149', fontWeight: 600 }}>▼ Short Entry when</span>
+              <div style={styles.logicToggle}>
+                {(['AND', 'OR'] as const).map(l => (
+                  <button key={l} onClick={() => setShortBuyLogic(l)} style={{ ...styles.logicBtn, ...(shortBuyLogic === l ? styles.logicBtnActive : {}) }}>{l}</button>
+                ))}
+              </div>
+              <button onClick={() => setShortBuyRules(r => [...r, emptyRule()])} style={styles.addBtn}><Plus size={13} /> Add</button>
+            </div>
+            {shortBuyRules.map((r, i) => (
+              <RuleRow key={i} rule={r}
+                onChange={nr => setShortBuyRules(rules => rules.map((x, j) => j === i ? nr : x))}
+                onDelete={() => setShortBuyRules(rules => rules.filter((_, j) => j !== i))} />
+            ))}
+          </div>
+          <div style={styles.panel}>
+            <div style={styles.panelHeader}>
+              <span style={{ color: 'var(--accent-red)', fontWeight: 600 }}>▼ Short Exit when</span>
+              <div style={styles.logicToggle}>
+                {(['AND', 'OR'] as const).map(l => (
+                  <button key={l} onClick={() => setShortSellLogic(l)} style={{ ...styles.logicBtn, ...(shortSellLogic === l ? styles.logicBtnActive : {}) }}>{l}</button>
+                ))}
+              </div>
+              <button onClick={() => setShortSellRules(r => [...r, emptyRule()])} style={styles.addBtn}><Plus size={13} /> Add</button>
+            </div>
+            {shortSellRules.map((r, i) => (
+              <RuleRow key={i} rule={r}
+                onChange={nr => setShortSellRules(rules => rules.map((x, j) => j === i ? nr : x))}
+                onDelete={() => setShortSellRules(rules => rules.filter((_, j) => j !== i))} />
+            ))}
+          </div>
+          </>)}
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '8px 16px' }}>

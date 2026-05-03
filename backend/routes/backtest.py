@@ -278,6 +278,26 @@ def run_backtest(req: StrategyRequest):
         buy_rules = [migrate_rule(r) for r in req.buy_rules]
         sell_rules = [migrate_rule(r) for r in req.sell_rules]
         all_rules = buy_rules + sell_rules
+
+        # B23: dual rule sets when long_buy_rules + short_buy_rules both provided with regime enabled
+        b23_mode = (
+            req.regime and req.regime.enabled
+            and req.long_buy_rules is not None and len(req.long_buy_rules) > 0
+            and req.short_buy_rules is not None and len(req.short_buy_rules) > 0
+        )
+        if b23_mode:
+            long_buy_rules = [migrate_rule(r) for r in req.long_buy_rules]
+            long_sell_rules = [migrate_rule(r) for r in (req.long_sell_rules or [])]
+            short_buy_rules = [migrate_rule(r) for r in req.short_buy_rules]
+            short_sell_rules = [migrate_rule(r) for r in (req.short_sell_rules or [])]
+            # Combine all rules so indicators are computed for every rule across both sets
+            all_rules = all_rules + long_buy_rules + long_sell_rules + short_buy_rules + short_sell_rules
+        else:
+            long_buy_rules = []
+            long_sell_rules = []
+            short_buy_rules = []
+            short_sell_rules = []
+
         indicators = compute_indicators(close, high=high, low=low, volume=volume, rules=all_rules)
 
         # Simulate
@@ -449,7 +469,16 @@ def run_backtest(req: StrategyRequest):
             else:
                 regime_ok = curr_regime_active
 
-            buy_fires = position == 0 and hour_ok and regime_ok and eval_rules(buy_rules, req.buy_logic, indicators, i)
+            if b23_mode:
+                if curr_regime_active:
+                    active_buy = long_buy_rules
+                    active_buy_logic = req.long_buy_logic
+                else:
+                    active_buy = short_buy_rules
+                    active_buy_logic = req.short_buy_logic
+                buy_fires = position == 0 and hour_ok and eval_rules(active_buy, active_buy_logic, indicators, i)
+            else:
+                buy_fires = position == 0 and hour_ok and regime_ok and eval_rules(buy_rules, req.buy_logic, indicators, i)
             if buy_fires and skip_remaining > 0:
                 skip_remaining -= 1
                 if signal_trace is not None:
@@ -466,7 +495,9 @@ def run_backtest(req: StrategyRequest):
                     effective_size = req.position_size * (ds.reduced_pct / 100)
 
                 # Direction follows regime when close_and_reverse is active
-                if on_flip == "close_and_reverse" and regime_active_series is not None:
+                if b23_mode:
+                    position_direction = 'long' if curr_regime_active else 'short'
+                elif on_flip == "close_and_reverse" and regime_active_series is not None:
                     position_direction = req.direction if curr_regime_active else ("short" if req.direction == "long" else "long")
                 else:
                     position_direction = req.direction
@@ -559,7 +590,12 @@ def run_backtest(req: StrategyRequest):
                     exit_price = raw_exit * (1 + drag)
                 else:
                     exit_price = raw_exit * (1 - drag)
-                sell_fired = eval_rules(sell_rules, req.sell_logic, indicators, i)
+                if b23_mode and position_direction is not None:
+                    active_sell = long_sell_rules if position_direction == 'long' else short_sell_rules
+                    active_sell_logic = req.long_sell_logic if position_direction == 'long' else req.short_sell_logic
+                    sell_fired = eval_rules(active_sell, active_sell_logic, indicators, i) if active_sell else False
+                else:
+                    sell_fired = eval_rules(sell_rules, req.sell_logic, indicators, i)
                 if stop_hit or trail_hit or time_stop_hit or sell_fired:
                     exit_slippage = abs(position * (raw_exit - exit_price))
                     commission = per_leg_commission(position, req)

@@ -77,6 +77,14 @@ export interface StrategyRequest {
   sell_rules: Rule[]
   buy_logic: 'AND' | 'OR'
   sell_logic: 'AND' | 'OR'
+  long_buy_rules?: Rule[]
+  long_sell_rules?: Rule[]
+  long_buy_logic?: 'AND' | 'OR'
+  long_sell_logic?: 'AND' | 'OR'
+  short_buy_rules?: Rule[]
+  short_sell_rules?: Rule[]
+  short_buy_logic?: 'AND' | 'OR'
+  short_sell_logic?: 'AND' | 'OR'
   initial_capital: number
   position_size: number
   stop_loss_pct?: number
@@ -106,6 +114,14 @@ export interface SavedStrategy {
   sellRules: Rule[]
   buyLogic: 'AND' | 'OR'
   sellLogic: 'AND' | 'OR'
+  longBuyRules?: Rule[]
+  longSellRules?: Rule[]
+  longBuyLogic?: 'AND' | 'OR'
+  longSellLogic?: 'AND' | 'OR'
+  shortBuyRules?: Rule[]
+  shortSellRules?: Rule[]
+  shortBuyLogic?: 'AND' | 'OR'
+  shortSellLogic?: 'AND' | 'OR'
   capital: number
   posSize: number
   stopLoss: number | ''

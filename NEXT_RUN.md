@@ -37,24 +37,26 @@ Tasks to skip even if tagged `[next]`:
 ## Last Run
 
 **Date:** 2026-05-03
-**Branch:** `claude/bold-fermat-Z9dFt`
+**Branch:** `claude/overnight-2026-05-03`
 
 **Shipped:**
-- **C17a** SPY correlation fix — switched from flat daily equity returns to per-trade returns; correctly shows beta/R² now.
-- **B21** Regime sit-flat gate — `RegimeConfig` model, `is_short` → `position_direction` refactor, regime gate on backtest entry, chart histogram shading, StrategyBuilder regime UI, saved-strategy support, bot runner guard, `UpdateBotRequest` regime field.
-- **B22** Regime symmetric direction switching — `on_flip` field (`close_only`/`close_and_reverse`/`hold`), forced exit on regime flip, optional forced reversal entry, regime-directed signal entries, UI dropdown + direction toggle hide, `regime_series` shows opposite direction for `close_and_reverse`.
+- **B21a** Regime config not restored on refresh — localStorage persistence effect missing regime fields; added `regime` to JSON and dep array.
+- **A8c** (partial) "View as" 1D regime histogram axis fix — `snapRegimeTime` converts intraday unix timestamps to YYYY-MM-DD when displaying at daily scale; fixes axis confusion and thin candles.
+- **B23** Regime dual rule sets — backend `b23_mode` + 8 schema fields; frontend Single/Long/Short tab UI in StrategyBuilder; dual rules sent in backtest request when both long and short buy rules populated.
 
-**Self-review findings (B22): review in background at commit time**
-- Build: clean
-- Syntax: clean (python3 ast.parse)
-- Not visually verified
+**Self-review findings:**
+- P1: `[emptyRule()]` initial state for dual rule arrays would always trigger b23_mode — fixed to `[]`.
+- P2: HTF overlay smooth-vs-stepped when `viewInterval === htfInterval` — deferred as `A8c-htf`, cosmetic.
+- P3: b23_mode + `on_flip = "hold"` doesn't force position exit on regime flip — documented, by-design.
+- Build: clean (tsc -b + vite). Syntax: clean (python3 ast.parse). Not visually verified.
+- Review: 1 P1 auto-fixed, 1 P2 deferred, 1 iteration.
 
-**Deferred:** None.
+**Deferred:**
+- A8c-htf: HTF overlay stepped-vs-smooth when viewInterval matches htfInterval (cosmetic, added to TODO).
 
 **Review concerns flagged:**
-- Python test environment not available in sandbox (no pandas/uvicorn); backend Python changes syntax-verified only.
-- B22 UI **not visually verified** — on_flip dropdown and direction toggle hide need human review in browser.
-- `_compute_regime_series` `next(iter(result))` gap (P2 from B21) still open — deferred to pre-Stage-4.
-- `close_and_reverse` after a stop-loss: position = 0 when flip happens, so forced reversal silently skips (no existing position to reverse from). Expected behavior; documented here for awareness.
+- Python smoke test not run (no pandas/uvicorn in sandbox); backend verified by syntax only.
+- B23 UI **not visually verified** — Long/Short tabs, regime tab switching, dual-rule backtest flow need human browser review.
+- b23_mode + `on_flip = "hold"` behavior: existing position stays open when regime flips; new entries after close use new rule set. This is intentional but worth verifying in browser.
 
-**Next up:** B23 [next] (regime dual rule sets — Stage 4 of regime filter plan). Also C18 and C9 are standalone medium tasks.
+**Next up:** D24 [next] (regime live bot integration — prereq B23 now shipped). Also C18 and C9 are standalone medium tasks.
