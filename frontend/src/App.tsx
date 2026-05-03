@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import type { BacktestResult, IndicatorInstance, DataSource, StrategyRequest, DatePreset } from './shared/types'
 import { DEFAULT_INDICATORS } from './shared/types/indicators'
@@ -79,17 +79,23 @@ export default function App() {
   const [mainChart, setMainChart] = useState<IChartApi | null>(null)
   const [chartEnabled, setChartEnabled] = useState(true)
   const [datePreset, setDatePreset] = useState<DatePreset>((saved?.datePreset as DatePreset) ?? 'Y')
-  const [viewInterval, setViewInterval] = useState(interval)
+  const [viewInterval, setViewInterval] = useState(saved?.viewInterval ?? interval)
+  const intervalRef = useRef(interval)
 
-  useEffect(() => { setViewInterval(interval) }, [interval])
+  useEffect(() => {
+    if (interval !== intervalRef.current) {
+      setViewInterval(interval)
+      intervalRef.current = interval
+    }
+  }, [interval])
 
   const viewIntervalOptions = useMemo(() => getCoarserIntervals(interval), [interval])
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, datePreset,
+      ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, datePreset, viewInterval,
     }))
-  }, [ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, datePreset])
+  }, [ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, datePreset, viewInterval])
 
   useEffect(() => {
     if (backtestResult && lastRequest) {
