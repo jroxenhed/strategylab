@@ -26,6 +26,7 @@ Interactive trading strategy backtester + live paper trading platform. Read this
 - **Pipeline parallelism across tasks.** Don't wait for Task A's full cycle before starting Task B. While Task A is in review (the slowest phase), Task B can be in explore/implement — as long as their files don't overlap. The orchestrator tracks multiple tasks at different pipeline stages. Typical overlap: Task A in review + Task B in implement = ~2x wall-clock speedup on multi-task sessions. Use `run_in_background: true` on review agents, then dispatch the next task's explore+implement while reviews run. When review results arrive, synthesize and fix Task A, then move to Task B's review.
 - **Model routing for subagents.** haiku for reads/exploration, sonnet for coding/implementation/review, opus only when complexity demands it. Set the `model` parameter on every Agent call.
 - **Review rules.** Pass file paths and intent to reviewers, not diff content. Always use absolute paths. Skip review for trivial (<10 line) changes; single reviewer for medium; parallel personas for large.
+- **Overnight PR review.** Before merging overnight builder PRs, dispatch 3 parallel review agents (correctness, reliability, adversarial) against the PR branch. The builder's self-review consistently misses P1s that multi-agent review catches (8 P1s found across 2 PRs in 2026-05-03). Fix confirmed P1s, verify with a quick review pass, then merge. Takes ~5 minutes.
 - **Anti-patterns to avoid:**
   - "Just check one thing" trap — any investigation in the main session is a delegation failure; dispatch a haiku agent instead
   - Reading full diffs into orchestrator context — wasteful; pass file paths, let reviewers gather evidence
@@ -34,6 +35,7 @@ Interactive trading strategy backtester + live paper trading platform. Read this
   - `tsc --noEmit` as verification — misses `verbatimModuleSyntax` errors that cause blank pages. Always use `npm run build` (runs `tsc -b`).
   - Implementation agents committing — agents follow CLAUDE.md literally and will commit+push. Always include "Do NOT commit or push" in implementation agent prompts. The orchestrator owns commit decisions.
   - System `python` for syntax checks — macOS system Python is 2.7. Always use `python3` explicitly.
+  - Dispatching review agents on wrong branch — always check out the PR branch or extract files to `/tmp` before dispatching. Agents that read main when reviewing a PR produce false positives (~40% false positive rate observed).
 - Visually verify UI changes in browser or flag "not visually verified." Journal to `JOURNAL.md` at session end.
 
 ## Handoff Contract
