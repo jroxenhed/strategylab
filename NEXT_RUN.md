@@ -35,24 +35,26 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-05-03 (build 5)
-**Branch:** `claude/bold-einstein-MCgOu`
-**Commit:** cbc2bcc
+**Date:** 2026-05-03 (build 6)
+**Branch:** `claude/bold-einstein-XBXNO`
+**Commits:** 5a3076b (F14/F15/F16), 25492c3 (D24a), 6771f01 (D25)
 
 **Shipped:**
-- **D24** Regime filter live bot integration — full Stage 5 implementation: regime evaluation per tick, position flip sequence, pending_regime_flip retry, bidirectional P&L helpers, same-symbol guard, regime status on BotCard, AddBotBar passthrough.
+- **F14** Atomic bots.json: `save()` now writes to `.tmp` then `os.replace()` — crash-safe.
+- **F15** Log journal errors: 5 `except Exception: pass` blocks around `_log_trade()` now log via `self._log("ERROR", ...)`.
+- **F16** Journal write lock: `threading.Lock` wraps read-modify-write in `_log_trade()`.
+- **D24a** `backtest_bot()` regime passthrough: added 9 missing fields (`regime`, dual-rule sets, logics) to `StrategyRequest` constructor.
+- **D25** Entry guard: opposite-direction position check now skips entry on exception instead of proceeding.
 
 **Self-review findings:**
-- P2: `pending_regime_flip` not in list_bots summary → added for "⏳ Pending flip" badge on BotCard. Auto-fixed.
-- Build: clean (tsc -b + vite). Syntax: clean (ast.parse). Not visually verified (live bot paper trading required).
-- Review: 1 finding (P2), 1 auto-fixed, 1 iteration.
+- Review: 0 findings across all 5 tasks, 0 auto-fixed, 1 iteration each.
+- Syntax: clean (ast.parse). Backend-only changes — no frontend build needed.
+- Smoke test not run (no pandas/uvicorn in sandbox); verified by syntax + code review.
 
 **Deferred:**
-- D24b: Regime bot not visually verified — need paper trading QA to confirm flip sequence, pending flip retry, regime badge.
+- D24b: Regime bot visual verification — still needs live paper-trading QA.
 
 **Review concerns flagged:**
-- Backend: `backtest_bot()` in `bot_manager.py` doesn't pass regime/dual-rule fields to StrategyRequest → added as D24a [easy] [next].
-- D24 not visually verified — the bot flip sequence requires a live market session with a running regime bot.
-- Smoke test not run (no pandas/uvicorn in sandbox); backend verified by syntax only.
+- None. All changes were mechanical/safe.
 
-**Next up:** F14 [easy] (atomic bots.json), F15 [easy] (log journal errors), F16 [easy] (journal write lock), D24a [easy], D25 [easy] — safety-first. Next run after that: F20+F21 (bot_runner tests then split) before more feature work touches that file. F6, C18, D23 also tagged [next] but lower priority.
+**Next up:** F6 [easy] (split shared/types/index.ts), C18 [medium] (parameter sensitivity sweep), D23 [medium] (bot daily P&L), F20 [medium] (bot_runner test harness), F21 [medium] (split bot_runner.py — prereq: F20). D24c [easy] (regime HTF timeout) and D24d [medium] (HTF cache staleness) also worth picking up.
