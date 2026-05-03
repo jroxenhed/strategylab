@@ -4,6 +4,10 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-03 (overnight build 3)
+
+- **[B22](TODO.md#b--strategy-engine--rules)** Regime symmetric direction switching. Added `on_flip: str = "close_only"` field to `RegimeConfig` (backend + TS type). Three behaviors: `hold` (existing gate-only), `close_only` (forced exit on regime flip, no auto re-entry), `close_and_reverse` (forced exit + immediate forced entry in opposite direction at same bar, slippage/commission on both legs). Flip detection via `curr_regime_active != prev_regime_active` each bar. With `close_and_reverse`, signal-driven entries also adopt the regime-determined direction (active=req.direction, inactive=opposite). `regime_series` output shows opposite direction for inactive bars under `close_and_reverse` (not "flat"). Frontend: `on_flip` dropdown (Close only / Close & reverse / Hold) in regime config section; direction toggle hidden when `regimeEnabled && on_flip !== 'hold'`, replaced by informational label showing entry direction and flip target. Build clean. Not visually verified. Review in background.
+
 ## 2026-05-03 (overnight build 2)
 
 - **[C17a](TODO.md#c--strategy-summary--analytics)** Fix SPY correlation (beta/R² always 0). Root cause: daily equity-curve returns are 0 for 90%+ of bars when strategy is flat, making covariance meaningless. Fix: rewrote `_compute_spy_correlation(trades, start, end)` to use per-trade returns (pnl / entry_value) paired with SPY's return over each trade's holding period. Returns None gracefully for <3 trades or near-zero SPY variance (intraday same-day trades). P2 cosmetic: intraday strategies with same-day entries/exits will have near-zero SPY variance and correctly show None.

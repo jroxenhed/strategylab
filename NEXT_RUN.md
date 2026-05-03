@@ -42,16 +42,19 @@ Tasks to skip even if tagged `[next]`:
 **Shipped:**
 - **C17a** SPY correlation fix — switched from flat daily equity returns to per-trade returns; correctly shows beta/R² now.
 - **B21** Regime sit-flat gate — `RegimeConfig` model, `is_short` → `position_direction` refactor, regime gate on backtest entry, chart histogram shading, StrategyBuilder regime UI, saved-strategy support, bot runner guard, `UpdateBotRequest` regime field.
+- **B22** Regime symmetric direction switching — `on_flip` field (`close_only`/`close_and_reverse`/`hold`), forced exit on regime flip, optional forced reversal entry, regime-directed signal entries, UI dropdown + direction toggle hide, `regime_series` shows opposite direction for `close_and_reverse`.
 
-**Self-review findings: 1 (P0: 0, P1: 1, P2: 0, P3: 1), 1 auto-fixed, 1 iteration**
-- P1 auto-fixed: `regime` missing from `UpdateBotRequest` in `routes/bots.py` (Known Pitfall #4)
-- P3 deferred: `RegimeConfig` import unused directly in `backtest.py` — harmless
+**Self-review findings (B22): review in background at commit time**
+- Build: clean
+- Syntax: clean (python3 ast.parse)
+- Not visually verified
 
-**Deferred:** None. Both tasks shipped.
+**Deferred:** None.
 
 **Review concerns flagged:**
-- Python test environment not available in sandbox (no pandas/uvicorn); backend Python changes syntax-verified only, smoke test skipped.
-- B21 UI **not visually verified** — regime UI section and chart histogram shading need human review in browser.
-- `_compute_regime_series` uses `next(iter(result))` to get the primary series key — if `compute_instance` returns a multi-key dict (e.g., BB upper/middle/lower), it picks the first key alphabetically. For the default `ma` indicator this is fine (`{"ma": series}`). Edge case: if user configures regime indicator as "bb" or "macd", the wrong series might be selected. This is a P2 gap that should be addressed before Stage 4.
+- Python test environment not available in sandbox (no pandas/uvicorn); backend Python changes syntax-verified only.
+- B22 UI **not visually verified** — on_flip dropdown and direction toggle hide need human review in browser.
+- `_compute_regime_series` `next(iter(result))` gap (P2 from B21) still open — deferred to pre-Stage-4.
+- `close_and_reverse` after a stop-loss: position = 0 when flip happens, so forced reversal silently skips (no existing position to reverse from). Expected behavior; documented here for awareness.
 
-**Next up:** B22 [next] (regime symmetric direction switching — builds on B21 `position_direction` foundation). Also C18 and C9 are standalone medium tasks.
+**Next up:** B23 [next] (regime dual rule sets — Stage 4 of regime filter plan). Also C18 and C9 are standalone medium tasks.

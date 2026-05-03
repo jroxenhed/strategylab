@@ -85,6 +85,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [regimeConfig, setRegimeConfig] = useState<RegimeConfig>(saved?.regime ?? {
     enabled: false, timeframe: '1d', indicator: 'ma',
     indicator_params: { period: 200, type: 'sma' }, condition: 'above', min_bars: 3,
+    on_flip: 'close_only',
   })
   const [debug, setDebug] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -539,26 +540,33 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             </div>
           )}
         </div>
-        <div style={{ display: 'flex', gap: 4, marginBottom: 8, paddingLeft: 16 }}>
-          {(['long', 'short'] as const).map(d => (
-            <button
-              key={d}
-              onClick={() => setDirection(d)}
-              style={{
-                padding: '4px 12px', fontSize: 12, borderRadius: 4, border: 'none',
-                cursor: 'pointer', textTransform: 'uppercase', fontWeight: 600,
-                background: direction === d
-                  ? (d === 'long' ? '#1a3a2a' : '#3a1a1a')
-                  : '#161b22',
-                color: direction === d
-                  ? (d === 'long' ? '#26a69a' : '#ef5350')
-                  : '#666',
-              }}
-            >
-              {d}
-            </button>
-          ))}
-        </div>
+        {!(regimeEnabled && regimeConfig.on_flip && regimeConfig.on_flip !== 'hold') && (
+          <div style={{ display: 'flex', gap: 4, marginBottom: 8, paddingLeft: 16 }}>
+            {(['long', 'short'] as const).map(d => (
+              <button
+                key={d}
+                onClick={() => setDirection(d)}
+                style={{
+                  padding: '4px 12px', fontSize: 12, borderRadius: 4, border: 'none',
+                  cursor: 'pointer', textTransform: 'uppercase', fontWeight: 600,
+                  background: direction === d
+                    ? (d === 'long' ? '#1a3a2a' : '#3a1a1a')
+                    : '#161b22',
+                  color: direction === d
+                    ? (d === 'long' ? '#26a69a' : '#ef5350')
+                    : '#666',
+                }}
+              >
+                {d}
+              </button>
+            ))}
+          </div>
+        )}
+        {regimeEnabled && regimeConfig.on_flip && regimeConfig.on_flip !== 'hold' && (
+          <div style={{ padding: '0 16px 6px', fontSize: 11, color: '#8b949e' }}>
+            Direction: <span style={{ color: '#58a6ff' }}>{direction}</span> entry · flips to <span style={{ color: '#8b949e' }}>{direction === 'long' ? 'short' : 'long'}</span> on regime flip
+          </div>
+        )}
 
         {/* Regime filter */}
         <div style={{ padding: '6px 16px 4px', borderBottom: '1px solid #21262d' }}>
@@ -576,7 +584,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             </button>
             {regimeEnabled && (
               <span style={{ fontSize: 11, color: '#8b949e' }}>
-                {regimeConfig.indicator.toUpperCase()}({(regimeConfig.indicator_params as Record<string, unknown>).period as number}) {regimeConfig.condition} · {regimeConfig.timeframe} · {regimeConfig.min_bars}b
+                {regimeConfig.indicator.toUpperCase()}({(regimeConfig.indicator_params as Record<string, unknown>).period as number}) {regimeConfig.condition} · {regimeConfig.timeframe} · {regimeConfig.min_bars}b · {regimeConfig.on_flip ?? 'close_only'}
               </span>
             )}
           </div>
@@ -613,6 +621,18 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
                 <option value="rising">Rising</option>
                 <option value="falling">Falling</option>
               </select>
+              <label style={{ fontSize: 11, color: '#8b949e', display: 'flex', alignItems: 'center', gap: 4 }}>
+                On flip
+                <select
+                  value={regimeConfig.on_flip ?? 'close_only'}
+                  onChange={e => setRegimeConfig(c => ({ ...c, on_flip: e.target.value as 'close_only' | 'close_and_reverse' | 'hold' }))}
+                  style={{ fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}
+                >
+                  <option value="close_only">Close only</option>
+                  <option value="close_and_reverse">Close &amp; reverse</option>
+                  <option value="hold">Hold</option>
+                </select>
+              </label>
               <label style={{ fontSize: 11, color: '#8b949e', display: 'flex', alignItems: 'center', gap: 4 }}>
                 Min bars
                 <input

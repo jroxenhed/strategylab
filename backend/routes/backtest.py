@@ -303,6 +303,8 @@ def run_backtest(req: StrategyRequest):
         skip_remaining = 0  # entries still to skip after a qualifying stop
         is_intraday = req.interval in _INTRADAY_INTERVALS
         regime_active_series = _compute_regime_series(req, df)
+        on_flip = req.regime.on_flip if (req.regime and req.regime.enabled) else "hold"
+        prev_regime_active: bool = False
 
         def _rule_desc(r):
             """Short human-readable description of a rule."""
@@ -361,7 +363,92 @@ def run_backtest(req: StrategyRequest):
                             hour_ok = False
                             break
 
-            regime_ok = (regime_active_series is None) or bool(regime_active_series.iloc[i])
+            curr_regime_active = bool(regime_active_series.iloc[i]) if regime_active_series is not None else True
+
+            # Regime flip: forced exit (and optional reversal) when on_flip != "hold"
+            if i > 0 and regime_active_series is not None and on_flip != "hold":
+                if curr_regime_active != prev_regime_active and position > 0:
+                    raw_exit = price
+                    if position_direction == "short":
+                        exit_price_rf = raw_exit * (1 + drag)
+                    else:
+                        exit_price_rf = raw_exit * (1 - drag)
+                    exit_slippage_rf = abs(position * (raw_exit - exit_price_rf))
+                    commission_rf = per_leg_commission(position, req)
+                    bcost_rf = borrow_cost(position, entry_price, entry_ts, df.index[i],
+                                           position_direction, req)
+                    if position_direction == "short":
+                        pnl_rf = position * (entry_price - exit_price_rf) - commission_rf - bcost_rf
+                        capital += position * entry_price + pnl_rf
+                    else:
+                        proceeds_rf = position * exit_price_rf
+                        pnl_rf = (proceeds_rf - commission_rf) - position * entry_price
+                        capital += proceeds_rf - commission_rf
+                    exit_type_rf = "cover" if position_direction == "short" else "sell"
+                    rf_old_direction = position_direction
+                    trades.append({
+                        "type": exit_type_rf, "date": date, "price": round(exit_price_rf, 4),
+                        "shares": round(position, 4), "direction": rf_old_direction,
+                        "pnl": round(pnl_rf, 2),
+                        "pnl_pct": round(pnl_rf / (position * entry_price) * 100, 2),
+                        "stop_loss": False, "trailing_stop": False,
+                        "slippage": round(exit_slippage_rf, 2), "commission": round(commission_rf, 2),
+                        "borrow_cost": round(bcost_rf, 2), "rules": ["regime flip"],
+                        "exit_reason": "regime_flip",
+                    })
+                    if signal_trace is not None:
+                        signal_trace.append({
+                            "date": date, "price": round(price, 4), "position": "exited",
+                            "action": "REGIME_FLIP_EXIT",
+                        })
+                    position = 0.0
+                    position_direction = None
+                    entry_ts = None
+                    trail_peak = 0.0
+                    trail_stop_price = None
+                    consec_sl_count = 0
+
+                    if on_flip == "close_and_reverse":
+                        new_dir = "short" if rf_old_direction == "long" else "long"
+                        if new_dir == "short":
+                            fill_price_rf = price * (1 - drag)
+                        else:
+                            fill_price_rf = price * (1 + drag)
+                        shares_rf = (capital * req.position_size) / fill_price_rf
+                        commission_rf2 = per_leg_commission(shares_rf, req)
+                        entry_slippage_rf = abs(shares_rf * (fill_price_rf - price))
+                        position = shares_rf
+                        position_direction = new_dir
+                        entry_price = fill_price_rf
+                        entry_ts = df.index[i]
+                        entry_bar_idx = i
+                        capital -= shares_rf * fill_price_rf + commission_rf2
+                        trail_peak = fill_price_rf
+                        trail_stop_price = None
+                        trades.append({
+                            "type": "short" if new_dir == "short" else "buy",
+                            "date": date, "price": round(fill_price_rf, 4),
+                            "shares": round(shares_rf, 4), "direction": new_dir,
+                            "slippage": round(entry_slippage_rf, 2),
+                            "commission": round(commission_rf2, 2),
+                            "rules": ["regime flip reverse"],
+                        })
+                        if signal_trace is not None:
+                            signal_trace.append({
+                                "date": date, "price": round(price, 4), "position": "entered",
+                                "action": "REGIME_FLIP_REVERSE",
+                            })
+
+            if regime_active_series is not None:
+                prev_regime_active = curr_regime_active
+
+            if regime_active_series is None:
+                regime_ok = True
+            elif on_flip == "close_and_reverse":
+                regime_ok = True
+            else:
+                regime_ok = curr_regime_active
+
             buy_fires = position == 0 and hour_ok and regime_ok and eval_rules(buy_rules, req.buy_logic, indicators, i)
             if buy_fires and skip_remaining > 0:
                 skip_remaining -= 1
@@ -378,8 +465,11 @@ def run_backtest(req: StrategyRequest):
                 if ds and ds.enabled and consec_sl_count >= ds.consec_sls:
                     effective_size = req.position_size * (ds.reduced_pct / 100)
 
-                # Set position direction at entry; for Stage 3 this always equals req.direction
-                position_direction = req.direction
+                # Direction follows regime when close_and_reverse is active
+                if on_flip == "close_and_reverse" and regime_active_series is not None:
+                    position_direction = req.direction if curr_regime_active else ("short" if req.direction == "long" else "long")
+                else:
+                    position_direction = req.direction
                 # Slippage: short entry fills lower (worse for seller), long fills higher (worse for buyer)
                 if position_direction == "short":
                     fill_price = price * (1 - drag)
@@ -689,7 +779,15 @@ def run_backtest(req: StrategyRequest):
             result["rule_signals"] = rule_signals
         if regime_active_series is not None:
             result["regime_series"] = [
-                {"time": _format_time(df.index[i], req.interval), "direction": req.direction if bool(regime_active_series.iloc[i]) else "flat"}
+                {
+                    "time": _format_time(df.index[i], req.interval),
+                    "direction": (
+                        req.direction if bool(regime_active_series.iloc[i])
+                        else ("short" if req.direction == "long" else "long")
+                    ) if on_flip == "close_and_reverse" else (
+                        req.direction if bool(regime_active_series.iloc[i]) else "flat"
+                    ),
+                }
                 for i in range(len(df))
             ]
         return result

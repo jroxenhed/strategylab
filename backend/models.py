@@ -40,6 +40,7 @@ class RegimeConfig(BaseModel):
     indicator_params: dict = Field(default_factory=lambda: {"period": 200, "type": "sma"})
     condition: str = "above"        # above | below | rising | falling
     min_bars: int = 3               # consecutive bars required before regime flips
+    on_flip: str = "close_only"     # close_only | close_and_reverse | hold
 
 
 class StrategyRequest(BaseModel):

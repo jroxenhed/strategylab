@@ -65,6 +65,7 @@ export interface RegimeConfig {
   indicator_params: Record<string, unknown>  // e.g. { period: 200, type: "sma" }
   condition: 'above' | 'below' | 'rising' | 'falling'
   min_bars: number
+  on_flip?: 'close_only' | 'close_and_reverse' | 'hold'
 }
 
 export interface StrategyRequest {
