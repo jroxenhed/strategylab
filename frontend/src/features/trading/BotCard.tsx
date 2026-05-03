@@ -195,6 +195,11 @@ export default function BotCard({
             }}>
               {summary.status}
             </span>
+            {stopped && summary.was_running && (
+              <span style={{ fontSize: 10, color: '#f0b74e', flexShrink: 0 }} title="Was running before restart">
+                ⚡ Was running
+              </span>
+            )}
 
             {/* Kebab menu — replaces inline buttons */}
             <div
@@ -426,6 +431,12 @@ export default function BotCard({
               label="Status"
               value={<span style={{ color: statusColor(summary.status), textTransform: 'capitalize' }}>{summary.status}</span>}
             />
+            {stopped && summary.was_running && (
+              <StatCell
+                label=""
+                value={<span style={{ color: '#f0b74e', fontSize: 11 }} title="This bot was running before the server restarted">⚡ Was running before restart</span>}
+              />
+            )}
             {summary.regime_direction != null && (
               <StatCell
                 label="Regime"

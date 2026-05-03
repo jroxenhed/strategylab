@@ -4,6 +4,14 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-03 (overnight build 8)
+
+- **[F22](TODO.md#f--architecture--housekeeping)** `was_running` badge on BotCard. Stopped bots with `was_running=True` now show an amber "⚡ Was running" badge in both compact and expanded layouts, prompting the user to restart bots that were live before a server restart. Also fixed a P2: `was_running` is now reset to `False` in `BotRunner.run()` so the badge clears once the bot is started and then manually stopped (no stale badge after the first restart cycle).
+
+- **[C18b](TODO.md#c--strategy-summary--analytics)** Sensitivity sweep sparkline. SVG mini line chart above the results table in `SensitivityPanel` showing `total_return_pct` vs `param_value`. Dot colors teal/red by sign, dashed zero-baseline when range straddles zero, footer labels show param range. Renders when ≥2 sweep points available. Makes cliff-edge vs smooth plateau visible at a glance. `preserveAspectRatio="none"` ensures full-width fill on any container width. Not visually verified.
+
+- **[A8c-htf](TODO.md#a--charts--indicators)** HTF overlay line type fix. `LineType.WithSteps` is no longer applied when `viewInterval === inst.htfInterval` (i.e., the chart is already at the same resolution as the HTF data). Added `viewInterval` to the overlay series effect deps so the lineType decision re-evaluates when the user changes view intervals. Not visually verified.
+
 ## 2026-05-03 (overnight build 7)
 
 - **[F6](TODO.md#f--architecture--housekeeping)** Split `shared/types/index.ts` into domain files. Created `chart.ts` (OHLCV, TimeValue, Macro* types), `strategy.ts` (Rule, StrategyRequest, BacktestResult, etc.), `trading.ts` (BotConfig, BotState, BotSummary, etc.). `index.ts` now a barrel re-export — all 30+ external imports unchanged, no consumer updates needed.

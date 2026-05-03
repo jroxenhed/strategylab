@@ -469,7 +469,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
             color: colors[key], lineWidth: 1,
             title: `BB ${key.charAt(0).toUpperCase() + key.slice(1)}${htfSuffix}`,
             priceScaleId: 'right',
-            ...(inst.htfInterval ? { lineType: LineType.WithSteps } : {}),
+            ...(inst.htfInterval && inst.htfInterval !== viewInterval ? { lineType: LineType.WithSteps } : {}),
           })
           seriesMap.set(`${inst.id}:${key}`, s)
         }
@@ -482,7 +482,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
           color, lineWidth: 1,
           title: inst.type === 'vwap' ? `VWAP${htfSuffix}` : `${inst.type.toUpperCase()}(${paramStr})${htfSuffix}`,
           priceScaleId: 'right',
-          ...(inst.htfInterval ? { lineType: LineType.WithSteps } : {}),
+          ...(inst.htfInterval && inst.htfInterval !== viewInterval ? { lineType: LineType.WithSteps } : {}),
         })
         seriesMap.set(inst.id, s)
       }
@@ -494,7 +494,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       mainOverlaySeriesRef.current = null
       for (const s of seriesMap.values()) { try { chart.removeSeries(s) } catch {} }
     }
-  }, [mainInstancesKey, subPaneCount])
+  }, [mainInstancesKey, subPaneCount, viewInterval])
 
   useEffect(() => {
     const seriesMap = mainOverlaySeriesRef.current

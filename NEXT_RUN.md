@@ -35,31 +35,31 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-05-03 (build 7)
-**Branch:** `claude/sharp-allen-fqXqj`
+**Date:** 2026-05-03 (build 8)
+**Branch:** `claude/sharp-allen-HWr4u`
 
 **Shipped:**
-- **F6** Split `shared/types/index.ts` into chart.ts / strategy.ts / trading.ts with barrel re-export.
-- **D23** `DailyPnlChart` on BotCard — SVG bar chart from equity_snapshots, ET date bucketing, last 30 days.
-- **C18** Parameter sensitivity sweep — `POST /api/backtest/sweep` + `SensitivityPanel` in Results (Sensitivity tab).
-- **F17** `was_running` flag in `BotState` — captured in `BotManager.load()` before status reset.
-- **F18** Cap `equity_snapshots` at 500 entries — trim at all 3 append sites in bot_runner.py.
-- **D24c** Regime HTF fetch timeout — `asyncio.wait_for(..., timeout=15.0)`, returns "flat" on timeout.
-- **F20** bot_runner test harness — 7 tests passing in 0.81s, `MockProvider` + `_direct_executor` pattern.
+- **F22** `was_running` badge on BotCard — amber "⚡ Was running" badge in compact + expanded layouts; also fixes stale-badge bug by resetting `was_running=False` in `BotRunner.run()`.
+- **C18b** Sensitivity sweep sparkline — SVG mini line chart above SensitivityPanel results table, `total_return_pct` vs `param_value`, teal/red dots, zero-baseline, `preserveAspectRatio="none"`.
+- **A8c-htf** HTF overlay line type fix — `LineType.WithSteps` only when `viewInterval !== htfInterval`; `viewInterval` added to overlay series effect deps.
 
-**Self-review findings:**
-- Review: 1 P3 finding (C18 default sweep range confusing when rule.value=0, user can override), 0 P0/P1.
-- Syntax: clean (ast.parse on all backend files). Frontend: npm run build passes.
-- Smoke test not run (no pydantic in sandbox Python); verified by syntax + code review.
+**Review findings:**
+- 3 parallel reviewers (correctness, integration, standards+robustness)
+- Review: 2 P2 findings, 4 P3 findings. Both P2s auto-fixed.
+- P2 (F22): `was_running` never reset on start → fixed in `bot_runner.py:run()`.
+- P2 (C18b): Missing `preserveAspectRatio="none"` on SVG → fixed.
+- P3s deferred: badge doesn't show for `status=error` bots (product decision); case-sensitivity note on interval comparison (currently safe); flat-line sparkline renders at bottom not center (cosmetic).
+- Syntax: `ast.parse` clean on all backend files. `npm run build` passes.
 
 **Deferred:**
-- F21: Split bot_runner.py — deferred; can't run tests in sandbox to verify the refactor. Best done in environment with the project venv.
-- D24b: Regime bot visual verification — still needs live paper-trading QA.
-- D24d: HTF cache staleness — 1-hour TTL still means regime direction can lag. Lower priority.
+- F21: Split bot_runner.py — still deferred; needs project venv to run the test harness for refactor verification.
+- D24b: Regime bot visual verification — needs live paper-trading QA.
+- D24d: HTF cache staleness — 1-hour TTL can lag regime direction.
+- F22-badge for error-status bots — P3, product decision whether errored+was_running bots should show badge.
 
 **Review concerns flagged:**
-- F20 tests can't verify test execution in this environment (no pydantic in system Python). Tests passed in agent's execution (0.81s). Run `pytest tests/test_bot_runner.py` in the project venv to confirm.
-- D23 DailyPnlChart not visually verified — pure frontend change, reviewer should check BotCard expanded view with a bot that has equity_snapshots.
-- C18 SensitivityPanel not visually verified — reviewer should run a sweep to confirm results table renders correctly.
+- F22 badge not visually verified — check BotCard compact+expanded with a bot that has `was_running=true` in bots.json.
+- C18b sparkline not visually verified — run a sweep to confirm chart renders above table.
+- A8c-htf not visually verified — toggle a 1D HTF MA overlay with `viewInterval=1d` to confirm smooth line.
 
-**Next up:** F21 [medium] (split bot_runner.py), F22 [easy] (was_running badge on BotCard), C18b [easy] (sensitivity sparkline). F23 already shipped in PR #12 review fixes.
+**Next up:** F21 [medium] (split bot_runner.py), B26 [medium] (sweep-from-rule-row), C9 [medium] (strategy comparison mode).
