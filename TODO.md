@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*109 / 133 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*110 / 133 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -92,7 +92,7 @@
 - [x] **C17a** Fix SPY correlation: beta/R² always 0 — switched from daily equity-curve returns to per-trade returns aligned to SPY over the same holding periods. Returns None (hidden panel) for strategies with <3 closed trades or intraday-only activity (near-zero SPY variance). [easy]
 - [x] **C18** Parameter sensitivity sweep — re-run backtest with ±N variations of one indicator param, show results in a table/heatmap. Answers "how fragile is this edge?" `POST /api/backtest/sweep` + SensitivityPanel in Results (Sensitivity tab). [medium]
 - [ ] **C20** Equity curve chart blank after F6 types split — stats render but no line drawn. Likely a broken import or missing type re-export from the F6 split. Regression from build 7. [easy] [next]
-- [ ] **C21** Sweep param_path bug — some parameters (indicator params, rule values) produce identical results across all sweep values. Stop loss works correctly. Likely `_apply_param` in `backtest_sweep.py` isn't correctly mutating the nested field for certain param_path formats (e.g. `buy_rule_0_param` vs `buy_rule_0_value`). Debug and fix. [easy] [next]
+- [x] **C21** Sweep param_path bug — (1) fixed error swallowing in sweep loop (propagate HTTPException instead of returning zeros); (2) added `rule.params` sweep support for indicator params (MA/RSI/Stochastic/ADX periods etc.) in backend `_apply_param` + frontend `buildParamOptions`. Also fixed max_drawdown color inversion (highIsGood=true for negative series), integer rounding for period params in linspace, and stale selectedPath reset when lastRequest changes.
 - [ ] **C22** Auto-optimizer — run sensitivity sweeps automatically across multiple parameters, find the combination that maximizes Sharpe / return / win rate. Like C18 but multi-dimensional: sweep param A, pick best, sweep param B, iterate. Show a ranked table of top N parameter combos. Could use grid search for small spaces or Bayesian optimization for larger ones. The "push button, get optimized strategy" workflow. [large]
 - [x] **C19** Backtest result persistence — save/load backtest results to localStorage. Auto-save on each backtest; auto-restore on page load when ticker/dates/interval match saved settings. Graceful fallback on quota exceeded. [medium]
 
