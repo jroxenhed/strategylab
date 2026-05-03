@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*94 / 127 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*95 / 127 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -117,7 +117,7 @@
 - [x] **D19** Bot card redesign — responsive sparkline (was fixed 60%), columnar stats (label above value), compact mode kebab dropdown (replaces inline buttons), portfolio strip alignment, shared `ui.tsx` for layout primitives. 106 tests.
 - [x] **D22** Trade journal CSV export — download button on TradeJournal for tax prep or external analysis in spreadsheets. [easy]
 - [ ] **D23** Bot daily P&L summary — small calendar heatmap or daily bar chart on BotCard showing per-day returns. Visual pattern recognition for "which days does this bot print?" [medium] [next]
-- [ ] **D24a** Regime bot backtest_bot() method — `bot_manager.backtest_bot()` doesn't pass regime/dual-rule fields to `StrategyRequest`; regime bots silently backtest without their regime config. [easy] [next]
+- [x] **D24a** Regime bot backtest_bot() method — `bot_manager.backtest_bot()` doesn't pass regime/dual-rule fields to `StrategyRequest`; regime bots silently backtest without their regime config. [easy]
 - [ ] **D24b** Regime bot visual verification — D24 not visually verified. Need to run a regime bot in paper trading to confirm flip sequence, pending_regime_flip retry, and BotCard regime status display. Manual QA item.
 - [ ] **D24c** Regime HTF fetch timeout — `_eval_regime_direction()` runs `fetch_higher_tf` in an executor with no timeout. A hanging data provider blocks the entire `_tick()`, stalling stop-loss checks for open positions. Add `asyncio.wait_for` wrapper or executor timeout. [easy]
 - [ ] **D24d** Regime HTF cache staleness — `_fetch()` TTL is 1 hour for daily intervals. Regime direction could lag by up to 1 hour after a real flip. Consider a forced-refresh path or shorter TTL for regime HTF fetches. [medium]

@@ -313,6 +313,15 @@ class BotManager:
             slippage_bps=config.slippage_bps,
             source=config.data_source,
             direction=config.direction,
+            regime=config.regime,
+            long_buy_rules=config.long_buy_rules,
+            long_sell_rules=config.long_sell_rules,
+            long_buy_logic=config.long_buy_logic,
+            long_sell_logic=config.long_sell_logic,
+            short_buy_rules=config.short_buy_rules,
+            short_sell_rules=config.short_sell_rules,
+            short_buy_logic=config.short_buy_logic,
+            short_sell_logic=config.short_sell_logic,
         )
 
         try:
