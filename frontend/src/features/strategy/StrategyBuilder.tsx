@@ -602,7 +602,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
                 onChange={e => setRegimeConfig(c => ({ ...c, indicator_params: { ...(c.indicator_params as Record<string, unknown>), type: e.target.value } }))}
                 style={{ fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}
               >
-                {['sma', 'ema'].map(t => <option key={t} value={t}>{t.toUpperCase()}</option>)}
+                {['sma', 'ema', 'rma'].map(t => <option key={t} value={t}>{t.toUpperCase()}</option>)}
               </select>
               <input
                 type="number" min={1} step={1}
