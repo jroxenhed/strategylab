@@ -15,9 +15,8 @@ Leave empty to use default `[next]` tag picking from TODO.md. Or list specific I
 
 Tasks to skip even if tagged `[next]`:
 
-<!-- Uncomment and edit:
-- B20 — needs design work first
--->
+- B24 — needs design discussion (dual strategy import)
+- B25 — needs design discussion (per-direction settings)
 
 ## Constraints
 
