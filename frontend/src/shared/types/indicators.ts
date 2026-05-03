@@ -7,6 +7,7 @@ export type IndicatorInstance = {
   enabled: boolean
   color?: string
   pane: 'main' | 'sub'
+  htfInterval?: string
 }
 
 export type ParamFieldNumber = { key: string; label: string; kind: 'number'; min?: number; max?: number }

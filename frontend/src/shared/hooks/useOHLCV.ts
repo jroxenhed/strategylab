@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../api/client'
 import { fetchBroker, setBroker as setBrokerApi, type BrokerInfo } from '../../api/trading'
 import type { OHLCVBar, DataSource, IndicatorInstance } from '../types'
@@ -16,6 +16,8 @@ export function useOHLCV(ticker: string, start: string, end: string, interval: s
   })
 }
 
+type IndicatorData = Record<string, Record<string, { time: string; value: number | null }[]>>
+
 export function useInstanceIndicators(
   ticker: string,
   start: string,
@@ -26,24 +28,72 @@ export function useInstanceIndicators(
   extendedHours: boolean = false,
 ) {
   const enabledInstances = instances.filter(i => i.enabled)
-  const instancesQueryKey = enabledInstances.map(i => ({ id: i.id, type: i.type, params: i.params }))
+  const regularInstances = enabledInstances.filter(i => !i.htfInterval)
 
-  return useQuery<Record<string, Record<string, { time: string; value: number | null }[]>>>({
-    queryKey: ['instance-indicators', ticker, start, end, interval, instancesQueryKey, source, extendedHours],
+  // Group HTF instances by their htfInterval
+  const htfGroupsMap = new Map<string, IndicatorInstance[]>()
+  for (const inst of enabledInstances.filter(i => !!i.htfInterval)) {
+    const key = inst.htfInterval!
+    const group = htfGroupsMap.get(key)
+    if (group) group.push(inst)
+    else htfGroupsMap.set(key, [inst])
+  }
+  const htfGroups = Array.from(htfGroupsMap.entries())
+
+  const regularQueryKey = regularInstances.map(i => ({ id: i.id, type: i.type, params: i.params }))
+
+  const regularQuery = useQuery<IndicatorData>({
+    queryKey: ['instance-indicators', ticker, start, end, interval, regularQueryKey, source, extendedHours],
     queryFn: async () => {
       const { data } = await api.post(`/api/indicators/${ticker}`, {
-        start,
-        end,
-        interval,
-        source,
-        extended_hours: extendedHours,
-        instances: enabledInstances.map(i => ({ id: i.id, type: i.type, params: i.params })),
+        start, end, interval, source, extended_hours: extendedHours,
+        instances: regularInstances.map(i => ({ id: i.id, type: i.type, params: i.params })),
       })
       return data
     },
-    enabled: !!ticker && enabledInstances.length > 0,
+    enabled: !!ticker && regularInstances.length > 0,
     staleTime: 5 * 60 * 1000,
   })
+
+  const htfQueryResults = useQueries({
+    queries: htfGroups.map(([htfInterval, insts]) => ({
+      queryKey: [
+        'instance-indicators-htf', ticker, start, end, interval, htfInterval,
+        insts.map(i => ({ id: i.id, type: i.type, params: i.params })), source, extendedHours,
+      ],
+      queryFn: async (): Promise<IndicatorData> => {
+        const { data } = await api.post(`/api/indicators/${ticker}`, {
+          start, end, interval, source, extended_hours: extendedHours,
+          htf_interval: htfInterval,
+          instances: insts.map(i => ({ id: i.id, type: i.type, params: i.params })),
+        })
+        return data
+      },
+      enabled: !!ticker,
+      staleTime: 5 * 60 * 1000,
+    })),
+  })
+
+  const merged: IndicatorData = { ...(regularQuery.data ?? {}) }
+  for (const q of htfQueryResults) {
+    if (q.data) Object.assign(merged, q.data)
+  }
+
+  const refetch = async () => {
+    await regularQuery.refetch()
+    await Promise.all(htfQueryResults.map(q => q.refetch()))
+  }
+
+  const isSuccess =
+    (regularInstances.length === 0 || regularQuery.isSuccess) &&
+    htfQueryResults.every(q => q.isSuccess)
+
+  const fetchStatus =
+    regularInstances.length > 0 ? regularQuery.fetchStatus
+    : htfGroups.length > 0 ? (htfQueryResults[0]?.fetchStatus ?? 'idle')
+    : 'idle'
+
+  return { data: merged, refetch, isSuccess, fetchStatus }
 }
 
 export function useProviders() {

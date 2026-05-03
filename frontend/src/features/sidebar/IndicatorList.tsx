@@ -155,7 +155,7 @@ export default function IndicatorList({ indicators, onChange }: IndicatorListPro
               {summary && (
                 <span style={{ fontSize: 10, color: 'var(--text-muted)', marginRight: 4 }}>{summary}</span>
               )}
-              {(def.paramFields.length > 0 || SUPPORTS_COLOR.has(inst.type)) && (
+              {(def.paramFields.length > 0 || SUPPORTS_COLOR.has(inst.type) || def.pane === 'main') && (
                 <span
                   onClick={() => setExpandedId(isExpanded ? null : inst.id)}
                   style={{ cursor: 'pointer', color: isExpanded ? 'var(--accent-primary)' : 'var(--text-muted)', fontSize: 13 }}
@@ -173,8 +173,27 @@ export default function IndicatorList({ indicators, onChange }: IndicatorListPro
               </span>
             </div>
 
-            {isExpanded && (def.paramFields.length > 0 || SUPPORTS_COLOR.has(inst.type)) && (
+            {isExpanded && (def.paramFields.length > 0 || SUPPORTS_COLOR.has(inst.type) || def.pane === 'main') && (
               <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {def.pane === 'main' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 10, color: 'var(--text-muted)', minWidth: 40 }}>TF</span>
+                    <select
+                      value={inst.htfInterval ?? 'same'}
+                      onChange={e => {
+                        const v = e.target.value
+                        onChange(prev => prev.map(i =>
+                          i.id === inst.id ? { ...i, htfInterval: v === 'same' ? undefined : v } : i
+                        ))
+                      }}
+                      style={{ fontSize: 11, background: 'var(--bg-main)', border: '1px solid var(--border-light)', borderRadius: 3, color: 'var(--text-primary)', padding: '2px 6px' }}
+                    >
+                      <option value="same">Same</option>
+                      <option value="1d">1D</option>
+                      <option value="1wk">1W</option>
+                    </select>
+                  </div>
+                )}
                 {SUPPORTS_COLOR.has(inst.type) && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span style={{ fontSize: 10, color: 'var(--text-muted)', minWidth: 40 }}>Color</span>

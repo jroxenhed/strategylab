@@ -6,6 +6,7 @@ import {
   LineSeries,
   HistogramSeries,
   ColorType,
+  LineType,
 } from 'lightweight-charts'
 import type { IChartApi, ISeriesApi } from 'lightweight-charts'
 import type { OHLCVBar, IndicatorInstance, EMAOverlay, Trade, RuleSignal } from '../../shared/types'
@@ -147,7 +148,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     [indicators],
   )
   const mainInstancesKey = useMemo(
-    () => JSON.stringify(mainInstances.map(i => ({ id: i.id, type: i.type, params: i.params, color: i.color }))),
+    () => JSON.stringify(mainInstances.map(i => ({ id: i.id, type: i.type, params: i.params, color: i.color, htfInterval: i.htfInterval }))),
     [mainInstances],
   )
 
@@ -459,11 +460,13 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         seriesMap.set(inst.id, vol)
       } else if (inst.type === 'bb') {
         const colors = { upper: '#30363d', middle: '#58a6ff', lower: '#30363d' }
+        const htfSuffix = inst.htfInterval ? ` ${inst.htfInterval.toUpperCase()}` : ''
         for (const key of ['upper', 'middle', 'lower'] as const) {
           const s = chart.addSeries(LineSeries, {
             color: colors[key], lineWidth: 1,
-            title: `BB ${key.charAt(0).toUpperCase() + key.slice(1)}`,
+            title: `BB ${key.charAt(0).toUpperCase() + key.slice(1)}${htfSuffix}`,
             priceScaleId: 'right',
+            ...(inst.htfInterval ? { lineType: LineType.WithSteps } : {}),
           })
           seriesMap.set(`${inst.id}:${key}`, s)
         }
@@ -471,10 +474,12 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         const paramStr = Object.values(inst.params).join(',')
         const defaultColor = inst.type === 'vwap' ? '#ff9800' : '#f0883e'
         const color = inst.color ?? defaultColor
+        const htfSuffix = inst.htfInterval ? ` ${inst.htfInterval.toUpperCase()}` : ''
         const s = chart.addSeries(LineSeries, {
           color, lineWidth: 1,
-          title: inst.type === 'vwap' ? 'VWAP' : `${inst.type.toUpperCase()}(${paramStr})`,
+          title: inst.type === 'vwap' ? `VWAP${htfSuffix}` : `${inst.type.toUpperCase()}(${paramStr})${htfSuffix}`,
           priceScaleId: 'right',
+          ...(inst.htfInterval ? { lineType: LineType.WithSteps } : {}),
         })
         seriesMap.set(inst.id, s)
       }

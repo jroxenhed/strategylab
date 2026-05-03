@@ -1,8 +1,8 @@
-from typing import Literal
+from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 import pandas as pd
-from shared import _fetch, _format_time
+from shared import _fetch, _format_time, fetch_higher_tf, align_htf_to_ltf, htf_lookback_days
 from indicators import compute_instance, OHLCVSeries
 
 router = APIRouter()
@@ -31,12 +31,46 @@ class IndicatorsPostRequest(BaseModel):
     source: str = "yahoo"
     extended_hours: bool = False
     instances: list[InstanceRequest] = Field(max_length=20)
+    htf_interval: Optional[str] = None
 
 
 @router.post("/api/indicators/{ticker}")
 def post_indicators(ticker: str, body: IndicatorsPostRequest):
     try:
         df = _fetch(ticker, body.start, body.end, body.interval, source=body.source, extended_hours=body.extended_hours)
+
+        if body.htf_interval:
+            # Compute indicator at higher timeframe, then align to LTF index
+            max_lookback = max(
+                (htf_lookback_days(inst.type, inst.params) for inst in body.instances),
+                default=30,
+            )
+            extended_start = (
+                pd.Timestamp(body.start) - pd.Timedelta(days=max_lookback)
+            ).strftime("%Y-%m-%d")
+            df_htf = fetch_higher_tf(ticker, extended_start, body.end, body.htf_interval, source=body.source)
+            ohlcv_htf = OHLCVSeries(
+                close=df_htf["Close"], high=df_htf["High"],
+                low=df_htf["Low"], volume=df_htf["Volume"],
+            )
+
+            result = {}
+            for inst in body.instances:
+                try:
+                    series_dict = compute_instance(inst.type, inst.params, ohlcv_htf)
+                    result[inst.id] = {
+                        key: _series_to_list(
+                            df.index, body.interval,
+                            align_htf_to_ltf(series, df.index),
+                        )
+                        for key, series in series_dict.items()
+                    }
+                except ValueError as e:
+                    result[inst.id] = {"error": "invalid_params", "detail": str(e)}
+                except Exception:
+                    result[inst.id] = {"error": "compute_failed"}
+            return result
+
         ohlcv = OHLCVSeries(
             close=df["Close"], high=df["High"],
             low=df["Low"], volume=df["Volume"],

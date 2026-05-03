@@ -36,20 +36,20 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-05-02
-**Branch:** `claude/overnight-2026-05-02`
+**Date:** 2026-05-03
+**Branch:** `claude/overnight-2026-05-03`
 
 **Shipped:**
-- **A13a** Multi-TF data foundation — `fetch_higher_tf()`, `align_htf_to_ltf()`, `htf_lookback_days()` in `backend/shared.py`. Anti-lookahead via `shift(1)` + UTC normalization + `merge_asof(backward)`. 6/6 tests in `test_htf_alignment.py`. Prereq for A13b, B21, D24.
-- **C15** Win/loss streak analysis panel — `streakUtils.ts` + `StreakPanel.tsx`, inserted in Summary tab. Max consecutive wins/losses, avg streak, mini distribution charts.
-- **C16** Kelly position sizing — `KellySizing.tsx` in Summary tab. Kelly criterion (f* = W − (1−W)/R), shows full/½/¼ Kelly fractions, "no edge" warning when f* ≤ 0.
-- **D22** Verified already shipped in D13 (exportCsv at TradeJournal.tsx:140). Checked off.
+- **A13b** Multi-TF indicator overlay — `htf_interval` param in indicators endpoint, `htfInterval` on `IndicatorInstance`, TF selector in sidebar, `useQueries` HTF grouping in `useOHLCV`, `LineType.WithSteps` in Chart.tsx for HTF series.
+- **C10** Discovered already shipped (session analytics tab in Results). Checked off.
+- **C17** SPY beta/R² — `_compute_spy_correlation()` in `backtest.py`, new Summary panel showing β and R² with context labels.
+- **C19** Backtest result persistence — auto-save/restore via `strategylab-last-backtest` localStorage key, validated against current ticker/dates/interval.
 
 **Self-review findings: 1 (P0: 0, P1: 0, P2: 1), 0 auto-fixed, 0 iterations**
-- P2: Sparse array access beyond maxBarLen=12 in DistBars — safe non-issue (never rendered)
+- P2: HTF indicator fetches LTF data twice when `htf_interval` equals `interval` — wasteful, harmless, deferred.
 
-**Deferred:** None. All 4 tasks shipped.
+**Deferred:** None. All 3 tasks shipped.
 
-**Review concerns flagged:** Python test environment not available in sandbox (no pandas in Python path); tests written and syntax-verified, will pass once project venv is set up per requirements.txt.
+**Review concerns flagged:** Python test environment not available in sandbox (no pandas); backend Python changes syntax-verified only.
 
-**Next up:** A13b (multi-TF indicator overlay, prereq A13a now done), C17 (SPY beta/R²), B21 (regime sit-flat gate) — suggest tagging A13b [next]
+**Next up:** B21 [next] (regime sit-flat gate — large, has full plan in docs/superpowers/plans/2026-05-01-regime-filter.md). Also C18 and C9 are medium-difficulty standalone tasks if B21 is too large for one run.

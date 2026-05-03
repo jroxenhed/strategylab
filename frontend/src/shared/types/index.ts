@@ -189,6 +189,8 @@ export interface BacktestResult {
     gross_loss?: number
     ev_per_trade?: number | null
     profit_factor?: number | null
+    beta?: number | null
+    r_squared?: number | null
   }
   trades: Trade[]
   equity_curve: TimeValue[]

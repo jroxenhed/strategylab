@@ -151,6 +151,75 @@ def compute_session_analytics(trades: list, interval: str) -> list | None:
     return result
 
 
+def _compute_spy_correlation(equity: list, start: str, end: str) -> dict:
+    """Compute beta and R-squared of daily strategy returns vs SPY."""
+    if not equity or len(equity) < 3:
+        return {"beta": None, "r_squared": None}
+
+    # Group equity values by ET date (last value per day)
+    eq_by_date: dict[str, float] = {}
+    for pt in equity:
+        t = pt.get("time")
+        v = pt.get("value")
+        if t is None or v is None:
+            continue
+        if isinstance(t, (int, float)):
+            date_str = datetime.fromtimestamp(t, tz=ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+        else:
+            date_str = str(t)[:10]
+        eq_by_date[date_str] = v
+
+    if len(eq_by_date) < 3:
+        return {"beta": None, "r_squared": None}
+
+    sorted_dates = sorted(eq_by_date)
+    eq_vals = [eq_by_date[d] for d in sorted_dates]
+    prev_vals = eq_vals[:-1]
+    eq_rets_arr = np.array(
+        [(eq_vals[i] - prev_vals[i]) / prev_vals[i] if prev_vals[i] != 0 else 0.0
+         for i in range(len(prev_vals))]
+    )
+    ret_dates = sorted_dates[1:]  # returns correspond to the later date
+
+    if len(eq_rets_arr) < 3:
+        return {"beta": None, "r_squared": None}
+
+    try:
+        spy_df = _fetch("SPY", start, end, "1d")
+        spy_strs = [str(t)[:10] for t in spy_df.index.astype(str)]
+        spy_close = spy_df["Close"].values.astype(float)
+        spy_ret_by_date = {
+            spy_strs[i]: (spy_close[i] - spy_close[i - 1]) / spy_close[i - 1]
+            for i in range(1, len(spy_strs))
+            if spy_close[i - 1] != 0
+        }
+    except Exception:
+        return {"beta": None, "r_squared": None}
+
+    ret_date_idx = {d: i for i, d in enumerate(ret_dates)}
+    common = [d for d in ret_dates if d in spy_ret_by_date]
+    if len(common) < 3:
+        return {"beta": None, "r_squared": None}
+
+    strat_arr = np.array([eq_rets_arr[ret_date_idx[d]] for d in common])
+    spy_arr = np.array([spy_ret_by_date[d] for d in common])
+
+    var_spy = float(np.var(spy_arr))
+    if var_spy < 1e-10:
+        return {"beta": None, "r_squared": None}
+
+    cov = float(np.cov(strat_arr, spy_arr)[0, 1])
+    beta = cov / var_spy
+
+    corr = float(np.corrcoef(strat_arr, spy_arr)[0, 1])
+    r_squared = corr ** 2 if not np.isnan(corr) else None
+
+    return {
+        "beta": round(beta, 3),
+        "r_squared": round(r_squared, 4) if r_squared is not None else None,
+    }
+
+
 @router.post("/api/backtest")
 def run_backtest(req: StrategyRequest):
     try:
@@ -537,6 +606,8 @@ def run_backtest(req: StrategyRequest):
             "trades": trades,
         })
 
+        spy_corr = _compute_spy_correlation(equity, req.start, req.end)
+
         result = {
             "summary": {
                 "initial_capital": req.initial_capital,
@@ -551,6 +622,7 @@ def run_backtest(req: StrategyRequest):
                 "loss_stats": loss_stats,
                 "pnl_distribution": pnl_distribution,
                 **edge_stats,
+                **spy_corr,
             },
             "trades": trades,
             "equity_curve": equity,

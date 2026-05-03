@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*79 / 101 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*83 / 101 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -33,7 +33,7 @@
 - [x] **A11** MA8 / MA21 with SMA/EMA/RMA type selector + S-G smoothed variants (independent window/poly per MA, raw curve toggles, dashed S-G lines)
 - [x] **A12** Backtest equity curve: baseline (buy & hold) overlay toggle
 - [x] **A13a** Multi-TF data foundation — `fetch_higher_tf()`, `align_htf_to_ltf()`, `htf_lookback_days()` in `backend/shared.py`. Anti-lookahead alignment: daily MA for day D maps to day D+1's intraday bars (strict `<`, UTC-normalized). Weekend/holiday gap handling (Monday → Friday's close). Exhaustive alignment tests in `backend/tests/test_htf_alignment.py`. Shared prereq for A13b, B21, D24. [medium] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
-- [ ] **A13b** Multi-TF indicator overlay — see daily/weekly indicators stepped onto intraday charts. HTF indicator endpoint (`routes/indicators.py` + `htf_interval` param), per-instance timeframe selector in sidebar ("Same"/"1D"/"1W"), stepped overlay rendering via `LineType.WithSteps`, grouped HTF data fetching in `useOHLCV`. Prereq: A13a. [medium] [next] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
+- [x] **A13b** Multi-TF indicator overlay — see daily/weekly indicators stepped onto intraday charts. HTF indicator endpoint (`routes/indicators.py` + `htf_interval` param), per-instance timeframe selector in sidebar ("Same"/"1D"/"1W"), stepped overlay rendering via `LineType.WithSteps`, grouped HTF data fetching via `useQueries` in `useOHLCV`. Prereq: A13a. [medium] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
 
 ## B — Strategy Engine & Rules
 
@@ -61,7 +61,7 @@
 - [x] **B18** Triggering rules in trade tooltip — extend B17 tooltip to show which buy/sell rules fired for each trade. Backend tags each trade with `rules` field via `_fired_rules()`. Entries show buy rules, exits show sell rules (or "stop loss"/"trailing stop"/"time stop" for mechanical exits).
 - [x] **B19** Implement shorting — direction field, backtest + bot runner, chart markers, bot card refresh
 - [ ] **B20** Multi-timeframe confirmation — rules evaluate on a single interval today. Add "confirm on higher timeframe" option (e.g., enter on 5m signal only if 1h trend agrees). Requires fetching a second OHLCV series at the confirmation interval, computing indicators on it, and adding a `confirm_interval` + `confirm_rules` field to StrategyRequest. Common quant pattern that expands strategy sophistication significantly.
-- [ ] **B21** Regime filter: sit-flat gate + `is_short` refactor — `RegimeConfig` model, refactor backtest `is_short` → `position_direction` (behavioral no-op for single direction), regime gate in backtest (`buy_fires AND regime_active[i]`), regime chart shading (histogram on hidden scale), regime UI section in StrategyBuilder (collapsible, with stop-loss warning), `regime_active` in backtest response, regime in saved strategies, bot runner rejects `regime.enabled` until D24 ships. Prereq: A13a. [large] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
+- [ ] **B21** Regime filter: sit-flat gate + `is_short` refactor — `RegimeConfig` model, refactor backtest `is_short` → `position_direction` (behavioral no-op for single direction), regime gate in backtest (`buy_fires AND regime_active[i]`), regime chart shading (histogram on hidden scale), regime UI section in StrategyBuilder (collapsible, with stop-loss warning), `regime_active` in backtest response, regime in saved strategies, bot runner rejects `regime.enabled` until D24 ships. Prereq: A13a. [large] [next] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
 - [ ] **B22** Regime: symmetric direction switching (backtest) — `on_flip` behavior (close_only default / close_and_reverse / hold), per-bar `position_direction` switching driven by regime, per-trade direction in trade records. Uses same rules for both directions (no dual rule sets yet). UI: on_flip dropdown, direction toggle hidden when on_flip != hold. PnL sign correctness tests against known price sequences. Prereq: B21. [medium] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
 - [ ] **B23** Regime: dual rule sets — `long_buy_rules`/`long_sell_rules`/`short_buy_rules`/`short_sell_rules` in schema + backtest. Three-state regime (long/short/flat based on dual rule presence). Long/Short tab split in StrategyBuilder — each direction gets independent entry/exit rules with different indicators (e.g. MA-based long, RSI/Stochastic short). Prereq: B22. [medium] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
 
@@ -76,16 +76,16 @@
 - [x] **C7** Summary readability pass — dropped `(mean)` suffix on EV/PF, renamed Max/Min gain/loss to Biggest/Smallest win/loss, added size hierarchy to top metrics row (Return + Final Value 22px primary, rest 13px secondary), removed median secondary values from avg rows
 - [x] **C8** B&H value in summary was inconsistent for short strategies with open positions at end — `final_value` used long formula (`capital + position * price`) instead of short formula (`capital + position * entry_price + unrealized`). Fixed to match equity curve calculation.
 - [ ] **C9** Strategy comparison mode — load 2-3 saved strategies, run them on the same ticker/period, see equity curves overlaid + metric table side-by-side. Mostly frontend composition over existing backtest engine and equity rendering. Makes parameter tuning much faster than running backtests one at a time.
-- [ ] **C10** Intraday session analytics — break down strategy performance by time-of-day (30-min buckets). Heatmap or histogram of win rate / EV by session window (open, midday, power hour). Trade timestamps already exist; cheap to compute, actionable for trading hours filters.
+- [x] **C10** Intraday session analytics — break down strategy performance by time-of-day (30-min buckets). Win rate / EV / PnL per 30-min bucket. Session tab in Results, gated to intraday intervals. Already shipped in a prior session.
 - [x] **C11** Monte Carlo simulation — run N random permutations of trade sequence to estimate confidence intervals on returns, max drawdown, and probability of ruin. Critical for small-account sizing where a single bad drawdown sequence matters.
 - [x] **C12** Rolling performance window — show Sharpe, win rate, and return over rolling N-trade windows overlaid on equity curve. Reveals regime changes and strategy decay that aggregate stats hide.
 - [x] **C13** Monte Carlo bug fixes — (1) final value percentiles all show the same number (should spread); header stats may be pulling from wrong field. (2) Used raw `fetch()` instead of project `api` client (already fixed locally, needs committing).
 - [x] **C14** Trade duration histogram — distribution of hold times (bars or hours/days) as SVG histogram in Results. Spots if strategy holds losers too long. Pure frontend from existing trade timestamps. [easy]
 - [x] **C15** Win/loss streak analysis — max consecutive wins/losses, average streak length, streak distribution mini-chart. Reveals if strategy clusters wins or has brutal losing runs. Small panel in Summary tab. [easy]
 - [x] **C16** Risk-adjusted position sizing calculator — Kelly criterion + fixed-fractional sizing based on backtest win rate and avg win/loss ratio. Shows "optimal" bet size given your edge. Small panel in Summary tab. [easy]
-- [ ] **C17** Correlation to benchmark — compute beta and R² vs SPY returns alongside strategy equity curve. SPY data already loads via existing infrastructure. New stats row in Summary. [medium]
+- [x] **C17** Correlation to benchmark — compute beta and R² vs SPY returns alongside strategy equity curve. `_compute_spy_correlation()` in `backtest.py` (daily return alignment, SPY cached fetch), panel in Summary tab. [medium]
 - [ ] **C18** Parameter sensitivity sweep — re-run backtest with ±N variations of one indicator param, show results in a table/heatmap. Answers "how fragile is this edge?" [medium]
-- [ ] **C19** Backtest result persistence — save/load backtest results to localStorage so you can compare across sessions without re-running. [medium]
+- [x] **C19** Backtest result persistence — save/load backtest results to localStorage. Auto-save on each backtest; auto-restore on page load when ticker/dates/interval match saved settings. Graceful fallback on quota exceeded. [medium]
 
 ## D — Bots (live trading)
 

@@ -19,6 +19,7 @@ type AppTab = 'chart' | 'trading' | 'discovery'
 
 
 const STORAGE_KEY = 'strategylab-settings'
+const BACKTEST_CACHE_KEY = 'strategylab-last-backtest'
 const EMPTY_OHLCV: never[] = []
 const today = new Date().toISOString().slice(0, 10)
 const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -30,7 +31,28 @@ function loadSettings() {
   } catch { return null }
 }
 
+function loadBacktestCache(): { result: BacktestResult; request: StrategyRequest } | null {
+  try {
+    const raw = localStorage.getItem(BACKTEST_CACHE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
 const saved = loadSettings()
+
+// Restore last backtest result if the settings (ticker/dates/interval) still match
+const _cachedBacktest = (() => {
+  const cache = loadBacktestCache()
+  if (!cache?.request) return null
+  const r = cache.request
+  if (r.ticker === (saved?.ticker ?? 'AAPL') &&
+      r.start === (saved?.start ?? oneYearAgo) &&
+      r.end === (saved?.end ?? today) &&
+      r.interval === (saved?.interval ?? '1d')) {
+    return cache
+  }
+  return null
+})()
 
 export default function App() {
   const [tzMode, setTzMode] = useTimezone()
@@ -43,8 +65,8 @@ export default function App() {
   const [showQqq, setShowQqq] = useState<boolean>(saved?.showQqq ?? false)
   const [dataSource, setDataSource] = useState<DataSource>((saved?.dataSource as DataSource) ?? 'yahoo')
   const [extendedHours, setExtendedHours] = useState<boolean>(saved?.extendedHours ?? false)
-  const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null)
-  const [lastRequest, setLastRequest] = useState<StrategyRequest | null>(null)
+  const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(_cachedBacktest?.result ?? null)
+  const [lastRequest, setLastRequest] = useState<StrategyRequest | null>(_cachedBacktest?.request ?? null)
   const [resultsTab, setResultsTab] = useState<ResultsTab>('summary')
   const [macroBucket, setMacroBucket] = useState<string | null>(null)
   const [showBaseline, setShowBaseline] = useState(false)
@@ -68,6 +90,16 @@ export default function App() {
       ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, datePreset,
     }))
   }, [ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, datePreset])
+
+  useEffect(() => {
+    if (backtestResult && lastRequest) {
+      try {
+        localStorage.setItem(BACKTEST_CACHE_KEY, JSON.stringify({ result: backtestResult, request: lastRequest }))
+      } catch {} // Quota exceeded — silently skip
+    } else {
+      localStorage.removeItem(BACKTEST_CACHE_KEY)
+    }
+  }, [backtestResult, lastRequest])
 
   const chartInterval = chartEnabled ? viewInterval : interval
   const { data: ohlcv = EMPTY_OHLCV, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, chartInterval, dataSource, extendedHours)

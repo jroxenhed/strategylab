@@ -466,6 +466,31 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
           })()}
           <StreakPanel trades={result.trades} />
           {summary.num_trades >= 5 && <KellySizing summary={summary} />}
+          {summary.beta != null && (
+            <div style={{ display: 'flex', flexDirection: 'column', padding: '12px 16px', borderTop: '1px solid #21262d', gap: 6 }}>
+              <div style={{ marginBottom: 2 }}>
+                <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase', letterSpacing: 0.5 }}>Benchmark Correlation (SPY)</span>
+              </div>
+              <div style={{ display: 'flex', gap: 28 }}>
+                <div>
+                  <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>Beta (β)</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: '#e6edf3' }}>{summary.beta.toFixed(2)}</div>
+                  <div style={{ fontSize: 10, color: '#8b949e', marginTop: 2 }}>
+                    {summary.beta > 1.2 ? 'Amplified' : summary.beta < 0 ? 'Inverse' : summary.beta < 0.3 ? 'Low corr.' : 'Tracking'}
+                  </div>
+                </div>
+                {summary.r_squared != null && (
+                  <div>
+                    <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>R² (Fit)</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: '#e6edf3' }}>{(summary.r_squared * 100).toFixed(1)}%</div>
+                    <div style={{ fontSize: 10, color: '#8b949e', marginTop: 2 }}>
+                      {summary.r_squared > 0.7 ? 'High' : summary.r_squared > 0.3 ? 'Moderate' : 'Low'}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           </div>
         </div>
       )}

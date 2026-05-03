@@ -4,6 +4,16 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-03
+
+- **[A13b](TODO.md#a--charts--indicators)** Multi-TF indicator overlay. Extends `routes/indicators.py` with `htf_interval` param — when set, fetches OHLCV at the higher TF with extended lookback (via `htf_lookback_days`), computes indicator, aligns to LTF index via `align_htf_to_ltf`, returns at LTF timestamps. Frontend: `htfInterval?` field on `IndicatorInstance`; TF selector dropdown ("Same"/"1D"/"1W") in IndicatorList expanded settings for main-pane overlays; `useInstanceIndicators` updated to group HTF instances by `htfInterval` and make parallel API calls via `useQueries`; Chart.tsx renders HTF overlays with `LineType.WithSteps` and includes htfInterval in series title suffix. Prereq A13a.
+
+- **[C10](TODO.md#c--strategy-summary--analytics)** Intraday session analytics. Discovered already shipped in prior session (30-min bucket breakdown of win rate/EV in `compute_session_analytics` backend + `SessionAnalytics` component + Session tab in Results). Checked off.
+
+- **[C17](TODO.md#c--strategy-summary--analytics)** Benchmark correlation (SPY beta/R²). New `_compute_spy_correlation(equity, start, end)` in `backtest.py`: groups equity curve by ET date, computes daily returns, fetches SPY daily (TTL-cached), aligns on common dates, computes beta = cov/var_spy and R² = corr². Returns null for short/empty periods or failed SPY fetches. Added to backtest summary dict; `beta`/`r_squared` added to `BacktestResult.summary` TS type; new "Benchmark Correlation (SPY)" panel in Summary tab showing β value with context label (Amplified/Inverse/Tracking) and R² percentage with fit label.
+
+- **[C19](TODO.md#c--strategy-summary--analytics)** Backtest result persistence. `BACKTEST_CACHE_KEY` localStorage entry stores `{result, request}` on each backtest. On page load, `_cachedBacktest` checks if saved ticker/start/end/interval matches the cache's request — if so, restores last backtest result into state so results are visible without re-running. Clears cache when result is null (ticker/date changes). Quota-exceeded silently skipped.
+
 ## 2026-05-02
 
 - **[A13a](TODO.md#a--charts--indicators)** Multi-TF data foundation. Three new functions in `backend/shared.py`: `htf_lookback_days(indicator, params)` computes calendar-day warmup window (`int(period * 1.5 * 365/252 + 30)`); `fetch_higher_tf()` thin wrapper over `_fetch()` for HTF data; `align_htf_to_ltf(htf_series, ltf_index)` aligns daily values to intraday bars with strict anti-lookahead via `shift(1)` + UTC normalization + `pd.merge_asof(direction='backward')`. Handles weekend/holiday gaps and tz-aware/naive inputs. 6 exhaustive tests in `backend/tests/test_htf_alignment.py` (6/6 pass) covering lookahead, forward mapping, weekend gap, empty series, warmup NaN, lookback formula. Shared prereq for A13b, B21, D24.
