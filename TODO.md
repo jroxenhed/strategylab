@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*91 / 126 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*91 / 127 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -168,3 +168,4 @@ Own multi-session research project. Needs its own design work before implementat
 - [ ] **F18** Cap equity_snapshots growth — `equity_snapshots` in `BotState` appends on every trade, never trimmed. `bots.json` is 375 KB and growing. Cap at N entries (e.g. 500), trim oldest on append. [easy]
 - [ ] **F19** Migrate bot/journal polling to React Query — 12-14 simultaneous `setInterval` timers with no deduplication. Journal fetched independently by `PositionsTable` (60s) and `TradeJournal` (5s). React Query is already in the project but only used for OHLCV. Migrating would deduplicate, add stale-while-revalidate, and halve the interval count. [medium]
 - [ ] **F20** bot_runner test harness — the 1000-line file that moves real money has zero test coverage. Mock the `TradingProvider` protocol, test state transitions in `_tick()`: entry/exit, stop-loss, trailing stop, regime flip, pending flip retry, externally-closed detection. Foundation for catching P1s before they ship. [medium]
+- [ ] **F21** Split bot_runner.py (~1000 lines) — extract `_eval_regime_direction`/`_handle_regime_flip`/`_enter_position` into `regime.py`, exit logic (stop-loss, trailing, time-stop, externally-closed detection) into `exits.py`, keep `_tick()` as the thin orchestrator. Prereq: F20. [medium]
