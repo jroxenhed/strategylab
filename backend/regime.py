@@ -89,8 +89,7 @@ class RegimeMixin:
     async def _handle_regime_flip(self, cfg, state, new_dir: str, price: float,
                                    broker_qty: int, in_hours: bool, indicators: dict, i: int):
         """Close current position for a regime flip. Optionally enters the new direction."""
-        from slippage import slippage_cost_bps, fill_bias_bps
-        from broker import get_trading_provider
+        br = _br()
 
         old_dir = state.position_direction
         pos_is_short_now = old_dir == "short"
@@ -99,7 +98,7 @@ class RegimeMixin:
         self._log("INFO", f"Regime flip: {old_dir} → {new_dir} ({on_flip})")
 
         try:
-            provider = get_trading_provider(cfg.broker)
+            provider = br.get_trading_provider(cfg.broker)
 
             # Cancel pending stop orders for this symbol
             try:
@@ -157,8 +156,8 @@ class RegimeMixin:
         pnl = (state.entry_price - sell_fill) * broker_qty if pos_is_short_now else (sell_fill - state.entry_price) * broker_qty
         exit_label = "COVER" if pos_is_short_now else "SELL"
         side_key = "cover" if pos_is_short_now else "sell"
-        cost_bps = slippage_cost_bps(side_key, expected=price, fill=sell_fill)
-        bias_bps = fill_bias_bps(side_key, expected=price, fill=sell_fill)
+        cost_bps = br.slippage_cost_bps(side_key, expected=price, fill=sell_fill)
+        bias_bps = br.fill_bias_bps(side_key, expected=price, fill=sell_fill)
         state.slippage_bps.append(round(cost_bps, 2))
         state.last_signal = f"{exit_label} (regime_flip)"
 
