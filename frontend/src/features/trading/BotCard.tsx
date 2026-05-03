@@ -6,6 +6,7 @@ import { fmtUsd, fmtPnl } from '../../shared/utils/format'
 import { statusColor, levelColor } from '../../shared/utils/colors'
 import { fmtTimeET } from '../../shared/utils/time'
 import MiniSparkline from './MiniSparkline'
+import DailyPnlChart from './DailyPnlChart'
 import { useBroker } from '../../shared/hooks/useOHLCV'
 import { INFO_COLUMN_FLEX, StatCell, btnStyle } from './ui'
 
@@ -570,6 +571,11 @@ export default function BotCard({
           <MiniSparkline equityData={detail?.state.equity_snapshots ?? summary.equity_snapshots ?? []} alignedRange={alignedRange} />
         </div>
       </div>
+
+      {/* Daily P&L bar chart */}
+      {(detail?.state.equity_snapshots ?? summary.equity_snapshots ?? []).length >= 2 && (
+        <DailyPnlChart snapshots={detail?.state.equity_snapshots ?? summary.equity_snapshots ?? []} />
+      )}
 
       {/* Expandable activity log */}
       {expanded && (

@@ -99,9 +99,14 @@ class BotRunner:
         lookback = htf_lookback_days(rc.indicator, rc.indicator_params)
         htf_start = (date.today() - timedelta(days=lookback)).isoformat()
 
-        htf_df = await self._run_in_executor(
-            fetch_higher_tf, cfg.symbol, htf_start, end_date, rc.timeframe, cfg.data_source
-        )
+        try:
+            htf_df = await asyncio.wait_for(
+                self._run_in_executor(fetch_higher_tf, cfg.symbol, htf_start, end_date, rc.timeframe, cfg.data_source),
+                timeout=15.0,
+            )
+        except asyncio.TimeoutError:
+            self._log("WARN", "Regime: HTF fetch timed out after 15s, gate closed")
+            return "flat"
         if htf_df is None or htf_df.empty:
             self._log("WARN", f"Regime: no HTF data for {rc.timeframe}, gate closed")
             return "flat"
@@ -249,6 +254,8 @@ class BotRunner:
             "time": datetime.now(timezone.utc).isoformat(),
             "value": round(self._bot_pnl(cfg, state), 2),
         })
+        if len(state.equity_snapshots) > 500:
+            state.equity_snapshots = state.equity_snapshots[-500:]
 
         # Clear position state
         state.entry_price = None
@@ -578,6 +585,8 @@ class BotRunner:
                     "time": datetime.now(timezone.utc).isoformat(),
                     "value": round(self._bot_pnl(cfg, state), 2),
                 })
+                if len(state.equity_snapshots) > 500:
+                    state.equity_snapshots = state.equity_snapshots[-500:]
 
                 if cfg.drawdown_threshold_pct and state.equity_snapshots:
                     snaps = [s["value"] for s in state.equity_snapshots]
@@ -882,6 +891,8 @@ class BotRunner:
                     "time": datetime.now(timezone.utc).isoformat(),
                     "value": round(self._bot_pnl(cfg, state), 2),
                 })
+                if len(state.equity_snapshots) > 500:
+                    state.equity_snapshots = state.equity_snapshots[-500:]
 
                 if cfg.drawdown_threshold_pct and state.equity_snapshots:
                     snaps = [s["value"] for s in state.equity_snapshots]
@@ -997,11 +1008,11 @@ class BotRunner:
                         self._log("WARN", f"Backing off {RECOVERY_WAIT}s after {MAX_CONSEC_ERRORS} consecutive failures")
                         self.state.error_message = f"Recovering: {e}"
                         self.manager.save()
-                        await notify_error(
+                        asyncio.create_task(notify_error(
                             symbol=self.config.symbol,
                             error_msg=f"{MAX_CONSEC_ERRORS} consecutive tick failures: {e}",
                             bot_id=self.config.bot_id,
-                        )
+                        ))
                         await asyncio.sleep(RECOVERY_WAIT)
                         consec_errors = 0
                         self._log("INFO", "Resuming after recovery backoff")
