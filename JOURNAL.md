@@ -4,6 +4,10 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-03 (overnight build 8, part 2)
+
+- **[F21](TODO.md#f--architecture--housekeeping)** Split bot_runner.py (1030 → 511 lines). `RegimeMixin` in `regime.py` holds `_eval_regime_direction` + `_handle_regime_flip`. `ExitsMixin` in `exits.py` holds `_detect_external_close` + `_evaluate_exit_reason` + `_execute_exit`. `BotRunner` inherits from both. `_tick()` is now a thin orchestrator. Both mixin files use a `_br()` helper (`sys.modules["bot_runner"]`) so test patches apply correctly at call time. All 7 F20 tests pass post-split.
+
 ## 2026-05-03 (review sessions)
 
 - **[D24](TODO.md#d--bots-live-trading)** PR #10 review: 6 P1 fixes (dual-rule indicators, stale trail_stop, skip_remaining bypass, consec_sl on regime flip, manual_buy PnL, stop_bot regime state).
