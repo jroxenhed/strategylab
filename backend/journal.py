@@ -2,6 +2,7 @@
 
 import json
 import os
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,7 @@ _default_data = Path(__file__).resolve().parent / "data"
 DATA_DIR = Path(os.environ.get("STRATEGYLAB_DATA_DIR", str(_default_data)))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 JOURNAL_PATH = DATA_DIR / "trade_journal.json"
+_journal_lock = threading.Lock()
 
 
 def _load_trades() -> list[dict]:
@@ -160,30 +162,32 @@ def _log_trade(symbol: str, side: str, qty: float, price: float | None,
     `bot_id` is required for bot-sourced trades so that P&L can be scoped to
     the specific bot (see `compute_realized_pnl`). Manual routes pass None.
     """
-    if JOURNAL_PATH.exists():
-        journal = json.loads(JOURNAL_PATH.read_text())
-    else:
-        journal = {"trades": []}
     from slippage import slippage_cost_bps  # lazy: slippage imports JOURNAL_PATH from us
 
     cost_bps: float | None = None
     if price is not None and expected_price is not None and side is not None:
         cost_bps = round(slippage_cost_bps(side, expected_price, price), 2)
 
-    journal["trades"].append({
-        "id": str(uuid.uuid4()),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "symbol": symbol,
-        "side": side,
-        "qty": qty,
-        "price": price,
-        "stop_loss_price": stop_loss_price,
-        "source": source,
-        "reason": reason,
-        "expected_price": expected_price,
-        "slippage_bps": cost_bps,
-        "direction": direction,
-        "bot_id": bot_id,
-        "broker": broker,
-    })
-    JOURNAL_PATH.write_text(json.dumps(journal, indent=2))
+    with _journal_lock:
+        if JOURNAL_PATH.exists():
+            journal = json.loads(JOURNAL_PATH.read_text())
+        else:
+            journal = {"trades": []}
+
+        journal["trades"].append({
+            "id": str(uuid.uuid4()),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "price": price,
+            "stop_loss_price": stop_loss_price,
+            "source": source,
+            "reason": reason,
+            "expected_price": expected_price,
+            "slippage_bps": cost_bps,
+            "direction": direction,
+            "bot_id": bot_id,
+            "broker": broker,
+        })
+        JOURNAL_PATH.write_text(json.dumps(journal, indent=2))

@@ -417,8 +417,8 @@ class BotManager:
             _log_trade(config.symbol, "short" if is_short else "buy", qty, fill_price,
                        source="bot", reason="manual_entry", expected_price=price,
                        direction=config.direction, bot_id=config.bot_id)
-        except Exception:
-            pass
+        except Exception as e:
+            runner._log("ERROR", f"Journal write failed: {e}")
 
         self.save()
         return {"qty": qty, "fill_price": fill_price, "slippage_bps": round(cost_bps, 2)}
@@ -517,8 +517,10 @@ class BotManager:
                 for config, state in self.bots.values()
             ],
         }
-        with open(DATA_PATH, "w") as f:
+        tmp = DATA_PATH + ".tmp"
+        with open(tmp, "w") as f:
             json.dump(data, f, indent=2, default=str)
+        os.replace(tmp, DATA_PATH)
 
     def load(self):
         if not os.path.exists(DATA_PATH):
