@@ -406,7 +406,7 @@ def run_backtest(req: StrategyRequest):
                     entry_ts = None
                     trail_peak = 0.0
                     trail_stop_price = None
-                    consec_sl_count = 0
+                    # Regime flip is not a stop-loss; don't modify consec_sl_count
 
                     if on_flip == "close_and_reverse":
                         new_dir = "short" if rf_old_direction == "long" else "long"

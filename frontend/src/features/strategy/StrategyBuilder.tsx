@@ -223,7 +223,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         slippage_bps: slippageBps !== '' ? slippageBps : undefined,
         per_share_rate: perShareRate,
         min_per_order: minPerOrder,
-        borrow_rate_annual: direction === 'short' ? borrowRateAnnual : 0,
+        borrow_rate_annual: (direction === 'short' || (regimeEnabled && regimeConfig.on_flip === 'close_and_reverse')) ? borrowRateAnnual : 0,
         source: dataSource, debug, direction,
         extended_hours: extendedHours,
         regime: regimeEnabled ? { ...regimeConfig, enabled: true } : undefined,
