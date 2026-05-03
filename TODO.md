@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*108 / 131 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*109 / 133 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -91,6 +91,9 @@
 - [x] **C17** Correlation to benchmark — compute beta and R² vs SPY returns alongside strategy equity curve. `_compute_spy_correlation()` in `backtest.py` (daily return alignment, SPY cached fetch), panel in Summary tab. [medium]
 - [x] **C17a** Fix SPY correlation: beta/R² always 0 — switched from daily equity-curve returns to per-trade returns aligned to SPY over the same holding periods. Returns None (hidden panel) for strategies with <3 closed trades or intraday-only activity (near-zero SPY variance). [easy]
 - [x] **C18** Parameter sensitivity sweep — re-run backtest with ±N variations of one indicator param, show results in a table/heatmap. Answers "how fragile is this edge?" `POST /api/backtest/sweep` + SensitivityPanel in Results (Sensitivity tab). [medium]
+- [ ] **C20** Equity curve chart blank after F6 types split — stats render but no line drawn. Likely a broken import or missing type re-export from the F6 split. Regression from build 7. [easy] [next]
+- [ ] **C21** Sweep param_path bug — some parameters (indicator params, rule values) produce identical results across all sweep values. Stop loss works correctly. Likely `_apply_param` in `backtest_sweep.py` isn't correctly mutating the nested field for certain param_path formats (e.g. `buy_rule_0_param` vs `buy_rule_0_value`). Debug and fix. [easy] [next]
+- [ ] **C22** Auto-optimizer — run sensitivity sweeps automatically across multiple parameters, find the combination that maximizes Sharpe / return / win rate. Like C18 but multi-dimensional: sweep param A, pick best, sweep param B, iterate. Show a ranked table of top N parameter combos. Could use grid search for small spaces or Bayesian optimization for larger ones. The "push button, get optimized strategy" workflow. [large]
 - [x] **C19** Backtest result persistence — save/load backtest results to localStorage. Auto-save on each backtest; auto-restore on page load when ticker/dates/interval match saved settings. Graceful fallback on quota exceeded. [medium]
 
 ## D — Bots (live trading)
@@ -168,7 +171,7 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] **F18** Cap equity_snapshots growth — `equity_snapshots` in `BotState` appends on every trade, never trimmed. Capped at 500 entries at all 3 append sites in `bot_runner.py` (`if len > 500: snapshots = snapshots[-500:]`). [easy]
 - [ ] **F19** Migrate bot/journal polling to React Query — 12-14 simultaneous `setInterval` timers with no deduplication. Journal fetched independently by `PositionsTable` (60s) and `TradeJournal` (5s). React Query is already in the project but only used for OHLCV. Migrating would deduplicate, add stale-while-revalidate, and halve the interval count. [medium]
 - [x] **F20** bot_runner test harness — 7 tests in `backend/tests/test_bot_runner.py`: no-entry-outside-hours, entry-on-buy-signal, no-entry-when-positioned, stop-loss-exit-long, sell-signal-exit, time-stop-exit, skip-entry-cooldown. MockProvider with call-count-aware `get_positions`, `_direct_executor` patch. All 7 pass in 0.81s. [medium]
-- [x] **F21** Split bot_runner.py (~1000 lines) — extract `_eval_regime_direction`/`_handle_regime_flip`/`_enter_position` into `regime.py`, exit logic (stop-loss, trailing, time-stop, externally-closed detection) into `exits.py`, keep `_tick()` as the thin orchestrator. Prereq: F20. [medium]
+- [x] **F21** Split bot_runner.py (1030→511 lines) — `RegimeMixin` in `regime.py` (`_eval_regime_direction`, `_handle_regime_flip`), `ExitsMixin` in `exits.py` (`_detect_external_close`, `_evaluate_exit_reason`, `_execute_exit`). `_tick()` as thin orchestrator. All 7 F20 tests pass. [medium]
 - [x] **F22** Surface `was_running` in BotCard UI — F17 persists the flag to bots.json but nothing in the UI reads it. Show a small warning badge (e.g. "⚡ Was running") on stopped bots with `was_running=True`, prompting restart decision. Requires adding `was_running` to `BotSummary` API response. [easy]
 - [x] **F23** Add `was_running` to frontend `BotSummary` TypeScript type + `list_bots()` API response — shipped in PR #12 review fixes. [easy]
 - [x] **C18b** Sensitivity sweep sparkline — add a mini line chart above the results table showing `total_return_pct` vs `param_value`. Makes the sensitivity curve shape immediately visible (cliff-edge vs smooth plateau). Pure frontend from existing `SweepPoint[]` data. [easy]

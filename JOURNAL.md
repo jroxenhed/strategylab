@@ -6,7 +6,17 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-03 (overnight build 8, part 2)
 
-- **[F21](TODO.md#f--architecture--housekeeping)** Split bot_runner.py (1030 → 511 lines). `RegimeMixin` in `regime.py` holds `_eval_regime_direction` + `_handle_regime_flip`. `ExitsMixin` in `exits.py` holds `_detect_external_close` + `_evaluate_exit_reason` + `_execute_exit`. `BotRunner` inherits from both. `_tick()` is now a thin orchestrator. Both mixin files use a `_br()` helper (`sys.modules["bot_runner"]`) so test patches (`patch("bot_runner._log_trade")` etc.) apply correctly at call time. All 7 F20 tests verified green by user before this run.
+- **[F21](TODO.md#f--architecture--housekeeping)** Split bot_runner.py (1030 → 511 lines). `RegimeMixin` in `regime.py` holds `_eval_regime_direction` + `_handle_regime_flip`. `ExitsMixin` in `exits.py` holds `_detect_external_close` + `_evaluate_exit_reason` + `_execute_exit`. `BotRunner` inherits from both. `_tick()` is now a thin orchestrator. Both mixin files use a `_br()` helper (`sys.modules["bot_runner"]`) so test patches apply correctly at call time. All 7 F20 tests pass post-split.
+
+## 2026-05-03 (review sessions)
+
+- **[D24](TODO.md#d--bots-live-trading)** PR #10 review: 6 P1 fixes (dual-rule indicators, stale trail_stop, skip_remaining bypass, consec_sl on regime flip, manual_buy PnL, stop_bot regime state).
+- **[F14](TODO.md#f--architecture--housekeeping)**/**[F15](TODO.md#f--architecture--housekeeping)**/**[F16](TODO.md#f--architecture--housekeeping)** PR #11 review: 2 P1 hardening fixes (unique tempfile paths for concurrent save(), atomic journal writes so readers never see partial JSON).
+- **[F23](TODO.md#f--architecture--housekeeping)** Shipped in PR #12 review: `was_running` added to `list_bots()` response + `BotSummary` TS type.
+- PR #12 review: 3 P1 fixes (await→create_task for notify_error, negative sweep guard, was_running in API).
+- PR #13 review: clean — 0 P0/P1, merged as-is.
+- Architectural audit: added F14-F21 (safety fixes, test harness, bot_runner split). Overnight task limit raised 3→5.
+- Market research: StrategyLab's 10-capability combination (no-code builder + regime filter + multi-broker + Monte Carlo + sensitivity sweep + live bot dashboard) has no retail equivalent.
 
 ## 2026-05-03 (overnight build 8)
 
