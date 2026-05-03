@@ -94,6 +94,13 @@
 - [ ] **C20** Equity curve chart blank after F6 types split — stats render but no line drawn. Likely a broken import or missing type re-export from the F6 split. Regression from build 7. [easy] [next]
 - [ ] **C21** Sweep param_path bug — some parameters (indicator params, rule values) produce identical results across all sweep values. Stop loss works correctly. Likely `_apply_param` in `backtest_sweep.py` isn't correctly mutating the nested field for certain param_path formats (e.g. `buy_rule_0_param` vs `buy_rule_0_value`). Debug and fix. [easy] [next]
 - [ ] **C22** Auto-optimizer — run sensitivity sweeps automatically across multiple parameters, find the combination that maximizes Sharpe / return / win rate. Like C18 but multi-dimensional: sweep param A, pick best, sweep param B, iterate. Show a ranked table of top N parameter combos. Could use grid search for small spaces or Bayesian optimization for larger ones. The "push button, get optimized strategy" workflow. [large]
+- [ ] **C23** Regime/short direction-aware analytics — the entire Results analytics pipeline assumes long-only trades. With regime `close_and_reverse` strategies, short/cover trades are miscounted or invisible across multiple tabs. Systematic pass needed: [medium] [next]
+  - Summary: "Trades: 0" — stat counter only counts buy/sell pairs, misses short/cover
+  - Trades tab: columns labelled "Buy $"/"Sell $" should adapt to "Entry $"/"Exit $" or show direction column
+  - Session analytics: win rate computed as `sell > buy`, wrong for shorts where `entry > exit` is a win
+  - Win/Loss streaks: all shorts counted as losses (same direction bug)
+  - Monte Carlo, Rolling, Hold Time tabs: audit for same assumption
+  - Kelly sizing, EV/PF: verify P&L sign handling for shorts
 - [x] **C19** Backtest result persistence — save/load backtest results to localStorage. Auto-save on each backtest; auto-restore on page load when ticker/dates/interval match saved settings. Graceful fallback on quota exceeded. [medium]
 
 ## D — Bots (live trading)
