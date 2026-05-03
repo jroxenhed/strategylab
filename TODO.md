@@ -84,6 +84,7 @@
 - [x] **C15** Win/loss streak analysis — max consecutive wins/losses, average streak length, streak distribution mini-chart. Reveals if strategy clusters wins or has brutal losing runs. Small panel in Summary tab. [easy]
 - [x] **C16** Risk-adjusted position sizing calculator — Kelly criterion + fixed-fractional sizing based on backtest win rate and avg win/loss ratio. Shows "optimal" bet size given your edge. Small panel in Summary tab. [easy]
 - [x] **C17** Correlation to benchmark — compute beta and R² vs SPY returns alongside strategy equity curve. `_compute_spy_correlation()` in `backtest.py` (daily return alignment, SPY cached fetch), panel in Summary tab. [medium]
+- [ ] **C17a** Fix SPY correlation: beta/R² always 0 — equity curve is flat between trades (capital unchanged), so daily returns are 0 for 90%+ of days, making correlation meaningless. Fix: compute correlation only on days the strategy holds a position, or use trade-level returns aligned to SPY daily returns for the same holding periods. [easy] [next]
 - [ ] **C18** Parameter sensitivity sweep — re-run backtest with ±N variations of one indicator param, show results in a table/heatmap. Answers "how fragile is this edge?" [medium]
 - [x] **C19** Backtest result persistence — save/load backtest results to localStorage. Auto-save on each backtest; auto-restore on page load when ticker/dates/interval match saved settings. Graceful fallback on quota exceeded. [medium]
 
