@@ -4,6 +4,14 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-04 (overnight build 10)
+
+- **[C23](TODO.md#c--strategy-summary--analytics)** Sweep error banner — replaced plain `color: red` div with a styled banner (tinted background + red border + ✕ icon) when the sensitivity sweep fails. The `apiErrorDetail()` helper already extracted the error string; only the presentation changed.
+
+- **[C24](TODO.md#c--strategy-summary--analytics)** Direction-aware analytics — (1) `sell_trades` filter in `backtest.py` now includes both `"sell"` and `"cover"` exits (was gated on `req.direction`), fixing `num_trades` and `win_rate` for regime `close_and_reverse` strategies; (2) Trades tab column headers in `Results.tsx` adapt to "Entry"/"Exit" when short or mixed-direction trades detected. Audited all other analytics: streaks, MC, rolling, hold time, Kelly already used direction-agnostic PnL-sign logic.
+
+- **[B26](TODO.md#b--strategy-engine--rules)** Sweep from rule row — TrendingUp icon button on rule rows with a numeric threshold (`needsValue && typeof rule.value === 'number'`). Clicking it: (a) pre-fills the Sensitivity tab with the rule's `param_path` selected and ±50% range around the current value, (b) switches the Results panel to the Sensitivity tab. Prop chain: `RuleRow.onSweep → StrategyBuilder.onSweep → App → setSweepInit + setResultsTab('sensitivity') → Results.sweepInit → SensitivityPanel` applies via `useEffect`. Button gates on `onSweep` being defined so regime rule rows (not yet sweep-supported) stay clean.
+
 ## 2026-05-04
 
 - **[A8d](TODO.md#a--chart--data)** Same-TF indicator resample to view interval — when "View as" selects a coarser interval, indicators compute at the backtest interval and resample via backend `view_interval` field. Five follow-up fixes during visual testing: (1) removed `origin='start'` from resample — caused 30min offset vs provider clock-hour boundaries; (2) HTF queries use `viewInterval` for alignment so HTF indicators don't inject backtest-interval timestamps; (3) regime background uses `snapTimestamp` (replaces incomplete `snapRegimeTime`); (4) rule signal markers snapped+deduped when aggregated; (5) EMA overlays un-gated and timestamps snapped for coarser views. Trade tooltip SNAP tolerance ±5 candles when aggregated. [Plan](docs/superpowers/plans/2026-05-04-a8d-same-tf-indicator-resample.md)

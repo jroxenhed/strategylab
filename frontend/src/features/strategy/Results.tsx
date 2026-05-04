@@ -71,6 +71,8 @@ interface Props {
   onLogScaleChange: (v: boolean) => void
   viewInterval: string
   backtestInterval: string
+  sweepInit?: { path: string; centerVal: number } | null
+  onSweepConsumed?: () => void
 }
 
 function autoDefaultBucket(equityLength: number): string {
@@ -80,7 +82,7 @@ function autoDefaultBucket(equityLength: number): string {
   return 'M'
 }
 
-export default function Results({ result, mainChart, activeTab, onTabChange, bucket, onBucketChange, lastRequest, showBaseline, onShowBaselineChange, logScale, onLogScaleChange, viewInterval, backtestInterval }: Props) {
+export default function Results({ result, mainChart, activeTab, onTabChange, bucket, onBucketChange, lastRequest, showBaseline, onShowBaselineChange, logScale, onLogScaleChange, viewInterval, backtestInterval, sweepInit, onSweepConsumed }: Props) {
   const { summary, trades, equity_curve, signal_trace } = result
   const [tzMode] = useTimezone()
   const chartRef = useRef<HTMLDivElement>(null)
@@ -183,7 +185,16 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       priceScaleId: 'right',
       ...(priceFormat ? { priceFormat } : {}),
     })
-    series.setData(equityData.map(d => ({ time: d.time, value: d.value })))
+    // Deduplicate by time, keeping the last entry for each timestamp.
+    // Needed because close_and_reverse strategies (and DST collapses via toDisplayTime)
+    // can produce duplicate timestamps that crash lightweight-charts.
+    function dedup<T extends { time: any }>(data: T[]): T[] {
+      const seen = new Map<any, T>()
+      for (const d of data) seen.set(d.time, d)
+      return Array.from(seen.values())
+    }
+
+    series.setData(dedup(equityData.map(d => ({ time: d.time, value: d.value }))))
 
     if (showBaseline && baselineData) {
       const baselineSeries = chart.addSeries(LineSeries, {
@@ -195,7 +206,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
         priceScaleId: 'right',
         ...(priceFormat ? { priceFormat } : {}),
       })
-      baselineSeries.setData(baselineData.map(d => ({ time: d.time, value: d.value })))
+      baselineSeries.setData(dedup(baselineData.map(d => ({ time: d.time, value: d.value }))))
     }
 
     // Trade density ticks at exact bar positions
@@ -212,7 +223,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
         scaleMargins: { top: 0.92, bottom: 0 },
       })
       tickSeries.setData(
-        sells.map(s => {
+        dedup(sells.map(s => {
           const pnl = s.pnl ?? 0
           const intensity = 0.3 + 0.7 * Math.min(1, Math.abs(pnl) / maxPnl)
           return {
@@ -222,7 +233,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
               ? `rgba(38, 166, 65, ${intensity})`
               : `rgba(248, 81, 73, ${intensity})`,
           }
-        })
+        }))
       )
     }
 
@@ -558,12 +569,18 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
           {sells.length === 0 ? (
             <div style={{ color: '#8b949e', fontSize: 12, padding: 8 }}>No completed trades</div>
           ) : (<>
+            {(() => {
+              const hasMixedDirection = sells.some(t => t.type === 'cover') && sells.some(t => t.type === 'sell')
+              const allShort = sells.length > 0 && sells.every(t => t.type === 'cover')
+              const entryLabel = (hasMixedDirection || allShort) ? 'Entry' : 'Buy'
+              const exitLabel = (hasMixedDirection || allShort) ? 'Exit' : 'Sell'
+              return (
             <div style={{ ...styles.tradeRow, borderBottom: '1px solid #30363d', marginBottom: 2 }}>
               <span style={{ ...styles.tradeCell, width: 24, color: '#8b949e', fontSize: 10 }}>#</span>
-              <span style={{ ...styles.tradeCell, width: 115, color: '#8b949e', fontSize: 10 }}>Buy</span>
-              <span style={{ ...styles.tradeCell, width: 65, color: '#8b949e', fontSize: 10 }}>Buy $</span>
-              <span style={{ ...styles.tradeCell, width: 115, color: '#8b949e', fontSize: 10 }}>Sell</span>
-              <span style={{ ...styles.tradeCell, width: 65, color: '#8b949e', fontSize: 10 }}>Sell $</span>
+              <span style={{ ...styles.tradeCell, width: 115, color: '#8b949e', fontSize: 10 }}>{entryLabel}</span>
+              <span style={{ ...styles.tradeCell, width: 65, color: '#8b949e', fontSize: 10 }}>{entryLabel} $</span>
+              <span style={{ ...styles.tradeCell, width: 115, color: '#8b949e', fontSize: 10 }}>{exitLabel}</span>
+              <span style={{ ...styles.tradeCell, width: 65, color: '#8b949e', fontSize: 10 }}>{exitLabel} $</span>
               <span style={{ ...styles.tradeCell, width: 45, color: '#8b949e', fontSize: 10 }}>Shares</span>
               <span style={{ ...styles.tradeCell, width: 60, color: '#8b949e', fontSize: 10 }}>P&L</span>
               <span style={{ ...styles.tradeCell, width: 50, color: '#8b949e', fontSize: 10 }}>Return</span>
@@ -572,6 +589,8 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
               <span style={{ ...styles.tradeCell, width: 50, color: '#8b949e', fontSize: 10 }}>Borrow</span>
               <span style={{ ...styles.tradeCell, width: 40, color: '#8b949e', fontSize: 10 }}>Exit</span>
             </div>
+              )
+            })()}
             {sells.map((sell, i) => {
               const buy = trades.filter(t => t.type === 'buy' || t.type === 'short')[i]
               const win = (sell.pnl ?? 0) >= 0
@@ -642,7 +661,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
 
       {activeTab === 'sensitivity' && lastRequest && (
         <div style={{ padding: '0 16px 16px' }}>
-          <SensitivityPanel lastRequest={lastRequest} />
+          <SensitivityPanel lastRequest={lastRequest} sweepInit={sweepInit} onSweepConsumed={onSweepConsumed} />
         </div>
       )}
 

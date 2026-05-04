@@ -41,6 +41,13 @@ class SweepPoint(BaseModel):
     ev_per_trade: Optional[float] = None
 
 
+class SweepResponse(BaseModel):
+    results: list[SweepPoint]
+    requested: int
+    completed: int
+    skipped: int
+
+
 def _apply_param(base: StrategyRequest, param_path: str, value: float) -> StrategyRequest:
     """Return a deep copy of base with param_path set to value."""
     modified = base.model_copy(deep=True)
@@ -119,13 +126,15 @@ def _apply_param(base: StrategyRequest, param_path: str, value: float) -> Strate
 
 
 @router.post("/api/backtest/sweep")
-def sweep_backtest(req: SweepRequest) -> list[SweepPoint]:
+def sweep_backtest(req: SweepRequest) -> SweepResponse:
     if len(req.values) == 0:
         raise HTTPException(status_code=400, detail="values must not be empty")
     if len(req.values) > 25:
         raise HTTPException(status_code=400, detail="Max 25 sweep values per request")
 
+    requested = len(req.values)
     results: list[SweepPoint] = []
+    skipped = 0
     for v in req.values:
         try:
             modified = _apply_param(req.base, req.param_path, v)
@@ -145,6 +154,11 @@ def sweep_backtest(req: SweepRequest) -> list[SweepPoint]:
                 ev_per_trade=s.get("ev_per_trade"),
             ))
         except HTTPException:
-            continue  # skip invalid parameter values (e.g. RSI period=1)
+            skipped += 1  # skip invalid parameter values (e.g. RSI period=1)
 
-    return results
+    return SweepResponse(
+        results=results,
+        requested=requested,
+        completed=len(results),
+        skipped=skipped,
+    )

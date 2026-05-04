@@ -13,6 +13,13 @@ interface SweepPoint {
   ev_per_trade: number | null
 }
 
+interface SweepResponse {
+  results: SweepPoint[]
+  requested: number
+  completed: number
+  skipped: number
+}
+
 interface ParamOption {
   path: string
   label: string
@@ -136,9 +143,11 @@ function colorFor(value: number, min: number, max: number, highIsGood: boolean):
 
 interface Props {
   lastRequest: StrategyRequest
+  sweepInit?: { path: string; centerVal: number } | null
+  onSweepConsumed?: () => void
 }
 
-export default function SensitivityPanel({ lastRequest }: Props) {
+export default function SensitivityPanel({ lastRequest, sweepInit, onSweepConsumed }: Props) {
   const paramOptions = useMemo(() => buildParamOptions(lastRequest), [lastRequest])
 
   const [selectedPath, setSelectedPath] = useState<string>(paramOptions[0]?.path ?? '')
@@ -149,6 +158,7 @@ export default function SensitivityPanel({ lastRequest }: Props) {
   const [steps, setSteps] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [warning, setWarning] = useState('')
   const [results, setResults] = useState<SweepPoint[] | null>(null)
   const [sweptPath, setSweptPath] = useState<string>('')
 
@@ -158,6 +168,25 @@ export default function SensitivityPanel({ lastRequest }: Props) {
       setSelectedPath(paramOptions[0].path)
     }
   }, [paramOptions])
+
+  // Apply sweep init from rule row shortcut
+  useEffect(() => {
+    if (!sweepInit) return
+    const opt = paramOptions.find(o => o.path === sweepInit.path)
+    if (!opt) {
+      // Path no longer exists (rule deleted) — clear stale init and bail
+      onSweepConsumed?.()
+      return
+    }
+    const center = sweepInit.centerVal
+    const half = center === 0 ? 1 : Math.abs(center) * 0.5
+    setSelectedPath(sweepInit.path)
+    setMinVal((center - half).toFixed(2))
+    setMaxVal((center + half).toFixed(2))
+    setSteps('9')
+    setError('')
+    onSweepConsumed?.()
+  }, [sweepInit])
 
   // Reset inputs when param selection changes
   function handleParamChange(path: string) {
@@ -186,15 +215,20 @@ export default function SensitivityPanel({ lastRequest }: Props) {
     const values = selected.isInteger ? rawValues.map(v => Math.round(v)) : rawValues
     setLoading(true)
     setError('')
+    setWarning('')
     setResults(null)
     try {
-      const res = await api.post('/api/backtest/sweep', {
+      const res = await api.post<SweepResponse>('/api/backtest/sweep', {
         base: lastRequest,
         param_path: selected.path,
         values,
       })
-      setResults(res.data)
+      const data = res.data
+      setResults(data.results)
       setSweptPath(selected.path)
+      if (data.skipped > 0) {
+        setWarning(`${data.completed} of ${data.requested} sweep points completed — ${data.skipped} failed (e.g. invalid parameter value).`)
+      }
     } catch (e: any) {
       setError(apiErrorDetail(e, 'Sweep failed.'))
     } finally {
@@ -287,7 +321,19 @@ export default function SensitivityPanel({ lastRequest }: Props) {
         </button>
       </div>
 
-      {error && <div style={{ color: '#ef5350', fontSize: 12, marginBottom: 8 }}>{error}</div>}
+      {error && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, padding: '8px 10px', marginBottom: 8, background: 'rgba(239,83,80,0.1)', border: '1px solid rgba(239,83,80,0.3)', borderRadius: 4, color: '#ef5350', fontSize: 12 }}>
+          <span style={{ flexShrink: 0, fontWeight: 700 }}>✕</span>
+          <span>{error}</span>
+        </div>
+      )}
+
+      {warning && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, padding: '8px 10px', marginBottom: 8, background: 'rgba(255,193,7,0.08)', border: '1px solid rgba(255,193,7,0.3)', borderRadius: 4, color: '#d4a017', fontSize: 12 }}>
+          <span style={{ flexShrink: 0, fontWeight: 700 }}>⚠</span>
+          <span>{warning}</span>
+        </div>
+      )}
 
       {/* Sensitivity sparkline — return% vs param value */}
       {results && results.length > 1 && (() => {
