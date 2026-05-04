@@ -80,8 +80,13 @@ class ExitsMixin:
         self._log("TRADE", f"{side_label} {cfg.symbol} @ {exit_price:.2f} | PnL={pnl:+.2f} | reason={exit_reason} (detected)")
 
         expected_exit: float | None = None
-        if exit_reason == "stop_loss" and cfg.stop_loss_pct and state.entry_price:
-            sl_mult = (1 + cfg.stop_loss_pct / 100) if pos_is_short else (1 - cfg.stop_loss_pct / 100)
+        # B25: resolve per-direction stop_loss_pct for expected_price calculation
+        _sl_pct_ext = (
+            (cfg.long_stop_loss_pct if state.position_direction == 'long' else cfg.short_stop_loss_pct)
+            if state.position_direction and hasattr(cfg, 'long_stop_loss_pct') else None
+        ) or cfg.stop_loss_pct
+        if exit_reason == "stop_loss" and _sl_pct_ext and state.entry_price:
+            sl_mult = (1 + _sl_pct_ext / 100) if pos_is_short else (1 - _sl_pct_ext / 100)
             expected_exit = state.entry_price * sl_mult
         elif exit_reason == "trailing_stop" and state.trail_stop_price:
             expected_exit = state.trail_stop_price
@@ -152,9 +157,29 @@ class ExitsMixin:
         state.entry_bar_count += 1
         exit_reason = None
 
-        # Update trailing peak/trough
-        if cfg.trailing_stop and state.entry_price is not None:
+        # B25: resolve per-direction stop/trailing/mbh values
+        _pos_dir = state.position_direction
+        _has_dir_fields = hasattr(cfg, 'long_stop_loss_pct')
+        if _pos_dir and _has_dir_fields:
+            sl_pct = (
+                (cfg.long_stop_loss_pct if _pos_dir == 'long' else cfg.short_stop_loss_pct)
+                or cfg.stop_loss_pct
+            )
+            ts = (
+                (cfg.long_trailing_stop if _pos_dir == 'long' else cfg.short_trailing_stop)
+                or cfg.trailing_stop
+            )
+            mbh = (
+                (cfg.long_max_bars_held if _pos_dir == 'long' else cfg.short_max_bars_held)
+                or cfg.max_bars_held
+            )
+        else:
+            sl_pct = cfg.stop_loss_pct
             ts = cfg.trailing_stop
+            mbh = cfg.max_bars_held
+
+        # Update trailing peak/trough
+        if ts and state.entry_price is not None:
             if pos_is_short:
                 source_price = float(df["Low"].iloc[-1]) if ts.source == "high" else price
                 activated = (not ts.activate_on_profit) or (
@@ -186,23 +211,23 @@ class ExitsMixin:
                     elif ts.type == "atr" and atr_val:
                         state.trail_stop_price = state.trail_peak - ts.value * atr_val
 
-        # Check exits in priority order
+        # Check exits in priority order (B25: use resolved sl_pct, ts, mbh)
         if pos_is_short:
-            if cfg.stop_loss_pct and state.entry_price:
-                if price >= state.entry_price * (1 + cfg.stop_loss_pct / 100):
+            if sl_pct and state.entry_price:
+                if price >= state.entry_price * (1 + sl_pct / 100):
                     exit_reason = "stop_loss"
-            if exit_reason is None and cfg.trailing_stop and state.trail_stop_price:
+            if exit_reason is None and ts and state.trail_stop_price:
                 if price >= state.trail_stop_price:
                     exit_reason = "trailing_stop"
         else:
-            if cfg.stop_loss_pct and state.entry_price and not cfg.trailing_stop:
-                if price <= state.entry_price * (1 - cfg.stop_loss_pct / 100):
+            if sl_pct and state.entry_price and not ts:
+                if price <= state.entry_price * (1 - sl_pct / 100):
                     exit_reason = "stop_loss"
-            if exit_reason is None and cfg.trailing_stop and state.trail_stop_price:
+            if exit_reason is None and ts and state.trail_stop_price:
                 if price <= state.trail_stop_price:
                     exit_reason = "trailing_stop"
 
-        if exit_reason is None and cfg.max_bars_held and state.entry_bar_count >= cfg.max_bars_held:
+        if exit_reason is None and mbh and state.entry_bar_count >= mbh:
             exit_reason = "time_stop"
 
         if exit_reason is None:

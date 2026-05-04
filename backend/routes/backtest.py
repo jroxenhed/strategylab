@@ -218,7 +218,10 @@ def _compute_regime_series(req: StrategyRequest, ltf_df: pd.DataFrame) -> "pd.Se
     Returns a boolean pd.Series indexed on ltf_df.index where True = regime allows entries.
     Returns None when regime is disabled (gate always open).
     Raises ValueError when regime is enabled but computation fails.
-    Supported conditions: above, below, rising, falling.
+
+    Dual path:
+    - rules path (rc.rules non-empty): calls eval_rules() over HTF bars using full rule set.
+    - legacy path (rc.rules empty): single-indicator + condition check (above/below/rising/falling).
     """
     rc = req.regime
     if not rc or not rc.enabled:
@@ -226,34 +229,57 @@ def _compute_regime_series(req: StrategyRequest, ltf_df: pd.DataFrame) -> "pd.Se
 
     from indicators import compute_instance, OHLCVSeries as _OHLCVSeries  # local import avoids circular dep
 
-    lookback = htf_lookback_days(rc.indicator, rc.indicator_params)
-    htf_start = (datetime.fromisoformat(req.start) - timedelta(days=lookback)).strftime("%Y-%m-%d")
-    htf_df = fetch_higher_tf(req.ticker, htf_start, req.end, rc.timeframe, source=req.source)
-    if htf_df.empty:
-        raise ValueError(f"No HTF data for regime filter ({rc.timeframe})")
+    if rc.rules:
+        # B28: rules-based path — evaluate a full rule set on HTF bars
+        migrated_rules = [migrate_rule(r) for r in rc.rules]
+        lookback = max((htf_lookback_days(r.indicator, r.params or {}) for r in migrated_rules), default=20)
+        htf_start = (datetime.fromisoformat(req.start) - timedelta(days=lookback)).strftime("%Y-%m-%d")
+        htf_df = fetch_higher_tf(req.ticker, htf_start, req.end, rc.timeframe, source=req.source)
+        if htf_df.empty:
+            raise ValueError(f"No HTF data for regime filter ({rc.timeframe})")
 
-    vol_col = htf_df["Volume"] if "Volume" in htf_df.columns else htf_df["Close"] * 0
-    ohlcv = _OHLCVSeries(
-        close=htf_df["Close"],
-        high=htf_df["High"],
-        low=htf_df["Low"],
-        volume=vol_col,
-    )
-    result = compute_instance(rc.indicator, rc.indicator_params, ohlcv)
-    indicator_key = next(iter(result))
-    indicator_series = result[indicator_key]
+        htf_close = htf_df["Close"]
+        htf_high = htf_df["High"]
+        htf_low = htf_df["Low"]
+        htf_vol = htf_df["Volume"] if "Volume" in htf_df.columns else htf_df["Close"] * 0
 
-    close = htf_df["Close"]
-    if rc.condition == "above":
-        raw_bool = close > indicator_series
-    elif rc.condition == "below":
-        raw_bool = close < indicator_series
-    elif rc.condition == "rising":
-        raw_bool = indicator_series.diff() > 0
-    elif rc.condition == "falling":
-        raw_bool = indicator_series.diff() < 0
+        htf_indicators = compute_indicators(htf_close, high=htf_high, low=htf_low, volume=htf_vol, rules=migrated_rules)
+
+        raw_values = [
+            eval_rules(migrated_rules, rc.logic, htf_indicators, i)
+            for i in range(len(htf_df))
+        ]
+        raw_bool = pd.Series(raw_values, index=htf_df.index, dtype=bool)
     else:
-        raise ValueError(f"Unsupported regime condition for Stage 3: {rc.condition!r}. Use above/below/rising/falling.")
+        # Legacy path: single-indicator + condition
+        lookback = htf_lookback_days(rc.indicator, rc.indicator_params)
+        htf_start = (datetime.fromisoformat(req.start) - timedelta(days=lookback)).strftime("%Y-%m-%d")
+        htf_df = fetch_higher_tf(req.ticker, htf_start, req.end, rc.timeframe, source=req.source)
+        if htf_df.empty:
+            raise ValueError(f"No HTF data for regime filter ({rc.timeframe})")
+
+        vol_col = htf_df["Volume"] if "Volume" in htf_df.columns else htf_df["Close"] * 0
+        ohlcv = _OHLCVSeries(
+            close=htf_df["Close"],
+            high=htf_df["High"],
+            low=htf_df["Low"],
+            volume=vol_col,
+        )
+        result = compute_instance(rc.indicator, rc.indicator_params, ohlcv)
+        indicator_key = next(iter(result))
+        indicator_series = result[indicator_key]
+
+        close = htf_df["Close"]
+        if rc.condition == "above":
+            raw_bool = close > indicator_series
+        elif rc.condition == "below":
+            raw_bool = close < indicator_series
+        elif rc.condition == "rising":
+            raw_bool = indicator_series.diff() > 0
+        elif rc.condition == "falling":
+            raw_bool = indicator_series.diff() < 0
+        else:
+            raise ValueError(f"Unsupported regime condition for Stage 3: {rc.condition!r}. Use above/below/rising/falling.")
 
     raw_bool = raw_bool.fillna(False)
 
@@ -318,13 +344,59 @@ def run_backtest(req: StrategyRequest):
         signal_trace = [] if req.debug else None
         ds = req.dynamic_sizing
         th = req.trading_hours
-        consec_sl_count = 0  # track consecutive stop losses for dynamic sizing
         sas = req.skip_after_stop
-        skip_remaining = 0  # entries still to skip after a qualifying stop
         is_intraday = req.interval in _INTRADAY_INTERVALS
         regime_active_series = _compute_regime_series(req, df)
         on_flip = req.regime.on_flip if (req.regime and req.regime.enabled) else "hold"
         prev_regime_active: bool = False
+
+        # B25: per-direction counters in b23_mode; single counters otherwise
+        if b23_mode:
+            consec_sl_count_by_dir: dict[str, int] = {'long': 0, 'short': 0}
+            skip_remaining_by_dir: dict[str, int] = {'long': 0, 'short': 0}
+        else:
+            consec_sl_count = 0  # track consecutive stop losses for dynamic sizing
+            skip_remaining = 0   # entries still to skip after a qualifying stop
+
+        # B25: per-direction helper closures
+        def _dir_stop(direction: str):
+            """Return per-direction stop_loss_pct when b23_mode, else global."""
+            if not b23_mode:
+                return req.stop_loss_pct
+            v = req.long_stop_loss_pct if direction == 'long' else req.short_stop_loss_pct
+            return v if v is not None else req.stop_loss_pct
+
+        def _dir_ts(direction: str):
+            """Return per-direction trailing_stop when b23_mode, else global.
+            Merges per-direction type+value into global config's source/activate fields.
+            """
+            if not b23_mode:
+                return req.trailing_stop
+            base = req.trailing_stop
+            override = req.long_trailing_stop if direction == 'long' else req.short_trailing_stop
+            if override is None:
+                return base
+            if base is None:
+                return override
+            return TrailingStopConfig(
+                type=override.type, value=override.value,
+                source=base.source, activate_on_profit=base.activate_on_profit,
+                activate_pct=base.activate_pct,
+            )
+
+        def _dir_mbh(direction: str):
+            """Return per-direction max_bars_held when b23_mode, else global."""
+            if not b23_mode:
+                return req.max_bars_held
+            v = req.long_max_bars_held if direction == 'long' else req.short_max_bars_held
+            return v if v is not None else req.max_bars_held
+
+        def _dir_size(direction: str) -> float:
+            """Return per-direction position_size when b23_mode, else global."""
+            if not b23_mode:
+                return req.position_size
+            v = req.long_position_size if direction == 'long' else req.short_position_size
+            return v if v is not None else req.position_size
 
         def _rule_desc(r):
             """Short human-readable description of a rule."""
@@ -434,7 +506,9 @@ def run_backtest(req: StrategyRequest):
                             fill_price_rf = price * (1 - drag)
                         else:
                             fill_price_rf = price * (1 + drag)
-                        shares_rf = (capital * req.position_size) / fill_price_rf
+                        # B25: rebind ts for new direction before trail_peak usage
+                        ts = _dir_ts(new_dir)
+                        shares_rf = (capital * _dir_size(new_dir)) / fill_price_rf
                         commission_rf2 = per_leg_commission(shares_rf, req)
                         entry_slippage_rf = abs(shares_rf * (fill_price_rf - price))
                         position = shares_rf
@@ -479,21 +553,27 @@ def run_backtest(req: StrategyRequest):
                 buy_fires = position == 0 and hour_ok and eval_rules(active_buy, active_buy_logic, indicators, i)
             else:
                 buy_fires = position == 0 and hour_ok and regime_ok and eval_rules(buy_rules, req.buy_logic, indicators, i)
-            if buy_fires and skip_remaining > 0:
-                skip_remaining -= 1
-                if signal_trace is not None:
-                    signal_trace.append({
-                        "date": date, "price": round(price, 4), "position": "flat",
-                        "action": f"SKIPPED (post-stop, {skip_remaining} left)",
-                    })
-                buy_fires = False
+            if b23_mode:
+                sr_key = 'long' if curr_regime_active else 'short'
+                if buy_fires and skip_remaining_by_dir[sr_key] > 0:
+                    skip_remaining_by_dir[sr_key] -= 1
+                    if signal_trace is not None:
+                        signal_trace.append({
+                            "date": date, "price": round(price, 4), "position": "flat",
+                            "action": f"SKIPPED (post-stop, {skip_remaining_by_dir[sr_key]} left) [{sr_key}]",
+                        })
+                    buy_fires = False
+            else:
+                if buy_fires and skip_remaining > 0:
+                    skip_remaining -= 1
+                    if signal_trace is not None:
+                        signal_trace.append({
+                            "date": date, "price": round(price, 4), "position": "flat",
+                            "action": f"SKIPPED (post-stop, {skip_remaining} left)",
+                        })
+                    buy_fires = False
 
             if buy_fires:
-                # Dynamic sizing: reduce position after consecutive stop losses
-                effective_size = req.position_size
-                if ds and ds.enabled and consec_sl_count >= ds.consec_sls:
-                    effective_size = req.position_size * (ds.reduced_pct / 100)
-
                 # Direction follows regime when close_and_reverse is active
                 if b23_mode:
                     position_direction = 'long' if curr_regime_active else 'short'
@@ -501,6 +581,19 @@ def run_backtest(req: StrategyRequest):
                     position_direction = req.direction if curr_regime_active else ("short" if req.direction == "long" else "long")
                 else:
                     position_direction = req.direction
+
+                # B25: bind per-direction trailing stop AFTER position_direction is known
+                ts = _dir_ts(position_direction)
+
+                # Dynamic sizing: reduce position after consecutive stop losses
+                effective_size = _dir_size(position_direction)
+                if b23_mode:
+                    csl = consec_sl_count_by_dir[position_direction]
+                else:
+                    csl = consec_sl_count
+                if ds and ds.enabled and csl >= ds.consec_sls:
+                    effective_size = _dir_size(position_direction) * (ds.reduced_pct / 100)
+
                 # Slippage: short entry fills lower (worse for seller), long fills higher (worse for buyer)
                 if position_direction == "short":
                     fill_price = price * (1 - drag)
@@ -560,16 +653,18 @@ def run_backtest(req: StrategyRequest):
                             trail_stop_price = trail_peak - ts.value * atr_val
                         trail_hit = low.iloc[i] <= trail_stop_price
 
-                # Check fixed stop loss
+                # Check fixed stop loss (B25: use per-direction stop when b23_mode)
+                stop_loss_pct_eff = _dir_stop(position_direction)
                 if position_direction == "short":
-                    stop_price_limit = entry_price * (1 + req.stop_loss_pct / 100) if (req.stop_loss_pct and req.stop_loss_pct > 0) else None
+                    stop_price_limit = entry_price * (1 + stop_loss_pct_eff / 100) if (stop_loss_pct_eff and stop_loss_pct_eff > 0) else None
                     stop_hit = stop_price_limit is not None and high.iloc[i] >= stop_price_limit
                 else:
-                    stop_price_limit = entry_price * (1 - req.stop_loss_pct / 100) if (req.stop_loss_pct and req.stop_loss_pct > 0) else None
+                    stop_price_limit = entry_price * (1 - stop_loss_pct_eff / 100) if (stop_loss_pct_eff and stop_loss_pct_eff > 0) else None
                     stop_hit = stop_price_limit is not None and low.iloc[i] <= stop_price_limit
 
-                # Time stop: exit after N bars held
-                time_stop_hit = req.max_bars_held is not None and (i - entry_bar_idx) >= req.max_bars_held
+                # Time stop: exit after N bars held (B25: use per-direction max_bars_held when b23_mode)
+                mbh_eff = _dir_mbh(position_direction)
+                time_stop_hit = mbh_eff is not None and (i - entry_bar_idx) >= mbh_eff
 
                 # Exit priority: fixed stop beats trailing stop beats time stop
                 if stop_hit:
@@ -635,19 +730,28 @@ def run_backtest(req: StrategyRequest):
                     })
                     if signal_trace is not None:
                         action = "STOP_LOSS" if exit_reason == "stop_loss" else "TRAIL_STOP" if exit_reason == "trailing_stop" else ("COVER" if position_direction == "short" else "SELL")
+                    # B25: capture exited_direction BEFORE clearing position_direction
+                    exited_direction = position_direction
                     position = 0.0
                     position_direction = None
                     entry_ts = None
                     trail_peak = 0.0
                     trail_stop_price = None
                     ds_trigger = ds.trigger if ds else "sl"
-                    if is_post_loss_trigger(exit_reason, ds_trigger):
-                        consec_sl_count += 1
+                    if b23_mode:
+                        if is_post_loss_trigger(exit_reason, ds_trigger):
+                            consec_sl_count_by_dir[exited_direction] += 1
+                        else:
+                            consec_sl_count_by_dir[exited_direction] = 0
+                        if sas and sas.enabled and is_post_loss_trigger(exit_reason, sas.trigger):
+                            skip_remaining_by_dir[exited_direction] = sas.count
                     else:
-                        consec_sl_count = 0
-
-                    if sas and sas.enabled and is_post_loss_trigger(exit_reason, sas.trigger):
-                        skip_remaining = sas.count
+                        if is_post_loss_trigger(exit_reason, ds_trigger):
+                            consec_sl_count += 1
+                        else:
+                            consec_sl_count = 0
+                        if sas and sas.enabled and is_post_loss_trigger(exit_reason, sas.trigger):
+                            skip_remaining = sas.count
                     if signal_trace is not None:
                         signal_trace.append({
                             "date": date, "price": round(price, 4), "position": "exited",

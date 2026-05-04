@@ -23,14 +23,28 @@ class RegimeMixin:
     async def _eval_regime_direction(self, cfg, df) -> str:
         """Evaluate current regime direction. Returns 'long', 'short', or 'flat'.
         Conservative default: 'flat' on any error.
+
+        Dual path:
+        - rules path (rc.rules non-empty): calls eval_rules() over HTF bars using full rule set.
+        - legacy path (rc.rules empty): single-indicator + condition check (above/below/rising/falling).
         """
         from indicators import compute_instance, OHLCVSeries as _OHLCVSeries
         from shared import fetch_higher_tf, align_htf_to_ltf, htf_lookback_days
+        # B28: local imports for test-patching support — do NOT move to top of file
+        from signal_engine import compute_indicators, eval_rules, migrate_rule
 
         rc = cfg.regime
         from datetime import date, timedelta
         end_date = date.today().isoformat()
-        lookback = htf_lookback_days(rc.indicator, rc.indicator_params)
+
+        if rc.rules:
+            # B28: rules-based path
+            migrated_rules = [migrate_rule(r) for r in rc.rules]
+            lookback = max((htf_lookback_days(r.indicator, r.params or {}) for r in migrated_rules), default=20)
+        else:
+            # Legacy path: single-indicator lookback
+            lookback = htf_lookback_days(rc.indicator, rc.indicator_params)
+
         htf_start = (date.today() - timedelta(days=lookback)).isoformat()
 
         try:
@@ -45,26 +59,43 @@ class RegimeMixin:
             self._log("WARN", f"Regime: no HTF data for {rc.timeframe}, gate closed")
             return "flat"
 
-        vol_col = htf_df["Volume"] if "Volume" in htf_df.columns else htf_df["Close"] * 0
-        ohlcv = _OHLCVSeries(
-            close=htf_df["Close"], high=htf_df["High"], low=htf_df["Low"], volume=vol_col
-        )
-        result = compute_instance(rc.indicator, rc.indicator_params, ohlcv)
-        indicator_key = next(iter(result))
-        indicator_series = result[indicator_key]
+        if rc.rules:
+            # B28: rules-based path — evaluate full rule set on HTF bars
+            htf_close = htf_df["Close"]
+            htf_high = htf_df["High"]
+            htf_low = htf_df["Low"]
+            htf_vol = htf_df["Volume"] if "Volume" in htf_df.columns else htf_df["Close"] * 0
 
-        close = htf_df["Close"]
-        if rc.condition == "above":
-            raw_bool = close > indicator_series
-        elif rc.condition == "below":
-            raw_bool = close < indicator_series
-        elif rc.condition == "rising":
-            raw_bool = indicator_series.diff() > 0
-        elif rc.condition == "falling":
-            raw_bool = indicator_series.diff() < 0
+            htf_indicators = compute_indicators(htf_close, high=htf_high, low=htf_low, volume=htf_vol, rules=migrated_rules)
+
+            import pandas as _pd
+            raw_values = [
+                eval_rules(migrated_rules, rc.logic, htf_indicators, i)
+                for i in range(len(htf_df))
+            ]
+            raw_bool = _pd.Series(raw_values, index=htf_df.index, dtype=bool)
         else:
-            self._log("WARN", f"Unsupported regime condition: {rc.condition!r}")
-            return "flat"
+            # Legacy path: single-indicator + condition
+            vol_col = htf_df["Volume"] if "Volume" in htf_df.columns else htf_df["Close"] * 0
+            ohlcv = _OHLCVSeries(
+                close=htf_df["Close"], high=htf_df["High"], low=htf_df["Low"], volume=vol_col
+            )
+            result = compute_instance(rc.indicator, rc.indicator_params, ohlcv)
+            indicator_key = next(iter(result))
+            indicator_series = result[indicator_key]
+
+            close = htf_df["Close"]
+            if rc.condition == "above":
+                raw_bool = close > indicator_series
+            elif rc.condition == "below":
+                raw_bool = close < indicator_series
+            elif rc.condition == "rising":
+                raw_bool = indicator_series.diff() > 0
+            elif rc.condition == "falling":
+                raw_bool = indicator_series.diff() < 0
+            else:
+                self._log("WARN", f"Unsupported regime condition: {rc.condition!r}")
+                return "flat"
 
         raw_bool = raw_bool.fillna(False)
 
@@ -73,7 +104,6 @@ class RegimeMixin:
         else:
             smoothed = raw_bool.astype(bool)
 
-        from shared import align_htf_to_ltf
         aligned = align_htf_to_ltf(smoothed.astype(float), df.index)
         aligned = aligned.fillna(0).astype(bool)
         regime_active = bool(aligned.iloc[-1]) if not aligned.empty else False

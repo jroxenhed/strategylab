@@ -51,6 +51,8 @@ export interface RegimeConfig {
   condition: 'above' | 'below' | 'rising' | 'falling'
   min_bars: number
   on_flip?: 'close_only' | 'close_and_reverse' | 'hold'
+  rules?: Rule[]        // B28: full rule set (empty = legacy single-indicator path)
+  logic?: 'AND' | 'OR' // B28: logic for regime rules (defaults to 'AND')
 }
 
 export interface StrategyRequest {
@@ -88,6 +90,15 @@ export interface StrategyRequest {
   direction?: 'long' | 'short'
   extended_hours?: boolean
   regime?: RegimeConfig
+  // B25: per-direction settings (only used when b23_mode / regime is active)
+  long_stop_loss_pct?: number
+  short_stop_loss_pct?: number
+  long_trailing_stop?: TrailingStopConfig
+  short_trailing_stop?: TrailingStopConfig
+  long_max_bars_held?: number
+  short_max_bars_held?: number
+  long_position_size?: number
+  short_position_size?: number
 }
 
 export interface SavedStrategy {
@@ -125,6 +136,18 @@ export interface SavedStrategy {
   regime?: RegimeConfig
   indicators?: IndicatorInstance[]
   pinned?: boolean
+  strategyType?: 'long' | 'short' | 'regime'
+  // B25: per-direction settings stored in saved strategy
+  longStopLoss?: number | ''
+  shortStopLoss?: number | ''
+  longTrailingEnabled?: boolean
+  longTrailingConfig?: TrailingStopConfig
+  shortTrailingEnabled?: boolean
+  shortTrailingConfig?: TrailingStopConfig
+  longMaxBarsHeld?: number | ''
+  shortMaxBarsHeld?: number | ''
+  longPosSize?: number
+  shortPosSize?: number
 }
 
 export interface Trade {

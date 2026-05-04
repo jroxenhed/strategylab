@@ -66,7 +66,12 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [shortSellRules, setShortSellRules] = useState<Rule[]>(saved?.shortSellRules ?? [])
   const [shortBuyLogic, setShortBuyLogic] = useState<'AND' | 'OR'>(saved?.shortBuyLogic ?? 'AND')
   const [shortSellLogic, setShortSellLogic] = useState<'AND' | 'OR'>(saved?.shortSellLogic ?? 'AND')
-  const [activeRuleTab, setActiveRuleTab] = useState<'single' | 'long' | 'short'>('single')
+  // B28: regime rule set state
+  const [regimeBuyRules, setRegimeBuyRules] = useState<Rule[]>(saved?.regime?.rules ?? [])
+  const [regimeLogic, setRegimeLogic] = useState<'AND' | 'OR'>(saved?.regime?.logic ?? 'AND')
+  const [activeRuleTab, setActiveRuleTab] = useState<'single' | 'long' | 'short' | 'regime'>(
+    saved?.regime?.enabled ? 'regime' : 'single'
+  )
   const [capital, setCapital] = useState(saved?.capital ?? 10000)
   const [posSize, setPosSize] = useState(saved?.posSize ?? 100)
   const [stopLoss, setStopLoss] = useState<number | ''>(saved?.stopLoss ?? '')
@@ -107,6 +112,19 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [saveAsName, setSaveAsName] = useState('')
   const [renamingStrategy, setRenamingStrategy] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [importingTab, setImportingTab] = useState<'regime' | 'long' | 'short' | null>(null)
+  const [importError, setImportError] = useState<string | null>(null)
+  // B25: per-direction settings (regime mode only)
+  const [longStopLoss, setLongStopLoss] = useState<number | ''>(saved?.longStopLoss ?? '')
+  const [shortStopLoss, setShortStopLoss] = useState<number | ''>(saved?.shortStopLoss ?? '')
+  const [longTrailingEnabled, setLongTrailingEnabled] = useState<boolean>(saved?.longTrailingEnabled ?? false)
+  const [longTrailingConfig, setLongTrailingConfig] = useState<TrailingStopConfig>(saved?.longTrailingConfig ?? trailingConfig)
+  const [shortTrailingEnabled, setShortTrailingEnabled] = useState<boolean>(saved?.shortTrailingEnabled ?? false)
+  const [shortTrailingConfig, setShortTrailingConfig] = useState<TrailingStopConfig>(saved?.shortTrailingConfig ?? trailingConfig)
+  const [longMaxBarsHeld, setLongMaxBarsHeld] = useState<number | ''>(saved?.longMaxBarsHeld ?? '')
+  const [shortMaxBarsHeld, setShortMaxBarsHeld] = useState<number | ''>(saved?.shortMaxBarsHeld ?? '')
+  const [longPosSize, setLongPosSize] = useState<number>(saved?.longPosSize ?? posSize)
+  const [shortPosSize, setShortPosSize] = useState<number>(saved?.shortPosSize ?? posSize)
 
   useEffect(() => {
     if (slippageSource === 'manual') return
@@ -117,6 +135,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   }, [slipInfo?.modeled_bps, slipInfo?.source, slippageSource])
 
   function currentSnapshot(name: string): SavedStrategy {
+    const strategyType: SavedStrategy['strategyType'] =
+      regimeEnabled === true ? 'regime' : direction === 'short' ? 'short' : 'long'
     return {
       name, savedAt: new Date().toISOString(),
       ticker, interval,
@@ -127,7 +147,14 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
       trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours,
       slippageBps, commission, direction,
       perShareRate, minPerOrder, borrowRateAnnual,
-      regime: regimeEnabled ? { ...regimeConfig, enabled: true } : undefined,
+      regime: regimeEnabled ? { ...regimeConfig, rules: regimeBuyRules, logic: regimeLogic, enabled: true } : undefined,
+      strategyType,
+      // B25: per-direction settings
+      longStopLoss, shortStopLoss,
+      longTrailingEnabled, longTrailingConfig,
+      shortTrailingEnabled, shortTrailingConfig,
+      longMaxBarsHeld, shortMaxBarsHeld,
+      longPosSize, shortPosSize,
     }
   }
 
@@ -164,9 +191,23 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     if (s.regime) {
       setRegimeEnabled(s.regime.enabled)
       setRegimeConfig(s.regime)
+      setRegimeBuyRules(s.regime.rules ?? [])
+      setRegimeLogic(s.regime.logic ?? 'AND')
+      if (s.regime.enabled) setActiveRuleTab('regime')
     } else {
       setRegimeEnabled(false)
     }
+    // B25: load per-direction settings (fall back to global/empty if not present)
+    setLongStopLoss(s.longStopLoss ?? '')
+    setShortStopLoss(s.shortStopLoss ?? '')
+    setLongTrailingEnabled(s.longTrailingEnabled ?? false)
+    setLongTrailingConfig(s.longTrailingConfig ?? s.trailingConfig)
+    setShortTrailingEnabled(s.shortTrailingEnabled ?? false)
+    setShortTrailingConfig(s.shortTrailingConfig ?? s.trailingConfig)
+    setLongMaxBarsHeld(s.longMaxBarsHeld ?? '')
+    setShortMaxBarsHeld(s.shortMaxBarsHeld ?? '')
+    setLongPosSize(s.longPosSize ?? s.posSize)
+    setShortPosSize(s.shortPosSize ?? s.posSize)
     setActiveStrategyName(s.name)
   }
 
@@ -200,6 +241,73 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     return 0
   })
 
+  function importFromStrategy(tab: 'regime' | 'long' | 'short', sourceName: string) {
+    const source = savedStrategies.find(s => s.name === sourceName)
+    if (!source) return
+
+    let sourceBuy: Rule[]
+    let sourceSell: Rule[]
+    if (tab === 'long') {
+      sourceBuy = source.longBuyRules?.length ? source.longBuyRules : source.buyRules
+      sourceSell = source.longSellRules?.length ? source.longSellRules : source.sellRules
+    } else if (tab === 'short') {
+      sourceBuy = source.shortBuyRules?.length ? source.shortBuyRules : source.buyRules
+      sourceSell = source.shortSellRules?.length ? source.shortSellRules : source.sellRules
+    } else {
+      // Regime tab: always use single-mode buyRules
+      sourceBuy = source.buyRules
+      sourceSell = source.sellRules
+    }
+
+    const migratedBuy = sourceBuy.map(migrateRule)
+    const migratedSell = sourceSell.map(migrateRule)
+
+    if (migratedBuy.length === 0) {
+      setImportError(`"${sourceName}" has no entry rules — it may have been saved in regime mode. Try importing its sub-strategies instead.`)
+      setImportingTab(null)
+      return
+    }
+
+    const destCount = tab === 'regime' ? regimeBuyRules.length : tab === 'long' ? longBuyRules.length : shortBuyRules.length
+    if (destCount > 0 && !window.confirm(`Replace ${destCount} existing rule${destCount > 1 ? 's' : ''} with rules from "${sourceName}"?`)) {
+      setImportingTab(null)
+      return
+    }
+
+    if (tab === 'regime') {
+      setRegimeBuyRules(migratedBuy)
+      setRegimeLogic(source.buyLogic ?? 'AND')
+    } else if (tab === 'long') {
+      setLongBuyRules(migratedBuy)
+      setLongSellRules(migratedSell)
+      setLongBuyLogic(source.longBuyLogic ?? source.buyLogic ?? 'AND')
+      setLongSellLogic(source.longSellLogic ?? source.sellLogic ?? 'AND')
+      // B25: also copy settings from source into long per-direction fields
+      if (source.stopLoss !== '') setLongStopLoss(source.stopLoss ?? '')
+      if (source.trailingEnabled) {
+        setLongTrailingEnabled(true)
+        setLongTrailingConfig(source.trailingConfig)
+      }
+      if (source.maxBarsHeld !== undefined && source.maxBarsHeld !== '') setLongMaxBarsHeld(source.maxBarsHeld)
+      setLongPosSize(source.posSize ?? posSize)
+    } else if (tab === 'short') {
+      setShortBuyRules(migratedBuy)
+      setShortSellRules(migratedSell)
+      setShortBuyLogic(source.shortBuyLogic ?? source.buyLogic ?? 'AND')
+      setShortSellLogic(source.shortSellLogic ?? source.sellLogic ?? 'AND')
+      // B25: also copy settings from source into short per-direction fields
+      if (source.stopLoss !== '') setShortStopLoss(source.stopLoss ?? '')
+      if (source.trailingEnabled) {
+        setShortTrailingEnabled(true)
+        setShortTrailingConfig(source.trailingConfig)
+      }
+      if (source.maxBarsHeld !== undefined && source.maxBarsHeld !== '') setShortMaxBarsHeld(source.maxBarsHeld)
+      setShortPosSize(source.posSize ?? posSize)
+    }
+    setImportError(null)
+    setImportingTab(null)
+  }
+
   // Portal target must be found after first DOM commit, not during render
   const [settingsTarget, setSettingsTarget] = useState<HTMLElement | null>(null)
   useEffect(() => {
@@ -215,14 +323,25 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
       buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, maxBarsHeld,
       trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours, slippageBps, commission, direction,
       perShareRate, minPerOrder, borrowRateAnnual,
-      regime: { ...regimeConfig, enabled: regimeEnabled },
+      regime: { ...regimeConfig, enabled: regimeEnabled, rules: regimeBuyRules, logic: regimeLogic },
       longBuyRules, longSellRules, longBuyLogic, longSellLogic,
       shortBuyRules, shortSellRules, shortBuyLogic, shortSellLogic,
+      // B25: per-direction settings
+      longStopLoss, shortStopLoss,
+      longTrailingEnabled, longTrailingConfig,
+      shortTrailingEnabled, shortTrailingConfig,
+      longMaxBarsHeld, shortMaxBarsHeld,
+      longPosSize, shortPosSize,
     }))
   }, [buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, maxBarsHeld, trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours, slippageBps, commission, direction,
-      perShareRate, minPerOrder, borrowRateAnnual, regimeEnabled, regimeConfig,
+      perShareRate, minPerOrder, borrowRateAnnual, regimeEnabled, regimeConfig, regimeBuyRules, regimeLogic,
       longBuyRules, longSellRules, longBuyLogic, longSellLogic,
-      shortBuyRules, shortSellRules, shortBuyLogic, shortSellLogic])
+      shortBuyRules, shortSellRules, shortBuyLogic, shortSellLogic,
+      longStopLoss, shortStopLoss,
+      longTrailingEnabled, longTrailingConfig,
+      shortTrailingEnabled, shortTrailingConfig,
+      longMaxBarsHeld, shortMaxBarsHeld,
+      longPosSize, shortPosSize])
 
   async function runBacktest() {
     setLoading(true)
@@ -248,7 +367,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         borrow_rate_annual: (direction === 'short' || (regimeEnabled && regimeConfig.on_flip === 'close_and_reverse')) ? borrowRateAnnual : 0,
         source: dataSource, debug, direction,
         extended_hours: extendedHours,
-        regime: regimeEnabled ? { ...regimeConfig, enabled: true } : undefined,
+        regime: regimeEnabled ? { ...regimeConfig, rules: regimeBuyRules, logic: regimeLogic, enabled: true } : undefined,
         ...(regimeEnabled && longBuyRules.some(r => r.indicator) && shortBuyRules.some(r => r.indicator) ? {
           long_buy_rules: longBuyRules,
           long_sell_rules: longSellRules,
@@ -258,6 +377,17 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
           short_sell_rules: shortSellRules,
           short_buy_logic: shortBuyLogic,
           short_sell_logic: shortSellLogic,
+        } : {}),
+        // B25: per-direction settings (only sent when regime is active)
+        ...(regimeEnabled ? {
+          long_stop_loss_pct: longStopLoss !== '' ? longStopLoss : undefined,
+          short_stop_loss_pct: shortStopLoss !== '' ? shortStopLoss : undefined,
+          long_trailing_stop: longTrailingEnabled ? { ...trailingConfig, type: longTrailingConfig.type, value: longTrailingConfig.value } : undefined,
+          short_trailing_stop: shortTrailingEnabled ? { ...trailingConfig, type: shortTrailingConfig.type, value: shortTrailingConfig.value } : undefined,
+          long_max_bars_held: longMaxBarsHeld !== '' ? longMaxBarsHeld : undefined,
+          short_max_bars_held: shortMaxBarsHeld !== '' ? shortMaxBarsHeld : undefined,
+          long_position_size: longPosSize / 100,
+          short_position_size: shortPosSize / 100,
         } : {}),
       }
       const { data } = await api.post('/api/backtest', req)
@@ -462,7 +592,84 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
           )}
         </div>
 
-        {/* Column 3: Execution */}
+        {/* Column 3: Per-Direction (Regime) — shown only when regimeEnabled */}
+        {regimeEnabled && (
+          <div style={styles.settingsGroup}>
+            <div style={styles.groupTitle}>Per-Direction</div>
+            {/* Long settings */}
+            <div style={{ fontSize: 11, color: '#3fb950', fontWeight: 600, marginBottom: 4 }}>Long</div>
+            <div style={styles.settingsRow}>
+              <label style={styles.settingsLabel}>Stop Loss (%)</label>
+              <input type="number" value={longStopLoss} step={0.5} min={0} placeholder="global" onChange={e => setLongStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+            </div>
+            <div style={styles.settingsRow}>
+              <label style={styles.settingsLabel}>Time Stop (bars)</label>
+              <input type="number" value={longMaxBarsHeld} step={1} min={1} placeholder="global" onChange={e => setLongMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+            </div>
+            <div style={styles.settingsRow}>
+              <label style={styles.settingsLabel}>Position Size (%)</label>
+              <input type="number" value={longPosSize} step={1} min={1} max={100} onChange={e => setLongPosSize(+e.target.value)} style={styles.settingsInput} />
+            </div>
+            <div style={{ ...styles.settingsRow, marginTop: 2 }}>
+              <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                <input type="checkbox" checked={longTrailingEnabled} onChange={e => setLongTrailingEnabled(e.target.checked)} />
+                Trailing Stop
+              </label>
+            </div>
+            {longTrailingEnabled && (
+              <div style={{ paddingLeft: 12, borderLeft: '2px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={styles.settingsRow}>
+                  <label style={styles.settingsLabel}>Type</label>
+                  <select value={longTrailingConfig.type} onChange={e => setLongTrailingConfig(c => ({ ...c, type: e.target.value as 'pct' | 'atr' }))} style={styles.settingsInput}>
+                    <option value="pct">%</option>
+                    <option value="atr">ATR</option>
+                  </select>
+                </div>
+                <div style={styles.settingsRow}>
+                  <label style={styles.settingsLabel}>Value</label>
+                  <input type="number" value={longTrailingConfig.value} step={0.5} min={0.1} onChange={e => setLongTrailingConfig(c => ({ ...c, value: +e.target.value }))} style={styles.settingsInput} />
+                </div>
+              </div>
+            )}
+            {/* Short settings */}
+            <div style={{ fontSize: 11, color: '#f85149', fontWeight: 600, marginTop: 12, marginBottom: 4 }}>Short</div>
+            <div style={styles.settingsRow}>
+              <label style={styles.settingsLabel}>Stop Loss (%)</label>
+              <input type="number" value={shortStopLoss} step={0.5} min={0} placeholder="global" onChange={e => setShortStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+            </div>
+            <div style={styles.settingsRow}>
+              <label style={styles.settingsLabel}>Time Stop (bars)</label>
+              <input type="number" value={shortMaxBarsHeld} step={1} min={1} placeholder="global" onChange={e => setShortMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+            </div>
+            <div style={styles.settingsRow}>
+              <label style={styles.settingsLabel}>Position Size (%)</label>
+              <input type="number" value={shortPosSize} step={1} min={1} max={100} onChange={e => setShortPosSize(+e.target.value)} style={styles.settingsInput} />
+            </div>
+            <div style={{ ...styles.settingsRow, marginTop: 2 }}>
+              <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                <input type="checkbox" checked={shortTrailingEnabled} onChange={e => setShortTrailingEnabled(e.target.checked)} />
+                Trailing Stop
+              </label>
+            </div>
+            {shortTrailingEnabled && (
+              <div style={{ paddingLeft: 12, borderLeft: '2px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={styles.settingsRow}>
+                  <label style={styles.settingsLabel}>Type</label>
+                  <select value={shortTrailingConfig.type} onChange={e => setShortTrailingConfig(c => ({ ...c, type: e.target.value as 'pct' | 'atr' }))} style={styles.settingsInput}>
+                    <option value="pct">%</option>
+                    <option value="atr">ATR</option>
+                  </select>
+                </div>
+                <div style={styles.settingsRow}>
+                  <label style={styles.settingsLabel}>Value</label>
+                  <input type="number" value={shortTrailingConfig.value} step={0.5} min={0.1} onChange={e => setShortTrailingConfig(c => ({ ...c, value: +e.target.value }))} style={styles.settingsInput} />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Column 4: Execution */}
         <div style={styles.settingsGroup}>
           <div style={styles.groupTitle}>Execution</div>
           <div style={styles.settingsRow}>
@@ -522,9 +729,18 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             style={styles.strategySelect}
           >
             <option value="">Strategy: unsaved</option>
-            {sortedStrategies.map(s => (
-              <option key={s.name} value={s.name}>{s.pinned ? '★ ' : ''}{s.name}</option>
-            ))}
+            {(['regime', 'long', 'short'] as const).map(type => {
+              const group = sortedStrategies.filter(s => (s.strategyType ?? 'long') === type)
+              if (group.length === 0) return null
+              const label = type === 'regime' ? 'Regime' : type === 'short' ? 'Short' : 'Long'
+              return (
+                <optgroup key={type} label={label}>
+                  {group.map(s => (
+                    <option key={s.name} value={s.name}>{s.pinned ? '★ ' : ''}{s.name}</option>
+                  ))}
+                </optgroup>
+              )
+            })}
           </select>
           {activeStrategyName && (
             <button onClick={() => saveStrategy(activeStrategyName)} style={styles.strategyBtn}>Save</button>
@@ -604,7 +820,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         <div style={{ padding: '6px 16px 4px', borderBottom: '1px solid #21262d' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: regimeEnabled ? 8 : 0 }}>
             <button
-              onClick={() => setRegimeEnabled((v: boolean) => !v)}
+              onClick={() => setRegimeEnabled((v: boolean) => { if (!v) setActiveRuleTab('regime'); return !v })}
               style={{
                 fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, border: 'none',
                 cursor: 'pointer', textTransform: 'uppercase',
@@ -616,75 +832,26 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             </button>
             {regimeEnabled && (
               <span style={{ fontSize: 11, color: '#8b949e' }}>
-                {regimeConfig.indicator.toUpperCase()}({(regimeConfig.indicator_params as Record<string, unknown>).period as number}) {regimeConfig.condition} · {regimeConfig.timeframe} · {regimeConfig.min_bars}b · {regimeConfig.on_flip ?? 'close_only'}
+                {regimeBuyRules.length > 0
+                  ? `${regimeBuyRules.length} rule${regimeBuyRules.length > 1 ? 's' : ''} · ${regimeConfig.timeframe} · ${regimeConfig.min_bars}b · ${regimeConfig.on_flip ?? 'close_only'}`
+                  : regimeConfig.indicator
+                    ? `${regimeConfig.indicator.toUpperCase()}(${(regimeConfig.indicator_params as Record<string, unknown>).period as number}) ${regimeConfig.condition} · ${regimeConfig.timeframe} · ${regimeConfig.min_bars}b · ${regimeConfig.on_flip ?? 'close_only'}`
+                    : 'No regime rules configured'
+                }
               </span>
             )}
           </div>
-          {regimeEnabled && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingBottom: 6 }}>
-              <select
-                value={regimeConfig.timeframe}
-                onChange={e => setRegimeConfig(c => ({ ...c, timeframe: e.target.value }))}
-                style={{ fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}
-              >
-                {['1d', '1W', '1M'].map(tf => <option key={tf} value={tf}>{tf}</option>)}
-              </select>
-              <select
-                value={(regimeConfig.indicator_params as Record<string, unknown>).type as string ?? 'sma'}
-                onChange={e => setRegimeConfig(c => ({ ...c, indicator_params: { ...(c.indicator_params as Record<string, unknown>), type: e.target.value } }))}
-                style={{ fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}
-              >
-                {['sma', 'ema', 'rma'].map(t => <option key={t} value={t}>{t.toUpperCase()}</option>)}
-              </select>
-              <input
-                type="number" min={1} step={1}
-                value={(regimeConfig.indicator_params as Record<string, unknown>).period as number ?? 200}
-                onChange={e => setRegimeConfig(c => ({ ...c, indicator_params: { ...(c.indicator_params as Record<string, unknown>), period: +e.target.value } }))}
-                style={{ width: 52, fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}
-                placeholder="period"
-              />
-              <select
-                value={regimeConfig.condition}
-                onChange={e => setRegimeConfig(c => ({ ...c, condition: e.target.value as RegimeConfig['condition'] }))}
-                style={{ fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}
-              >
-                <option value="above">Price above</option>
-                <option value="below">Price below</option>
-                <option value="rising">Rising</option>
-                <option value="falling">Falling</option>
-              </select>
-              <label style={{ fontSize: 11, color: '#8b949e', display: 'flex', alignItems: 'center', gap: 4 }}>
-                On flip
-                <select
-                  value={regimeConfig.on_flip ?? 'close_only'}
-                  onChange={e => setRegimeConfig(c => ({ ...c, on_flip: e.target.value as 'close_only' | 'close_and_reverse' | 'hold' }))}
-                  style={{ fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}
-                >
-                  <option value="close_only">Close only</option>
-                  <option value="close_and_reverse">Close &amp; reverse</option>
-                  <option value="hold">Hold</option>
-                </select>
-              </label>
-              <label style={{ fontSize: 11, color: '#8b949e', display: 'flex', alignItems: 'center', gap: 4 }}>
-                Min bars
-                <input
-                  type="number" min={1} max={20} step={1}
-                  value={regimeConfig.min_bars}
-                  onChange={e => setRegimeConfig(c => ({ ...c, min_bars: +e.target.value }))}
-                  style={{ width: 38, fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}
-                />
-              </label>
-              {!stopLoss && direction === 'long' && (
-                <span style={{ fontSize: 10, color: '#f0883e', alignSelf: 'center' }}>⚠ Add a stop-loss to limit open-position risk during flat periods</span>
-              )}
+          {regimeEnabled && !stopLoss && direction === 'long' && (
+            <div style={{ paddingBottom: 6 }}>
+              <span style={{ fontSize: 10, color: '#f0883e' }}>⚠ Add a stop-loss to limit open-position risk during flat periods</span>
             </div>
           )}
         </div>
 
-        {/* B23: tab selector for single / long / short rule sets when regime is enabled */}
+        {/* B28/B23: tab selector for regime / long / short / single rule sets */}
         {regimeEnabled && (
           <div style={{ display: 'flex', gap: 4, padding: '6px 16px 0', borderBottom: '1px solid #21262d' }}>
-            {(['single', 'long', 'short'] as const).map(tab => (
+            {(['regime', 'long', 'short', 'single'] as const).map(tab => (
               <button key={tab} onClick={() => setActiveRuleTab(tab)}
                 style={{
                   fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, border: 'none',
@@ -694,13 +861,67 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
                     ? (tab === 'long' ? '#3fb950' : tab === 'short' ? '#f85149' : '#58a6ff')
                     : '#555',
                 }}>
-                {tab === 'long' ? '▲ Long' : tab === 'short' ? '▼ Short' : 'Single'}
+                {tab === 'long' ? '▲ Long' : tab === 'short' ? '▼ Short' : tab === 'regime' ? 'Regime Rules' : 'Single'}
               </button>
             ))}
           </div>
         )}
 
         <div style={styles.panels}>
+          {/* B28: Regime Rules panel */}
+          {regimeEnabled && activeRuleTab === 'regime' && (
+          <div style={styles.panel}>
+            <div style={styles.panelHeader}>
+              <span style={{ color: '#58a6ff', fontWeight: 600 }}>Regime active when</span>
+              <div style={styles.logicToggle}>
+                {(['AND', 'OR'] as const).map(l => (
+                  <button key={l} onClick={() => setRegimeLogic(l)} style={{ ...styles.logicBtn, ...(regimeLogic === l ? styles.logicBtnActive : {}) }}>{l}</button>
+                ))}
+              </div>
+              <button onClick={() => setRegimeBuyRules(r => [...r, emptyRule()])} style={styles.addBtn}><Plus size={13} /> Add</button>
+              <button onClick={() => setImportingTab(importingTab === 'regime' ? null : 'regime')} style={styles.addBtn}>Import</button>
+              {importingTab === 'regime' && (
+                <select autoFocus defaultValue=""
+                  onChange={e => { if (e.target.value) importFromStrategy('regime', e.target.value) }}
+                  onBlur={() => setTimeout(() => setImportingTab(null), 0)}
+                  style={{ fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}>
+                  <option value="">— pick strategy —</option>
+                  {sortedStrategies.map(s => (
+                    <option key={s.name} value={s.name}>{s.name}{s.interval ? ` (${s.interval})` : ''}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+            {/* Meta-controls: timeframe, on_flip, min_bars — shown ABOVE rules for clarity */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8, alignItems: 'center', borderBottom: '1px solid #21262d', paddingBottom: 8 }}>
+              <label style={{ fontSize: 11, color: '#8b949e' }}>Timeframe</label>
+              <select value={regimeConfig.timeframe} onChange={e => setRegimeConfig(c => ({ ...c, timeframe: e.target.value }))}
+                style={{ fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}>
+                {['1d', '1wk', '1mo', '4h', '1h', '15m'].map(tf => <option key={tf} value={tf}>{tf}</option>)}
+              </select>
+              <label style={{ fontSize: 11, color: '#8b949e', marginLeft: 4 }}>On flip</label>
+              <select value={regimeConfig.on_flip ?? 'close_only'} onChange={e => setRegimeConfig(c => ({ ...c, on_flip: e.target.value as RegimeConfig['on_flip'] }))}
+                style={{ fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}>
+                <option value="close_only">close only</option>
+                <option value="close_and_reverse">close &amp; reverse</option>
+                <option value="hold">none (hold through)</option>
+              </select>
+              <label style={{ fontSize: 11, color: '#8b949e', marginLeft: 4 }}>Min bars</label>
+              <input type="number" min={1} max={50} value={regimeConfig.min_bars ?? 1}
+                onChange={e => setRegimeConfig(c => ({ ...c, min_bars: +e.target.value }))}
+                style={{ width: 46, fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }} />
+            </div>
+            {regimeBuyRules.map((r, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <RuleRow rule={r}
+                  onChange={nr => setRegimeBuyRules(rules => rules.map((x, j) => j === i ? nr : x))}
+                  onDelete={() => setRegimeBuyRules(rules => rules.filter((_, j) => j !== i))} />
+                <span style={{ fontSize: 10, color: '#58a6ff', background: '#161b22', border: '1px solid #30363d', borderRadius: 3, padding: '1px 4px', whiteSpace: 'nowrap' }}>{regimeConfig.timeframe}</span>
+              </div>
+            ))}
+          </div>
+          )}
+
           {/* BUY — single mode or regime disabled */}
           {(!regimeEnabled || activeRuleTab === 'single') && (<>
           <div style={styles.panel}>
@@ -752,6 +973,18 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
                 ))}
               </div>
               <button onClick={() => setLongBuyRules(r => [...r, emptyRule()])} style={styles.addBtn}><Plus size={13} /> Add</button>
+              <button onClick={() => setImportingTab(importingTab === 'long' ? null : 'long')} style={styles.addBtn}>Import</button>
+              {importingTab === 'long' && (
+                <select autoFocus defaultValue=""
+                  onChange={e => { if (e.target.value) importFromStrategy('long', e.target.value) }}
+                  onBlur={() => setTimeout(() => setImportingTab(null), 0)}
+                  style={{ fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}>
+                  <option value="">— pick strategy —</option>
+                  {sortedStrategies.map(s => (
+                    <option key={s.name} value={s.name}>{s.name}{s.interval ? ` (${s.interval})` : ''}</option>
+                  ))}
+                </select>
+              )}
             </div>
             {longBuyRules.map((r, i) => (
               <RuleRow key={i} rule={r}
@@ -788,6 +1021,18 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
                 ))}
               </div>
               <button onClick={() => setShortBuyRules(r => [...r, emptyRule()])} style={styles.addBtn}><Plus size={13} /> Add</button>
+              <button onClick={() => setImportingTab(importingTab === 'short' ? null : 'short')} style={styles.addBtn}>Import</button>
+              {importingTab === 'short' && (
+                <select autoFocus defaultValue=""
+                  onChange={e => { if (e.target.value) importFromStrategy('short', e.target.value) }}
+                  onBlur={() => setTimeout(() => setImportingTab(null), 0)}
+                  style={{ fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}>
+                  <option value="">— pick strategy —</option>
+                  {sortedStrategies.map(s => (
+                    <option key={s.name} value={s.name}>{s.name}{s.interval ? ` (${s.interval})` : ''}</option>
+                  ))}
+                </select>
+              )}
             </div>
             {shortBuyRules.map((r, i) => (
               <RuleRow key={i} rule={r}
@@ -814,6 +1059,14 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
           </>)}
         </div>
 
+        {regimeEnabled && (longBuyRules.length === 0 || shortBuyRules.length === 0) && (
+          <div style={{ color: '#d29922', fontSize: 11, padding: '0 16px 4px' }}>
+            Both Long and Short tabs need rules for regime mode. {longBuyRules.length === 0 ? 'Long' : 'Short'} tab is empty.
+          </div>
+        )}
+        {importError && (
+          <div style={{ color: 'var(--accent-red)', fontSize: 11, padding: '0 16px 4px' }}>{importError}</div>
+        )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '8px 16px' }}>
           <button onClick={runBacktest} disabled={loading} style={styles.runBtn}>
             <Play size={14} fill="currentColor" /> {loading ? 'Running...' : 'Run Backtest'}

@@ -42,6 +42,15 @@ export function loadSavedStrategies(): SavedStrategy[] {
     for (const s of strategies) {
       if (s.buyRules) s.buyRules = s.buyRules.map(migrateRule)
       if (s.sellRules) s.sellRules = s.sellRules.map(migrateRule)
+      if (!s.strategyType) {
+        if (s.regime?.enabled === true) {
+          s.strategyType = 'regime'
+        } else if (s.direction === 'short') {
+          s.strategyType = 'short'
+        } else {
+          s.strategyType = 'long'
+        }
+      }
     }
     return strategies
   } catch { return [] }

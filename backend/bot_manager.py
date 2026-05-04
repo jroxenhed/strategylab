@@ -81,6 +81,22 @@ class BotConfig(BaseModel):
     short_sell_rules: Optional[list[Rule]] = None
     short_buy_logic: str = "AND"
     short_sell_logic: str = "AND"
+    # B25: per-direction settings (only used when regime is active)
+    long_stop_loss_pct: Optional[float] = None
+    short_stop_loss_pct: Optional[float] = None
+    long_trailing_stop: Optional[TrailingStopConfig] = None
+    short_trailing_stop: Optional[TrailingStopConfig] = None
+    long_max_bars_held: Optional[int] = None
+    short_max_bars_held: Optional[int] = None
+    long_position_size: Optional[float] = None
+    short_position_size: Optional[float] = None
+
+    @field_validator('long_position_size', 'short_position_size', mode='before')
+    @classmethod
+    def clamp_dir_position_size(cls, v):
+        if v is None:
+            return v
+        return max(0.01, min(1.0, v))
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +341,14 @@ class BotManager:
             short_sell_rules=config.short_sell_rules,
             short_buy_logic=config.short_buy_logic,
             short_sell_logic=config.short_sell_logic,
+            long_stop_loss_pct=getattr(config, 'long_stop_loss_pct', None),
+            short_stop_loss_pct=getattr(config, 'short_stop_loss_pct', None),
+            long_trailing_stop=getattr(config, 'long_trailing_stop', None),
+            short_trailing_stop=getattr(config, 'short_trailing_stop', None),
+            long_max_bars_held=getattr(config, 'long_max_bars_held', None),
+            short_max_bars_held=getattr(config, 'short_max_bars_held', None),
+            long_position_size=getattr(config, 'long_position_size', None),
+            short_position_size=getattr(config, 'short_position_size', None),
         )
 
         try:

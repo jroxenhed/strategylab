@@ -94,7 +94,12 @@ class BotRunner(RegimeMixin, ExitsMixin):
 
         # Compute effective capital (bidirectional for regime bots)
         current_capital = cfg.allocated_capital + self._bot_pnl(cfg, state)
-        effective_size = max(current_capital, 0) * cfg.position_size
+        # B25: use per-direction position_size when available
+        _dir_ps = (
+            (cfg.long_position_size if direction == 'long' else cfg.short_position_size)
+            if hasattr(cfg, 'long_position_size') else None
+        ) or cfg.position_size
+        effective_size = max(current_capital, 0) * _dir_ps
         if cfg.dynamic_sizing and cfg.dynamic_sizing.enabled:
             if state.consec_sl_count >= cfg.dynamic_sizing.consec_sls:
                 effective_size *= (cfg.dynamic_sizing.reduced_pct / 100.0)
@@ -105,12 +110,30 @@ class BotRunner(RegimeMixin, ExitsMixin):
             self._log("WARN", f"Position too small: {effective_size:.2f} / {price:.2f} = {qty} shares")
             return
 
+        # Resolve per-direction stop for OTO bracket
+        _sl = None
+        if hasattr(cfg, 'long_stop_loss_pct') and direction == 'long' and cfg.long_stop_loss_pct is not None:
+            _sl = cfg.long_stop_loss_pct
+        elif hasattr(cfg, 'short_stop_loss_pct') and direction == 'short' and cfg.short_stop_loss_pct is not None:
+            _sl = cfg.short_stop_loss_pct
+        else:
+            _sl = cfg.stop_loss_pct
+
+        # Resolve per-direction trailing stop for OTO condition
+        _ts = None
+        if hasattr(cfg, 'long_trailing_stop') and direction == 'long' and cfg.long_trailing_stop is not None:
+            _ts = cfg.long_trailing_stop
+        elif hasattr(cfg, 'short_trailing_stop') and direction == 'short' and cfg.short_trailing_stop is not None:
+            _ts = cfg.short_trailing_stop
+        else:
+            _ts = cfg.trailing_stop
+
         try:
             provider = get_trading_provider(cfg.broker)
             if entry_is_short:
                 order_req = BrokerOrderRequest(symbol=cfg.symbol.upper(), qty=qty, side="sell")
-            elif cfg.stop_loss_pct and not cfg.trailing_stop:
-                stop_price = round(price * (1 - cfg.stop_loss_pct / 100), 2)
+            elif _sl and not _ts:
+                stop_price = round(price * (1 - _sl / 100), 2)
                 order_req = BrokerOrderRequest(
                     symbol=cfg.symbol.upper(), qty=qty, side="buy",
                     order_type="stop", stop_price=stop_price,

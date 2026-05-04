@@ -4,9 +4,16 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
-## 2026-05-04 (overnight build 10)
+## 2026-05-04 (overnight build 10 + interactive session)
 
 - **[C23](TODO.md#c--strategy-summary--analytics)** Sweep error banner — replaced plain `color: red` div with a styled banner (tinted background + red border + ✕ icon) when the sensitivity sweep fails. The `apiErrorDetail()` helper already extracted the error string; only the presentation changed.
+- **[C24](TODO.md#c--strategy-summary--analytics)** Direction-aware analytics — `sell_trades` filter includes both "sell"/"cover" exits. Trades tab column headers adapt to "Entry"/"Exit" for short strategies.
+- **[B26](TODO.md#b--backtester-engine)** Sweep from rule row — TrendingUp button on numeric-threshold rule rows pre-fills Sensitivity tab.
+- **PR #16 review fixes** — stale sweepInit cleared after consumption, zero-value sweep pre-fill handled (center=0 → [-1,1]), partial sweep warning with amber banner (SweepResponse model), equity curve duplicate timestamp dedup.
+- **[B28](TODO.md#b--backtester-engine)** Regime rules as full rule sets — `RegimeConfig` gains `rules[]` + `logic` fields. Dual-path in `_compute_regime_series()` and `_eval_regime_direction()`: rules-based path calls `eval_rules()` on HTF data, legacy single-indicator path preserved. UI: four-tab layout (Regime Rules / Long / Short / Single), timeframe controls above rules, timeframe badge per rule row.
+- **[B24](TODO.md#b--backtester-engine)** Regime strategy import — per-tab "Import" button copies rules from saved strategies. Direction-aware fallback chain (prefers `longBuyRules` over `buyRules`). Confirm dialog, empty-rules guard, onBlur dismiss.
+- **[B27](TODO.md#b--backtester-engine)** Strategy preset categories — `strategyType` field on SavedStrategy (long/short/regime), derived at save time, back-filled on load. Strategy dropdown grouped via `<optgroup>`.
+- **[B25](TODO.md#b--backtester-engine)** Per-direction settings — 8 flat fields on StrategyRequest + BotConfig. Four `_dir_*` helpers in backtest loop, per-direction counters (`consec_sl_count_by_dir`, `skip_remaining_by_dir`) with `exited_direction` capture. `exits.py` resolves per-direction values in both methods. OTO bracket uses per-direction stop. UI: Per-Direction settings panel gated on regime, trailing stop exposes type+value only (source/activate stays global).
 
 - **[C24](TODO.md#c--strategy-summary--analytics)** Direction-aware analytics — (1) `sell_trades` filter in `backtest.py` now includes both `"sell"` and `"cover"` exits (was gated on `req.direction`), fixing `num_trades` and `win_rate` for regime `close_and_reverse` strategies; (2) Trades tab column headers in `Results.tsx` adapt to "Entry"/"Exit" when short or mixed-direction trades detected. Audited all other analytics: streaks, MC, rolling, hold time, Kelly already used direction-agnostic PnL-sign logic.
 

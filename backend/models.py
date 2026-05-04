@@ -41,6 +41,9 @@ class RegimeConfig(BaseModel):
     condition: str = "above"        # above | below | rising | falling
     min_bars: int = 3               # consecutive bars required before regime flips
     on_flip: str = "close_only"     # close_only | close_and_reverse | hold
+    # B28: full rule set path (when non-empty, overrides single-indicator path above)
+    rules: list[Rule] = Field(default_factory=list)
+    logic: str = "AND"              # AND | OR
 
 
 class StrategyRequest(BaseModel):
@@ -79,8 +82,24 @@ class StrategyRequest(BaseModel):
     debug: bool = False
     extended_hours: bool = False
     regime: Optional[RegimeConfig] = None
+    # B25: per-direction settings (only used when b23_mode is active)
+    long_stop_loss_pct: Optional[float] = None
+    short_stop_loss_pct: Optional[float] = None
+    long_trailing_stop: Optional[TrailingStopConfig] = None
+    short_trailing_stop: Optional[TrailingStopConfig] = None
+    long_max_bars_held: Optional[int] = None
+    short_max_bars_held: Optional[int] = None
+    long_position_size: Optional[float] = None
+    short_position_size: Optional[float] = None
 
     @field_validator('position_size')
     @classmethod
     def clamp_position_size(cls, v: float) -> float:
+        return max(0.01, min(1.0, v))
+
+    @field_validator('long_position_size', 'short_position_size', mode='before')
+    @classmethod
+    def clamp_dir_position_size(cls, v):
+        if v is None:
+            return v
         return max(0.01, min(1.0, v))
