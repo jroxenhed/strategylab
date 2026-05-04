@@ -72,6 +72,7 @@
 - [x] **B28** Regime rules as full rule sets — RegimeConfig gains `rules[]` + `logic` fields. `_compute_regime_series()` and `_eval_regime_direction()` dual-path: rules-based (eval_rules on HTF) or legacy single-indicator. UI: four tabs (Regime Rules / Long / Short / Single), timeframe badge per rule row. [medium]
 - [x] **B25** Per-direction settings — 8 flat fields on StrategyRequest/BotConfig (long/short × stop_loss/trailing_stop/max_bars_held/position_size). Backtest uses _dir_* helpers + per-direction counters. Bot exits.py resolves in both methods. OTO bracket uses per-direction stop. [medium]
 - [x] **B27** Strategy preset categories — SavedStrategy gains `strategyType` (long/short/regime), back-filled on load, grouped via `<optgroup>` in strategy dropdown. [easy]
+- [ ] **B29** Regime setup UX overhaul — the regime builder (B28 rules + B23 dual rule sets + B25 per-direction settings + B24 import + close_only/close_and_reverse/hold semantics) is too complex to use intuitively. Needs a guided flow or wizard that makes the interaction between regime rules, long/short entry rules, on_flip behavior, and per-direction settings obvious. Clarify what "close_only" means in b23_mode (both sides still trade independently). [medium]
 
 ## C — Strategy Summary & Analytics
 
