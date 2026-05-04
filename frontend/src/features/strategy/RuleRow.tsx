@@ -1,4 +1,4 @@
-import { Trash2, VolumeX, Volume2, Eye } from 'lucide-react'
+import { Trash2, VolumeX, Volume2, Eye, TrendingUp } from 'lucide-react'
 import type { Rule } from '../../shared/types'
 
 export const INDICATORS = ['macd', 'rsi', 'price', 'ma', 'bb', 'atr', 'atr_pct', 'volume', 'stochastic', 'adx'] as const
@@ -174,7 +174,7 @@ function encodeParam(mode: string, period?: number, type?: string, extra?: { std
   return undefined
 }
 
-export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onChange: (r: Rule) => void; onDelete: () => void }) {
+export default function RuleRow({ rule, onChange, onDelete, onSweep }: { rule: Rule; onChange: (r: Rule) => void; onDelete: () => void; onSweep?: () => void }) {
   const muted = rule.muted ?? false
   const conditions = CONDITIONS[rule.indicator] || []
   const canParam = CAN_USE_PARAM[rule.indicator]?.includes(rule.condition)
@@ -506,6 +506,11 @@ export default function RuleRow({ rule, onChange, onDelete }: { rule: Rule; onCh
             style={{ ...styles.ruleSelect, width: 58 }}
           />
         </>
+      )}
+      {onSweep && needsValue && typeof rule.value === 'number' && (
+        <button onClick={onSweep} title="Sweep this value in Sensitivity tab"
+          style={{ color: '#8b949e', padding: '4px 6px', cursor: 'pointer', background: 'transparent', border: 'none', lineHeight: 1 }}
+        ><TrendingUp size={13} /></button>
       )}
       <button
         onClick={() => onChange({ ...rule, visualize: !visualize })}

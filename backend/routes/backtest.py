@@ -705,8 +705,8 @@ def run_backtest(req: StrategyRequest):
         drawdown = (eq_series - peak) / peak
         max_drawdown = float(drawdown.min() * 100)
 
-        exit_type = "cover" if req.direction == "short" else "sell"
-        sell_trades = [t for t in trades if t["type"] == exit_type]
+        # Include both exit types so regime close_and_reverse (mixed long/short) counts correctly
+        sell_trades = [t for t in trades if t["type"] in ("sell", "cover")]
         winning = [t for t in sell_trades if t.get("pnl", 0) > 0]
         win_rate = len(winning) / len(sell_trades) * 100 if sell_trades else 0
 

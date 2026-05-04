@@ -68,6 +68,7 @@ export default function App() {
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(_cachedBacktest?.result ?? null)
   const [lastRequest, setLastRequest] = useState<StrategyRequest | null>(_cachedBacktest?.request ?? null)
   const [resultsTab, setResultsTab] = useState<ResultsTab>('summary')
+  const [sweepInit, setSweepInit] = useState<{ path: string; centerVal: number } | null>(null)
   const [macroBucket, setMacroBucket] = useState<string | null>(null)
   const [showBaseline, setShowBaseline] = useState(false)
   const [logScale, setLogScale] = useState(false)
@@ -284,6 +285,10 @@ export default function App() {
                               setBacktestResult(result)
                               if (req) setLastRequest(req)
                             }}
+                            onSweep={(path, centerVal) => {
+                              setSweepInit({ path, centerVal })
+                              setResultsTab('sensitivity')
+                            }}
                             dataSource={dataSource}
                             settingsPortalId="strategy-settings-portal"
                             extendedHours={extendedHours}
@@ -303,6 +308,7 @@ export default function App() {
                               onLogScaleChange={setLogScale}
                               viewInterval={viewInterval}
                               backtestInterval={interval}
+                              sweepInit={sweepInit}
                             />
                           )}
                         </>

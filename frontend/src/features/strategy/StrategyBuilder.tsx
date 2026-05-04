@@ -15,6 +15,7 @@ interface Props {
   end: string
   interval: string
   onResult: (r: BacktestResult | null, req?: StrategyRequest) => void
+  onSweep?: (path: string, centerVal: number) => void
   dataSource: DataSource
   settingsPortalId?: string
   extendedHours?: boolean
@@ -37,7 +38,7 @@ function persistSavedStrategies(strategies: SavedStrategy[]) {
   localStorage.setItem(_SAVED_KEY, JSON.stringify(strategies))
 }
 
-export default function StrategyBuilder({ ticker, start, end, interval, onResult, dataSource, settingsPortalId, extendedHours }: Props) {
+export default function StrategyBuilder({ ticker, start, end, interval, onResult, onSweep, dataSource, settingsPortalId, extendedHours }: Props) {
   const saved = useState(() => loadStrategy())[0]
 
   useEffect(() => {
@@ -715,7 +716,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             {buyRules.map((r, i) => (
               <RuleRow key={i} rule={r}
                 onChange={nr => setBuyRules(rules => rules.map((x, j) => j === i ? nr : x))}
-                onDelete={() => setBuyRules(rules => rules.filter((_, j) => j !== i))} />
+                onDelete={() => setBuyRules(rules => rules.filter((_, j) => j !== i))}
+                onSweep={onSweep && typeof r.value === 'number' ? () => onSweep(`buy_rule_${i}_value`, r.value as number) : undefined} />
             ))}
           </div>
 
@@ -733,7 +735,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             {sellRules.map((r, i) => (
               <RuleRow key={i} rule={r}
                 onChange={nr => setSellRules(rules => rules.map((x, j) => j === i ? nr : x))}
-                onDelete={() => setSellRules(rules => rules.filter((_, j) => j !== i))} />
+                onDelete={() => setSellRules(rules => rules.filter((_, j) => j !== i))}
+                onSweep={onSweep && typeof r.value === 'number' ? () => onSweep(`sell_rule_${i}_value`, r.value as number) : undefined} />
             ))}
           </div>
           </>)}

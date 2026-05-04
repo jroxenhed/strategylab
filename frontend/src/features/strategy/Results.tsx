@@ -71,6 +71,7 @@ interface Props {
   onLogScaleChange: (v: boolean) => void
   viewInterval: string
   backtestInterval: string
+  sweepInit?: { path: string; centerVal: number } | null
 }
 
 function autoDefaultBucket(equityLength: number): string {
@@ -80,7 +81,7 @@ function autoDefaultBucket(equityLength: number): string {
   return 'M'
 }
 
-export default function Results({ result, mainChart, activeTab, onTabChange, bucket, onBucketChange, lastRequest, showBaseline, onShowBaselineChange, logScale, onLogScaleChange, viewInterval, backtestInterval }: Props) {
+export default function Results({ result, mainChart, activeTab, onTabChange, bucket, onBucketChange, lastRequest, showBaseline, onShowBaselineChange, logScale, onLogScaleChange, viewInterval, backtestInterval, sweepInit }: Props) {
   const { summary, trades, equity_curve, signal_trace } = result
   const [tzMode] = useTimezone()
   const chartRef = useRef<HTMLDivElement>(null)
@@ -558,12 +559,18 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
           {sells.length === 0 ? (
             <div style={{ color: '#8b949e', fontSize: 12, padding: 8 }}>No completed trades</div>
           ) : (<>
+            {(() => {
+              const hasMixedDirection = sells.some(t => t.type === 'cover') && sells.some(t => t.type === 'sell')
+              const allShort = sells.length > 0 && sells.every(t => t.type === 'cover')
+              const entryLabel = (hasMixedDirection || allShort) ? 'Entry' : 'Buy'
+              const exitLabel = (hasMixedDirection || allShort) ? 'Exit' : 'Sell'
+              return (
             <div style={{ ...styles.tradeRow, borderBottom: '1px solid #30363d', marginBottom: 2 }}>
               <span style={{ ...styles.tradeCell, width: 24, color: '#8b949e', fontSize: 10 }}>#</span>
-              <span style={{ ...styles.tradeCell, width: 115, color: '#8b949e', fontSize: 10 }}>Buy</span>
-              <span style={{ ...styles.tradeCell, width: 65, color: '#8b949e', fontSize: 10 }}>Buy $</span>
-              <span style={{ ...styles.tradeCell, width: 115, color: '#8b949e', fontSize: 10 }}>Sell</span>
-              <span style={{ ...styles.tradeCell, width: 65, color: '#8b949e', fontSize: 10 }}>Sell $</span>
+              <span style={{ ...styles.tradeCell, width: 115, color: '#8b949e', fontSize: 10 }}>{entryLabel}</span>
+              <span style={{ ...styles.tradeCell, width: 65, color: '#8b949e', fontSize: 10 }}>{entryLabel} $</span>
+              <span style={{ ...styles.tradeCell, width: 115, color: '#8b949e', fontSize: 10 }}>{exitLabel}</span>
+              <span style={{ ...styles.tradeCell, width: 65, color: '#8b949e', fontSize: 10 }}>{exitLabel} $</span>
               <span style={{ ...styles.tradeCell, width: 45, color: '#8b949e', fontSize: 10 }}>Shares</span>
               <span style={{ ...styles.tradeCell, width: 60, color: '#8b949e', fontSize: 10 }}>P&L</span>
               <span style={{ ...styles.tradeCell, width: 50, color: '#8b949e', fontSize: 10 }}>Return</span>
@@ -572,6 +579,8 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
               <span style={{ ...styles.tradeCell, width: 50, color: '#8b949e', fontSize: 10 }}>Borrow</span>
               <span style={{ ...styles.tradeCell, width: 40, color: '#8b949e', fontSize: 10 }}>Exit</span>
             </div>
+              )
+            })()}
             {sells.map((sell, i) => {
               const buy = trades.filter(t => t.type === 'buy' || t.type === 'short')[i]
               const win = (sell.pnl ?? 0) >= 0
@@ -642,7 +651,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
 
       {activeTab === 'sensitivity' && lastRequest && (
         <div style={{ padding: '0 16px 16px' }}>
-          <SensitivityPanel lastRequest={lastRequest} />
+          <SensitivityPanel lastRequest={lastRequest} sweepInit={sweepInit} />
         </div>
       )}
 

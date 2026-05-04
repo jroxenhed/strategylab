@@ -136,9 +136,10 @@ function colorFor(value: number, min: number, max: number, highIsGood: boolean):
 
 interface Props {
   lastRequest: StrategyRequest
+  sweepInit?: { path: string; centerVal: number } | null
 }
 
-export default function SensitivityPanel({ lastRequest }: Props) {
+export default function SensitivityPanel({ lastRequest, sweepInit }: Props) {
   const paramOptions = useMemo(() => buildParamOptions(lastRequest), [lastRequest])
 
   const [selectedPath, setSelectedPath] = useState<string>(paramOptions[0]?.path ?? '')
@@ -158,6 +159,19 @@ export default function SensitivityPanel({ lastRequest }: Props) {
       setSelectedPath(paramOptions[0].path)
     }
   }, [paramOptions])
+
+  // Apply sweep init from rule row shortcut
+  useEffect(() => {
+    if (!sweepInit) return
+    const opt = paramOptions.find(o => o.path === sweepInit.path)
+    if (!opt) return
+    const center = sweepInit.centerVal
+    setSelectedPath(sweepInit.path)
+    setMinVal((center * 0.5).toFixed(2))
+    setMaxVal((center * 1.5).toFixed(2))
+    setSteps('9')
+    setError('')
+  }, [sweepInit])
 
   // Reset inputs when param selection changes
   function handleParamChange(path: string) {
@@ -287,7 +301,12 @@ export default function SensitivityPanel({ lastRequest }: Props) {
         </button>
       </div>
 
-      {error && <div style={{ color: '#ef5350', fontSize: 12, marginBottom: 8 }}>{error}</div>}
+      {error && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, padding: '8px 10px', marginBottom: 8, background: 'rgba(239,83,80,0.1)', border: '1px solid rgba(239,83,80,0.3)', borderRadius: 4, color: '#ef5350', fontSize: 12 }}>
+          <span style={{ flexShrink: 0, fontWeight: 700 }}>✕</span>
+          <span>{error}</span>
+        </div>
+      )}
 
       {/* Sensitivity sparkline — return% vs param value */}
       {results && results.length > 1 && (() => {

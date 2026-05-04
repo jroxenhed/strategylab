@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*111 / 136 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*114 / 136 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -69,9 +69,9 @@
 - [x] **B21a** Regime config not restored on page refresh — added `regime: { ...regimeConfig, enabled: regimeEnabled }` to the localStorage persistence effect + dependency array in StrategyBuilder.tsx. On refresh, `loadStrategy()` now returns the saved regime config which initialises `regimeEnabled`/`regimeConfig` state correctly.
 - [x] **B23** Regime: dual rule sets — `long_buy_rules`/`long_sell_rules`/`short_buy_rules`/`short_sell_rules` + `*_logic` fields added to `StrategyRequest` (models.py + TS type). `b23_mode` detection in `run_backtest`: when regime enabled + both long and short buy rules present, routes entries to long or short rule set based on `curr_regime_active`, sets `position_direction` directly from regime state, and routes exits to matching sell rules. Frontend: 8 new state vars in StrategyBuilder with `[]` defaults (not `[emptyRule()]` — avoids accidental b23 activation); Single/▲Long/▼Short tab bar under regime section; dual rules sent in request when regime enabled and both long+short buy rules non-empty. Prereq: B22. [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
 - [ ] **B24** Regime dual strategy import — instead of building long/short rules from scratch in the dual tabs, allow importing from saved strategies. Pick "Long side: use [saved strategy X]" + "Short side: use [saved strategy Y]", each already validated and backtested independently. Avoids duplicating rule design work and enables composition of proven strategies. [medium]
-- [ ] **B28** Regime rules as full rule sets — replace bespoke single-indicator `RegimeConfig` (indicator/condition/min_bars) with the same rule builder used for entry/exit. Regime evaluation calls `eval_rules()` with AND/OR logic, enabling multi-condition regimes (e.g. "EMA(21) above EMA(89) AND ADX > 20"). UI becomes three tabs: Regime Rules / Long Rules / Short Rules. `min_bars` smoothing stays as a meta-filter on top of rule evaluation result. Backend: `RegimeConfig` gains `rules[]` + `logic` fields, `_compute_regime_series()` delegates to `eval_rules()`. [medium]
+- [ ] **B28** Regime rules as full rule sets — replace bespoke single-indicator `RegimeConfig` (indicator/condition/min_bars) with the same rule builder used for entry/exit. Regime evaluation calls `eval_rules()` with AND/OR logic, enabling multi-condition regimes (e.g. "EMA(21) above EMA(89) AND ADX > 20"). UI becomes three tabs: Regime Rules / Long Rules / Short Rules. `min_bars` smoothing stays as a meta-filter on top of rule evaluation result. Backend: `RegimeConfig` gains `rules[]` + `logic` fields, `_compute_regime_series()` delegates to `eval_rules()`. [medium] [next]
 - [ ] **B25** Per-direction settings — stop loss, trailing stop, position size, borrow rate, and other risk parameters should be configurable independently per direction in a regime strategy. A volatile short strategy needs different stops and sizing than a trend-following long. Currently all settings are shared. [medium]
-- [ ] **B27** Strategy preset categories — tag saved strategies by type (long/short/regime) and group them in the strategy dropdown. Makes it easier to find and compose strategies as the library grows. [easy]
+- [ ] **B27** Strategy preset categories — tag saved strategies by type (long/short/regime) and group them in the strategy dropdown. Makes it easier to find and compose strategies as the library grows. [easy] [next]
 
 ## C — Strategy Summary & Analytics
 
@@ -96,15 +96,12 @@
 - [x] **C18** Parameter sensitivity sweep — re-run backtest with ±N variations of one indicator param, show results in a table/heatmap. Answers "how fragile is this edge?" `POST /api/backtest/sweep` + SensitivityPanel in Results (Sensitivity tab). [medium]
 - [x] **C20** Equity curve chart blank — root cause found and fixed: `bucket && macroData ? <MacroEquityChart> : <div ref={chartRef}>` had a blind spot when a macro bucket is selected but data is still loading. The chartRef div rendered (blank 250px area) but the effect returned early (`bucket !== null`). Fixed to two-level ternary: `bucket ? (macroData ? <MacroEquityChart> : <Loading>) : <div ref={chartRef}>`. chartRef div now only mounts when bucket === null.
 - [x] **C21** Sweep param_path bug — (1) fixed error swallowing in sweep loop (propagate HTTPException instead of returning zeros); (2) added `rule.params` sweep support for indicator params (MA/RSI/Stochastic/ADX periods etc.) in backend `_apply_param` + frontend `buildParamOptions`. Also fixed max_drawdown color inversion (highIsGood=true for negative series), integer rounding for period params in linspace, and stale selectedPath reset when lastRequest changes.
-- [ ] **C23** Sweep: surface `run_backtest` error message in SensitivityPanel when sweep fails — currently the UI just shows nothing if sweep returns HTTP 4xx/5xx after C21's error-propagation fix. Show an error banner with the detail string. [easy] [next]
+- [x] **C23** Sweep: surface `run_backtest` error message in SensitivityPanel when sweep fails — currently the UI just shows nothing if sweep returns HTTP 4xx/5xx after C21's error-propagation fix. Show an error banner with the detail string. [easy]
 - [ ] **C22** Auto-optimizer — run sensitivity sweeps automatically across multiple parameters, find the combination that maximizes Sharpe / return / win rate. Like C18 but multi-dimensional: sweep param A, pick best, sweep param B, iterate. Show a ranked table of top N parameter combos. Could use grid search for small spaces or Bayesian optimization for larger ones. The "push button, get optimized strategy" workflow. [large]
-- [ ] **C24** Regime/short direction-aware analytics — the entire Results analytics pipeline assumes long-only trades. With regime `close_and_reverse` strategies, short/cover trades are miscounted or invisible across multiple tabs. Systematic pass needed: [medium] [next]
-  - Summary: "Trades: 0" — stat counter only counts buy/sell pairs, misses short/cover
-  - Trades tab: columns labelled "Buy $"/"Sell $" should adapt to "Entry $"/"Exit $" or show direction column
-  - Session analytics: win rate computed as `sell > buy`, wrong for shorts where `entry > exit` is a win
-  - Win/Loss streaks: all shorts counted as losses (same direction bug)
-  - Monte Carlo, Rolling, Hold Time tabs: audit for same assumption
-  - Kelly sizing, EV/PF: verify P&L sign handling for shorts
+- [x] **C24** Regime/short direction-aware analytics — the entire Results analytics pipeline assumes long-only trades. With regime `close_and_reverse` strategies, short/cover trades are miscounted or invisible across multiple tabs. Systematic pass: [medium]
+  - Fixed: `sell_trades` in backtest.py now includes both "sell" and "cover" exits (fixes num_trades, win_rate for mixed-direction strategies)
+  - Fixed: Trades tab columns adapt to "Entry"/"Exit" labels when short/mixed direction trades present
+  - Verified correct: session analytics (PnL-sign-based), win/loss streaks, MC, rolling, hold time all already filtered both exit types
 - [x] **C19** Backtest result persistence — save/load backtest results to localStorage. Auto-save on each backtest; auto-restore on page load when ticker/dates/interval match saved settings. Graceful fallback on quota exceeded. [medium]
 
 ## D — Bots (live trading)
@@ -186,4 +183,4 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] **F22** Surface `was_running` in BotCard UI — F17 persists the flag to bots.json but nothing in the UI reads it. Show a small warning badge (e.g. "⚡ Was running") on stopped bots with `was_running=True`, prompting restart decision. Requires adding `was_running` to `BotSummary` API response. [easy]
 - [x] **F23** Add `was_running` to frontend `BotSummary` TypeScript type + `list_bots()` API response — shipped in PR #12 review fixes. [easy]
 - [x] **C18b** Sensitivity sweep sparkline — add a mini line chart above the results table showing `total_return_pct` vs `param_value`. Makes the sensitivity curve shape immediately visible (cliff-edge vs smooth plateau). Pure frontend from existing `SweepPoint[]` data. [easy]
-- [ ] **B26** Sweep from rule row — "Sweep this value" button on rule rows in StrategyBuilder with a numeric threshold, automatically selects the matching `param_path` in the Sensitivity tab and suggests a ±50% range. Eliminates manual tab-switching and path selection. [medium] [next]
+- [x] **B26** Sweep from rule row — "Sweep this value" button on rule rows in StrategyBuilder with a numeric threshold, automatically selects the matching `param_path` in the Sensitivity tab and suggests a ±50% range. Eliminates manual tab-switching and path selection. [medium]
