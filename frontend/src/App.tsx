@@ -309,6 +309,7 @@ export default function App() {
                               viewInterval={viewInterval}
                               backtestInterval={interval}
                               sweepInit={sweepInit}
+                              onSweepConsumed={() => setSweepInit(null)}
                             />
                           )}
                         </>
