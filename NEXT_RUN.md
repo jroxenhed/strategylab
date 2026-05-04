@@ -35,23 +35,23 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-05-03 (build 9)
-**Branch:** `claude/sharp-allen-6THKO`
+**Date:** 2026-05-04 (build 10)
+**Branch:** `claude/sharp-allen-V5KsM`
+**PR:** https://github.com/jroxenhed/strategylab/pull/16
 
 **Shipped:**
-- **C21** Sensitivity sweep param bug — fixed error swallowing (propagate HTTPException instead of zero rows), added `rule.params` sweep support for MA/RSI/Stochastic/ADX/BB periods in `_apply_param` (backend) and `buildParamOptions` (frontend). 3 P2s auto-fixed: max_drawdown color direction, integer rounding for period linspace, stale selectedPath reset.
-- **C20** Equity curve blank — fixed. `bucket && macroData` ternary had a blind spot during macro data loading. Two-level ternary ensures chartRef div only mounts when `bucket === null`.
+- **C23** Sweep error banner — styled red banner replaces plain div when sweep HTTP call fails.
+- **C24** Direction-aware analytics — `sell_trades` filter includes both "sell"/"cover" exits (fixes num_trades + win_rate for regime close_and_reverse). Trades tab column headers adapt to "Entry"/"Exit" for short strategies.
+- **B26** Sweep from rule row — TrendingUp button on numeric-threshold rule rows pre-fills Sensitivity tab (path + ±50% range) and switches to it automatically.
 
 **Review findings:**
-- Self-review pass on C21: 3 P2 findings, 0 P0/P1. All P2s auto-fixed.
-- Build clean: `npm run build` passes, `ast.parse` clean on backtest_sweep.py.
+- 0 P0, 0 P1, 1 P2 (value=0 degenerate sweep range — not fixed, acceptable edge case).
+- Build clean: `npm run build` passes, `ast.parse` clean on backtest.py.
+- Smoke test: uvicorn not in PATH — not run. Backend change is a 2-line filter widening.
 
-**Deferred:**
-- D24b: Regime bot visual verification — needs live paper-trading QA.
-- D24d: HTF cache staleness — 1-hour TTL can lag regime direction.
-- F22-badge for error-status bots — P3, product decision.
+**Not visually verified:**
+- C24: Run a regime close_and_reverse strategy and check num_trades + Trades tab column labels.
+- B26: Click TrendingUp on an RSI rule row, verify Sensitivity tab opens with correct path + range pre-filled.
+- C23: Trigger a sweep error (e.g., invalid param_path) and verify the styled banner appears.
 
-**Review concerns flagged:**
-- C21 changes not visually verified — test sensitivity sweep with MA rule: `period` should appear as sweep option, values should be integers.
-
-**Next up:** C24 [medium] (regime/short direction-aware analytics — priority), C23 [easy] (sweep error banner), A8d [medium] (indicator resample on coarser view), B26 [medium] (sweep from rule row).
+**Next up:** B27 [easy] (strategy preset categories), B28 [medium] (regime rules as full rule sets).
