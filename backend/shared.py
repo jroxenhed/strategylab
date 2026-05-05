@@ -365,8 +365,8 @@ _TTL_DAILY_LIVE = 300.0
 
 
 def _fetch_ttl(end: str, interval: str) -> float:
-    from datetime import date
-    if end >= date.today().isoformat():
+    from datetime import datetime, timezone
+    if end >= datetime.now(timezone.utc).date().isoformat():
         if interval in _INTRADAY_INTERVALS:
             return _TTL_LIVE
         return _TTL_DAILY_LIVE

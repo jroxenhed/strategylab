@@ -121,7 +121,7 @@ export default function StrategyComparison({ ticker, start, end, interval, dataS
       toRun.forEach((s, i) => colorMap.set(s.name, COLORS[i] ?? COLORS[0]))
 
       const promises = toRun.map(async (s, i) => {
-        const hasRegime = s.regime?.enabled && (s.longBuyRules?.length ?? 0) > 0
+        const hasRegime = s.strategyType === 'regime' || (s.regime?.enabled && ((s.longBuyRules?.length ?? 0) > 0 || (s.shortBuyRules?.length ?? 0) > 0))
         const req: Record<string, unknown> = {
           ticker, start, end, interval,
           buy_rules: s.buyRules,
@@ -158,8 +158,8 @@ export default function StrategyComparison({ ticker, start, end, interval, dataS
           short_stop_loss_pct: s.shortStopLoss !== '' && (s.shortStopLoss as number) > 0 ? s.shortStopLoss : undefined,
           long_max_bars_held: s.longMaxBarsHeld !== '' && (s.longMaxBarsHeld as number) > 0 ? s.longMaxBarsHeld : undefined,
           short_max_bars_held: s.shortMaxBarsHeld !== '' && (s.shortMaxBarsHeld as number) > 0 ? s.shortMaxBarsHeld : undefined,
-          long_position_size: s.longPosSize ? s.longPosSize / 100 : undefined,
-          short_position_size: s.shortPosSize ? s.shortPosSize / 100 : undefined,
+          long_position_size: s.longPosSize != null ? s.longPosSize / 100 : undefined,
+          short_position_size: s.shortPosSize != null ? s.shortPosSize / 100 : undefined,
           long_trailing_stop: s.longTrailingEnabled ? s.longTrailingConfig : undefined,
           short_trailing_stop: s.shortTrailingEnabled ? s.shortTrailingConfig : undefined,
         }
