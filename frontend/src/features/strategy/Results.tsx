@@ -73,6 +73,7 @@ interface Props {
   backtestInterval: string
   sweepInit?: { path: string; centerVal: number } | null
   onSweepConsumed?: () => void
+  mainTimestamps?: (string | number)[]
 }
 
 function autoDefaultBucket(equityLength: number): string {
@@ -82,7 +83,7 @@ function autoDefaultBucket(equityLength: number): string {
   return 'M'
 }
 
-export default function Results({ result, mainChart, activeTab, onTabChange, bucket, onBucketChange, lastRequest, showBaseline, onShowBaselineChange, logScale, onLogScaleChange, viewInterval, backtestInterval, sweepInit, onSweepConsumed }: Props) {
+export default function Results({ result, mainChart, activeTab, onTabChange, bucket, onBucketChange, lastRequest, showBaseline, onShowBaselineChange, logScale, onLogScaleChange, viewInterval, backtestInterval, sweepInit, onSweepConsumed, mainTimestamps }: Props) {
   const { summary, trades, equity_curve, signal_trace } = result
   const [tzMode] = useTimezone()
   const chartRef = useRef<HTMLDivElement>(null)
@@ -111,11 +112,12 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       height: chartRef.current.clientHeight || 185,
       layout: { background: { type: ColorType.Solid, color: '#0d1117' }, textColor: '#8b949e' },
       grid: { vertLines: { color: '#1c2128' }, horzLines: { color: '#1c2128' } },
-      timeScale: { borderColor: '#30363d' },
+      timeScale: { borderColor: '#30363d', timeVisible: true },
       rightPriceScale: {
         borderColor: '#30363d',
         mode: logScale && !showBaseline ? 1 : 0, // 1 = logarithmic (native), 0 = normal
       },
+      leftPriceScale: { visible: false, borderColor: '#30363d' },
     })
 
     // Prepare equity data, downsampled to match chart view interval.
@@ -194,7 +196,53 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       return Array.from(seen.values())
     }
 
-    series.setData(dedup(equityData.map(d => ({ time: d.time, value: d.value }))))
+    // Build equity data with exact same bar positions as the main chart.
+    // For each main chart timestamp, emit the equity value if it exists,
+    // otherwise a whitespace entry. This ensures matching bar counts for
+    // logical range sync (same pattern as MACD/RSI sub-panes).
+    const equityByTime = new Map<any, number>()
+    for (const d of equityData) equityByTime.set(d.time, d.value)
+
+    let resolvedTimes: any[] | null = null
+    let seriesData: any[]
+    if (mainTimestamps && mainTimestamps.length > 0) {
+      // Transform main chart timestamps to the same coordinate space
+      const mainTimes = mainTimestamps.map(t => toDisplayTime(t as any))
+      // If downsampled to daily, bucket the main times the same way
+      if (needsDownsample && ['1d', '1wk', '1mo'].includes(viewInterval)) {
+        const seen = new Set<string>()
+        resolvedTimes = []
+        for (const t of mainTimes) {
+          if (typeof t === 'number') {
+            const dt = new Date(t * 1000)
+            const key = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`
+            if (!seen.has(key)) { seen.add(key); resolvedTimes.push(key) }
+          } else {
+            const s = t as string
+            if (!seen.has(s)) { seen.add(s); resolvedTimes.push(s) }
+          }
+        }
+      } else if (needsDownsample) {
+        const secs = INTERVAL_SECS[viewInterval]
+        const seen = new Set<number>()
+        resolvedTimes = []
+        for (const t of mainTimes) {
+          const key = secs ? (t as number) - ((t as number) % secs) : t as number
+          if (!seen.has(key)) { seen.add(key); resolvedTimes.push(key) }
+        }
+      } else {
+        resolvedTimes = [...new Set(mainTimes)]
+      }
+
+      seriesData = resolvedTimes.map(t => {
+        const val = equityByTime.get(t)
+        return val !== undefined ? { time: t, value: val } : { time: t }
+      })
+    } else {
+      // Fallback: no main timestamps available, use equity data as-is
+      seriesData = dedup(equityData.map(d => ({ time: d.time, value: d.value })))
+    }
+    series.setData(seriesData as any)
 
     if (showBaseline && baselineData) {
       const baselineSeries = chart.addSeries(LineSeries, {
@@ -206,7 +254,16 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
         priceScaleId: 'right',
         ...(priceFormat ? { priceFormat } : {}),
       })
-      baselineSeries.setData(dedup(baselineData.map(d => ({ time: d.time, value: d.value }))))
+      if (resolvedTimes) {
+        const baseByTime = new Map<any, number>()
+        for (const d of baselineData) baseByTime.set(d.time, d.value)
+        baselineSeries.setData(resolvedTimes.map(t => {
+          const val = baseByTime.get(t)
+          return val !== undefined ? { time: t, value: val } : { time: t }
+        }) as any)
+      } else {
+        baselineSeries.setData(dedup(baselineData.map(d => ({ time: d.time, value: d.value }))))
+      }
     }
 
     // Trade density ticks at exact bar positions
@@ -222,26 +279,37 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
         visible: false,
         scaleMargins: { top: 0.92, bottom: 0 },
       })
+      const resolvedSet = resolvedTimes ? new Set(resolvedTimes) : null
       tickSeries.setData(
         dedup(sells.map(s => {
           const pnl = s.pnl ?? 0
           const intensity = 0.3 + 0.7 * Math.min(1, Math.abs(pnl) / maxPnl)
+          const rawT = toDisplayTime(s.date as any) as any
+          // Snap timestamp to the same bucket used for resolvedTimes
+          let t = rawT
+          if (needsDownsample && ['1d', '1wk', '1mo'].includes(viewInterval) && typeof rawT === 'number') {
+            const dt = new Date(rawT * 1000)
+            t = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`
+          } else if (needsDownsample && typeof rawT === 'number') {
+            const secs = INTERVAL_SECS[viewInterval]
+            if (secs) t = rawT - (rawT % secs)
+          }
           return {
-            time: toDisplayTime(s.date as any) as any,
+            time: t,
             value: 1,
             color: pnl >= 0
               ? `rgba(38, 166, 65, ${intensity})`
               : `rgba(248, 81, 73, ${intensity})`,
           }
-        }))
+        }).filter(d => !resolvedSet || resolvedSet.has(d.time)))
       )
     }
 
-    // Initial alignment: match main chart's visible range, or fit content as fallback
+    // Initial alignment: match main chart's visible logical range, or fit content as fallback
     if (mainChart) {
       const range = mainChart.timeScale().getVisibleLogicalRange()
       if (range) {
-        chart.timeScale().setVisibleLogicalRange(range)
+        try { chart.timeScale().setVisibleLogicalRange(range) } catch {}
       } else {
         chart.timeScale().fitContent()
       }
@@ -249,19 +317,26 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       chart.timeScale().fitContent()
     }
 
-    // Bidirectional scroll/zoom sync with main chart
-    let syncing = false
-    const onMainRangeChange = (range: any) => {
-      if (syncing || !range) return
-      syncing = true
-      chart.timeScale().setVisibleLogicalRange(range)
-      syncing = false
+    // Sync price scale widths so plot areas align horizontally (same pattern as syncWidths in Chart.tsx).
+    // Deferred 100 ms so the equity chart has laid out before we read widths.
+    let syncWidthTimer: ReturnType<typeof setTimeout> | null = null
+    if (mainChart) {
+      syncWidthTimer = setTimeout(() => {
+        try {
+          const rightW = mainChart.priceScale('right').width()
+          if (rightW > 0) chart.applyOptions({ rightPriceScale: { minimumWidth: rightW } })
+          const leftW = mainChart.priceScale('left').width()
+          if (leftW > 0) chart.applyOptions({ leftPriceScale: { minimumWidth: leftW, visible: false } })
+        } catch {}
+      }, 100)
     }
-    const onEquityRangeChange = (range: any) => {
-      if (syncing || !range || !mainChart) return
-      syncing = true
-      mainChart.timeScale().setVisibleLogicalRange(range)
-      syncing = false
+
+    // One-way scroll/zoom sync: main chart drives equity chart (logical range)
+    const onMainRangeChange = (logicalRange: any) => {
+      if (!logicalRange) return
+      try {
+        chart.timeScale().setVisibleLogicalRange(logicalRange)
+      } catch {}
     }
     // One-way crosshair sync: main → equity
     const onMainCrosshairMove = (param: any) => {
@@ -274,7 +349,6 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
 
     if (mainChart) {
       mainChart.timeScale().subscribeVisibleLogicalRangeChange(onMainRangeChange)
-      chart.timeScale().subscribeVisibleLogicalRangeChange(onEquityRangeChange)
       mainChart.subscribeCrosshairMove(onMainCrosshairMove)
     }
 
@@ -283,6 +357,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
     })
     ro.observe(chartRef.current)
     return () => {
+      if (syncWidthTimer !== null) clearTimeout(syncWidthTimer)
       // mainChart may already be destroyed if Chart unmounted first (e.g. on
       // ticker change both Chart and Results remount). Calling methods on a
       // removed lightweight-charts instance throws — swallow it so the React
@@ -296,7 +371,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       chart.remove()
       ro.disconnect()
     }
-  }, [activeTab, bucket, equity_curve, summary.total_return_pct, mainChart, showBaseline, result.baseline_curve, logScale, viewInterval, backtestInterval, tzMode])
+  }, [activeTab, bucket, equity_curve, summary.total_return_pct, mainChart, showBaseline, result.baseline_curve, logScale, viewInterval, backtestInterval, tzMode, mainTimestamps])
 
   useEffect(() => {
     setMcResult(null)

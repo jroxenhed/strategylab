@@ -122,6 +122,7 @@ export default function App() {
   }, [refetchOhlcv, refetchIndicators, refetchSpy, refetchQqq])
 
   const trades = useMemo(() => backtestResult?.trades ?? [], [backtestResult])
+  const mainTimestamps = useMemo(() => ohlcv.map(d => d.time), [ohlcv])
   const emaOverlays = backtestResult?.ema_overlays
   const ruleSignals = backtestResult?.rule_signals
   const regimeSeries = backtestResult?.regime_series
@@ -310,6 +311,7 @@ export default function App() {
                               backtestInterval={interval}
                               sweepInit={sweepInit}
                               onSweepConsumed={() => setSweepInit(null)}
+                              mainTimestamps={mainTimestamps}
                             />
                           )}
                         </>

@@ -69,8 +69,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   // B28: regime rule set state
   const [regimeBuyRules, setRegimeBuyRules] = useState<Rule[]>(saved?.regime?.rules ?? [])
   const [regimeLogic, setRegimeLogic] = useState<'AND' | 'OR'>(saved?.regime?.logic ?? 'AND')
-  const [activeRuleTab, setActiveRuleTab] = useState<'single' | 'long' | 'short' | 'regime'>(
-    saved?.regime?.enabled ? 'regime' : 'single'
+  const [activeRuleTab, setActiveRuleTab] = useState<'long' | 'short' | 'regime'>(
+    saved?.regime?.enabled ? 'regime' : 'long'
   )
   const [capital, setCapital] = useState(saved?.capital ?? 10000)
   const [posSize, setPosSize] = useState(saved?.posSize ?? 100)
@@ -812,7 +812,15 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         )}
         {regimeEnabled && regimeConfig.on_flip && regimeConfig.on_flip !== 'hold' && (
           <div style={{ padding: '0 16px 6px', fontSize: 11, color: '#8b949e' }}>
-            Direction: <span style={{ color: '#58a6ff' }}>{direction}</span> entry · flips to <span style={{ color: '#8b949e' }}>{direction === 'long' ? 'short' : 'long'}</span> on regime flip
+            Direction: <span style={{ color: '#58a6ff' }}>{direction}</span> entry · {
+              regimeConfig.on_flip === 'close_and_reverse'
+                ? (shortBuyRules.some(r => r.indicator)
+                  ? <>reverses to <span style={{ color: '#8b949e' }}>{direction === 'long' ? 'short' : 'long'}</span> on flip</>
+                  : 'goes flat on flip (no short rules)')
+                : (shortBuyRules.some(r => r.indicator)
+                  ? 'goes flat on flip, re-enters on signal'
+                  : 'goes flat when regime inactive')
+            }
           </div>
         )}
 
@@ -820,7 +828,18 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         <div style={{ padding: '6px 16px 4px', borderBottom: '1px solid #21262d' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: regimeEnabled ? 8 : 0 }}>
             <button
-              onClick={() => setRegimeEnabled((v: boolean) => { if (!v) setActiveRuleTab('regime'); return !v })}
+              onClick={() => setRegimeEnabled((v: boolean) => {
+                if (!v) {
+                  setActiveRuleTab('regime');
+                  if (buyRules.length > 0 && buyRules.some(r => r.indicator) && !longBuyRules.some(r => r.indicator)) {
+                    setLongBuyRules([...buyRules]);
+                    setLongSellRules([...sellRules]);
+                    setLongBuyLogic(buyLogic);
+                    setLongSellLogic(sellLogic);
+                  }
+                }
+                return !v;
+              })}
               style={{
                 fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, border: 'none',
                 cursor: 'pointer', textTransform: 'uppercase',
@@ -832,12 +851,12 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             </button>
             {regimeEnabled && (
               <span style={{ fontSize: 11, color: '#8b949e' }}>
-                {regimeBuyRules.length > 0
-                  ? `${regimeBuyRules.length} rule${regimeBuyRules.length > 1 ? 's' : ''} · ${regimeConfig.timeframe} · ${regimeConfig.min_bars}b · ${regimeConfig.on_flip ?? 'close_only'}`
+                {(() => { const fl: Record<string, string> = { close_only: 'close·wait', close_and_reverse: 'close·enter', hold: 'hold' }; const fp = fl[regimeConfig.on_flip ?? 'close_only'] ?? regimeConfig.on_flip; return regimeBuyRules.length > 0
+                  ? `${regimeBuyRules.length} rule${regimeBuyRules.length > 1 ? 's' : ''} · ${regimeConfig.timeframe} · ${regimeConfig.min_bars}b · ${fp}`
                   : regimeConfig.indicator
-                    ? `${regimeConfig.indicator.toUpperCase()}(${(regimeConfig.indicator_params as Record<string, unknown>).period as number}) ${regimeConfig.condition} · ${regimeConfig.timeframe} · ${regimeConfig.min_bars}b · ${regimeConfig.on_flip ?? 'close_only'}`
+                    ? `${regimeConfig.indicator.toUpperCase()}(${(regimeConfig.indicator_params as Record<string, unknown>).period as number}) ${regimeConfig.condition} · ${regimeConfig.timeframe} · ${regimeConfig.min_bars}b · ${fp}`
                     : 'No regime rules configured'
-                }
+                })()}
               </span>
             )}
           </div>
@@ -851,7 +870,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         {/* B28/B23: tab selector for regime / long / short / single rule sets */}
         {regimeEnabled && (
           <div style={{ display: 'flex', gap: 4, padding: '6px 16px 0', borderBottom: '1px solid #21262d' }}>
-            {(['regime', 'long', 'short', 'single'] as const).map(tab => (
+            {(['regime', 'long', 'short'] as const).map(tab => (
               <button key={tab} onClick={() => setActiveRuleTab(tab)}
                 style={{
                   fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, border: 'none',
@@ -902,9 +921,9 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
               <label style={{ fontSize: 11, color: '#8b949e', marginLeft: 4 }}>On flip</label>
               <select value={regimeConfig.on_flip ?? 'close_only'} onChange={e => setRegimeConfig(c => ({ ...c, on_flip: e.target.value as RegimeConfig['on_flip'] }))}
                 style={{ fontSize: 11, background: '#161b22', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px' }}>
-                <option value="close_only">close only</option>
-                <option value="close_and_reverse">close &amp; reverse</option>
-                <option value="hold">none (hold through)</option>
+                <option value="close_only">Close, wait for signal</option>
+                <option value="close_and_reverse">Close, enter immediately</option>
+                <option value="hold">Hold (block new entries)</option>
               </select>
               <label style={{ fontSize: 11, color: '#8b949e', marginLeft: 4 }}>Min bars</label>
               <input type="number" min={1} max={50} value={regimeConfig.min_bars ?? 1}
@@ -923,7 +942,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
           )}
 
           {/* BUY — single mode or regime disabled */}
-          {(!regimeEnabled || activeRuleTab === 'single') && (<>
+          {!regimeEnabled && (<>
           <div style={styles.panel}>
             <div style={styles.panelHeader}>
               <span style={{ color: 'var(--accent-green)', fontWeight: 600 }}>{direction === 'short' ? 'Entry Rules' : 'BUY'} when</span>
@@ -1059,9 +1078,14 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
           </>)}
         </div>
 
-        {regimeEnabled && (longBuyRules.length === 0 || shortBuyRules.length === 0) && (
+        {regimeEnabled && regimeConfig.on_flip === 'close_and_reverse' && (!longBuyRules.some(r => r.indicator) || !shortBuyRules.some(r => r.indicator)) && (
           <div style={{ color: '#d29922', fontSize: 11, padding: '0 16px 4px' }}>
-            Both Long and Short tabs need rules for regime mode. {longBuyRules.length === 0 ? 'Long' : 'Short'} tab is empty.
+            Close &amp; enter requires both Long and Short rules. {!longBuyRules.some(r => r.indicator) ? 'Long' : 'Short'} tab has no rules — will go flat instead.
+          </div>
+        )}
+        {regimeEnabled && buyRules.some(r => r.indicator) && longBuyRules.some(r => r.indicator) && shortBuyRules.some(r => r.indicator) && (
+          <div style={{ color: '#8b949e', fontSize: 11, padding: '0 16px 4px' }}>
+            Single tab rules are inactive — Long/Short rules take precedence.
           </div>
         )}
         {importError && (
