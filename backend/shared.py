@@ -355,17 +355,21 @@ def get_available_providers() -> list[str]:
 # TTL cache for _fetch()
 # Historical data (end < today): 1 hour TTL — won't change.
 # Live intraday (end >= today):  2 min TTL — data is still moving.
+# Live daily+ (end >= today):    5 min TTL — regime direction must not lag > 1 bar.
 # ---------------------------------------------------------------------------
 _fetch_cache: dict[tuple, tuple[float, pd.DataFrame]] = {}
 _CACHE_MAX = 100
 _TTL_HISTORICAL = 3600.0
 _TTL_LIVE = 120.0
+_TTL_DAILY_LIVE = 300.0
 
 
 def _fetch_ttl(end: str, interval: str) -> float:
-    from datetime import date
-    if interval in _INTRADAY_INTERVALS and end >= date.today().isoformat():
-        return _TTL_LIVE
+    from datetime import datetime, timezone
+    if end >= datetime.now(timezone.utc).date().isoformat():
+        if interval in _INTRADAY_INTERVALS:
+            return _TTL_LIVE
+        return _TTL_DAILY_LIVE
     return _TTL_HISTORICAL
 
 

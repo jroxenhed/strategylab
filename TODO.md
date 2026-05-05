@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*114 / 136 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*116 / 136 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -84,7 +84,7 @@
 - [x] **C6** Strategy summary: min/max/avg gain and loss
 - [x] **C7** Summary readability pass — dropped `(mean)` suffix on EV/PF, renamed Max/Min gain/loss to Biggest/Smallest win/loss, added size hierarchy to top metrics row (Return + Final Value 22px primary, rest 13px secondary), removed median secondary values from avg rows
 - [x] **C8** B&H value in summary was inconsistent for short strategies with open positions at end — `final_value` used long formula (`capital + position * price`) instead of short formula (`capital + position * entry_price + unrealized`). Fixed to match equity curve calculation.
-- [ ] **C9** Strategy comparison mode — load 2-3 saved strategies, run them on the same ticker/period, see equity curves overlaid + metric table side-by-side. Mostly frontend composition over existing backtest engine and equity rendering. Makes parameter tuning much faster than running backtests one at a time.
+- [x] **C9** Strategy comparison mode — load 2-3 saved strategies, run them on the same ticker/period, see equity curves overlaid + metric table side-by-side. Mostly frontend composition over existing backtest engine and equity rendering. Makes parameter tuning much faster than running backtests one at a time.
 - [x] **C10** Intraday session analytics — break down strategy performance by time-of-day (30-min buckets). Win rate / EV / PnL per 30-min bucket. Session tab in Results, gated to intraday intervals. Already shipped in a prior session.
 - [x] **C11** Monte Carlo simulation — run N random permutations of trade sequence to estimate confidence intervals on returns, max drawdown, and probability of ruin. Critical for small-account sizing where a single bad drawdown sequence matters.
 - [x] **C12** Rolling performance window — show Sharpe, win rate, and return over rolling N-trade windows overlaid on equity curve. Reveals regime changes and strategy decay that aggregate stats hide.
@@ -132,7 +132,7 @@
 - [x] **D24a** Regime bot backtest_bot() method — `bot_manager.backtest_bot()` doesn't pass regime/dual-rule fields to `StrategyRequest`; regime bots silently backtest without their regime config. [easy]
 - [ ] **D24b** Regime bot visual verification — D24 not visually verified. Need to run a regime bot in paper trading to confirm flip sequence, pending_regime_flip retry, and BotCard regime status display. Manual QA item.
 - [x] **D24c** Regime HTF fetch timeout — `_eval_regime_direction()` runs `fetch_higher_tf` in an executor with no timeout. Added `asyncio.wait_for(..., timeout=15.0)` around the executor call; logs WARN and returns `"flat"` on timeout. [easy]
-- [ ] **D24d** Regime HTF cache staleness — `_fetch()` TTL is 1 hour for daily intervals. Regime direction could lag by up to 1 hour after a real flip. Consider a forced-refresh path or shorter TTL for regime HTF fetches. [medium]
+- [x] **D24d** Regime HTF cache staleness — `_fetch()` TTL is 1 hour for daily intervals. Regime direction could lag by up to 1 hour after a real flip. Fixed: `_TTL_DAILY_LIVE = 300.0` (5 min) applied when `end >= today` for non-intraday intervals. [medium]
 - [x] **D25** Opposite-direction entry guard swallows errors — `_tick()` section 6 checks for opposing positions before entry, but the `except` block does `pass` (proceeds with entry). Conservative behavior on broker check failure should be to skip entry, not proceed. Pre-existing issue, amplified by regime bots. [easy]
 - [x] **D24** Regime filter: live bot integration — regime evaluation in `bot_runner._tick()`, `is_short` → `position_direction` refactor in bot_runner, position flip sequence (close → verify → reverse entry on same tick), `pending_regime_flip` retry logic, BotState regime+direction fields, `compute_bidirectional_pnl` in journal.py (no existing callers change), bidirectional same-symbol guard (regime bot gets exclusive symbol access), regime status on bot card (Active/Flat/Pending + position direction), AddBotBar regime passthrough. Prereq: B23. [large] [Plan](docs/superpowers/plans/2026-05-01-regime-filter.md)
 

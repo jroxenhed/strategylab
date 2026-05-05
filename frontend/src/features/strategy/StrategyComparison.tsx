@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { createChart, LineSeries, ColorType } from 'lightweight-charts'
+import { createChart, LineSeries, ColorType, LineStyle } from 'lightweight-charts'
 import type { SavedStrategy, BacktestResult, DataSource } from '../../shared/types'
 import { api } from '../../api/client'
 import { loadSavedStrategies } from './savedStrategies'
@@ -40,13 +40,14 @@ export default function StrategyComparison({ ticker, start, end, interval, dataS
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [results, setResults] = useState<ComparisonResult[]>([])
+  const [normalize, setNormalize] = useState(false)
   const chartRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     setStrategies(loadSavedStrategies())
   }, [])
 
-  // Build + teardown chart whenever results change
+  // Build + teardown chart whenever results or normalize mode changes
   useEffect(() => {
     if (!chartRef.current || results.length === 0) return
     const chart = createChart(chartRef.current, {
@@ -63,17 +64,39 @@ export default function StrategyComparison({ ticker, start, end, interval, dataS
         lineWidth: 2,
         priceScaleId: 'right',
       })
-      const data = cr.result.equity_curve
-        .filter(d => d.value !== null)
-        .map(d => ({ time: toDisplayTime(d.time) as any, value: d.value as number }))
+      const raw = cr.result.equity_curve.filter(d => d.value !== null)
+      const base = normalize && raw.length > 0 ? (raw[0].value as number) : 1
+      const data = raw.map(d => ({
+        time: toDisplayTime(d.time) as any,
+        value: normalize ? ((d.value as number) / base - 1) * 100 : (d.value as number),
+      }))
       series.setData(data)
     }
+
+    // Add B&H baseline from first result as a dashed reference line
+    const baseline = results[0]?.result.baseline_curve
+    if (baseline && baseline.length > 0) {
+      const bh = chart.addSeries(LineSeries, {
+        color: '#8b949e',
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        priceScaleId: 'right',
+        title: 'B&H',
+      })
+      const rawBh = baseline.filter(d => d.value !== null)
+      const bhBase = normalize && rawBh.length > 0 ? (rawBh[0].value as number) : 1
+      bh.setData(rawBh.map(d => ({
+        time: toDisplayTime(d.time) as any,
+        value: normalize ? ((d.value as number) / bhBase - 1) * 100 : (d.value as number),
+      })))
+    }
+
     chart.timeScale().fitContent()
 
     return () => {
       try { chart.remove() } catch { /* already removed */ }
     }
-  }, [results])
+  }, [results, normalize])
 
   function toggleStrategy(name: string) {
     setSelected(prev => {
@@ -98,13 +121,14 @@ export default function StrategyComparison({ ticker, start, end, interval, dataS
       toRun.forEach((s, i) => colorMap.set(s.name, COLORS[i] ?? COLORS[0]))
 
       const promises = toRun.map(async (s, i) => {
-        const req = {
+        const hasRegime = s.strategyType === 'regime' || (s.regime?.enabled && ((s.longBuyRules?.length ?? 0) > 0 || (s.shortBuyRules?.length ?? 0) > 0))
+        const req: Record<string, unknown> = {
           ticker, start, end, interval,
           buy_rules: s.buyRules,
           sell_rules: s.sellRules,
           buy_logic: s.buyLogic,
           sell_logic: s.sellLogic,
-          initial_capital: capital,
+          initial_capital: s.capital ?? capital,
           position_size: (s.posSize ?? 100) / 100,
           stop_loss_pct: s.stopLoss !== '' && (s.stopLoss as number) > 0 ? s.stopLoss : undefined,
           max_bars_held: s.maxBarsHeld !== '' && (s.maxBarsHeld as number) > 0 ? s.maxBarsHeld : undefined,
@@ -119,6 +143,25 @@ export default function StrategyComparison({ ticker, start, end, interval, dataS
           source: dataSource,
           direction: s.direction,
           extended_hours: extendedHours,
+          // regime + dual rule sets (B23)
+          regime: s.regime,
+          long_buy_rules: hasRegime ? (s.longBuyRules ?? []) : undefined,
+          long_sell_rules: hasRegime ? (s.longSellRules ?? []) : undefined,
+          long_buy_logic: hasRegime ? (s.longBuyLogic ?? 'AND') : undefined,
+          long_sell_logic: hasRegime ? (s.longSellLogic ?? 'AND') : undefined,
+          short_buy_rules: hasRegime ? (s.shortBuyRules ?? []) : undefined,
+          short_sell_rules: hasRegime ? (s.shortSellRules ?? []) : undefined,
+          short_buy_logic: hasRegime ? (s.shortBuyLogic ?? 'AND') : undefined,
+          short_sell_logic: hasRegime ? (s.shortSellLogic ?? 'AND') : undefined,
+          // B25 per-direction settings
+          long_stop_loss_pct: s.longStopLoss !== '' && (s.longStopLoss as number) > 0 ? s.longStopLoss : undefined,
+          short_stop_loss_pct: s.shortStopLoss !== '' && (s.shortStopLoss as number) > 0 ? s.shortStopLoss : undefined,
+          long_max_bars_held: s.longMaxBarsHeld !== '' && (s.longMaxBarsHeld as number) > 0 ? s.longMaxBarsHeld : undefined,
+          short_max_bars_held: s.shortMaxBarsHeld !== '' && (s.shortMaxBarsHeld as number) > 0 ? s.shortMaxBarsHeld : undefined,
+          long_position_size: s.longPosSize != null ? s.longPosSize / 100 : undefined,
+          short_position_size: s.shortPosSize != null ? s.shortPosSize / 100 : undefined,
+          long_trailing_stop: s.longTrailingEnabled ? s.longTrailingConfig : undefined,
+          short_trailing_stop: s.shortTrailingEnabled ? s.shortTrailingConfig : undefined,
         }
         const { data } = await api.post('/api/backtest', req)
         return { strategy_name: s.name, result: data as BacktestResult, color: COLORS[i] ?? COLORS[0] }
@@ -222,13 +265,34 @@ export default function StrategyComparison({ ticker, start, end, interval, dataS
       {results.length > 0 && (
         <>
           {/* Legend */}
-          <div style={{ display: 'flex', gap: 16, marginBottom: 8 }}>
+          <div style={{ display: 'flex', gap: 16, marginBottom: 8, flexWrap: 'wrap' }}>
             {results.map(r => (
               <div key={r.strategy_name} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span style={{ width: 14, height: 3, borderRadius: 2, background: r.color, display: 'inline-block' }} />
                 <span style={{ color: r.color, fontWeight: 600 }}>{r.strategy_name}</span>
               </div>
             ))}
+            {results[0]?.result.baseline_curve && results[0].result.baseline_curve.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ width: 14, height: 1, background: '#8b949e', display: 'inline-block', borderTop: '1px dashed #8b949e' }} />
+                <span style={{ color: '#8b949e' }}>Buy &amp; Hold</span>
+              </div>
+            )}
+          </div>
+
+          {/* Chart toolbar */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
+            <button
+              onClick={() => setNormalize(n => !n)}
+              style={{
+                padding: '3px 10px', borderRadius: 4, border: `1px solid ${normalize ? '#58a6ff55' : '#30363d'}`,
+                background: normalize ? 'rgba(88,166,255,0.15)' : '#161b22', color: normalize ? '#58a6ff' : '#8b949e',
+                fontSize: 11, cursor: 'pointer',
+              }}
+              title="Show % return from starting value instead of absolute dollar values"
+            >
+              % Normalized
+            </button>
           </div>
 
           {/* Equity curve overlay */}

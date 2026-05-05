@@ -35,23 +35,21 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-05-04 (build 10)
-**Branch:** `claude/sharp-allen-V5KsM`
-**PR:** https://github.com/jroxenhed/strategylab/pull/16
+**Date:** 2026-05-05 (build 11)
+**Branch:** `claude/sharp-allen-cBKPL`
 
 **Shipped:**
-- **C23** Sweep error banner — styled red banner replaces plain div when sweep HTTP call fails.
-- **C24** Direction-aware analytics — `sell_trades` filter includes both "sell"/"cover" exits (fixes num_trades + win_rate for regime close_and_reverse). Trades tab column headers adapt to "Entry"/"Exit" for short strategies.
-- **B26** Sweep from rule row — TrendingUp button on numeric-threshold rule rows pre-fills Sensitivity tab (path + ±50% range) and switches to it automatically.
+- **C9** Strategy comparison mode — was already fully implemented. Enhanced with: per-strategy capital, regime+B23 dual-rule support, B25 per-direction settings, B&H baseline dashed line, and "% Normalized" toggle.
+- **D24d** Regime HTF cache staleness — `_TTL_DAILY_LIVE = 300.0` (5 min) for live daily intervals, down from 1-hour historical TTL.
 
 **Review findings:**
-- 0 P0, 0 P1, 1 P2 (value=0 degenerate sweep range — not fixed, acceptable edge case).
-- Build clean: `npm run build` passes, `ast.parse` clean on backtest.py.
-- Smoke test: uvicorn not in PATH — not run. Backend change is a 2-line filter widening.
+- 0 P0, 0 P1, 0 P2. Build clean: `npm run build` + `ast.parse` both pass.
+- Smoke test not run (backend changes are cache-TTL only — no logic change).
 
 **Not visually verified:**
-- C24: Run a regime close_and_reverse strategy and check num_trades + Trades tab column labels.
-- B26: Click TrendingUp on an RSI rule row, verify Sensitivity tab opens with correct path + range pre-filled.
-- C23: Trigger a sweep error (e.g., invalid param_path) and verify the styled banner appears.
+- C9 comparison mode: load 2 strategies, run comparison, verify B&H baseline line appears + normalize toggle works.
+- C9 regime strategy: compare a regime strategy and verify it backtests correctly (regime config flows through).
 
-**Next up:** B27 [easy] (strategy preset categories), B28 [medium] (regime rules as full rule sets).
+**Concerns for human review:** None.
+
+**Next up:** B29 [medium] (regime UX overhaul), F19 [medium] (React Query migration), C22 [large] (auto-optimizer).
