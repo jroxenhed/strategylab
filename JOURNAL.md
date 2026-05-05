@@ -4,6 +4,12 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-05 (overnight build 11)
+
+- **[C9](TODO.md#c--strategy-summary--analytics)** Strategy comparison mode — already fully implemented (`StrategyComparison.tsx` with equity overlay + metrics table). Checked off and enhanced: now uses per-strategy `s.capital` instead of a shared default, passes regime+dual-rule-set fields (B23) and per-direction settings (B25) to the backtest API so regime strategies compare correctly. Added B&H baseline dashed line on equity chart and a "% Normalized" toggle that converts all curves to % return from starting value — enabling visual comparison when strategies use different capitals.
+
+- **[D24d](TODO.md#d--bots-live-trading)** Regime HTF cache staleness — live daily-interval fetches (`end >= today`, interval not in `_INTRADAY_INTERVALS`) now use a 5-minute TTL (`_TTL_DAILY_LIVE = 300.0`) instead of the 1-hour historical TTL. Regime direction lag cut from up to 60 minutes to at most 5 minutes after a real daily-bar flip.
+
 ## 2026-05-04 (overnight build 10 + interactive session)
 
 - **[C23](TODO.md#c--strategy-summary--analytics)** Sweep error banner — replaced plain `color: red` div with a styled banner (tinted background + red border + ✕ icon) when the sensitivity sweep fails. The `apiErrorDetail()` helper already extracted the error string; only the presentation changed.
