@@ -1,0 +1,474 @@
+import { useState, useMemo } from 'react'
+import type { StrategyRequest, Rule } from '../../shared/types'
+import { api } from '../../api/client'
+import { apiErrorDetail } from '../../shared/utils/errors'
+
+// --- Types ---
+
+interface ParamOption {
+  path: string
+  label: string
+  defaultMin: number
+  defaultMax: number
+  defaultSteps: number
+  currentValue: number | null
+  isInteger?: boolean
+}
+
+interface OptimizerCombo {
+  param_values: Record<string, number>
+  num_trades: number
+  total_return_pct: number
+  sharpe_ratio: number
+  win_rate_pct: number
+  max_drawdown_pct: number
+  ev_per_trade: number | null
+}
+
+interface OptimizeResponse {
+  results: OptimizerCombo[]
+  total_combos: number
+  completed: number
+  skipped: number
+}
+
+interface ParamRow {
+  path: string
+  min: string
+  max: string
+  steps: string
+}
+
+// --- Helpers (duplicated from SensitivityPanel to avoid coupling) ---
+
+function buildParamOptions(req: StrategyRequest): ParamOption[] {
+  const opts: ParamOption[] = []
+
+  if (req.stop_loss_pct != null) {
+    opts.push({
+      path: 'stop_loss_pct', label: 'Stop Loss %',
+      defaultMin: Math.max(0.1, req.stop_loss_pct * 0.3),
+      defaultMax: req.stop_loss_pct * 2,
+      defaultSteps: 5, currentValue: req.stop_loss_pct,
+    })
+  }
+  if (req.trailing_stop?.value != null) {
+    opts.push({
+      path: 'trailing_stop_value', label: 'Trailing Stop Value',
+      defaultMin: Math.max(0.1, req.trailing_stop.value * 0.3),
+      defaultMax: req.trailing_stop.value * 2,
+      defaultSteps: 5, currentValue: req.trailing_stop.value,
+    })
+  }
+  opts.push({
+    path: 'slippage_bps', label: 'Slippage (bps)',
+    defaultMin: 0, defaultMax: 20,
+    defaultSteps: 5, currentValue: req.slippage_bps ?? 2,
+  })
+
+  req.buy_rules.forEach((rule: Rule, i: number) => {
+    if (rule.value != null) {
+      opts.push({
+        path: `buy_rule_${i}_value`,
+        label: `Buy Rule ${i + 1} Threshold (${rule.indicator.toUpperCase()})`,
+        defaultMin: Math.max(1, (rule.value ?? 30) * 0.5),
+        defaultMax: (rule.value ?? 30) * 1.5,
+        defaultSteps: 5, currentValue: rule.value,
+      })
+    }
+    if (rule.params) {
+      Object.entries(rule.params).forEach(([key, val]) => {
+        if (typeof val === 'number') {
+          opts.push({
+            path: `buy_rule_${i}_params_${key}`,
+            label: `Buy Rule ${i + 1} ${key} (${rule.indicator.toUpperCase()})`,
+            defaultMin: Math.max(1, Math.round(val * 0.5)),
+            defaultMax: Math.round(val * 2),
+            defaultSteps: 5, currentValue: val,
+            isInteger: Number.isInteger(val),
+          })
+        }
+      })
+    }
+  })
+
+  req.sell_rules.forEach((rule: Rule, i: number) => {
+    if (rule.value != null) {
+      opts.push({
+        path: `sell_rule_${i}_value`,
+        label: `Sell Rule ${i + 1} Threshold (${rule.indicator.toUpperCase()})`,
+        defaultMin: Math.max(1, (rule.value ?? 70) * 0.5),
+        defaultMax: (rule.value ?? 70) * 1.5,
+        defaultSteps: 5, currentValue: rule.value,
+      })
+    }
+    if (rule.params) {
+      Object.entries(rule.params).forEach(([key, val]) => {
+        if (typeof val === 'number') {
+          opts.push({
+            path: `sell_rule_${i}_params_${key}`,
+            label: `Sell Rule ${i + 1} ${key} (${rule.indicator.toUpperCase()})`,
+            defaultMin: Math.max(1, Math.round(val * 0.5)),
+            defaultMax: Math.round(val * 2),
+            defaultSteps: 5, currentValue: val,
+            isInteger: Number.isInteger(val),
+          })
+        }
+      })
+    }
+  })
+
+  return opts
+}
+
+function linspace(min: number, max: number, steps: number): number[] {
+  if (steps <= 1) return [min]
+  const out: number[] = []
+  for (let i = 0; i < steps; i++) {
+    out.push(+(min + (max - min) * i / (steps - 1)).toFixed(4))
+  }
+  return out
+}
+
+// --- Constants ---
+
+const METRICS = [
+  { value: 'sharpe_ratio', label: 'Sharpe Ratio' },
+  { value: 'total_return_pct', label: 'Total Return %' },
+  { value: 'win_rate_pct', label: 'Win Rate %' },
+]
+
+const NONE_PATH = ''
+
+// --- Component ---
+
+interface Props {
+  lastRequest: StrategyRequest
+}
+
+export default function OptimizerPanel({ lastRequest }: Props) {
+  const paramOptions = useMemo(() => buildParamOptions(lastRequest), [lastRequest])
+
+  const emptyRow = (): ParamRow => ({ path: paramOptions[0]?.path ?? NONE_PATH, min: '', max: '', steps: '5' })
+
+  const [paramRows, setParamRows] = useState<(ParamRow | null)[]>([emptyRow(), null, null])
+  const [metric, setMetric] = useState('sharpe_ratio')
+  const [topN, setTopN] = useState('10')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [result, setResult] = useState<OptimizeResponse | null>(null)
+
+  const activeRows = paramRows.filter((p): p is ParamRow => p !== null && p.path !== NONE_PATH)
+
+  const estimatedCombos = useMemo(() => {
+    let total = 1
+    for (const p of activeRows) {
+      const steps = Math.max(1, parseInt(p.steps) || 5)
+      total *= steps
+    }
+    return total
+  }, [activeRows])
+
+  const setRow = (i: number, update: Partial<ParamRow> | null) => {
+    setParamRows(prev => {
+      const next = [...prev]
+      if (update === null) {
+        next[i] = null
+      } else {
+        next[i] = { ...(prev[i] ?? emptyRow()), ...update }
+      }
+      return next
+    })
+  }
+
+  async function runOptimizer() {
+    if (activeRows.length === 0 || loading) return
+    setLoading(true)
+    setError('')
+    setResult(null)
+    try {
+      const requestParams = activeRows.map(p => {
+        const opt = paramOptions.find(o => o.path === p.path)
+        if (!opt) throw new Error(`Unknown param: ${p.path}`)
+        const minN = p.min !== '' ? parseFloat(p.min) : opt.defaultMin
+        const maxN = p.max !== '' ? parseFloat(p.max) : opt.defaultMax
+        const steps = Math.max(1, parseInt(p.steps) || 5)
+        let values = linspace(minN, maxN, steps)
+        if (opt.isInteger) {
+          values = [...new Set(values.map(v => Math.round(v)))]
+        }
+        return { path: p.path, values }
+      })
+      const { data } = await api.post<OptimizeResponse>('/api/backtest/optimize', {
+        base: lastRequest,
+        params: requestParams,
+        metric,
+        top_n: Math.max(1, parseInt(topN) || 10),
+      })
+      setResult(data)
+    } catch (e) {
+      setError(apiErrorDetail(e, 'Optimizer failed'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const topResult = result?.results[0]
+
+  const colColor = (value: number, key: keyof OptimizerCombo) => {
+    if (!result || result.results.length < 2) return '#e6edf3'
+    const vals = result.results.map(r => r[key] as number).filter(v => typeof v === 'number')
+    const min = Math.min(...vals), max = Math.max(...vals)
+    if (max === min) return '#e6edf3'
+    const t = (value - min) / (max - min)
+    const pct = key === 'max_drawdown_pct' ? 1 - t : t
+    if (pct >= 0.7) return '#26a69a'
+    if (pct >= 0.4) return '#aaa'
+    return '#ef5350'
+  }
+
+  return (
+    <div style={{ maxWidth: 900 }}>
+
+      {/* ─── Controls ───────────────────────────────────────────────── */}
+      <div style={s.section}>
+        <div style={s.row}>
+          <span style={s.label}>Optimize for</span>
+          <select value={metric} onChange={e => setMetric(e.target.value)} style={s.select}>
+            {METRICS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+          </select>
+          <span style={{ ...s.label, marginLeft: 16 }}>Show top</span>
+          <input
+            type="number" min={1} max={50} value={topN}
+            onChange={e => setTopN(e.target.value)}
+            style={{ ...s.input, width: 50 }}
+          />
+        </div>
+      </div>
+
+      {/* ─── Param rows ─────────────────────────────────────────────── */}
+      {[0, 1, 2].map(i => {
+        const row = paramRows[i]
+        const isActive = row !== null
+        const opt = isActive ? paramOptions.find(o => o.path === row.path) : null
+        return (
+          <div key={i} style={{ ...s.section, opacity: i > 0 && !paramRows[i - 1] ? 0.4 : 1 }}>
+            <div style={s.row}>
+              <span style={s.label}>Param {i + 1}</span>
+              {isActive ? (
+                <>
+                  <select
+                    value={row.path}
+                    onChange={e => setRow(i, { path: e.target.value, min: '', max: '', steps: '5' })}
+                    style={{ ...s.select, minWidth: 240 }}
+                  >
+                    {paramOptions.map(o => (
+                      <option key={o.path} value={o.path}>{o.label}</option>
+                    ))}
+                  </select>
+                  <span style={s.label}>Min</span>
+                  <input
+                    type="number"
+                    placeholder={opt ? String(opt.defaultMin) : ''}
+                    value={row.min}
+                    onChange={e => setRow(i, { min: e.target.value })}
+                    style={s.input}
+                  />
+                  <span style={s.label}>Max</span>
+                  <input
+                    type="number"
+                    placeholder={opt ? String(opt.defaultMax) : ''}
+                    value={row.max}
+                    onChange={e => setRow(i, { max: e.target.value })}
+                    style={s.input}
+                  />
+                  <span style={s.label}>Steps</span>
+                  <input
+                    type="number" min={2} max={10}
+                    value={row.steps}
+                    onChange={e => setRow(i, { steps: e.target.value })}
+                    style={{ ...s.input, width: 50 }}
+                  />
+                  {i > 0 && (
+                    <button onClick={() => setRow(i, null)} style={s.removeBtn}>✕</button>
+                  )}
+                </>
+              ) : (
+                <button
+                  onClick={() => setRow(i, emptyRow())}
+                  disabled={!paramRows[i - 1]}
+                  style={s.addBtn}
+                >
+                  + Add param
+                </button>
+              )}
+            </div>
+          </div>
+        )
+      })}
+
+      {/* ─── Run button ─────────────────────────────────────────────── */}
+      <div style={{ ...s.section, ...s.row, gap: 12 }}>
+        <button
+          onClick={runOptimizer}
+          disabled={loading || activeRows.length === 0 || estimatedCombos > 200}
+          style={{
+            ...s.runBtn,
+            opacity: loading || activeRows.length === 0 || estimatedCombos > 200 ? 0.6 : 1,
+          }}
+        >
+          {loading ? 'Running…' : 'Run Optimizer'}
+        </button>
+        <span style={{ fontSize: 12, color: estimatedCombos > 200 ? '#ef5350' : '#8b949e' }}>
+          {estimatedCombos} combination{estimatedCombos !== 1 ? 's' : ''} estimated
+          {estimatedCombos > 200 ? ' — reduce steps or params (max 200)' : ''}
+        </span>
+      </div>
+
+      {/* ─── Error ──────────────────────────────────────────────────── */}
+      {error && (
+        <div style={{ color: '#ef5350', fontSize: 12, padding: '6px 0' }}>{error}</div>
+      )}
+
+      {/* ─── Results ────────────────────────────────────────────────── */}
+      {result && !loading && (
+        <div>
+          <div style={{ fontSize: 12, color: '#8b949e', marginBottom: 8 }}>
+            {result.completed} backtests complete
+            {result.skipped > 0 && `, ${result.skipped} skipped`}
+            {' · '}ranked by {METRICS.find(m => m.value === metric)?.label}
+          </div>
+
+          {result.results.length === 0 ? (
+            <div style={{ color: '#484f58', fontSize: 12 }}>No valid results — all combinations failed or were skipped.</div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ borderCollapse: 'collapse', fontSize: 12, width: '100%' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid #30363d' }}>
+                    <th style={s.th}>#</th>
+                    {activeRows.map(p => {
+                      const opt = paramOptions.find(o => o.path === p.path)
+                      return <th key={p.path} style={s.th}>{opt?.label ?? p.path}</th>
+                    })}
+                    <th style={s.th}>Trades</th>
+                    <th style={{ ...s.th, color: metric === 'total_return_pct' ? '#58a6ff' : undefined }}>Return %</th>
+                    <th style={{ ...s.th, color: metric === 'sharpe_ratio' ? '#58a6ff' : undefined }}>Sharpe</th>
+                    <th style={{ ...s.th, color: metric === 'win_rate_pct' ? '#58a6ff' : undefined }}>Win %</th>
+                    <th style={s.th}>Max DD %</th>
+                    <th style={s.th}>EV/Trade</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.results.map((combo, i) => (
+                    <tr
+                      key={i}
+                      style={{
+                        borderBottom: '1px solid #161b22',
+                        background: i === 0 ? 'rgba(88, 166, 255, 0.05)' : 'transparent',
+                      }}
+                    >
+                      <td style={{ ...s.td, color: '#8b949e' }}>{i + 1}</td>
+                      {activeRows.map(p => (
+                        <td key={p.path} style={{ ...s.td, color: '#e6edf3', fontFamily: 'monospace' }}>
+                          {combo.param_values[p.path]?.toFixed(
+                            paramOptions.find(o => o.path === p.path)?.isInteger ? 0 : 2
+                          ) ?? '—'}
+                        </td>
+                      ))}
+                      <td style={s.td}>{combo.num_trades}</td>
+                      <td style={{ ...s.td, color: colColor(combo.total_return_pct, 'total_return_pct') }}>
+                        {combo.total_return_pct >= 0 ? '+' : ''}{combo.total_return_pct.toFixed(2)}%
+                      </td>
+                      <td style={{ ...s.td, color: colColor(combo.sharpe_ratio, 'sharpe_ratio') }}>
+                        {combo.sharpe_ratio.toFixed(3)}
+                      </td>
+                      <td style={{ ...s.td, color: colColor(combo.win_rate_pct, 'win_rate_pct') }}>
+                        {combo.win_rate_pct.toFixed(1)}%
+                      </td>
+                      <td style={{ ...s.td, color: colColor(combo.max_drawdown_pct, 'max_drawdown_pct') }}>
+                        {combo.max_drawdown_pct.toFixed(2)}%
+                      </td>
+                      <td style={{ ...s.td, color: combo.ev_per_trade != null && combo.ev_per_trade >= 0 ? '#26a69a' : '#ef5350' }}>
+                        {combo.ev_per_trade != null ? `$${combo.ev_per_trade.toFixed(2)}` : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─── Best params highlight ───────────────────────────────────── */}
+      {topResult && !loading && (
+        <div style={{ marginTop: 12, padding: '8px 12px', background: 'rgba(88,166,255,0.06)', borderRadius: 4, border: '1px solid rgba(88,166,255,0.15)', fontSize: 12 }}>
+          <span style={{ color: '#8b949e' }}>Best combo: </span>
+          {activeRows.map((p, i) => {
+            const opt = paramOptions.find(o => o.path === p.path)
+            const val = topResult.param_values[p.path]
+            const formatted = opt?.isInteger ? String(Math.round(val)) : val?.toFixed(2)
+            return (
+              <span key={p.path}>
+                {i > 0 && <span style={{ color: '#484f58' }}> · </span>}
+                <span style={{ color: '#8b949e' }}>{opt?.label ?? p.path}: </span>
+                <span style={{ color: '#e6edf3', fontWeight: 600 }}>{formatted}</span>
+              </span>
+            )
+          })}
+          <span style={{ color: '#484f58' }}> → </span>
+          <span style={{ color: '#8b949e' }}>Sharpe: </span>
+          <span style={{ color: '#26a69a', fontWeight: 600 }}>{topResult.sharpe_ratio.toFixed(3)}</span>
+          <span style={{ color: '#484f58' }}>, </span>
+          <span style={{ color: '#8b949e' }}>Return: </span>
+          <span style={{ color: topResult.total_return_pct >= 0 ? '#26a69a' : '#ef5350', fontWeight: 600 }}>
+            {topResult.total_return_pct >= 0 ? '+' : ''}{topResult.total_return_pct.toFixed(2)}%
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// --- Styles ---
+
+const s: Record<string, React.CSSProperties> = {
+  section: {
+    padding: '8px 0', borderBottom: '1px solid #21262d',
+  },
+  row: {
+    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+  },
+  label: { fontSize: 12, color: '#8b949e', whiteSpace: 'nowrap' },
+  select: {
+    fontSize: 12, padding: '3px 6px', borderRadius: 4,
+    background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d',
+    cursor: 'pointer',
+  },
+  input: {
+    fontSize: 12, padding: '3px 6px', borderRadius: 4, width: 70,
+    background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d',
+  },
+  runBtn: {
+    fontSize: 12, padding: '5px 14px', borderRadius: 4, cursor: 'pointer',
+    background: '#1e3a5f', color: '#e6edf3', border: '1px solid #1f6feb',
+    fontWeight: 600,
+  },
+  addBtn: {
+    fontSize: 12, padding: '3px 10px', borderRadius: 4, cursor: 'pointer',
+    background: 'transparent', color: '#58a6ff', border: '1px solid #30363d',
+  },
+  removeBtn: {
+    fontSize: 11, padding: '2px 6px', borderRadius: 4, cursor: 'pointer',
+    background: 'transparent', color: '#8b949e', border: 'none',
+  },
+  th: {
+    textAlign: 'left' as const, padding: '4px 8px',
+    fontSize: 10, color: '#8b949e', textTransform: 'uppercase' as const,
+    letterSpacing: '0.03em', whiteSpace: 'nowrap',
+  },
+  td: {
+    padding: '4px 8px', fontSize: 12, color: '#e6edf3', whiteSpace: 'nowrap',
+  },
+}

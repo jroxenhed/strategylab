@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
-import { fetchPositions, placeSell, fetchJournal, type Position, type JournalTrade, type BrokerHealth } from '../../api/trading'
+import { useEffect, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { placeSell, type BrokerHealth } from '../../api/trading'
 import { fmtShortET } from '../../shared/utils/time'
 import { BrokerTag } from './BrokerTag'
-import { useBroker } from '../../shared/hooks/useOHLCV'
+import { usePositionsQuery, useJournalQuery } from '../../shared/hooks/useTradingQueries'
 
 interface Props {
   brokerFilter: string
@@ -14,56 +15,15 @@ interface Props {
 }
 
 export default function PositionsTable({ brokerFilter, onBrokerFilterChange, availableBrokers, health, heartbeatWarmup, onStale }: Props) {
-  const { adaptiveInterval } = useBroker()
-  const [positions, setPositions] = useState<Position[]>([])
-  const [journal, setJournal] = useState<JournalTrade[]>([])
+  const qc = useQueryClient()
   const [closing, setClosing] = useState<string | null>(null)
-  const prevPositionsJsonRef = useRef('')
-  const prevJournalJsonRef = useRef('')
-  const reloadPositionsRef = useRef<() => void>(() => {})
+  const { data: positionsData } = usePositionsQuery(brokerFilter)
+  const { data: journal = [] } = useJournalQuery(brokerFilter)
+  const positions = positionsData?.rows ?? []
 
   useEffect(() => {
-    const ctrl = new AbortController()
-    const load = () => {
-      if (document.hidden) return
-      fetchPositions(brokerFilter, ctrl.signal)
-        .then(r => {
-          onStale(r.stale_brokers)
-          const json = JSON.stringify(r.rows)
-          if (json === prevPositionsJsonRef.current) return
-          prevPositionsJsonRef.current = json
-          setPositions(r.rows)
-        })
-        .catch(() => {})
-    }
-    reloadPositionsRef.current = load
-    load()
-    const id = window.setInterval(load, adaptiveInterval(5_000))
-    return () => { clearInterval(id); ctrl.abort() }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brokerFilter, adaptiveInterval])
-
-  // Journal is only used to resolve each position's entry timestamp — polled
-  // at 60s (entries don't change once opened) with a diff guard so re-renders
-  // only happen when a new entry actually appears.
-  useEffect(() => {
-    const ctrl = new AbortController()
-    const loadJournal = () => {
-      if (document.hidden) return
-      fetchJournal(undefined, brokerFilter, ctrl.signal)
-        .then(rows => {
-          const json = JSON.stringify(rows)
-          if (json === prevJournalJsonRef.current) return
-          prevJournalJsonRef.current = json
-          setJournal(rows)
-        })
-        .catch(() => {})
-    }
-    loadJournal()
-    const id = window.setInterval(loadJournal, 60_000)
-    return () => { clearInterval(id); ctrl.abort() }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brokerFilter])
+    if (positionsData) onStale(positionsData.stale_brokers)
+  }, [positionsData, onStale])
 
   const entryTimeMap = new Map<string, string>()
   const entryTimeFallback = new Map<string, string>()
@@ -82,7 +42,7 @@ export default function PositionsTable({ brokerFilter, onBrokerFilterChange, ava
     setClosing(symbol)
     try {
       await placeSell(symbol)
-      reloadPositionsRef.current()
+      qc.invalidateQueries({ queryKey: ['positions'] })
     } catch { /* ignore */ }
     setClosing(null)
   }

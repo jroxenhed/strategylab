@@ -14,8 +14,9 @@ import TradeHoldDurationHistogram from './TradeHoldDurationHistogram'
 import StreakPanel from './StreakPanel'
 import KellySizing from './KellySizing'
 import SensitivityPanel from './SensitivityPanel'
+import OptimizerPanel from './OptimizerPanel'
 
-export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace' | 'session' | 'monte_carlo' | 'rolling' | 'hold_duration' | 'sensitivity'
+export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace' | 'session' | 'monte_carlo' | 'rolling' | 'hold_duration' | 'sensitivity' | 'optimizer'
 
 function fmtDate(d: string | number | undefined): string {
   if (typeof d === 'number') return fmtDateTimeET(d)
@@ -394,7 +395,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
              ...(sells.length >= 2 ? ['monte_carlo'] : []),
              ...(sells.length >= 5 ? ['rolling'] : []),
              ...(sells.length >= 2 ? ['hold_duration'] : []),
-             ...(lastRequest ? ['sensitivity'] : []),
+             ...(lastRequest ? ['sensitivity', 'optimizer'] : []),
           ] as ResultsTab[]).map(tab => (
             <button
               key={tab}
@@ -409,6 +410,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
                 : tab === 'rolling' ? 'Rolling'
                 : tab === 'hold_duration' ? 'Hold Time'
                 : tab === 'sensitivity' ? 'Sensitivity'
+                : tab === 'optimizer' ? 'Optimizer'
                 : `Signal Trace (${signal_trace!.length})`}
             </button>
           ))}
@@ -737,6 +739,12 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       {activeTab === 'sensitivity' && lastRequest && (
         <div style={{ padding: '0 16px 16px' }}>
           <SensitivityPanel lastRequest={lastRequest} sweepInit={sweepInit} onSweepConsumed={onSweepConsumed} />
+        </div>
+      )}
+
+      {activeTab === 'optimizer' && lastRequest && (
+        <div style={{ padding: '0 16px 16px' }}>
+          <OptimizerPanel lastRequest={lastRequest} />
         </div>
       )}
 

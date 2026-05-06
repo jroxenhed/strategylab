@@ -1,9 +1,8 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
-import { fetchJournal, type JournalTrade, type BrokerHealth } from '../../api/trading'
-import { listBots } from '../../api/bots'
+import { useState, useRef, useCallback, useEffect } from 'react'
+import { type JournalTrade, type BrokerHealth } from '../../api/trading'
 import { fmtShortET } from '../../shared/utils/time'
 import { BrokerTag } from './BrokerTag'
-import { useBroker } from '../../shared/hooks/useOHLCV'
+import { useJournalQuery, useBotsQuery } from '../../shared/hooks/useTradingQueries'
 
 const DEFAULT_HEIGHT = 300
 const MIN_HEIGHT = 100
@@ -18,15 +17,14 @@ interface Props {
 }
 
 export default function TradeJournal({ brokerFilter, onBrokerFilterChange, availableBrokers, health, heartbeatWarmup }: Props) {
-  const { adaptiveInterval } = useBroker()
-  const [trades, setTrades] = useState<JournalTrade[]>([])
-  const [knownBotIds, setKnownBotIds] = useState<Set<string> | null>(null)
+  const { data: trades = [], refetch } = useJournalQuery(brokerFilter)
+  const { data: botsData } = useBotsQuery()
+  const knownBotIds = botsData ? new Set(botsData.bots.map(b => b.bot_id)) : null
   const [filter, setFilter] = useState('')
   const [tableHeight, setTableHeight] = useState(DEFAULT_HEIGHT)
   const dragging = useRef(false)
   const startY = useRef(0)
   const startH = useRef(0)
-  const prevTradesJsonRef = useRef('')
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     dragging.current = true
@@ -47,31 +45,8 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
     return () => { window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp) }
   }, [])
 
-  const reload = () => {
-    if (document.hidden) return
-    fetchJournal(undefined, brokerFilter)
-      .then(rows => {
-        const json = JSON.stringify(rows)
-        if (json === prevTradesJsonRef.current) return
-        prevTradesJsonRef.current = json
-        setTrades(rows)
-      })
-      .catch(() => {})
-  }
-
   const isOrphan = (t: JournalTrade) =>
     knownBotIds !== null && t.source === 'bot' && (t.bot_id == null || !knownBotIds.has(t.bot_id))
-
-  useEffect(() => {
-    listBots().then(d => setKnownBotIds(new Set(d.bots.map(b => b.bot_id)))).catch(() => {})
-  }, [brokerFilter])
-
-  useEffect(() => {
-    reload()
-    const id = setInterval(reload, adaptiveInterval(5000))
-    return () => clearInterval(id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brokerFilter, adaptiveInterval])
 
   const filtered = filter
     ? trades.filter(t => t.symbol.toLowerCase().includes(filter.toLowerCase()))
@@ -178,7 +153,7 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
       <div style={styles.header}>
         <span style={styles.title}>Trade Journal</span>
         <span style={styles.count}>{trades.length}</span>
-        <button onClick={reload} style={styles.reload} title="Refresh">↻</button>
+        <button onClick={() => refetch()} style={styles.reload} title="Refresh">↻</button>
         <select
           value={brokerFilter}
           onChange={e => onBrokerFilterChange(e.target.value)}

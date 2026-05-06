@@ -34,6 +34,7 @@ from routes.quote import router as quote_router
 from routes.notifications import router as notifications_router
 from routes.monte_carlo import router as monte_carlo_router
 from routes.backtest_sweep import router as backtest_sweep_router
+from routes.backtest_optimizer import router as backtest_optimizer_router
 import routes.bots as bots_module
 from bot_manager import BotManager
 
@@ -94,6 +95,7 @@ app.include_router(quote_router)
 app.include_router(notifications_router)
 app.include_router(monte_carlo_router)
 app.include_router(backtest_sweep_router)
+app.include_router(backtest_optimizer_router)
 
 
 @app.get("/api/cache")
