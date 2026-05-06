@@ -3,9 +3,9 @@ import { useAccountQuery } from '../../shared/hooks/useTradingQueries'
 
 export default function AccountBar() {
   const { broker, available, health, heartbeatWarmup, switchBroker } = useBroker()
-  const { data: account, isError, isLoading } = useAccountQuery()
+  const { data: account, isError, isLoading, error } = useAccountQuery()
 
-  if (isError) return <div style={styles.bar}><span style={{ color: '#f85149' }}>Account error</span></div>
+  if (isError) return <div style={styles.bar}><span style={{ color: '#f85149' }}>Account error: {(error as Error)?.message ?? 'unknown'}</span></div>
   if (isLoading || !account) return <div style={styles.bar}><span style={{ color: '#8b949e' }}>Loading account...</span></div>
 
   const metrics = [

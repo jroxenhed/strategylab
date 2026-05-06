@@ -20,7 +20,7 @@ export function useBotsQuery() {
   const qc = useQueryClient()
   return useQuery<BotListResponse>({
     queryKey: ['bots'],
-    queryFn: listBots,
+    queryFn: ({ signal }) => listBots(signal),
     staleTime: 0,
     refetchInterval: () => adaptiveMs(qc, 5_000),
     refetchIntervalInBackground: false,
@@ -50,21 +50,23 @@ export function usePositionsQuery(brokerFilter: string = 'all') {
 }
 
 export function useAccountQuery() {
+  const qc = useQueryClient()
   return useQuery<Account>({
     queryKey: ['account'],
     queryFn: ({ signal }) => fetchAccount(signal),
     staleTime: 0,
-    refetchInterval: 30_000,
+    refetchInterval: () => adaptiveMs(qc, 30_000),
     refetchIntervalInBackground: false,
   })
 }
 
 export function useOrdersQuery(brokerFilter: string = 'all') {
+  const qc = useQueryClient()
   return useQuery<StaleAware<Order>>({
     queryKey: ['orders', brokerFilter],
     queryFn: ({ signal }) => fetchOrders(brokerFilter, signal),
     staleTime: 0,
-    refetchInterval: 30_000,
+    refetchInterval: () => adaptiveMs(qc, 30_000),
     refetchIntervalInBackground: false,
   })
 }

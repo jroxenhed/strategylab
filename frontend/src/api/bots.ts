@@ -16,8 +16,8 @@ export async function addBot(config: Omit<BotConfig, 'bot_id'>): Promise<{ bot_i
   return res.data
 }
 
-export async function listBots(): Promise<BotListResponse> {
-  const res = await api.get('/api/bots')
+export async function listBots(signal?: AbortSignal): Promise<BotListResponse> {
+  const res = await api.get('/api/bots', { signal })
   return res.data
 }
 

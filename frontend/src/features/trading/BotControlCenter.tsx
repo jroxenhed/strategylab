@@ -149,6 +149,7 @@ export default function BotControlCenter() {
   const qc = useQueryClient()
   const { anyBrokerUnhealthy, health } = useBroker()
   const [brokerBannerDismissed, setBrokerBannerDismissed] = useState(false)
+  const [botsErrorDismissed, setBotsErrorDismissed] = useState(false)
   const [error, setError] = useState('')
   // Track user-set order; updated on drag-end and reconciled with server data
   const orderRef = useRef<string[]>([])
@@ -188,7 +189,12 @@ export default function BotControlCenter() {
     const [moved] = newOrder.splice(oldIdx, 1)
     newOrder.splice(newIdx, 0, moved)
     orderRef.current = newOrder
-    // Optimistic: invalidate so React Query re-fetches with updated order
+    // Optimistic: update cache immediately so cards reorder without waiting for round-trip
+    qc.setQueryData(['bots'], (old: { bots: BotSummary[]; fund: unknown } | undefined) => {
+      if (!old) return old
+      const map = new Map(old.bots.map(b => [b.bot_id, b]))
+      return { ...old, bots: newOrder.map(id => map.get(id)).filter(Boolean) as BotSummary[] }
+    })
     reorderBots(newOrder).then(() => invalidateBots()).catch(() => {})
   }, [orderedBots, invalidateBots])
 
@@ -208,6 +214,7 @@ export default function BotControlCenter() {
   useEffect(() => {
     if (!anyBrokerUnhealthy) setBrokerBannerDismissed(false)
   }, [anyBrokerUnhealthy])
+  useEffect(() => { if (!botsError) setBotsErrorDismissed(false) }, [botsError])
 
   // Initialise drag-drop order from server on first load; keep user order on subsequent loads
   useEffect(() => {
@@ -350,10 +357,13 @@ export default function BotControlCenter() {
         </div>
       </div>
 
-      {(error || botsError) && (
+      {(error || (botsError && !botsErrorDismissed)) && (
         <div style={{ color: '#ef5350', fontSize: 12, padding: '4px 8px', background: '#1a0d0d', borderRadius: 4 }}>
           {error || 'Could not reach bot API'}
-          {error && <button onClick={() => setError('')} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#ef5350', cursor: 'pointer' }}>×</button>}
+          {error
+            ? <button onClick={() => setError('')} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#ef5350', cursor: 'pointer' }}>×</button>
+            : <button onClick={() => setBotsErrorDismissed(true)} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#ef5350', cursor: 'pointer' }}>×</button>
+          }
         </div>
       )}
 
