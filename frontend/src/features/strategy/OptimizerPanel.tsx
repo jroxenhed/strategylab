@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import type { StrategyRequest } from '../../shared/types'
 import { api } from '../../api/client'
 import { apiErrorDetail } from '../../shared/utils/errors'
@@ -62,8 +62,10 @@ export default function OptimizerPanel({ lastRequest }: Props) {
   const [error, setError] = useState('')
   const [result, setResult] = useState<OptimizeResponse | null>(null)
 
-  // Reset paramRows, result, and error when the strategy changes (D2)
+  const prevRequestRef = useRef(lastRequest)
   useEffect(() => {
+    if (prevRequestRef.current === lastRequest) return
+    prevRequestRef.current = lastRequest
     const opts = buildParamOptions(lastRequest, 5)
     setParamRows([{ path: opts[0]?.path ?? '', min: '', max: '', steps: '5' }, null, null])
     setResult(null)
