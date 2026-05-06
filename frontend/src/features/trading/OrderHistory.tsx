@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { fetchOrders, type Order, type BrokerHealth } from '../../api/trading'
+import { type BrokerHealth } from '../../api/trading'
 import { fmtShortET } from '../../shared/utils/time'
 import { BrokerTag } from './BrokerTag'
+import { useOrdersQuery } from '../../shared/hooks/useTradingQueries'
 
 interface Props {
   brokerFilter: string
@@ -13,22 +14,13 @@ interface Props {
 }
 
 export default function OrderHistory({ brokerFilter, onBrokerFilterChange, availableBrokers, health, heartbeatWarmup, onStale }: Props) {
-  const [orders, setOrders] = useState<Order[]>([])
   const [filter, setFilter] = useState('')
+  const { data: ordersData } = useOrdersQuery(brokerFilter)
+  const orders = ordersData?.rows ?? []
 
   useEffect(() => {
-    const ctrl = new AbortController()
-    const load = () => {
-      if (document.hidden) return
-      fetchOrders(brokerFilter, ctrl.signal)
-        .then(r => { setOrders(r.rows); onStale(r.stale_brokers) })
-        .catch(() => {})
-    }
-    load()
-    const id = window.setInterval(load, 30_000)
-    return () => { clearInterval(id); ctrl.abort() }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brokerFilter])
+    if (ordersData) onStale(ordersData.stale_brokers)
+  }, [ordersData, onStale])
 
   const filtered = filter
     ? orders.filter(o => o.symbol.toLowerCase().includes(filter.toLowerCase()))

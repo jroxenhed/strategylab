@@ -1,30 +1,12 @@
-import { useEffect, useState } from 'react'
-import axios from 'axios'
-import { fetchAccount, type Account } from '../../api/trading'
 import { useBroker } from '../../shared/hooks/useOHLCV'
+import { useAccountQuery } from '../../shared/hooks/useTradingQueries'
 
 export default function AccountBar() {
-  const [account, setAccount] = useState<Account | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const hasLoaded = useState({ value: false })[0]
   const { broker, available, health, heartbeatWarmup, switchBroker } = useBroker()
+  const { data: account, isError, isLoading, error } = useAccountQuery()
 
-  useEffect(() => {
-    const ctrl = new AbortController()
-    const load = () => {
-      if (document.hidden) return
-      fetchAccount(ctrl.signal).then(a => { setAccount(a); setError(null); hasLoaded.value = true }).catch(e => {
-        if (axios.isCancel(e)) return
-        if (!hasLoaded.value) setError(e.message)
-      })
-    }
-    load()
-    const id = window.setInterval(load, 30_000)
-    return () => { clearInterval(id); ctrl.abort() }
-  }, [broker])
-
-  if (error) return <div style={styles.bar}><span style={{ color: '#f85149' }}>Account error: {error}</span></div>
-  if (!account) return <div style={styles.bar}><span style={{ color: '#8b949e' }}>Loading account...</span></div>
+  if (isError) return <div style={styles.bar}><span style={{ color: '#f85149' }}>Account error: {(error as Error)?.message ?? 'unknown'}</span></div>
+  if (isLoading || !account) return <div style={styles.bar}><span style={{ color: '#8b949e' }}>Loading account...</span></div>
 
   const metrics = [
     { label: 'Equity', value: `$${account.equity.toLocaleString(undefined, { minimumFractionDigits: 2 })}` },

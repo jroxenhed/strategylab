@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import type { BotSummary, BotFundStatus } from '../../shared/types'
 import {
-  listBots, setBotFund, addBot,
+  setBotFund, addBot,
   startBot, stopBot, backtestBot, deleteBot, manualBuyBot, updateBot, resetBotPnl,
   startAllBots, stopAllBots, stopAndCloseAllBots, reorderBots,
 } from '../../api/bots'
@@ -12,6 +13,7 @@ import { btnStyle } from './ui'
 import PortfolioStrip from './PortfolioStrip'
 import AddBotBar, { sectionStyle, inputStyle } from './AddBotBar'
 import { useBroker } from '../../shared/hooks/useOHLCV'
+import { useBotsQuery } from '../../shared/hooks/useTradingQueries'
 import {
   DndContext, closestCenter, PointerSensor, useSensor, useSensors,
   type DragEndEvent,
@@ -144,13 +146,19 @@ function SortableBotCard(props: {
 // ---------------------------------------------------------------------------
 
 export default function BotControlCenter() {
-  const { adaptiveInterval, anyBrokerUnhealthy, health } = useBroker()
+  const qc = useQueryClient()
+  const { anyBrokerUnhealthy, health } = useBroker()
   const [brokerBannerDismissed, setBrokerBannerDismissed] = useState(false)
-  const [fund, setFund] = useState<BotFundStatus | null>(null)
-  const [bots, setBots] = useState<BotSummary[]>([])
+  const [botsErrorDismissed, setBotsErrorDismissed] = useState(false)
   const [error, setError] = useState('')
   // Track user-set order; updated on drag-end and reconciled with server data
   const orderRef = useRef<string[]>([])
+
+  const { data: botsData, isError: botsError } = useBotsQuery()
+  const fund: BotFundStatus | null = botsData?.fund ?? null
+  const bots: BotSummary[] = botsData?.bots ?? []
+
+  const invalidateBots = useCallback(() => qc.invalidateQueries({ queryKey: ['bots'] }), [qc])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -181,10 +189,14 @@ export default function BotControlCenter() {
     const [moved] = newOrder.splice(oldIdx, 1)
     newOrder.splice(newIdx, 0, moved)
     orderRef.current = newOrder
-    // Optimistic: force re-render via setBots identity change
-    setBots(prev => [...prev])
-    reorderBots(newOrder).catch(() => {})
-  }, [orderedBots])
+    // Optimistic: update cache immediately so cards reorder without waiting for round-trip
+    qc.setQueryData(['bots'], (old: { bots: BotSummary[]; fund: unknown } | undefined) => {
+      if (!old) return old
+      const map = new Map(old.bots.map(b => [b.bot_id, b]))
+      return { ...old, bots: newOrder.map(id => map.get(id)).filter(Boolean) as BotSummary[] }
+    })
+    reorderBots(newOrder).then(() => invalidateBots()).catch(() => {})
+  }, [orderedBots, invalidateBots])
 
   const [sparklineScale, setSparklineScale] = useState<'local' | 'aligned'>(() => {
     const v = localStorage.getItem('sparklineScale')
@@ -202,92 +214,64 @@ export default function BotControlCenter() {
   useEffect(() => {
     if (!anyBrokerUnhealthy) setBrokerBannerDismissed(false)
   }, [anyBrokerUnhealthy])
+  useEffect(() => { if (!botsError) setBotsErrorDismissed(false) }, [botsError])
 
-  const prevFundJsonRef = useRef('')
-  const prevBotsJsonRef = useRef('')
-  const loadBots = async () => {
-    if (document.hidden) return
-    try {
-      const data = await listBots()
-      const fundJson = JSON.stringify(data.fund)
-      if (fundJson !== prevFundJsonRef.current) {
-        prevFundJsonRef.current = fundJson
-        setFund(data.fund)
-      }
-      const botsJson = JSON.stringify(data.bots)
-      if (botsJson !== prevBotsJsonRef.current) {
-        prevBotsJsonRef.current = botsJson
-        // Initialise order from server on first load; keep user order on subsequent loads
-        if (orderRef.current.length === 0) {
-          orderRef.current = data.bots.map((b: BotSummary) => b.bot_id)
-        }
-        setBots(data.bots)
-      }
-      setError('')
-    } catch {
-      setError('Could not reach bot API')
-    }
-  }
-
+  // Initialise drag-drop order from server on first load; keep user order on subsequent loads
   useEffect(() => {
-    loadBots()
-    const id = setInterval(loadBots, adaptiveInterval(5000))
-    return () => clearInterval(id)
-  }, [adaptiveInterval])
+    if (bots.length > 0 && orderRef.current.length === 0) {
+      orderRef.current = bots.map(b => b.bot_id)
+    }
+  }, [bots])
 
   const handleSetFund = async (amount: number) => {
-    try {
-      const f = await setBotFund(amount)
-      setFund(f)
-    } catch (e) {
-      setError(apiErrorDetail(e, 'Failed to set fund'))
-    }
+    try { await setBotFund(amount); invalidateBots() }
+    catch (e) { setError(apiErrorDetail(e, 'Failed to set fund')) }
   }
 
   const handleAdd = async (config: any) => {
     await addBot(config)
-    await loadBots()
+    invalidateBots()
   }
 
   const handleStart = async (botId: string) => {
-    try { await startBot(botId); await loadBots() }
+    try { await startBot(botId); invalidateBots() }
     catch (e) { setError(apiErrorDetail(e, 'Failed to start bot')) }
   }
 
   const handleStop = async (botId: string) => {
-    try { await stopBot(botId); await loadBots() }
+    try { await stopBot(botId); invalidateBots() }
     catch (e) { setError(apiErrorDetail(e, 'Failed to stop bot')) }
   }
 
   const handleBacktest = async (botId: string) => {
-    try { await backtestBot(botId); await loadBots() }
+    try { await backtestBot(botId); invalidateBots() }
     catch (e) { setError(apiErrorDetail(e, 'Failed to run backtest')) }
   }
 
   const handleDelete = async (botId: string) => {
-    try { await deleteBot(botId); await loadBots() }
+    try { await deleteBot(botId); invalidateBots() }
     catch (e) { setError(apiErrorDetail(e, 'Failed to delete bot')) }
   }
 
   const handleManualBuy = async (botId: string) => {
-    try { await manualBuyBot(botId); await loadBots() }
+    try { await manualBuyBot(botId); invalidateBots() }
     catch (e) { setError(apiErrorDetail(e, 'Failed to place buy')) }
   }
 
   const handleResetPnl = async (botId: string) => {
-    try { await resetBotPnl(botId); await loadBots() }
+    try { await resetBotPnl(botId); invalidateBots() }
     catch (e) { setError(apiErrorDetail(e, 'Failed to reset P&L')) }
   }
 
   const handleUpdate = async (botId: string, updates: Record<string, unknown>) => {
-    try { await updateBot(botId, updates); await loadBots() }
+    try { await updateBot(botId, updates); invalidateBots() }
     catch (e) { setError(apiErrorDetail(e, 'Failed to update bot')) }
   }
 
   const handleStartAll = async () => {
     try {
       const r = await startAllBots()
-      await loadBots()
+      invalidateBots()
       setError(r.failed.length ? `Started ${r.started.length}, ${r.failed.length} failed` : '')
     } catch (e) {
       setError(apiErrorDetail(e, 'Failed to start all bots'))
@@ -297,7 +281,7 @@ export default function BotControlCenter() {
   const handleStopAll = async () => {
     try {
       const r = await stopAllBots()
-      await loadBots()
+      invalidateBots()
       setError(r.failed.length ? `Stopped ${r.stopped.length}, ${r.failed.length} failed` : '')
     } catch (e) {
       setError(apiErrorDetail(e, 'Failed to stop all bots'))
@@ -312,7 +296,7 @@ export default function BotControlCenter() {
     }
     try {
       const r = await stopAndCloseAllBots()
-      await loadBots()
+      invalidateBots()
       setError(r.failed.length ? `Closed ${r.closed.length}, ${r.failed.length} failed` : '')
     } catch (e) {
       setError(apiErrorDetail(e, 'Failed to stop and close all bots'))
@@ -373,10 +357,13 @@ export default function BotControlCenter() {
         </div>
       </div>
 
-      {error && (
+      {(error || (botsError && !botsErrorDismissed)) && (
         <div style={{ color: '#ef5350', fontSize: 12, padding: '4px 8px', background: '#1a0d0d', borderRadius: 4 }}>
-          {error}
-          <button onClick={() => setError('')} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#ef5350', cursor: 'pointer' }}>×</button>
+          {error || 'Could not reach bot API'}
+          {error
+            ? <button onClick={() => setError('')} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#ef5350', cursor: 'pointer' }}>×</button>
+            : <button onClick={() => setBotsErrorDismissed(true)} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#ef5350', cursor: 'pointer' }}>×</button>
+          }
         </div>
       )}
 
