@@ -442,6 +442,11 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
                 : slippageSource === 'default'
                 ? 'default: 2 bps'
                 : 'manual'}
+              {slipInfo?.live_spread_bps != null && (
+                <span style={{ marginLeft: 8, color: 'var(--accent)' }}>
+                  {`live spread: ${slipInfo.live_spread_bps.toFixed(1)} bps (½: ${(slipInfo.half_spread_bps ?? slipInfo.live_spread_bps / 2).toFixed(1)})`}
+                </span>
+              )}
             </span>
           </div>
           <div style={styles.settingsRow}>

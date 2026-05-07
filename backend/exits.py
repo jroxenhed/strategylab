@@ -334,6 +334,17 @@ class ExitsMixin:
             pnl = (state.entry_price - sell_fill) * broker_qty if state.entry_price else 0
         else:
             pnl = (sell_fill - state.entry_price) * broker_qty if state.entry_price else 0
+
+        # Borrow cost for short positions: rate × notional × hold_days
+        borrow_cost: float = 0.0
+        if pos_is_short and state.entry_price and getattr(state, 'entry_time', None):
+            try:
+                entry_dt = datetime.fromisoformat(state.entry_time)
+                hold_days = (datetime.now(timezone.utc) - entry_dt).total_seconds() / 86400
+                borrow_cost = round(broker_qty * state.entry_price * (cfg.borrow_rate_annual / 100 / 365) * hold_days, 2)
+            except Exception:
+                pass
+
         exit_label = "COVER" if pos_is_short else "SELL"
         state.last_signal = f"{exit_label} ({exit_reason})"
 
@@ -362,7 +373,8 @@ class ExitsMixin:
         try:
             br._log_trade(cfg.symbol, "cover" if pos_is_short else "sell", broker_qty, sell_fill,
                           source="bot", reason=exit_reason, expected_price=price,
-                          direction=logged_dir, bot_id=cfg.bot_id, broker=cfg.broker)
+                          direction=logged_dir, bot_id=cfg.bot_id, broker=cfg.broker,
+                          borrow_cost=borrow_cost if borrow_cost else None)
         except Exception as e:
             self._log("ERROR", f"Journal write failed: {e}")
 

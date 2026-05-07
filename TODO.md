@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*118 / 136 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*120 / 136 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -45,10 +45,10 @@
 - [x] **B2** Extended hours — fully wired. Yahoo/IBKR native, Alpaca client-side RTH filter (9:30-16:00 ET). Cache keys already include `extended_hours`.
 - [x] **B3** New rule conditions — MA8/MA21 slope (`turns_up`/`turns_down`) + `decelerating` via Savitzky-Golay second derivative; N-bar lookback for slope confirmation + min move % threshold; backtest respects sidebar S-G toggles.
 - [x] **B4** Per-rule signal visualization toggles — eye icon on each rule row in strategy builder; when enabled, that rule's signals show as markers on the main chart during/after backtest. Replaces current hardcoded signal marker behavior. State stored with rule fields, persists with save/load. No global master toggle.
-- [ ] **B5** Borrow cost estimation (for live short positions on real accounts)
+- [x] **B5** Borrow cost estimation for live short positions — `borrow_rate_annual` field on `BotConfig` (default 0.5%), `entry_time` on `BotState` set at fill, borrow cost computed at exit using same formula as backtest and stored in journal `borrow_cost` field. `UpdateBotRequest` includes the field for in-place edits.
 - [x] **B6** Realistic cost model in backtester — IBKR Fixed per-share commission (`per_share_rate` + `min_per_order`), empirical per-symbol slippage via `GET /api/slippage/{symbol}` + `useEmpiricalSlippage` hook, short borrow cost (`borrow_rate_annual`). Results shows Borrow column + Cost Breakdown block.
 - [x] **B7** Slippage model redesign — separate *measured* slippage (diagnostics) from *modeled* slippage (backtest assumption). Always ≥ 0 everywhere it surfaces. Floor empirical at default, gate on minimum fill_count, single shared signed-cost helper in `backend/slippage.py`. Fixes journal display (wrong sign for sells/shorts), bot runner log sign drift, and the "favorable empirical auto-carries into Capital & Fees" pitfall. [plan](docs/superpowers/plans/2026-04-15-b7-slippage-redesign.md)
-- [ ] **B8** Spread-derived slippage default (follow-up to B7) — pull live bid/ask spread from broker (Alpaca quote endpoint / IBKR market data) and default modeled slippage to half-spread for the symbol. More principled than global/empirical fallback, especially for illiquid names. Only viable providers that expose quotes.
+- [x] **B8** Spread-derived slippage (follow-up to B7) — `/api/slippage/{symbol}` now returns `live_spread_bps` and `half_spread_bps` when a broker is configured (Alpaca/IBKR). `SlippageInfo` TS type extended; StrategyBuilder shows "live spread: X bps (½: Y)" in accent color next to the modeled slippage. Gracefully returns null when broker unavailable. Auto-apply deferred (informational only — modeled_bps auto-applying from real-time spread makes backtests non-deterministic).
 - [ ] **B9** Cost model v2 (deferred from B6):
   - Debit-balance-aware margin interest for shorts (charge margin rate only on days net cash is negative)
   - IBKR Tiered pricing (exchange fees, SEC fee, FINRA TAF, clearing pass-throughs)

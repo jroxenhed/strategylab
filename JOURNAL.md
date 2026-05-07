@@ -4,6 +4,12 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-07 (overnight build 13)
+
+- **[B5](TODO.md#b--strategy-engine--rules)** Borrow cost for live short positions — `borrow_rate_annual: float = 0.5` added to `BotConfig`; `entry_time: Optional[str]` added to `BotState` (set at fill, serialised to bots.json). `exits.py _execute_exit()` computes `broker_qty × entry_price × (rate/100/365) × hold_days` at close and stores in journal as `borrow_cost` field. `_log_trade()` extended with optional `borrow_cost` param. `UpdateBotRequest` includes the field. Review: 0 findings in this change.
+
+- **[B8](TODO.md#b--strategy-engine--rules)** Live spread display in slippage panel — `/api/slippage/{symbol}` returns `live_spread_bps` and `half_spread_bps` when a broker is configured (lazy-import `get_trading_provider()`, try/except returns null if market closed or Yahoo source). `SlippageInfo` TS type extended with optional fields. StrategyBuilder shows "live spread: X.X bps (½: Y.Y)" in accent color next to modeled slippage. Auto-apply to modeled_bps deliberately deferred — dynamic real-time defaults make backtests non-deterministic. P2 design note in NEXT_RUN.
+
 ## 2026-05-06 (overnight build 12)
 
 - **[F19](TODO.md#f--architecture--housekeeping)** React Query migration for bot/journal polling — replaced 12 manual `setInterval` timers across 5 components (BotControlCenter, TradeJournal, PositionsTable, AccountBar, OrderHistory) with 5 shared React Query hooks in `useTradingQueries.ts`. Journal deduplicated between PositionsTable (was 60s) and TradeJournal (was 5s) — both now share `['journal', brokerFilter]` key. Bots list deduplicated between BotControlCenter and TradeJournal's `listBots()` call. Adaptive interval logic (10s when broker unhealthy) moved into hook layer via broker query cache read. `invalidateQueries` replaces post-mutation `loadBots()` calls. `refetchIntervalInBackground: false` replaces `document.hidden` guards.

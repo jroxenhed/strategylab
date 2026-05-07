@@ -157,7 +157,7 @@ def _log_trade(symbol: str, side: str, qty: float, price: float | None,
                source: str, stop_loss_price: float | None = None,
                reason: str | None = None, expected_price: float | None = None,
                direction: str = "long", bot_id: str | None = None,
-               broker: str | None = None):
+               broker: str | None = None, borrow_cost: float | None = None):
     """Append a trade entry to the journal.
 
     `bot_id` is required for bot-sourced trades so that P&L can be scoped to
@@ -190,6 +190,7 @@ def _log_trade(symbol: str, side: str, qty: float, price: float | None,
             "direction": direction,
             "bot_id": bot_id,
             "broker": broker,
+            "borrow_cost": borrow_cost,
         })
         fd = tempfile.NamedTemporaryFile(
             mode='w', dir=str(JOURNAL_PATH.parent), suffix='.tmp', delete=False
