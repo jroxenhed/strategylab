@@ -386,6 +386,8 @@ def get_available_providers() -> list[str]:
 # Live daily+ (end >= today):    5 min TTL — regime direction must not lag > 1 bar.
 # ---------------------------------------------------------------------------
 _fetch_cache: dict[tuple, tuple[float, pd.DataFrame]] = {}
+_fetch_dedup_locks: dict[tuple, threading.Lock] = {}
+_fetch_dedup_locks_meta = threading.Lock()  # protects _fetch_dedup_locks dict
 _CACHE_MAX = 100
 _TTL_HISTORICAL = 3600.0
 _TTL_LIVE = 120.0
@@ -426,28 +428,38 @@ def _fetch(ticker: str, start: str, end: str, interval: str, source: str = "yaho
     now = time.monotonic()
     ttl = _fetch_ttl(end, interval)
 
-    cached = _fetch_cache.get(key)
-    if cached and (now - cached[0]) < ttl:
-        if logger.isEnabledFor(logging.DEBUG):
-            age = round(now - cached[0])
-            logger.debug("cache HIT  %s %s %s→%s [%s] age=%ss", ticker, interval, start, end, source, age)
-        return cached[1]
+    # Serialize concurrent requests for the same (symbol, interval) so that a
+    # second caller waiting on the lock hits the cache the first caller populated,
+    # instead of firing a duplicate HTTP request.
+    dedup_key = (ticker.upper(), interval)
+    with _fetch_dedup_locks_meta:
+        if dedup_key not in _fetch_dedup_locks:
+            _fetch_dedup_locks[dedup_key] = threading.Lock()
+        _lock = _fetch_dedup_locks[dedup_key]
 
-    logger.debug("cache MISS %s %s %s→%s [%s]", ticker, interval, start, end, source)
-    # Alpaca HTTP keep-alive sockets go stale between bot polls; retry once on
-    # RemoteDisconnected / ConnectionAborted so a dead socket doesn't swallow a tick.
-    try:
-        df = provider.fetch(ticker, start, end, interval, extended_hours=extended_hours)
-    except Exception as e:
-        if is_retryable_error(e):
+    with _lock:
+        cached = _fetch_cache.get(key)
+        if cached and (now - cached[0]) < ttl:
+            if logger.isEnabledFor(logging.DEBUG):
+                age = round(now - cached[0])
+                logger.debug("cache HIT  %s %s %s→%s [%s] age=%ss", ticker, interval, start, end, source, age)
+            return cached[1]
+
+        logger.debug("cache MISS %s %s %s→%s [%s]", ticker, interval, start, end, source)
+        # Alpaca HTTP keep-alive sockets go stale between bot polls; retry once on
+        # RemoteDisconnected / ConnectionAborted so a dead socket doesn't swallow a tick.
+        try:
             df = provider.fetch(ticker, start, end, interval, extended_hours=extended_hours)
-        else:
-            raise
+        except Exception as e:
+            if is_retryable_error(e):
+                df = provider.fetch(ticker, start, end, interval, extended_hours=extended_hours)
+            else:
+                raise
 
-    if len(_fetch_cache) >= _CACHE_MAX:
-        _evict_cache()
-    _fetch_cache[key] = (now, df)
-    return df
+        if len(_fetch_cache) >= _CACHE_MAX:
+            _evict_cache()
+        _fetch_cache[key] = (now, df)
+        return df
 
 
 def cache_info() -> dict:

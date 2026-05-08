@@ -294,6 +294,9 @@ class BotRunner(RegimeMixin, ExitsMixin):
                         state.trail_peak = price
                         if is_regime and not state.position_direction:
                             state.position_direction = pos["side"]
+                        if state.entry_time is None:
+                            state.entry_time = datetime.now(timezone.utc).isoformat()
+                            self._log("INFO", "Resumed position tracking; entry_time set to current (borrow accrual begins now)")
                         self._log("INFO", f"Resumed tracking position: entry={state.entry_price:.2f}")
                     break
         except Exception as e:
