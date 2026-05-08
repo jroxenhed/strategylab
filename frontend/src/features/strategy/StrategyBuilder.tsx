@@ -127,7 +127,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [shortPosSize, setShortPosSize] = useState<number>(saved?.shortPosSize ?? posSize)
 
   useEffect(() => {
-    if (slippageSource === 'manual') return
+    if (slippageSource === 'manual' || slippageSource === 'spread-derived') return
     if (slipInfo) {
       setSlippageBps(slipInfo.modeled_bps)
       setSlippageSource(slipInfo.source)
@@ -436,7 +436,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
               }}
               style={styles.settingsInput}
             />
-            {slipInfo?.half_spread_bps != null && (
+            {slipInfo?.half_spread_bps != null && slipInfo.half_spread_bps > 0 && (
               <button
                 onClick={() => {
                   setSlippageBps(slipInfo.half_spread_bps!)
