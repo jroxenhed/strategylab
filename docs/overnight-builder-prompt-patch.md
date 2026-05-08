@@ -106,7 +106,7 @@ Run npm run build one last time. If clean:
      - *Findings:* one item for every P2/P3 finding, every thing you explicitly deferred ("no timeout", "not migrated", "left X out"), every "would be cleaner if..." you thought during implementation.
      - *Observations:* things you noticed while reading surrounding code — duplication, fragile patterns, missing guards, natural follow-ons. If you'd raise it in a code review, it belongs here. Tag [easy]/[medium]/[hard].
      - If this step produces zero new items, that is almost certainly wrong. You read code to implement; you saw things. Write them down.
-     - **Do not run git add until at least 2 new items are written.**
+     - **DO NOT run git add until new items are written.**
   3. Tag suitable unchecked items `[next]` for tomorrow's run (prefer prereqs of in-progress work, then [easy] items). At least one item must be tagged [next] before you commit.
   4. Append to JOURNAL.md.
 - git add the changed files + TODO.md + JOURNAL.md
