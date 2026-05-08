@@ -668,10 +668,14 @@ class IBKRTradingProvider:
         contract = self._contract(symbol)
 
         async def _quote():
+            self._ib.reqMarketDataType(3)  # 3 = delayed (free, 15-min lag)
             ticker = self._ib.reqMktData(contract, '', False, False)
-            await _aio.sleep(1)
+            await _aio.sleep(2)
             bid, ask = ticker.bid, ticker.ask
+            if (bid != bid or bid <= 0) and ticker.delayedBid > 0:
+                bid, ask = ticker.delayedBid, ticker.delayedAsk
             self._ib.cancelMktData(contract)
+            self._ib.reqMarketDataType(1)  # reset to live for trading
             return bid, ask
 
         bid, ask = self._run(_quote())
