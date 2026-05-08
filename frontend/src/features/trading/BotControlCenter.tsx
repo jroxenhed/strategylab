@@ -6,6 +6,7 @@ import {
   startBot, stopBot, backtestBot, deleteBot, manualBuyBot, updateBot, resetBotPnl,
   startAllBots, stopAllBots, stopAndCloseAllBots, reorderBots,
 } from '../../api/bots'
+import { api } from '../../api/client'
 import { fmtUsd } from '../../shared/utils/format'
 import { apiErrorDetail } from '../../shared/utils/errors'
 import BotCard from './BotCard'
@@ -147,10 +148,11 @@ function SortableBotCard(props: {
 
 export default function BotControlCenter() {
   const qc = useQueryClient()
-  const { anyBrokerUnhealthy, health } = useBroker()
+  const { anyBrokerUnhealthy, health, pollIntervalMs } = useBroker()
   const [brokerBannerDismissed, setBrokerBannerDismissed] = useState(false)
   const [botsErrorDismissed, setBotsErrorDismissed] = useState(false)
   const [error, setError] = useState('')
+  const [pollInput, setPollInput] = useState('')
   // Track user-set order; updated on drag-end and reconciled with server data
   const orderRef = useRef<string[]>([])
 
@@ -226,6 +228,21 @@ export default function BotControlCenter() {
   const handleSetFund = async (amount: number) => {
     try { await setBotFund(amount); invalidateBots() }
     catch (e) { setError(apiErrorDetail(e, 'Failed to set fund')) }
+  }
+
+  const handlePollIntervalCommit = async () => {
+    const ms = parseInt(pollInput, 10)
+    if (!pollInput.trim()) return
+    if (isNaN(ms) || ms < 100 || ms > 60000) {
+      setError('Poll interval must be between 100 and 60000 ms')
+      return
+    }
+    try {
+      await api.patch('/api/broker/poll-interval', { ms })
+      setPollInput('')
+    } catch (e) {
+      setError(apiErrorDetail(e, 'Failed to set poll interval'))
+    }
   }
 
   const handleAdd = async (config: any) => {
@@ -325,6 +342,25 @@ export default function BotControlCenter() {
           <button onClick={handleStopAndCloseAll} style={btnStyle('#5a1a1a')}>Stop and Close</button>
         </div>
         <div style={{ flex: 1 }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <label style={{ fontSize: 11, color: '#8b949e', whiteSpace: 'nowrap' }}>Poll (ms)</label>
+          <input
+            type="number"
+            value={pollInput}
+            onChange={e => setPollInput(e.target.value)}
+            onBlur={handlePollIntervalCommit}
+            onKeyDown={e => { if (e.key === 'Enter') { e.currentTarget.blur() } }}
+            placeholder={pollIntervalMs != null ? String(pollIntervalMs) : 'auto'}
+            min={100}
+            max={60000}
+            style={{
+              ...inputStyle,
+              width: 72,
+              fontSize: 11,
+              padding: '3px 6px',
+            }}
+          />
+        </div>
         <div style={{ display: 'flex', gap: 4, background: '#0d1117', border: '1px solid #1e2530', borderRadius: 4, padding: 2 }}>
           {(['expanded', 'compact'] as const).map(mode => (
             <button

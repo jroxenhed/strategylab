@@ -10,8 +10,34 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time as _time
+from collections import deque
 from dataclasses import dataclass
 from typing import Protocol
+
+
+class RateCounter:
+    """Sliding-window API call counter (default 60-second window)."""
+
+    def __init__(self, window_secs: float = 60.0):
+        self._window = window_secs
+        self._calls: deque[float] = deque()
+
+    def record(self):
+        self._calls.append(_time.monotonic())
+
+    def calls_per_minute(self) -> int:
+        cutoff = _time.monotonic() - self._window
+        while self._calls and self._calls[0] < cutoff:
+            self._calls.popleft()
+        return len(self._calls)
+
+
+_rate_counter = RateCounter()
+
+
+def get_rate_counter() -> RateCounter:
+    return _rate_counter
 
 
 @dataclass
@@ -129,6 +155,7 @@ class AlpacaTradingProvider:
         }
 
     def get_positions(self) -> list[dict]:
+        _rate_counter.record()
         positions = self._retry(self._client.get_all_positions)
         return [
             {
@@ -175,6 +202,7 @@ class AlpacaTradingProvider:
         ]
 
     def submit_order(self, order: OrderRequest) -> OrderResult:
+        _rate_counter.record()
         from alpaca.trading.requests import MarketOrderRequest, StopLossRequest
         from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 
@@ -205,6 +233,7 @@ class AlpacaTradingProvider:
         )
 
     def get_order(self, order_id: str) -> OrderResult:
+        _rate_counter.record()
         o = self._retry(self._client.get_order_by_id, order_id)
         return OrderResult(
             order_id=str(o.id),
@@ -217,9 +246,11 @@ class AlpacaTradingProvider:
         )
 
     def cancel_order(self, order_id: str) -> None:
+        _rate_counter.record()
         self._retry(self._client.cancel_order_by_id, order_id)
 
     def close_position(self, symbol: str) -> OrderResult:
+        _rate_counter.record()
         resp = self._retry(self._client.close_position, symbol)
         order_id = str(getattr(resp, 'id', ''))
         return OrderResult(
@@ -237,6 +268,7 @@ class AlpacaTradingProvider:
         self._retry(self._client.cancel_orders)
 
     def get_latest_price(self, symbol: str) -> float:
+        _rate_counter.record()
         if self._data_client is None:
             raise ValueError("Alpaca data client not configured")
         from alpaca.data.requests import StockLatestTradeRequest
@@ -246,6 +278,7 @@ class AlpacaTradingProvider:
         return float(latest[symbol].price)
 
     def get_latest_quote(self, symbol: str) -> tuple[float, float]:
+        _rate_counter.record()
         if self._data_client is None:
             raise ValueError("Alpaca data client not configured")
         from alpaca.data.requests import StockLatestQuoteRequest
@@ -360,7 +393,7 @@ class IBKRTradingProvider:
         Retries transient failures (timeouts, connection resets) with
         exponential backoff. Structural errors are not retried.
         """
-        import time as _time
+        _rate_counter.record()
         last_err = None
         for attempt in range(retries):
             future = asyncio.run_coroutine_threadsafe(coro, self._loop)

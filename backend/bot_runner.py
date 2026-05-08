@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os as _os
 from datetime import datetime, timezone
 
 from slippage import slippage_cost_bps, fill_bias_bps
@@ -28,6 +29,18 @@ from exits import ExitsMixin
 
 # Poll interval per bar cadence (seconds)
 POLL_INTERVALS = {"1m": 10, "5m": 15, "15m": 20, "30m": 30, "1h": 60}
+
+# Global override poll interval (milliseconds). 0 = use per-interval defaults.
+_POLL_MS: int = int(_os.environ.get("BOT_POLL_MS", "0"))
+
+
+def get_poll_ms() -> int:
+    return _POLL_MS
+
+
+def set_poll_ms(ms: int):
+    global _POLL_MS
+    _POLL_MS = ms
 
 
 class BotRunner(RegimeMixin, ExitsMixin):
@@ -491,7 +504,10 @@ class BotRunner(RegimeMixin, ExitsMixin):
         self._register_error_listener()
         self.manager.save()
 
-        interval_secs = POLL_INTERVALS.get(self.config.interval, 30)
+        if _POLL_MS > 0:
+            interval_secs = _POLL_MS / 1000.0
+        else:
+            interval_secs = POLL_INTERVALS.get(self.config.interval, 30)
         consec_errors = 0
         MAX_CONSEC_ERRORS = 5
         RECOVERY_WAIT = 30  # seconds to wait before retrying after transient failures

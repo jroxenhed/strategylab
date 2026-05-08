@@ -209,6 +209,8 @@ export interface BrokerInfo {
   available: string[]
   health: Record<string, BrokerHealth>
   heartbeat_warmup: boolean
+  poll_interval_ms: number | null
+  api_calls_per_minute: number
 }
 
 export async function fetchBroker(): Promise<BrokerInfo> {

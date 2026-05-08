@@ -163,5 +163,7 @@ export function useBroker() {
     adaptiveInterval,
     isLoading: query.isLoading,
     switchBroker,
+    pollIntervalMs: query.data?.poll_interval_ms ?? null,
+    apiCallsPerMinute: query.data?.api_calls_per_minute ?? 0,
   }
 }
