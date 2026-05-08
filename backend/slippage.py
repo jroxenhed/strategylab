@@ -22,6 +22,7 @@ from typing import Literal
 
 # Tunable policy constants.
 SLIPPAGE_DEFAULT_BPS: float = 2.0
+SLIPPAGE_MAX_SPREAD_BPS: float = 50.0
 SLIPPAGE_MIN_FILLS:   int   = 20
 SLIPPAGE_WINDOW:      int   = 50
 
@@ -99,6 +100,29 @@ def _recent_fills(symbol: str, limit: int) -> list[Fill]:
     return out[-limit:]
 
 
+def _spread_derived_bps(symbol: str) -> float | None:
+    """Return half-spread in bps from the active broker's live quote.
+    Returns None when: no broker configured, market closed, quote stale
+    (outside 09:30-16:00 ET), or spread exceeds the safety cap."""
+    try:
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo
+        now_et = _dt.now(ZoneInfo("America/New_York"))
+        hour_min = now_et.hour * 100 + now_et.minute
+        if hour_min < 930 or hour_min >= 1600 or now_et.weekday() >= 5:
+            return None
+        from broker import get_trading_provider
+        provider = get_trading_provider()
+        bid, ask = provider.get_latest_quote(symbol)
+        if bid > 0 and ask > bid:
+            mid = (bid + ask) / 2
+            half_spread_bps = (ask - bid) / (2 * mid) * 10_000
+            return min(half_spread_bps, SLIPPAGE_MAX_SPREAD_BPS)
+    except Exception:
+        pass
+    return None
+
+
 def decide_modeled_bps(symbol: str) -> ModeledSlippage:
     """Return the modeled cost the backtester should use for `symbol`,
     plus the diagnostic aggregates over the same window.
@@ -108,24 +132,15 @@ def decide_modeled_bps(symbol: str) -> ModeledSlippage:
     n = len(fills)
 
     if n == 0:
-        # Try live spread before falling back to 2 bps default
-        try:
-            from broker import get_trading_provider
-            provider = get_trading_provider()
-            bid, ask = provider.get_latest_quote(symbol)
-            if bid > 0 and ask > bid:
-                mid = (bid + ask) / 2
-                half_spread_bps = (ask - bid) / (2 * mid) * 10_000
-                modeled = max(SLIPPAGE_DEFAULT_BPS, half_spread_bps)
-                return ModeledSlippage(
-                    modeled_bps=modeled,
-                    measured_bps=None,
-                    fill_bias_bps=None,
-                    fill_count=0,
-                    source="spread-derived",
-                )
-        except Exception:
-            pass  # broker unavailable, AttributeError for providers without get_latest_quote, etc.
+        spread = _spread_derived_bps(symbol)
+        if spread is not None:
+            return ModeledSlippage(
+                modeled_bps=max(SLIPPAGE_DEFAULT_BPS, spread),
+                measured_bps=None,
+                fill_bias_bps=None,
+                fill_count=0,
+                source="spread-derived",
+            )
         return ModeledSlippage(
             modeled_bps=SLIPPAGE_DEFAULT_BPS,
             measured_bps=None,
@@ -138,24 +153,15 @@ def decide_modeled_bps(symbol: str) -> ModeledSlippage:
     bias     = mean(fill_bias_bps(f.side, f.expected, f.fill)    for f in fills)
 
     if n < SLIPPAGE_MIN_FILLS:
-        # Try live spread before falling back to 2 bps default
-        try:
-            from broker import get_trading_provider
-            provider = get_trading_provider()
-            bid, ask = provider.get_latest_quote(symbol)
-            if bid > 0 and ask > bid:
-                mid = (bid + ask) / 2
-                half_spread_bps = (ask - bid) / (2 * mid) * 10_000
-                modeled = max(SLIPPAGE_DEFAULT_BPS, half_spread_bps)
-                return ModeledSlippage(
-                    modeled_bps=modeled,
-                    measured_bps=measured,
-                    fill_bias_bps=bias,
-                    fill_count=n,
-                    source="spread-derived",
-                )
-        except Exception:
-            pass  # broker unavailable, AttributeError for providers without get_latest_quote, etc.
+        spread = _spread_derived_bps(symbol)
+        if spread is not None:
+            return ModeledSlippage(
+                modeled_bps=max(SLIPPAGE_DEFAULT_BPS, spread),
+                measured_bps=measured,
+                fill_bias_bps=bias,
+                fill_count=n,
+                source="spread-derived",
+            )
         return ModeledSlippage(
             modeled_bps=SLIPPAGE_DEFAULT_BPS,
             measured_bps=measured,
