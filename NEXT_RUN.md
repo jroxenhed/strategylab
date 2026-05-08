@@ -35,15 +35,20 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-05-08 (build 15)
-**Branch:** `claude/wizardly-newton-AAkXw`
+**Date:** 2026-05-08 (build 16)
+**Branch:** `claude/wizardly-newton-xwoKZ`
 
 **Shipped:**
-- **B5a** Borrow cost in TradeJournal UI — conditional Borrow column (shows when any visible row has borrow_cost > 0). Dollar amount in red, CSV export included. TS type updated.
-- **B8a** "Use live spread" button — appears in Capital & Fees when IBKR live spread available. Pre-fills slippageBps with half_spread_bps, sets source label to "live spread".
+- **B5b** Total borrow cost in TradeJournal summary row — null-safe `totalBorrowCost` in `summaryStats`; summary Borrow cell shows `$X.XXXX` in red when > 0.
+- **B5c** Bot runner borrow cost on position resume — `entry_time` was never set when bot resumed tracking an externally-opened position, causing `_compute_borrow_cost()` to silently return 0.0. Fixed by setting `state.entry_time = now` in the resume block.
+- **F27** Concurrent `_fetch()` dedup — threading.Lock per `(symbol, interval)` in `shared.py`. Second concurrent caller blocks and hits the freshly-populated cache instead of firing a duplicate HTTP request.
 
-**Review findings:** 2 P1s found in post-merge multi-agent review, both fixed: spread-derived slippage overwritten by 60s auto-refresh, button shown at zero spread. Also added "↩ modeled" reset button (UX gap). B8b resolved as part of P1 fix.
+**Review findings:** 0 findings (P0: 0, P1: 0, P2: 0), 0 auto-fixed. Build clean.
 
-**Previous run:** 2026-05-08 (builds 13+14), branch `claude/sharp-allen-igMUK` — B5 (borrow cost live bots), B8 (spread-derived slippage). Post-merge review found 10 total findings across 2 PRs, all fixed.
+**Deferred:**
+- **A8** viewport-only rendering — estimated 500-700 lines across 5-6 files, 6-8 hours, high regression risk on pan/zoom and multi-pane sync. Needs multi-session approach with feature flag.
+- **F26** shared OHLCV cache — architectural follow-up to F27. F27 covers the critical concurrent-miss problem; F26 eliminates per-bot calls entirely. Lower urgency now.
 
-**Next up:** A8 viewport-only rendering [next][medium], F26 shared OHLCV cache [next][medium], B5b total borrow in summary row [easy], B5c bot runner borrow cost on cover [easy], F27 concurrent fetch dedup [easy].
+**Previous run:** 2026-05-08 (build 15), branch `claude/wizardly-newton-AAkXw` — B5a (borrow column UI), B8a (use live spread button). Post-merge review found 2 P1s, both fixed.
+
+**Next up:** F26 shared OHLCV cache [next][medium], A8 off-screen downsampling [next][medium].

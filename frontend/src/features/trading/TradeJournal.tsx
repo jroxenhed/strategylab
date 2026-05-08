@@ -101,11 +101,13 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
       const cost = costBpsOf(t)
       if (cost != null) costsBps.push(cost)
     }
+    const totalBorrowCost = filtered.reduce((sum, t) => sum + (t.borrow_cost ?? 0), 0)
     return {
       totalQty,
       totalPnl,
       avgGainPct: gainPcts.length > 0 ? gainPcts.reduce((a, b) => a + b, 0) / gainPcts.length : null,
       avgCostBps: costsBps.length > 0 ? costsBps.reduce((a, b) => a + b, 0) / costsBps.length : null,
+      totalBorrowCost,
     }
   })()
 
@@ -203,7 +205,11 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
             </span>
             <span style={styles.summaryCell} />  {/* Source */}
             <span style={styles.summaryCell} />  {/* Reason */}
-            {hasBorrowCost && <span style={styles.summaryCell} />}  {/* Borrow */}
+            {hasBorrowCost && (
+              <span style={{ ...styles.summaryCell, color: summaryStats.totalBorrowCost > 0 ? '#f85149' : undefined }}>
+                {summaryStats.totalBorrowCost > 0 ? `$${summaryStats.totalBorrowCost.toFixed(4)}` : ''}
+              </span>
+            )}  {/* Borrow */}
           </div>
           {[...filtered].reverse().map(t => (
             <div key={t.id} style={{ ...styles.row, background: rowBackground(t, exitPnl) }}>
