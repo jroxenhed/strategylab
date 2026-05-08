@@ -4,6 +4,32 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-08 (PR #25 review fixes)
+
+Multi-agent review of build 18 (A14, D27, F28b, F28c, C25) via `ce:review`. Found 1 P1 + 8 P2 + 8 P3.
+
+- **P1 fixed — startup cascade:** `Literal['AND','OR']` with `BeforeValidator` applied across all 8 models using a shared `LogicField` type alias, preventing any non-`AND|OR` string from reaching `eval_rules()`.
+- **P2 fixed — 3 missed models:** `ScanRequest`, `RegimeConfig`, `PerformanceRequest` now include `buy_logic`/`sell_logic` validation (were missed in the F28b pass).
+- **P2 fixed — duplicate validators eliminated:** 5 duplicate `validate_logic` methods replaced by the `LogicField` type alias (DRY pass across models).
+- **P2 fixed — App.tsx isError branch:** network failure now shows "Failed to load" instead of the misleading "No data" path.
+- **P2 fixed — cache_info star-unpack:** `shared.py` cache_info now uses `*rest` unpacking for resilience against future key growth.
+- **P3 fixed — cache_info +ext flag:** `GET /api/cache` display includes `+ext` flag when `extended_hours=True`.
+- **P3 fixed — BotCard lastTickStr dedup:** removed 3 duplicate IIFEs, reused single `lastTickStr` variable throughout.
+
+Deferred findings added to TODO.md: A14b (skeleton stale-cache), A14c (ChartSkeleton location), C25a (NaN guard improvements), F31 (eval_rules defense-in-depth), F32 (BotCard unsafe optional chain).
+
+## 2026-05-08 (build 18 — overnight)
+
+- **[A14](TODO.md#a--charts--indicators)** Chart loading skeleton — extracted `isLoading` from `useOHLCV` React Query hook in App.tsx. While loading with no cached data, shows a `ChartSkeleton` component: 20 CSS-animated pulsing grey bars mimicking candlestick columns, plus a ticker label. After loading with no data, shows "No data for {ticker}" (was always "Loading..."). CSS keyframe `chart-skeleton-pulse` added to `index.css`. Not visually verified.
+
+- **[D27](TODO.md#d--bots-live-trading)** Bot status tooltip — added native `title` attribute to the status badge in both compact and expanded BotCard layouts. Tooltip shows: status, P&L (amount + %), in/out-of-position, and last tick time via `fmtTimeET`. Uses the same `detail?.state.last_tick ?? summary.last_tick` fallback as the heartbeat dot. Not visually verified.
+
+- **[F28b](TODO.md#f--architecture--housekeeping)** `buy_logic`/`sell_logic` validation — added `@field_validator` restricting to `"AND" | "OR"` across all relevant models: `QuickBacktestRequest`, `BatchQuickBacktestRequest` (backtest_quick.py), `StrategyRequest` (models.py — all 6 logic fields), `BotConfig` (bot_manager.py — all 6 logic fields), and `UpdateBotRequest` (routes/bots.py — Optional fields, None-safe guard). Previously any string silently fell back to OR semantics.
+
+- **[F28c](TODO.md#f--architecture--housekeeping)** `cache_info()` 6-tuple crash fixed — `cache_info()` in shared.py was unpacking keys as 5-tuples `(ticker, start, end, interval, source)` but keys are 6-tuples that include `extended_hours`. Every `GET /api/cache` call raised `ValueError`. Fixed by unpacking as `(ticker, start, end, interval, source, _ext)`.
+
+- **[C25](TODO.md#c--strategy-summary--analytics)** Optimizer param NaN handling — added `isNaN(minN) || isNaN(maxN)` check before the existing `min > max` guard in `runOptimizer()` (OptimizerPanel.tsx). Catches non-numeric input like `'abc'` that `parseFloat` silently converts to NaN, which previously produced an all-NaN linspace with no visible error.
+
 ## 2026-05-08 (build 17 — overnight)
 
 - **[B10](TODO.md#b--strategy-engine--rules)** TradeJournal CSV quoting — replaced bare `.join(',')` with a `csvField()` RFC 4180 helper (wraps fields containing commas, double-quotes, or newlines). Applied to both header row and all data rows. Prevents column misalignment for timestamps like "May 8, 2026 10:30 AM" that contain a comma.

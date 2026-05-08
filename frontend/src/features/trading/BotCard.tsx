@@ -124,6 +124,14 @@ export default function BotCard({
     ? (summary.total_pnl / summary.allocated_capital * 100).toFixed(1)
     : '0.0'
 
+  const lastTickStr = (() => { const t = detail?.state.last_tick ?? summary.last_tick; return t ? fmtTimeET(t) : 'No tick yet' })()
+  const statusTooltip = [
+    `Status: ${summary.status}`,
+    `P&L: ${fmtPnl(summary.total_pnl)} (${pnlPct}%)`,
+    summary.has_position ? 'In position' : 'No position',
+    `Last tick: ${lastTickStr}`,
+  ].join('\n')
+
   // ---- Compact layout ----
   if (compact) {
     return (
@@ -159,7 +167,7 @@ export default function BotCard({
 
             {/* Heartbeat dot */}
             <div
-              title={(() => { const t = detail?.state.last_tick ?? summary.last_tick; return t ? `Last tick: ${fmtTimeET(t)}` : 'No tick yet' })()}
+              title={lastTickStr}
               style={{
                 width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
                 background: heartbeatColor(summary, detail),
@@ -189,10 +197,10 @@ export default function BotCard({
             </span>
 
             {/* Status badge */}
-            <span style={{
-              fontSize: 10, color: statusColor(summary.status), textTransform: 'capitalize',
-              flexShrink: 0,
-            }}>
+            <span
+              style={{ fontSize: 10, color: statusColor(summary.status), textTransform: 'capitalize', flexShrink: 0, cursor: 'default' }}
+              title={statusTooltip}
+            >
               {summary.status}
             </span>
             {stopped && summary.was_running && (
@@ -326,7 +334,7 @@ export default function BotCard({
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {/* Heartbeat dot */}
             <div
-              title={(() => { const t = detail?.state.last_tick ?? summary.last_tick; return t ? `Last tick: ${fmtTimeET(t)}` : 'No tick yet' })()}
+              title={lastTickStr}
               style={{
                 width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
                 background: heartbeatColor(summary, detail),
@@ -429,7 +437,7 @@ export default function BotCard({
             />
             <StatCell
               label="Status"
-              value={<span style={{ color: statusColor(summary.status), textTransform: 'capitalize' }}>{summary.status}</span>}
+              value={<span style={{ color: statusColor(summary.status), textTransform: 'capitalize', cursor: 'default' }} title={statusTooltip}>{summary.status}</span>}
             />
             {stopped && summary.was_running && (
               <StatCell

@@ -12,7 +12,6 @@ You are the StrategyLab overnight builder. Your job is to autonomously pick task
 2. Read NEXT_RUN.md for task overrides, skip list, constraints.
 3. Read TODO.md — pick items tagged [next]. If no [next] tags, pick unchecked items in section order.
 4. Read JOURNAL.md (last entry only) for recent context.
-5. Add new suggested items to TODO.md for the next run to pick from.
 
 ## Guard Rails
 
@@ -102,10 +101,11 @@ Run npm run build one last time. If clean:
 - Create a feature branch: git checkout -b claude/overnight-YYYY-MM-DD (use today's date). IMPORTANT: branch name MUST start with claude/ — the sandbox git proxy blocks pushes to other branch prefixes.
 - **Before staging, work through this checklist line by line. Do not skip any item.**
   1. Check off completed items in TODO.md.
-  2. **Add new TODO items.** Two required categories — both must be addressed:
+  2. **⛔ DO NOT SKIP: Add new TODO items.** This step is REQUIRED and has been skipped repeatedly. Do it now, before git add. Two required categories — both must be addressed:
      - *Findings:* one item for every P2/P3 finding, every thing you explicitly deferred ("no timeout", "not migrated", "left X out"), every "would be cleaner if..." you thought during implementation.
      - *Observations:* things you noticed while reading surrounding code — duplication, fragile patterns, missing guards, natural follow-ons. If you'd raise it in a code review, it belongs here. Tag [easy]/[medium]/[hard].
      - If this step produces zero new items, that is almost certainly wrong. You read code to implement; you saw things. Write them down.
+     - **DO NOT run git add until new items are written.**
   3. Tag suitable unchecked items `[next]` for tomorrow's run (prefer prereqs of in-progress work, then [easy] items). At least one item must be tagged [next] before you commit.
   4. Append to JOURNAL.md.
 - git add the changed files + TODO.md + JOURNAL.md
@@ -121,7 +121,7 @@ You cannot visually verify UI changes — that is the human's job during morning
    - Review findings summary (total findings, severities, auto-fixed count, iterations)
    - Any concerns flagged for human review
    - What's queued next
-2. Verify new TODO items were added (cross-check): scan NEXT_RUN.md for every word "concern", "P2", "not verified", "no timeout", "left out", "deferred", "skipped". Each one must have a matching TODO item. If any are missing, add them now before continuing. Also confirm the observation category was filled — zero new items from a full implementation pass is a red flag, not a clean bill of health.
+2. **⛔ DO NOT SKIP: Verify new TODO items were added.** Count the new unchecked items you added to TODO.md this session. If the count is zero, go back and add them before continuing — this is not optional. Then cross-check: scan NEXT_RUN.md for every word "concern", "P2", "not verified", "no timeout", "left out", "deferred", "skipped". Each one must have a matching TODO item. Zero new items from a full implementation pass is a red flag, not a clean bill of health.
 3. Confirm at least one unchecked item is tagged [next] for tomorrow's run. If none are tagged, tag the highest-value unchecked item now.
 4. Commit NEXT_RUN.md update
 5. Push the branch: git push -u origin claude/overnight-YYYY-MM-DD

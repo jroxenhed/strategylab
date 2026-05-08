@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field, field_validator
 
 from bot_manager import BotConfig, BotManager
-from models import RegimeConfig
+from models import RegimeConfig, LogicField
 
 router = APIRouter(prefix="/api/bots")
 
@@ -48,16 +48,16 @@ class UpdateBotRequest(BaseModel):
     strategy_name: Optional[str] = None
     buy_rules: Optional[list] = None
     sell_rules: Optional[list] = None
-    buy_logic: Optional[str] = None
-    sell_logic: Optional[str] = None
+    buy_logic: Optional[LogicField] = None
+    sell_logic: Optional[LogicField] = None
     long_buy_rules: Optional[list] = None
     long_sell_rules: Optional[list] = None
-    long_buy_logic: Optional[str] = None
-    long_sell_logic: Optional[str] = None
+    long_buy_logic: Optional[LogicField] = None
+    long_sell_logic: Optional[LogicField] = None
     short_buy_rules: Optional[list] = None
     short_sell_rules: Optional[list] = None
-    short_buy_logic: Optional[str] = None
-    short_sell_logic: Optional[str] = None
+    short_buy_logic: Optional[LogicField] = None
+    short_sell_logic: Optional[LogicField] = None
     max_spread_bps: Optional[float] = Field(default=None, ge=0)
     drawdown_threshold_pct: Optional[float] = Field(default=None, ge=0)
     borrow_rate_annual: Optional[float] = Field(default=None, ge=0)
@@ -72,6 +72,7 @@ class UpdateBotRequest(BaseModel):
         if v is not None and v not in ('long', 'short'):
             raise ValueError("direction must be 'long' or 'short'")
         return v
+
 
 
 class ReorderBotsRequest(BaseModel):

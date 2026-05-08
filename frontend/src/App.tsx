@@ -54,6 +54,22 @@ const _cachedBacktest = (() => {
   return null
 })()
 
+const SKELETON_HEIGHTS = [35, 55, 45, 70, 50, 40, 65, 80, 60, 45, 55, 70, 40, 50, 65, 75, 55, 45, 60, 50]
+
+function ChartSkeleton({ ticker }: { ticker: string }) {
+  return (
+    <div className="chart-skeleton">
+      <div className="chart-skeleton-bars">
+        {SKELETON_HEIGHTS.map((h, i) => (
+          <div key={i} className="chart-skeleton-bar" style={{ height: `${h}%` }} />
+        ))}
+      </div>
+      <div className="chart-skeleton-axis" />
+      <div className="chart-skeleton-label">Loading {ticker}…</div>
+    </div>
+  )
+}
+
 export default function App() {
   const [tzMode, setTzMode] = useTimezone()
   const [ticker, setTicker] = useState(saved?.ticker ?? 'AAPL')
@@ -109,7 +125,7 @@ export default function App() {
   }, [backtestResult, lastRequest])
 
   const chartInterval = chartEnabled ? viewInterval : interval
-  const { data: ohlcv = EMPTY_OHLCV, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, chartInterval, dataSource, extendedHours)
+  const { data: ohlcv = EMPTY_OHLCV, isLoading: ohlcvLoading, isError: ohlcvError, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, chartInterval, dataSource, extendedHours)
   const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', start, end, chartInterval, dataSource, extendedHours, chartEnabled && showSpy)
   const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', start, end, chartInterval, dataSource, extendedHours, chartEnabled && showQqq)
 
@@ -240,8 +256,12 @@ export default function App() {
                           backtestInterval={interval}
                           onChartReady={setMainChart}
                         />
+                      ) : ohlcvLoading ? (
+                        <ChartSkeleton ticker={ticker} />
+                      ) : ohlcvError ? (
+                        <div style={styles.empty}>Failed to load {ticker}</div>
                       ) : (
-                        <div style={styles.empty}>Loading {ticker}...</div>
+                        <div style={styles.empty}>No data for {ticker}</div>
                       )}
                     </div>
                   </Panel>
