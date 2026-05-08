@@ -21,6 +21,20 @@ def _br():
     return sys.modules["bot_runner"]
 
 
+def _compute_borrow_cost(pos_is_short: bool, entry_price, entry_time, borrow_rate_annual: float, broker_qty: float) -> float:
+    """Compute short borrow cost: rate × notional × hold_days. Returns 0.0 when not applicable."""
+    if not pos_is_short or not entry_price or not entry_time:
+        return 0.0
+    try:
+        entry_dt = datetime.fromisoformat(entry_time)
+        hold_days = (datetime.now(timezone.utc) - entry_dt).total_seconds() / 86400
+        return round(broker_qty * entry_price * (borrow_rate_annual / 100 / 365) * hold_days, 2)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Borrow cost calc skipped: {e}")
+        return 0.0
+
+
 class ExitsMixin:
 
     async def _detect_external_close(self, cfg, state, has_position, pos_is_short,
@@ -92,10 +106,15 @@ class ExitsMixin:
             expected_exit = state.trail_stop_price
 
         logged_dir = state.position_direction or cfg.direction
+        borrow_cost = _compute_borrow_cost(
+            pos_is_short, state.entry_price, getattr(state, 'entry_time', None),
+            cfg.borrow_rate_annual, sell_qty
+        )
         try:
             br._log_trade(cfg.symbol, "cover" if pos_is_short else "sell", sell_qty, exit_price,
                           source="bot", reason=exit_reason, expected_price=expected_exit,
-                          direction=logged_dir, bot_id=cfg.bot_id, broker=cfg.broker)
+                          direction=logged_dir, bot_id=cfg.bot_id, broker=cfg.broker,
+                          borrow_cost=borrow_cost if pos_is_short else None)
         except Exception as e:
             self._log("ERROR", f"Journal write failed: {e}")
 
@@ -131,6 +150,7 @@ class ExitsMixin:
                     bot_id=cfg.bot_id,
                 ))
                 state.entry_price = None
+                state.entry_time = None
                 state.entry_bar_count = 0
                 state.trail_peak = None
                 state.trail_stop_price = None
@@ -272,6 +292,7 @@ class ExitsMixin:
                 if not pos_match:
                     self._log("WARN", f"Position side mismatch — clearing stale state")
                     state.entry_price = None
+                    state.entry_time = None
                     state.entry_bar_count = 0
                     state.trail_peak = None
                     state.trail_stop_price = None
@@ -334,6 +355,13 @@ class ExitsMixin:
             pnl = (state.entry_price - sell_fill) * broker_qty if state.entry_price else 0
         else:
             pnl = (sell_fill - state.entry_price) * broker_qty if state.entry_price else 0
+
+        # Borrow cost for short positions: rate × notional × hold_days
+        borrow_cost: float = _compute_borrow_cost(
+            pos_is_short, state.entry_price, getattr(state, 'entry_time', None),
+            cfg.borrow_rate_annual, broker_qty
+        )
+
         exit_label = "COVER" if pos_is_short else "SELL"
         state.last_signal = f"{exit_label} ({exit_reason})"
 
@@ -362,7 +390,8 @@ class ExitsMixin:
         try:
             br._log_trade(cfg.symbol, "cover" if pos_is_short else "sell", broker_qty, sell_fill,
                           source="bot", reason=exit_reason, expected_price=price,
-                          direction=logged_dir, bot_id=cfg.bot_id, broker=cfg.broker)
+                          direction=logged_dir, bot_id=cfg.bot_id, broker=cfg.broker,
+                          borrow_cost=borrow_cost if pos_is_short else None)
         except Exception as e:
             self._log("ERROR", f"Journal write failed: {e}")
 
@@ -398,6 +427,7 @@ class ExitsMixin:
                     bot_id=cfg.bot_id,
                 ))
                 state.entry_price = None
+                state.entry_time = None
                 state.entry_bar_count = 0
                 state.trail_peak = None
                 state.trail_stop_price = None
@@ -410,6 +440,7 @@ class ExitsMixin:
                 return True
 
         state.entry_price = None
+        state.entry_time = None
         state.entry_bar_count = 0
         state.trail_peak = None
         state.trail_stop_price = None

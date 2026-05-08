@@ -35,24 +35,33 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-05-06 (build 12)
-**Branch:** `claude/sharp-allen-RUcHz`
+**Date:** 2026-05-07 (build 13)
+**Branch:** `claude/sharp-allen-lpvXd`
 
 **Shipped:**
-- **F19** React Query migration — 5 shared query hooks replace 12 manual setInterval timers. Journal deduplicated between PositionsTable + TradeJournal. Bots list deduplicated between BotControlCenter + TradeJournal.
-- **C22** Auto-optimizer — `POST /api/backtest/optimize` endpoint + `OptimizerPanel.tsx` "Optimizer" tab. Multi-param grid search (up to 3 params × 10 values, max 200 combos). Ranked table by Sharpe/Return/WinRate.
+- **B5** Borrow cost for live shorts — `borrow_rate_annual` on `BotConfig`, `entry_time` on `BotState`, borrow cost computed at exit using backtest formula, stored in journal.
+- **B8** Live spread display — `/api/slippage/{symbol}` returns `live_spread_bps`/`half_spread_bps`, shown in StrategyBuilder next to modeled slippage.
 
 **Review findings:**
-- 1 finding (P0: 0, P1: 0, P2: 1 — bot API connection error not surfaced after F19; fixed before commit), 1 auto-fixed, 1 iteration.
-- Build: `npm run build` passes. `ast.parse` passes on all backend files.
-- Smoke test: uvicorn not available in sandbox; C22 backend is a thin wrapper over tested `_apply_param` + `run_backtest`.
+- 2 findings (P0: 0, P1: 0, P2: 1, P3: 1). 0 auto-fixed.
+- P2: B8 live spread is informational only (not auto-applied to modeled_bps). Deliberate design choice — auto-apply would make backtests non-deterministic across runs.
+- P3: `entry_time` not explicitly cleared in exit cleanup paths. Harmless (guarded by `entry_price` null check). Cosmetic.
+- Build: `npm run build` passes. `ast.parse` passes on all 6 changed backend files.
 
 **Not visually verified:**
-- F19: Bot polling, journal deduplication — not visually verified (no browser).
-- C22: Optimizer tab UI — not visually verified. Verify: run a backtest, click Optimizer tab, add 2 params, run, see ranked table.
+- B8: Live spread display in StrategyBuilder — not visually verified (no browser). Verify: open StrategyBuilder with Alpaca broker configured, observe "live spread: X bps (½: Y)" next to slippage input.
 
 **Concerns for human review:**
-- F19: `onStale` prop in PositionsTable/OrderHistory is not memoized at the call site — may cause unnecessary effect re-fires. P3, no correctness issue.
-- C22: No timeout on optimizer endpoint — 200 backtests on a slow machine could take 30–60s. Consider adding `asyncio.wait_for` or a streaming response in a future pass.
+- B8 auto-apply: if the intent is to auto-default `modeled_bps` to `half_spread_bps`, a follow-up could add a "Use live spread" button that pre-fills slippage from the live quote. Discussed as B8-follow-up in TODO suggestions.
 
-**Next up:** C22 visual verification (manual QA), D24b (regime bot visual verification), A8 viewport-only rendering [medium].
+**Deferred:**
+- A8 viewport-only rendering — not attempted. Complex risk for an overnight run (many `setData()` call sites across Chart.tsx + SubPane.tsx).
+- D24b — manual QA only, requires browser.
+- B20 multi-TF confirmation — large, needs design.
+
+**Suggested new TODO items (add if relevant):**
+- B8-follow-up: "Use live spread" button in Capital & Fees that pre-fills slippage_bps from half-spread [easy]
+- B5-follow-up: Show borrow_cost in TradeJournal UI as a column (currently stored in JSON but not displayed) [easy]
+- B9 partial: start with margin interest only (simplest sub-item of B9) [medium]
+
+**Next up:** C22 visual verification (manual QA), D24b (regime bot visual verification), A8 viewport-only rendering [medium], or B5-follow-up [easy].

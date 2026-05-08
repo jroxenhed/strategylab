@@ -7,6 +7,8 @@ export interface SlippageInfo {
   fill_bias_bps: number | null
   fill_count: number
   source: 'default' | 'empirical'
+  live_spread_bps?: number | null
+  half_spread_bps?: number | null
 }
 
 export function useSlippage(symbol: string) {

@@ -90,6 +90,7 @@ class BotConfig(BaseModel):
     short_max_bars_held: Optional[int] = None
     long_position_size: Optional[float] = None
     short_position_size: Optional[float] = None
+    borrow_rate_annual: float = Field(default=0.5, ge=0)
 
     @field_validator('long_position_size', 'short_position_size', mode='before')
     @classmethod
@@ -115,6 +116,7 @@ class BotState:
 
     # Position tracking (mirrors backtest.py trailing stop state)
     entry_price: Optional[float] = None
+    entry_time: Optional[str] = None
     entry_bar_count: int = 0
     trail_peak: Optional[float] = None
     trail_stop_price: Optional[float] = None
@@ -157,6 +159,7 @@ class BotState:
             "last_signal": self.last_signal,
             "last_price": self.last_price,
             "entry_price": self.entry_price,
+            "entry_time": self.entry_time,
             "trail_peak": self.trail_peak,
             "trail_stop_price": self.trail_stop_price,
             "pending_close_order_id": self.pending_close_order_id,
@@ -436,6 +439,7 @@ class BotManager:
         bias_bps = fill_bias_bps(side_key, expected=price, fill=fill_price)
         state.slippage_bps.append(round(cost_bps, 2))
         state.entry_price = fill_price
+        state.entry_time = datetime.now(timezone.utc).isoformat()
         state.trail_peak = fill_price
         state.trades_count += 1
         side_label = "SHORT" if is_short else "BUY"

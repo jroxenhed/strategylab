@@ -150,6 +150,7 @@ class BotRunner(RegimeMixin, ExitsMixin):
         fill_price = await self._get_fill_price_provider(provider, result.order_id, price)
 
         state.entry_price = fill_price
+        state.entry_time = datetime.now(timezone.utc).isoformat()
         state.entry_bar_count = 0
         state.trail_peak = fill_price
         state.position_direction = direction

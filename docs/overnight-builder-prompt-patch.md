@@ -114,12 +114,13 @@ You cannot visually verify UI changes — that is the human's job during morning
    - Review findings summary (total findings, severities, auto-fixed count, iterations)
    - Any concerns flagged for human review
    - What's queued next
-2. Suggest new TODO items. Two categories:
+2. Add new TODO items to TODO.md (same commit as NEXT_RUN.md). Two categories:
    - **Follow-ups from this run:** gaps, edge cases, or P2/P3 findings discovered during implementation. If you flagged it in review notes, it should also be a TODO item.
    - **Observations:** things you noticed while reading the codebase that could be improved, simplified, or extended. Use your judgment — if you'd mention it in a code review, it's worth a TODO item. Tag with [easy]/[medium]/[hard] and the right section letter.
    Keep it grounded — you've read the code, so suggest things based on what you actually saw, not hypothetical features.
+   Update the shipped denominator (X / N) to reflect the new total item count.
 3. Tag suitable unchecked items [next] for tomorrow's run (prefer prereqs of in-progress work, then [easy] items).
-4. Commit NEXT_RUN.md update
+4. Commit NEXT_RUN.md + TODO.md update (same commit)
 5. Push the branch: git push -u origin claude/overnight-YYYY-MM-DD
 6. Open a PR: gh pr create --title "Overnight build: YYYY-MM-DD" --body "<summary of tasks shipped, review findings, and any flagged concerns>" --base main
 7. Run: bash bin/slack-report.sh "formatted report" (OK if it fails — no webhook URL means no-op)
