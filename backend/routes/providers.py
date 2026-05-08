@@ -54,8 +54,8 @@ def set_broker(req: SetBrokerRequest):
 @router.patch("/api/broker/poll-interval")
 def set_poll_interval(body: dict):
     ms = body.get("ms")
-    if not isinstance(ms, int) or ms < 100 or ms > 60000:
-        raise HTTPException(400, "ms must be integer between 100 and 60000")
+    if not isinstance(ms, int) or ms < 10 or ms > 60000:
+        raise HTTPException(400, "ms must be integer between 10 and 60000")
     from bot_runner import set_poll_ms
     set_poll_ms(ms)
     _persist_env("BOT_POLL_MS", str(ms))

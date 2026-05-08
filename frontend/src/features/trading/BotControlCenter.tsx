@@ -237,8 +237,8 @@ export default function BotControlCenter() {
   const handlePollIntervalCommit = async () => {
     if (!pollInput.trim()) return
     const ms = parseInt(pollInput, 10)
-    if (isNaN(ms) || ms < 100 || ms > 60000) {
-      setError('Poll interval must be between 100 and 60000 ms')
+    if (isNaN(ms) || ms < 10 || ms > 60000) {
+      setError('Poll interval must be between 10 and 60000 ms')
       return
     }
     try {
@@ -355,7 +355,7 @@ export default function BotControlCenter() {
             onBlur={() => { setPollFocused(false); handlePollIntervalCommit() }}
             onKeyDown={e => { if (e.key === 'Enter') { e.currentTarget.blur() } }}
             placeholder="auto"
-            min={100}
+            min={10}
             max={60000}
             style={{
               ...inputStyle,
