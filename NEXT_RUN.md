@@ -42,8 +42,8 @@ Tasks to skip even if tagged `[next]`:
 - **B5a** Borrow cost in TradeJournal UI — conditional Borrow column (shows when any visible row has borrow_cost > 0). Dollar amount in red, CSV export included. TS type updated.
 - **B8a** "Use live spread" button — appears in Capital & Fees when IBKR live spread available. Pre-fills slippageBps with half_spread_bps, sets source label to "live spread".
 
-**Review findings:** 0 findings (P0: 0, P1: 0, P2: 0), 0 auto-fixed.
+**Review findings:** 2 P1s found in post-merge multi-agent review, both fixed: spread-derived slippage overwritten by 60s auto-refresh, button shown at zero spread. Also added "↩ modeled" reset button (UX gap). B8b resolved as part of P1 fix.
 
 **Previous run:** 2026-05-08 (builds 13+14), branch `claude/sharp-allen-igMUK` — B5 (borrow cost live bots), B8 (spread-derived slippage). Post-merge review found 10 total findings across 2 PRs, all fixed.
 
-**Next up:** A8 viewport-only rendering [next][medium], F26 shared OHLCV cache [next][medium], B5b total borrow in summary row [easy], B8b slippage auto-reset bug [easy], F27 concurrent fetch dedup [easy].
+**Next up:** A8 viewport-only rendering [next][medium], F26 shared OHLCV cache [next][medium], B5b total borrow in summary row [easy], B5c bot runner borrow cost on cover [easy], F27 concurrent fetch dedup [easy].
