@@ -73,7 +73,7 @@ class ModeledSlippage:
     measured_bps:   float | None
     fill_bias_bps:  float | None
     fill_count:     int
-    source:         Literal["default", "empirical"]
+    source:         Literal["default", "empirical", "spread-derived"]
 
 
 def _recent_fills(symbol: str, limit: int) -> list[Fill]:
@@ -108,6 +108,24 @@ def decide_modeled_bps(symbol: str) -> ModeledSlippage:
     n = len(fills)
 
     if n == 0:
+        # Try live spread before falling back to 2 bps default
+        try:
+            from broker import get_trading_provider
+            provider = get_trading_provider()
+            bid, ask = provider.get_latest_quote(symbol)
+            if bid > 0 and ask > bid:
+                mid = (bid + ask) / 2
+                half_spread_bps = (ask - bid) / (2 * mid) * 10_000
+                modeled = max(SLIPPAGE_DEFAULT_BPS, half_spread_bps)
+                return ModeledSlippage(
+                    modeled_bps=modeled,
+                    measured_bps=None,
+                    fill_bias_bps=None,
+                    fill_count=0,
+                    source="spread-derived",
+                )
+        except Exception:
+            pass  # broker unavailable, AttributeError for providers without get_latest_quote, etc.
         return ModeledSlippage(
             modeled_bps=SLIPPAGE_DEFAULT_BPS,
             measured_bps=None,
@@ -120,6 +138,24 @@ def decide_modeled_bps(symbol: str) -> ModeledSlippage:
     bias     = mean(fill_bias_bps(f.side, f.expected, f.fill)    for f in fills)
 
     if n < SLIPPAGE_MIN_FILLS:
+        # Try live spread before falling back to 2 bps default
+        try:
+            from broker import get_trading_provider
+            provider = get_trading_provider()
+            bid, ask = provider.get_latest_quote(symbol)
+            if bid > 0 and ask > bid:
+                mid = (bid + ask) / 2
+                half_spread_bps = (ask - bid) / (2 * mid) * 10_000
+                modeled = max(SLIPPAGE_DEFAULT_BPS, half_spread_bps)
+                return ModeledSlippage(
+                    modeled_bps=modeled,
+                    measured_bps=measured,
+                    fill_bias_bps=bias,
+                    fill_count=n,
+                    source="spread-derived",
+                )
+        except Exception:
+            pass  # broker unavailable, AttributeError for providers without get_latest_quote, etc.
         return ModeledSlippage(
             modeled_bps=SLIPPAGE_DEFAULT_BPS,
             measured_bps=measured,

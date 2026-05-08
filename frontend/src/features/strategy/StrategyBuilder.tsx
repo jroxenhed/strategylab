@@ -94,7 +94,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [perShareRate, setPerShareRate] = useState<number>(saved?.perShareRate ?? 0)
   const [minPerOrder, setMinPerOrder] = useState<number>(saved?.minPerOrder ?? 0)
   const [borrowRateAnnual, setBorrowRateAnnual] = useState<number>(saved?.borrowRateAnnual ?? 0.5)
-  const [slippageSource, setSlippageSource] = useState<'empirical' | 'default' | 'manual'>('default')
+  const [slippageSource, setSlippageSource] = useState<'empirical' | 'default' | 'spread-derived' | 'manual'>('default')
   const { data: slipInfo } = useSlippage(ticker)
   const [direction, setDirection] = useState<'long' | 'short'>(saved?.direction ?? 'long')
   const [regimeEnabled, setRegimeEnabled] = useState(saved?.regime?.enabled ?? false)
@@ -439,6 +439,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 6 }}>
               {slippageSource === 'empirical' && slipInfo
                 ? `empirical: ${slipInfo.fill_count} fills`
+                : slippageSource === 'spread-derived'
+                ? 'live spread'
                 : slippageSource === 'default'
                 ? 'default: 2 bps'
                 : 'manual'}
