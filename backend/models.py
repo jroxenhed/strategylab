@@ -92,6 +92,13 @@ class StrategyRequest(BaseModel):
     long_position_size: Optional[float] = None
     short_position_size: Optional[float] = None
 
+    @field_validator('buy_logic', 'sell_logic', 'long_buy_logic', 'long_sell_logic', 'short_buy_logic', 'short_sell_logic')
+    @classmethod
+    def validate_logic(cls, v: str) -> str:
+        if v not in ('AND', 'OR'):
+            raise ValueError("logic must be 'AND' or 'OR'")
+        return v
+
     @field_validator('position_size')
     @classmethod
     def clamp_position_size(cls, v: float) -> float:

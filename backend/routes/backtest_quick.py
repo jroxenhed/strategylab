@@ -39,6 +39,13 @@ class QuickBacktestRequest(BaseModel):
             raise ValueError("ticker must be 1–20 characters")
         return v
 
+    @field_validator('buy_logic', 'sell_logic')
+    @classmethod
+    def validate_logic(cls, v: str) -> str:
+        if v not in ('AND', 'OR'):
+            raise ValueError("logic must be 'AND' or 'OR'")
+        return v
+
 
 class QuickBacktestResult(BaseModel):
     ticker: str
@@ -70,6 +77,13 @@ class BatchQuickBacktestRequest(BaseModel):
     def validate_direction(cls, v: str) -> str:
         if v not in ('long', 'short'):
             raise ValueError("direction must be 'long' or 'short'")
+        return v
+
+    @field_validator('buy_logic', 'sell_logic')
+    @classmethod
+    def validate_logic(cls, v: str) -> str:
+        if v not in ('AND', 'OR'):
+            raise ValueError("logic must be 'AND' or 'OR'")
         return v
 
 

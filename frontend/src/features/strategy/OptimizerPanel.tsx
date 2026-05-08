@@ -104,6 +104,10 @@ export default function OptimizerPanel({ lastRequest }: Props) {
       const minN = p.min !== '' ? parseFloat(p.min) : opt.defaultMin
       const maxN = p.max !== '' ? parseFloat(p.max) : opt.defaultMax
       const steps = parseInt(p.steps) || 0
+      if (isNaN(minN) || isNaN(maxN)) {
+        setError(`"${opt.label}": Min and Max must be valid numbers`)
+        return
+      }
       if (minN > maxN) {
         setError(`"${opt.label}": Min (${minN}) cannot be greater than Max (${maxN})`)
         return

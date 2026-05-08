@@ -125,3 +125,42 @@ input[type="checkbox"] {
   display: flex;
   flex-direction: column;
 }
+
+/* Chart loading skeleton */
+@keyframes chart-skeleton-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.9; }
+}
+.chart-skeleton {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 16px 12px;
+  gap: 8px;
+  box-sizing: border-box;
+}
+.chart-skeleton-bars {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  animation: chart-skeleton-pulse 1.6s ease-in-out infinite;
+}
+.chart-skeleton-bar {
+  flex: 1;
+  background: #21262d;
+  border-radius: 2px 2px 0 0;
+  min-height: 8px;
+}
+.chart-skeleton-axis {
+  height: 1px;
+  background: #21262d;
+  width: 100%;
+}
+.chart-skeleton-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  animation: chart-skeleton-pulse 1.6s ease-in-out infinite;
+}

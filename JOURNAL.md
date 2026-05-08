@@ -4,6 +4,18 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-08 (build 18 — overnight)
+
+- **[A14](TODO.md#a--charts--indicators)** Chart loading skeleton — extracted `isLoading` from `useOHLCV` React Query hook in App.tsx. While loading with no cached data, shows a `ChartSkeleton` component: 20 CSS-animated pulsing grey bars mimicking candlestick columns, plus a ticker label. After loading with no data, shows "No data for {ticker}" (was always "Loading..."). CSS keyframe `chart-skeleton-pulse` added to `index.css`. Not visually verified.
+
+- **[D27](TODO.md#d--bots-live-trading)** Bot status tooltip — added native `title` attribute to the status badge in both compact and expanded BotCard layouts. Tooltip shows: status, P&L (amount + %), in/out-of-position, and last tick time via `fmtTimeET`. Uses the same `detail?.state.last_tick ?? summary.last_tick` fallback as the heartbeat dot. Not visually verified.
+
+- **[F28b](TODO.md#f--architecture--housekeeping)** `buy_logic`/`sell_logic` validation — added `@field_validator` restricting to `"AND" | "OR"` across all relevant models: `QuickBacktestRequest`, `BatchQuickBacktestRequest` (backtest_quick.py), `StrategyRequest` (models.py — all 6 logic fields), `BotConfig` (bot_manager.py — all 6 logic fields), and `UpdateBotRequest` (routes/bots.py — Optional fields, None-safe guard). Previously any string silently fell back to OR semantics.
+
+- **[F28c](TODO.md#f--architecture--housekeeping)** `cache_info()` 6-tuple crash fixed — `cache_info()` in shared.py was unpacking keys as 5-tuples `(ticker, start, end, interval, source)` but keys are 6-tuples that include `extended_hours`. Every `GET /api/cache` call raised `ValueError`. Fixed by unpacking as `(ticker, start, end, interval, source, _ext)`.
+
+- **[C25](TODO.md#c--strategy-summary--analytics)** Optimizer param NaN handling — added `isNaN(minN) || isNaN(maxN)` check before the existing `min > max` guard in `runOptimizer()` (OptimizerPanel.tsx). Catches non-numeric input like `'abc'` that `parseFloat` silently converts to NaN, which previously produced an all-NaN linspace with no visible error.
+
 ## 2026-05-08 (build 17 — overnight)
 
 - **[B10](TODO.md#b--strategy-engine--rules)** TradeJournal CSV quoting — replaced bare `.join(',')` with a `csvField()` RFC 4180 helper (wraps fields containing commas, double-quotes, or newlines). Applied to both header row and all data rows. Prevents column misalignment for timestamps like "May 8, 2026 10:30 AM" that contain a comma.

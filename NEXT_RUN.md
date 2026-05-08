@@ -35,22 +35,21 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-05-08 (build 17)
+**Date:** 2026-05-08 (build 18)
 **Branch:** `claude/overnight-2026-05-08`
 
 **Shipped:**
-- **B10** TradeJournal CSV quoting — RFC 4180 `csvField()` helper wraps comma/quote-containing fields. Fixes column misalignment on timestamp fields like "May 8, 2026 10:30 AM".
-- **D26** FundBar invalid input feedback — inline red error message for empty/NaN/negative fund amounts. Previously silent no-op.
-- **C23** Optimizer validation — pre-submit guard for `min > max` and `steps < 2` in `runOptimizer()`. Error shown before loading spinner starts.
-- **F28** Backend input validation — Pydantic `Field` + `field_validator` across 6 request models (backtest_quick, bots, trading, quote). Rejects negative capitals, invalid directions, zero qty.
-- **F26** Shared OHLCV cache — `fetch_ohlcv_async()` in shared.py deduplicates concurrent asyncio coroutines at Future level. Multiple bots on same symbol share one executor call.
+- **A14** Chart loading skeleton — pulsing grey bars skeleton while OHLCV loads; "No data for {ticker}" when load completes empty. CSS animation in index.css. Not visually verified.
+- **D27** Bot status tooltip — native `title` on status badge (compact + expanded) with status, P&L, position flag, last tick.
+- **F28b** `buy_logic`/`sell_logic` validation — `@field_validator` restricting to `"AND" | "OR"` across 5 models (QuickBacktestRequest, BatchQuickBacktestRequest, StrategyRequest, BotConfig, UpdateBotRequest).
+- **F28c** `cache_info()` crash fixed — 5-tuple unpack corrected to 6-tuple. `GET /api/cache` now works.
+- **C25** Optimizer NaN guard — `isNaN(minN) || isNaN(maxN)` added before min > max check.
 
-**Review findings:** 0 findings (P0: 0, P1: 0, P2: 0), 0 auto-fixed, 1 build iteration. All 109 frontend tests pass.
+**Review findings:** 0 findings (P0: 0, P1: 0, P2: 0), 0 auto-fixed, 1 build iteration.
 
 **Deferred:**
-- **A8** viewport-only rendering — large multi-session task, deferred.
-- Nothing else deferred — all 5 [next] easy/medium tasks shipped.
+- Nothing explicitly deferred — all 5 [next] tasks shipped.
 
-**Previous run:** 2026-05-08 (build 16), branch `claude/wizardly-newton-xwoKZ` — B5b (borrow total), B5c (bot resume borrow), F27 (concurrent _fetch dedup).
+**Previous run:** 2026-05-08 (build 17), branch `claude/overnight-2026-05-08` — B10 (CSV quoting), D26 (FundBar error), C23 (optimizer validation), F28 (backend validation), F26 (shared OHLCV cache).
 
-**Next up:** A14 chart loading skeleton [next][easy], D27 bot status tooltip [next][easy], F29 watchlist ticker validation [easy], C25 optimizer NaN handling [easy], F30 fetch_ohlcv_async test coverage [easy], A8 off-screen downsampling [medium].
+**Next up:** F30 fetch_ohlcv_async test coverage [next][easy], F29 watchlist ticker validation [easy], A8 off-screen downsampling [medium].

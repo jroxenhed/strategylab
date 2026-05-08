@@ -73,6 +73,13 @@ class UpdateBotRequest(BaseModel):
             raise ValueError("direction must be 'long' or 'short'")
         return v
 
+    @field_validator('buy_logic', 'sell_logic', 'long_buy_logic', 'long_sell_logic', 'short_buy_logic', 'short_sell_logic')
+    @classmethod
+    def validate_logic(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ('AND', 'OR'):
+            raise ValueError("logic must be 'AND' or 'OR'")
+        return v
+
 
 class ReorderBotsRequest(BaseModel):
     order: list[str]

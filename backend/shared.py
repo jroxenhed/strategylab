@@ -497,7 +497,7 @@ def cache_info() -> dict:
     """Return current cache stats — exposed via /api/cache for debugging."""
     now = time.monotonic()
     entries = []
-    for (ticker, start, end, interval, source), (ts, df) in _fetch_cache.items():
+    for (ticker, start, end, interval, source, _ext), (ts, df) in _fetch_cache.items():
         ttl = _fetch_ttl(end, interval)
         entries.append({
             "key": f"{ticker} {interval} {start}→{end} [{source}]",
