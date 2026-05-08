@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*142 / 159 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*142 / 163 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -204,3 +204,6 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] **F28b** Validate `buy_logic`/`sell_logic` fields — `eval_rules()` silently falls back to OR semantics for any non-`"AND"` string (e.g. `"all"`, `"BOTH"`). Add `@field_validator` on `QuickBacktestRequest`, `BatchQuickBacktestRequest`, and `BotConfig` restricting to `"AND" | "OR"`. Asymmetric gap: `direction` was hardened in F28 but the adjacent logic fields were not. [easy]
 - [x] **F28c** Fix `cache_info()` 6-tuple unpack crash — `GET /api/cache` unpacks `_fetch_cache` keys as 5-tuples but keys are 6-tuples (includes `extended_hours`). Every call raises `ValueError`. Pre-existing but worsened by F26 making cache diagnostics more important. [easy]
 - [ ] **F30** `fetch_ohlcv_async` coverage — F26 added `fetch_ohlcv_async()` to `shared.py` but the bot_runner test harness (F20) still uses `_run_in_executor(_fetch, ...)` via a mock executor. Update `test_bot_runner.py` to verify the shared-fetch dedup path (two simultaneous tick() calls on same symbol share one Future). [easy] [next]
+- [ ] **F28d** `StrategyRequest.direction` missing validator — F28b hardened `buy_logic`/`sell_logic` across all models but `StrategyRequest.direction` (models.py) still has no `@field_validator` restricting to `"long" | "short"`. `QuickBacktestRequest` and `BotConfig` both validate it; `StrategyRequest` does not. [easy]
+- [ ] **A14a** SubPane loading state — the A14 skeleton only covers the main OHLCV chart. Indicator subpanes (RSI, MACD, volume) that appear below the main chart have no loading indicator — they render empty until data arrives. Add a minimal loading label or spinner to `SubPane.tsx` while indicator data is fetching. [easy]
+- [ ] **D27a** Status tooltip upgrade to custom popover — D27 uses the native browser `title` attribute (grey system tooltip, ~1s hover delay, no styling control). A positioned div overlay matching the app's dark theme (following the `TradeTooltip.tsx` pattern) would be more consistent and readable. [medium]

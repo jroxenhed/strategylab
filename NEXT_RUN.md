@@ -52,4 +52,4 @@ Tasks to skip even if tagged `[next]`:
 
 **Previous run:** 2026-05-08 (build 17), branch `claude/overnight-2026-05-08` — B10 (CSV quoting), D26 (FundBar error), C23 (optimizer validation), F28 (backend validation), F26 (shared OHLCV cache).
 
-**Next up:** F30 fetch_ohlcv_async test coverage [next][easy], F29 watchlist ticker validation [easy], A8 off-screen downsampling [medium].
+**Next up:** F30 fetch_ohlcv_async test coverage [next][easy], F29 watchlist ticker validation [easy], F28d StrategyRequest direction validation [easy], A14a SubPane loading state [easy], A8 off-screen downsampling [medium].
