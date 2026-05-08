@@ -4,6 +4,20 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-08 (PR #25 review fixes)
+
+Multi-agent review of build 18 (A14, D27, F28b, F28c, C25) via `ce:review`. Found 1 P1 + 8 P2 + 8 P3.
+
+- **P1 fixed — startup cascade:** `Literal['AND','OR']` with `BeforeValidator` applied across all 8 models using a shared `LogicField` type alias, preventing any non-`AND|OR` string from reaching `eval_rules()`.
+- **P2 fixed — 3 missed models:** `ScanRequest`, `RegimeConfig`, `PerformanceRequest` now include `buy_logic`/`sell_logic` validation (were missed in the F28b pass).
+- **P2 fixed — duplicate validators eliminated:** 5 duplicate `validate_logic` methods replaced by the `LogicField` type alias (DRY pass across models).
+- **P2 fixed — App.tsx isError branch:** network failure now shows "Failed to load" instead of the misleading "No data" path.
+- **P2 fixed — cache_info star-unpack:** `shared.py` cache_info now uses `*rest` unpacking for resilience against future key growth.
+- **P3 fixed — cache_info +ext flag:** `GET /api/cache` display includes `+ext` flag when `extended_hours=True`.
+- **P3 fixed — BotCard lastTickStr dedup:** removed 3 duplicate IIFEs, reused single `lastTickStr` variable throughout.
+
+Deferred findings added to TODO.md: A14b (skeleton stale-cache), A14c (ChartSkeleton location), C25a (NaN guard improvements), F31 (eval_rules defense-in-depth), F32 (BotCard unsafe optional chain).
+
 ## 2026-05-08 (build 18 — overnight)
 
 - **[A14](TODO.md#a--charts--indicators)** Chart loading skeleton — extracted `isLoading` from `useOHLCV` React Query hook in App.tsx. While loading with no cached data, shows a `ChartSkeleton` component: 20 CSS-animated pulsing grey bars mimicking candlestick columns, plus a ticker label. After loading with no data, shows "No data for {ticker}" (was always "Loading..."). CSS keyframe `chart-skeleton-pulse` added to `index.css`. Not visually verified.

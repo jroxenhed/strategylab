@@ -35,21 +35,26 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-05-08 (build 18)
+**Date:** 2026-05-08 (build 18 + PR #25 review fixes)
 **Branch:** `claude/overnight-2026-05-08`
 
-**Shipped:**
+**Shipped (build 18):**
 - **A14** Chart loading skeleton — pulsing grey bars skeleton while OHLCV loads; "No data for {ticker}" when load completes empty. CSS animation in index.css. Not visually verified.
 - **D27** Bot status tooltip — native `title` on status badge (compact + expanded) with status, P&L, position flag, last tick.
 - **F28b** `buy_logic`/`sell_logic` validation — `@field_validator` restricting to `"AND" | "OR"` across 5 models (QuickBacktestRequest, BatchQuickBacktestRequest, StrategyRequest, BotConfig, UpdateBotRequest).
 - **F28c** `cache_info()` crash fixed — 5-tuple unpack corrected to 6-tuple. `GET /api/cache` now works.
 - **C25** Optimizer NaN guard — `isNaN(minN) || isNaN(maxN)` added before min > max check.
 
-**Review findings:** 0 findings (P0: 0, P1: 0, P2: 0), 0 auto-fixed, 1 build iteration.
+**Review fixes (PR #25, 1 P1 + 8 P2 + 8 P3):**
+- P1: `LogicField` type alias + `BeforeValidator` across all 8 models (startup cascade fix)
+- P2: 3 missed models validated (ScanRequest, RegimeConfig, PerformanceRequest)
+- P2: 5 duplicate `validate_logic` methods eliminated
+- P2: App.tsx isError branch shows "Failed to load" on network failure
+- P2: cache_info star-unpack for future key growth resilience
+- P3: cache_info +ext flag, BotCard lastTickStr dedup (3 IIFEs removed)
 
-**Deferred:**
-- Nothing explicitly deferred — all 5 [next] tasks shipped.
+**Deferred (added to TODO):** A14b (skeleton stale-cache), A14c (ChartSkeleton location), C25a (NaN guard gaps), F31 (eval_rules defense-in-depth), F32 (BotCard unsafe optional chain).
 
 **Previous run:** 2026-05-08 (build 17), branch `claude/overnight-2026-05-08` — B10 (CSV quoting), D26 (FundBar error), C23 (optimizer validation), F28 (backend validation), F26 (shared OHLCV cache).
 
-**Next up:** F30 fetch_ohlcv_async test coverage [next][easy], F29 watchlist ticker validation [easy], F28d StrategyRequest direction validation [easy], A14a SubPane loading state [easy], A8 off-screen downsampling [medium].
+**Next up:** F30 fetch_ohlcv_async test coverage [next][easy], F29 watchlist ticker validation [next][easy], F28d StrategyRequest direction validation [easy], F31 eval_rules defense-in-depth [easy], F32 BotCard unsafe optional chain [easy], A14a SubPane loading state [easy], A8 off-screen downsampling [medium].
