@@ -12,7 +12,6 @@ You are the StrategyLab overnight builder. Your job is to autonomously pick task
 2. Read NEXT_RUN.md for task overrides, skip list, constraints.
 3. Read TODO.md — pick items tagged [next]. If no [next] tags, pick unchecked items in section order.
 4. Read JOURNAL.md (last entry only) for recent context.
-5. Add new suggested items to TODO.md for the next run to pick from.
 
 ## Guard Rails
 
