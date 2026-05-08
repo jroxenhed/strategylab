@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*127 / 143 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*127 / 145 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -189,4 +189,6 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] **C18b** Sensitivity sweep sparkline — add a mini line chart above the results table showing `total_return_pct` vs `param_value`. Makes the sensitivity curve shape immediately visible (cliff-edge vs smooth plateau). Pure frontend from existing `SweepPoint[]` data. [easy]
 - [x] **B26** Sweep from rule row — "Sweep this value" button on rule rows in StrategyBuilder with a numeric threshold, automatically selects the matching `param_path` in the Sensitivity tab and suggests a ±50% range. Eliminates manual tab-switching and path selection. [medium]
 - [x] **F24** Configurable poll interval + API rate counter — global `BOT_POLL_MS` setting (default: per-bar-interval fallback) with runtime `PATCH /api/broker/poll-interval` endpoint, persisted to `.env`. `RateCounter` sliding-window deque tracks all trading API calls; `DataRateCounter` tracks data provider calls. AccountBar displays `T:N/200 D:N/min @Nms`. Poll interval input in BotControlCenter. [medium] [spec](docs/specs/2026-05-08-configurable-poll-interval-design.md) [plan](docs/plans/2026-05-08-poll-interval-rate-counter.md)
+- [ ] **F25** WebSocket bar streaming — replace `_fetch()` polling with Alpaca's real-time bar/quote WebSocket streams. Bots react on each new bar instantly instead of polling. Eliminates the `_fetch()` network latency bottleneck (~200-500ms) that currently caps effective tick rate regardless of poll interval. [hard]
+- [ ] **F26** Shared OHLCV cache per symbol — fetch once per bar interval (e.g., every 5m), cache it, all bots on the same symbol read from cache. Eliminates redundant data fetches for same-symbol bots (e.g., long + short BABA). Simpler than F25, smaller latency win. [medium]
 - [x] **D25** IBC Gateway automation — IBC 3.23.0 installed at `~/ibc/install`, auto-starts IBKR Gateway paper trading via launchd plist. Auto-fills credentials, handles daily restart at 05:00 ET. Only manual step: weekly Sunday 2FA push on IBKR Mobile. [medium]
