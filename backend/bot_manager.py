@@ -90,7 +90,7 @@ class BotConfig(BaseModel):
     short_max_bars_held: Optional[int] = None
     long_position_size: Optional[float] = None
     short_position_size: Optional[float] = None
-    borrow_rate_annual: float = 0.5
+    borrow_rate_annual: float = Field(default=0.5, ge=0)
 
     @field_validator('long_position_size', 'short_position_size', mode='before')
     @classmethod
@@ -439,6 +439,7 @@ class BotManager:
         bias_bps = fill_bias_bps(side_key, expected=price, fill=fill_price)
         state.slippage_bps.append(round(cost_bps, 2))
         state.entry_price = fill_price
+        state.entry_time = datetime.now(timezone.utc).isoformat()
         state.trail_peak = fill_price
         state.trades_count += 1
         side_label = "SHORT" if is_short else "BUY"

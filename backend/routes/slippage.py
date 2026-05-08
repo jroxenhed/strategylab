@@ -23,7 +23,7 @@ def get_slippage(symbol: str):
         from broker import get_trading_provider
         provider = get_trading_provider()
         bid, ask = provider.get_latest_quote(symbol.upper())
-        if bid > 0 and ask > 0:
+        if bid > 0 and ask > bid:
             mid = (bid + ask) / 2.0
             spread_bps = (ask - bid) / mid * 1e4
             live_spread_bps = round(spread_bps, 2)
