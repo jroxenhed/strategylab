@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*128 / 147 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*129 / 147 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -191,5 +191,5 @@ Own multi-session research project. Needs its own design work before implementat
 - [ ] **F26** Shared OHLCV cache per symbol — fetch once per bar interval (e.g., every 5m), cache it, all bots on the same symbol read from cache. Eliminates redundant data fetches for same-symbol bots (e.g., long + short BABA). Simpler than F25, smaller latency win. [medium] [next]
 - [ ] **B5c** Bot runner borrow cost on cover — `bot_runner.py` and `routes/trading.py` never pass `borrow_cost` to `_log_trade()` on exit/cover fills. Compute using `borrow_cost()` from `routes/backtest.py` (same formula) using `entry_time` from `BotState` and fill timestamp. Without this, the Borrow column (B5a) only works for backtests, not live bot trades. [easy]
 - [ ] **B5b** Total borrow cost in TradeJournal summary row — the summary row currently leaves the Borrow column blank. Add a total (sum of all `borrow_cost` values in the filtered view) when `hasBorrowCost` is true. One-liner addition to `summaryStats` in TradeJournal.tsx. [easy]
-- [ ] **B8b** Slippage auto-reset overrides "Use live spread" — the `useEffect` in StrategyBuilder.tsx that auto-applies `slipInfo` on ticker change includes `slippageSource` in its dep array, so it re-fires when user clicks "Use live spread". If `slipInfo.source === 'empirical'` (20+ fills), the effect immediately overrides the spread-derived value back to empirical. Fix: guard effect body with `if (slippageSource === 'default' || !slippageSource)` so it only auto-applies when source is still at default. [easy]
+- [x] **B8b** Slippage auto-reset overrides "Use live spread" — the `useEffect` in StrategyBuilder.tsx that auto-applies `slipInfo` on ticker change includes `slippageSource` in its dep array, so it re-fires when user clicks "Use live spread". If `slipInfo.source === 'empirical'` (20+ fills), the effect immediately overrides the spread-derived value back to empirical. Fix: guard effect body with `if (slippageSource === 'default' || !slippageSource)` so it only auto-applies when source is still at default. [easy]
 - [ ] **F27** Concurrent `_fetch()` dedup — multiple bots on the same symbol that start simultaneously all miss the cache on first tick and fire parallel HTTP requests for identical data. Fix: `asyncio.Lock` per `(symbol, interval)` key in `shared.py`; second caller awaits the lock and hits the cache populated by the first. One-time cost at startup, zero overhead on warm-cache ticks. [easy]

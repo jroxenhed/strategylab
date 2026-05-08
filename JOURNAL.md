@@ -6,6 +6,8 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-08 (interactive review session)
 
+- **PR #21 review + merge** (B5a + B8a + B8b) — overnight builder PR: borrow cost journal column + live spread button. 3-agent review caught 2 P1s: spread-derived slippage overwritten by 60s auto-refresh, button shown at zero spread. Fixed both + added "↩ modeled" reset button (UX gap found during visual verification). B8b (auto-reset guard) resolved as part of P1 fix. Added B5c to TODO (bot runner doesn't pass borrow_cost to log_trade).
+
 - **PR #18 review fixes** (F19 + C22) — 12-agent multi-persona review caught 15 findings. Fixed: optimizer 500-error swallowing (P1), 60s wall-clock timeout with `timed_out` response field, 18 backend tests, drag-reorder optimistic update regression, botsError banner dismiss, paramRows reset on strategy switch, redundant `model_copy`, extracted `buildParamOptions` to shared `paramOptions.ts`, `adaptiveMs()` for all 5 React Query hooks, `useBotsQuery` AbortSignal, AccountBar error detail, `colColor` type narrowing, `win_rate_pct` precision, sorted metric validation.
 
 - **PR #19 review fixes** (B5 + B8) — 3-agent overnight review caught 7 findings. Fixed: borrow cost missing on external-close path (P1), `entry_time` not cleared in 4 cleanup paths (P1), falsy guard suppressing `borrow_cost=0.0`, `manual_buy` missing `entry_time`, negative `borrow_rate_annual` validation, borrow cost parse failure logging, crossed-market spread guard.
