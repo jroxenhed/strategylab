@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from shared import _fetch, _format_time
 from signal_engine import Rule, compute_indicators, eval_rules, migrate_rule
+from models import LogicField
 
 router = APIRouter()
 
@@ -17,8 +18,8 @@ class QuickBacktestRequest(BaseModel):
     lookback_days: int = Field(default=90, gt=0)
     buy_rules: list[Rule]
     sell_rules: list[Rule]
-    buy_logic: str = "AND"
-    sell_logic: str = "AND"
+    buy_logic: LogicField = "AND"
+    sell_logic: LogicField = "AND"
     direction: str = "long"
     initial_capital: float = Field(default=10000.0, gt=0)
     stop_loss_pct: float = Field(default=0.0, ge=0)
@@ -39,14 +40,6 @@ class QuickBacktestRequest(BaseModel):
             raise ValueError("ticker must be 1–20 characters")
         return v
 
-    @field_validator('buy_logic', 'sell_logic')
-    @classmethod
-    def validate_logic(cls, v: str) -> str:
-        if v not in ('AND', 'OR'):
-            raise ValueError("logic must be 'AND' or 'OR'")
-        return v
-
-
 class QuickBacktestResult(BaseModel):
     ticker: str
     return_pct: Optional[float] = None
@@ -65,8 +58,8 @@ class BatchQuickBacktestRequest(BaseModel):
     lookback_days: int = Field(default=90, gt=0)
     buy_rules: list[Rule]
     sell_rules: list[Rule]
-    buy_logic: str = "AND"
-    sell_logic: str = "AND"
+    buy_logic: LogicField = "AND"
+    sell_logic: LogicField = "AND"
     direction: str = "long"
     initial_capital: float = Field(default=10000.0, gt=0)
     stop_loss_pct: float = Field(default=0.0, ge=0)
@@ -77,13 +70,6 @@ class BatchQuickBacktestRequest(BaseModel):
     def validate_direction(cls, v: str) -> str:
         if v not in ('long', 'short'):
             raise ValueError("direction must be 'long' or 'short'")
-        return v
-
-    @field_validator('buy_logic', 'sell_logic')
-    @classmethod
-    def validate_logic(cls, v: str) -> str:
-        if v not in ('AND', 'OR'):
-            raise ValueError("logic must be 'AND' or 'OR'")
         return v
 
 

@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from slippage import slippage_cost_bps, fill_bias_bps
 
-from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest, RegimeConfig
+from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest, RegimeConfig, LogicField
 from routes.backtest import run_backtest
 from signal_engine import migrate_rule, Rule
 from shared import _fetch
@@ -48,17 +48,10 @@ class BotConfig(BaseModel):
     interval: str
     buy_rules: list[Rule]
     sell_rules: list[Rule]
-    buy_logic: str = "AND"
-    sell_logic: str = "AND"
+    buy_logic: LogicField = "AND"
+    sell_logic: LogicField = "AND"
     allocated_capital: float          # dollar slice of the bot fund for this bot
     position_size: float = 1.0        # fraction of allocated_capital per trade (0.01–1.0)
-
-    @field_validator('buy_logic', 'sell_logic', 'long_buy_logic', 'long_sell_logic', 'short_buy_logic', 'short_sell_logic')
-    @classmethod
-    def validate_logic(cls, v: str) -> str:
-        if v not in ('AND', 'OR'):
-            raise ValueError("logic must be 'AND' or 'OR'")
-        return v
 
     @field_validator('position_size')
     @classmethod
@@ -82,12 +75,12 @@ class BotConfig(BaseModel):
     # B23/D24: dual rule sets for regime bots (None = use buy_rules/sell_rules)
     long_buy_rules: Optional[list[Rule]] = None
     long_sell_rules: Optional[list[Rule]] = None
-    long_buy_logic: str = "AND"
-    long_sell_logic: str = "AND"
+    long_buy_logic: LogicField = "AND"
+    long_sell_logic: LogicField = "AND"
     short_buy_rules: Optional[list[Rule]] = None
     short_sell_rules: Optional[list[Rule]] = None
-    short_buy_logic: str = "AND"
-    short_sell_logic: str = "AND"
+    short_buy_logic: LogicField = "AND"
+    short_sell_logic: LogicField = "AND"
     # B25: per-direction settings (only used when regime is active)
     long_stop_loss_pct: Optional[float] = None
     short_stop_loss_pct: Optional[float] = None

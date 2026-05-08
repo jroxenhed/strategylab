@@ -167,7 +167,7 @@ export default function BotCard({
 
             {/* Heartbeat dot */}
             <div
-              title={(() => { const t = detail?.state.last_tick ?? summary.last_tick; return t ? `Last tick: ${fmtTimeET(t)}` : 'No tick yet' })()}
+              title={lastTickStr}
               style={{
                 width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
                 background: heartbeatColor(summary, detail),
@@ -334,7 +334,7 @@ export default function BotCard({
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {/* Heartbeat dot */}
             <div
-              title={(() => { const t = detail?.state.last_tick ?? summary.last_tick; return t ? `Last tick: ${fmtTimeET(t)}` : 'No tick yet' })()}
+              title={lastTickStr}
               style={{
                 width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
                 background: heartbeatColor(summary, detail),

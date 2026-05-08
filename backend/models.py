@@ -1,8 +1,10 @@
 """Shared Pydantic models used across backtest, bot_manager, and trading routes."""
 
-from typing import Optional
-from pydantic import BaseModel, Field, field_validator
+from typing import Annotated, Literal, Optional
+from pydantic import BaseModel, Field, field_validator, BeforeValidator
 from signal_engine import Rule
+
+LogicField = Annotated[Literal['AND', 'OR'], BeforeValidator(lambda v: v.upper() if isinstance(v, str) else v)]
 
 
 class TrailingStopConfig(BaseModel):
@@ -43,7 +45,7 @@ class RegimeConfig(BaseModel):
     on_flip: str = "close_only"     # close_only | close_and_reverse | hold
     # B28: full rule set path (when non-empty, overrides single-indicator path above)
     rules: list[Rule] = Field(default_factory=list)
-    logic: str = "AND"              # AND | OR
+    logic: LogicField = "AND"        # AND | OR
 
 
 class StrategyRequest(BaseModel):
@@ -53,17 +55,17 @@ class StrategyRequest(BaseModel):
     interval: str = "1d"
     buy_rules: list[Rule]
     sell_rules: list[Rule]
-    buy_logic: str = "AND"   # AND | OR
-    sell_logic: str = "AND"
+    buy_logic: LogicField = "AND"   # AND | OR
+    sell_logic: LogicField = "AND"
     # B23: dual rule sets for regime active (long) vs inactive (short)
     long_buy_rules: Optional[list[Rule]] = None
     long_sell_rules: Optional[list[Rule]] = None
-    long_buy_logic: str = "AND"
-    long_sell_logic: str = "AND"
+    long_buy_logic: LogicField = "AND"
+    long_sell_logic: LogicField = "AND"
     short_buy_rules: Optional[list[Rule]] = None
     short_sell_rules: Optional[list[Rule]] = None
-    short_buy_logic: str = "AND"
-    short_sell_logic: str = "AND"
+    short_buy_logic: LogicField = "AND"
+    short_sell_logic: LogicField = "AND"
     initial_capital: float = 10000.0
     position_size: float = 1.0   # fraction of capital per trade (0.01–1.0)
     stop_loss_pct: Optional[float] = None  # e.g. 5.0 means sell if price drops 5% from entry
@@ -91,13 +93,6 @@ class StrategyRequest(BaseModel):
     short_max_bars_held: Optional[int] = None
     long_position_size: Optional[float] = None
     short_position_size: Optional[float] = None
-
-    @field_validator('buy_logic', 'sell_logic', 'long_buy_logic', 'long_sell_logic', 'short_buy_logic', 'short_sell_logic')
-    @classmethod
-    def validate_logic(cls, v: str) -> str:
-        if v not in ('AND', 'OR'):
-            raise ValueError("logic must be 'AND' or 'OR'")
-        return v
 
     @field_validator('position_size')
     @classmethod
