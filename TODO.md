@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*147 / 168 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*147 / 186 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -75,6 +75,13 @@
 - [x] **B27** Strategy preset categories — SavedStrategy gains `strategyType` (long/short/regime), back-filled on load, grouped via `<optgroup>` in strategy dropdown. [easy]
 - [x] **B28** Regime rules as full rule sets — RegimeConfig gains `rules[]` + `logic` fields. `_compute_regime_series()` and `_eval_regime_direction()` dual-path: rules-based (eval_rules on HTF) or legacy single-indicator. UI: four tabs (Regime Rules / Long / Short / Single), timeframe badge per rule row. [medium]
 - [x] **B29** Regime setup UX overhaul — fixed status line to branch on on_flip + short rules presence (was always "flips to short"), relabeled on_flip dropdown ("Close, wait for signal" / "Close, enter immediately" / "Hold (block new entries)"), removed SINGLE tab when regime enabled with auto-migrate of buyRules→longBuyRules, scoped warning to close_and_reverse only (sit-flat gate no longer warned), added coexistence notice when SINGLE+dual rules overlap. Guards use `some(r => r.indicator)` matching backtest activation condition. [medium]
+- [ ] **B30** RuleRow horizontal overflow — complex rules (e.g. Stochastic with K/D/Smooth) clip without scrollbar on narrow windows. Add `overflowX: 'auto'` to rule panel container. [easy]
+- [ ] **B31** Stochastic rule row: 3 unlabeled number inputs — K/D/Smooth only discoverable via hover tooltip. Add 2-letter prefix labels (K, D, Sk) before each input. [easy]
+- [ ] **B32** No Cmd/Ctrl+Enter keyboard shortcut to run backtest — main interaction loop (tweak → run → read) requires mouse every time. Add keydown listener. [easy]
+- [ ] **B33** Run Backtest button missing spinner/cursor feedback — disables and shows "Running..." text but no spinner or cursor change. Add `cursor: 'not-allowed'` + opacity + CSS spinner. [easy]
+- [ ] **B34** Strategy bar: Delete button adjacent to Rename with no separator — fat-finger risk on irreversible action. Group primary actions, separate Delete with spacer or move to kebab overflow menu. [medium]
+- [ ] **B35** Strategy deletion irreversible with no undo — permanently removes from localStorage. Add 5-second undo toast (keep in memory, persist only after window expires). [medium]
+- [ ] **B36** Results tab bar overflow — wraps unpredictably on narrow panes when 10+ tabs shown. Use `overflowX: 'auto'` + `flexWrap: 'nowrap'` or fixed height. [easy]
 
 ## C — Strategy Summary & Analytics
 
@@ -202,6 +209,8 @@ Own multi-session research project. Needs its own design work before implementat
 - [ ] **F29** Watchlist quote endpoint ticker validation — `GET /api/quote/{ticker}` now validates tickers in `get_quote()`, but the batch `POST /api/quotes` iterates `symbols[:20]` without validating individual entries. Add per-symbol validation (strip, uppercase, length guard) to avoid passing garbage to `_fetch()`. [easy] [next]
 - [x] **C25** Optimizer param range NaN handling — if user types a non-numeric value (e.g. 'abc') into the Min/Max fields, `parseFloat` returns NaN which silently produces an all-NaN linspace. Add a `isNaN(minN) || isNaN(maxN)` check to the C23 validation guard. [easy]
 - [ ] **C25a** Optimizer NaN guard improvements — C25 guard has three gaps: (a) error message doesn't identify which field (Min vs Max) is the culprit, (b) doesn't guard the Steps field separately, (c) can fire on system-computed NaN defaults from `paramOptions`. [easy] (from C25)
+- [ ] **C26** Trades table has no sort/filter — chronological only, can't find biggest losers. Add sort-by dropdown (P&L high→low, P&L low→high, hold duration, exit type). [medium]
+- [ ] **C27** Metrics strip shown on Equity tab wastes 60px — same 8 metrics as Summary tab. Show full strip on Summary only; compact 2-metric header on Equity. [easy]
 - [x] **F28b** Validate `buy_logic`/`sell_logic` fields — `eval_rules()` silently falls back to OR semantics for any non-`"AND"` string (e.g. `"all"`, `"BOTH"`). Add `@field_validator` on `QuickBacktestRequest`, `BatchQuickBacktestRequest`, and `BotConfig` restricting to `"AND" | "OR"`. Asymmetric gap: `direction` was hardened in F28 but the adjacent logic fields were not. [easy]
 - [x] **F28c** Fix `cache_info()` 6-tuple unpack crash — `GET /api/cache` unpacks `_fetch_cache` keys as 5-tuples but keys are 6-tuples (includes `extended_hours`). Every call raises `ValueError`. Pre-existing but worsened by F26 making cache diagnostics more important. [easy]
 - [ ] **F30** `fetch_ohlcv_async` coverage — F26 added `fetch_ohlcv_async()` to `shared.py` but the bot_runner test harness (F20) still uses `_run_in_executor(_fetch, ...)` via a mock executor. Update `test_bot_runner.py` to verify the shared-fetch dedup path (two simultaneous tick() calls on same symbol share one Future). [easy] [next]
@@ -211,4 +220,13 @@ Own multi-session research project. Needs its own design work before implementat
 - [ ] **A14a** SubPane loading state — the A14 skeleton only covers the main OHLCV chart. Indicator subpanes (RSI, MACD, volume) that appear below the main chart have no loading indicator — they render empty until data arrives. Add a minimal loading label or spinner to `SubPane.tsx` while indicator data is fetching. [easy]
 - [ ] **A14b** Skeleton stale-cache behavior — A14 skeleton is invisible when switching to a previously-visited ticker because React Query's `isLoading` is false when stale cache exists. Either use `isFetching` instead, or document the stale-while-revalidate intent with a comment. [easy] (from A14)
 - [ ] **A14c** ChartSkeleton file location — `ChartSkeleton` component is defined inline in `App.tsx`. Move to `frontend/src/features/chart/ChartSkeleton.tsx` for better code organization. [easy] (from A14)
+- [ ] **A15** Equity curve resize handle broken — `resize: 'vertical'` + `overflow: 'hidden'` on Results.tsx makes native resize non-functional. Change overflow to 'auto' or remove resize property. [easy]
+- [ ] **A16** Signal Trace tab undiscoverable — tab only appears when checkbox is checked in builder, no hint the feature exists. Rename checkbox to "Enable Signal Trace tab" and/or always show tab with empty-state message. [easy]
 - [ ] **D27a** Status tooltip upgrade to custom popover — D27 uses the native browser `title` attribute (grey system tooltip, ~1s hover delay, no styling control). A positioned div overlay matching the app's dark theme (following the `TradeTooltip.tsx` pattern) would be more consistent and readable. [medium]
+- [ ] **D28** AddBotBar double-submit — no loading guard on async handleAdd, can create duplicate bots. Add `adding` state to disable button during submission. [easy]
+- [ ] **D29** AddBotBar doesn't copy strategy direction — selecting a short strategy leaves direction at 'long', risking wrong-way trades. Auto-set direction from selected strategy in onStrategyChange. [easy]
+- [ ] **D30** Bot activity log dead-end — "No activity yet" gives no context. Show "Waiting for next tick" (running) or "Bot is stopped" (stopped) instead. [easy]
+- [ ] **F33** 7 native alert()/confirm() dialogs break dark UI — flash white, block tab, can't be styled. Replace with inline confirmation rows and error text (pattern already used in FundBar). [medium]
+- [ ] **F34** 118+ hardcoded hex colors while CSS variables exist — theme change requires touching dozens of files. Migrate Results.tsx and BotCard.tsx to use --bg-*, --accent-*, --text-* variables. [medium]
+- [ ] **F35** 3 different active-tab styles across app — background fill vs underline vs colored text. Standardize on one pattern (underline + accent for sub-tabs). [medium]
+- [ ] **F36** Custom date preset uses gear icon — implies settings, not "custom date range". Replace with text label "Custom" or "…". [easy]
