@@ -326,3 +326,9 @@ _Everything shipped before the journal started (2026-04-27). Grouped by theme._
 ### Cost Model
 
 - **[B8](TODO.md#b--strategy-engine--rules)** Spread-derived slippage default — `decide_modeled_bps()` now tries the active broker's `get_latest_quote()` before falling back to 2 bps default. Half-spread formula: `(ask − bid) / (2 × mid) × 10,000` bps per leg. Conservative floor: `max(2.0, half_spread_bps)`. Source label: `"spread-derived"` shown as "live spread" in StrategyBuilder. Priority: empirical (20+ fills) > spread-derived (live quote) > default. Lazy import inside `try/except` avoids circular import and handles Yahoo (no `get_latest_quote()`), broker offline, and market-closed (zero bid/ask) gracefully.
+
+### Cost Model UI follow-ups
+
+- **[B5a](TODO.md#b--strategy-engine--rules)** Borrow cost in TradeJournal — added Borrow column to the live trading journal table. Column only appears when any visible row has a non-null, positive `borrow_cost` (short positions only). Shows dollar cost in red; '—' for longs. CSV export includes the column when active. `borrow_cost` field added to `JournalTrade` TS type (was already stored in journal JSON from B5).
+
+- **[B8a](TODO.md#b--strategy-engine--rules)** "Use live spread" button — added small button in Capital & Fees next to the Slippage input. Visible only when `slipInfo.half_spread_bps` is available (IBKR active, market hours). Clicking pre-fills `slippageBps` with the half-spread value and sets source label to "live spread". User-triggered (reproducible backtest assumptions), not auto-applied.

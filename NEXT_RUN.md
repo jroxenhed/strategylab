@@ -35,15 +35,15 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-05-08 (builds 13+14)
-**Branch:** `claude/sharp-allen-igMUK`
+**Date:** 2026-05-08 (build 15)
+**Branch:** `claude/wizardly-newton-AAkXw`
 
 **Shipped:**
-- **B5** Borrow cost for live shorts — `borrow_rate_annual` on `BotConfig`, `entry_time` on `BotState`, borrow cost computed at exit using backtest formula, stored in journal.
-- **B8** Spread-derived slippage — live spread display + spread-derived modeled default. `decide_modeled_bps()` uses half-spread when <20 fills (floor 2 bps, cap 50 bps, market-hours only). Skipped for Alpaca free tier (IEX-only, not NBBO). IBKR only.
+- **B5a** Borrow cost in TradeJournal UI — conditional Borrow column (shows when any visible row has borrow_cost > 0). Dollar amount in red, CSV export included. TS type updated.
+- **B8a** "Use live spread" button — appears in Capital & Fees when IBKR live spread available. Pre-fills slippageBps with half_spread_bps, sets source label to "live spread".
 
-**Review findings (post-merge human review):**
-- PR #19: 7 findings fixed (2 P1, 4 P2, 1 P3). Borrow cost now in external-close path, entry_time cleared in all cleanup paths, falsy guard fixed, manual_buy sets entry_time, negative rate validated, IEX spread display hidden.
-- PR #20: 3 fixes (cap 50 bps, market-hours guard, Alpaca IEX skip). Duplicated block extracted to _spread_derived_bps() helper.
+**Review findings:** 0 findings (P0: 0, P1: 0, P2: 0), 0 auto-fixed.
 
-**Next up:** A8 viewport-only rendering [medium], D24b regime bot visual verification (manual QA), B5a borrow cost in TradeJournal UI [easy], B8a "Use live spread" button [easy].
+**Previous run:** 2026-05-08 (builds 13+14), branch `claude/sharp-allen-igMUK` — B5 (borrow cost live bots), B8 (spread-derived slippage). Post-merge review found 10 total findings across 2 PRs, all fixed.
+
+**Next up:** A8 viewport-only rendering [next][medium], F26 shared OHLCV cache [next][medium], B5b total borrow in summary row [easy], B8b slippage auto-reset bug [easy], F27 concurrent fetch dedup [easy].

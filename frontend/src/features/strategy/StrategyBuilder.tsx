@@ -127,7 +127,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [shortPosSize, setShortPosSize] = useState<number>(saved?.shortPosSize ?? posSize)
 
   useEffect(() => {
-    if (slippageSource === 'manual') return
+    if (slippageSource === 'manual' || slippageSource === 'spread-derived') return
     if (slipInfo) {
       setSlippageBps(slipInfo.modeled_bps)
       setSlippageSource(slipInfo.source)
@@ -436,6 +436,27 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
               }}
               style={styles.settingsInput}
             />
+            {slipInfo?.half_spread_bps != null && slipInfo.half_spread_bps > 0 && slippageSource !== 'spread-derived' && (
+              <button
+                onClick={() => {
+                  setSlippageBps(slipInfo.half_spread_bps!)
+                  setSlippageSource('spread-derived')
+                }}
+                style={{ fontSize: 10, padding: '1px 6px', marginLeft: 6, cursor: 'pointer',
+                  background: 'rgba(88,166,255,0.1)', border: '1px solid rgba(88,166,255,0.3)',
+                  borderRadius: 3, color: 'var(--accent)' }}
+                title={`Use half of live spread: ${slipInfo.half_spread_bps.toFixed(1)} bps`}
+              >Use live spread</button>
+            )}
+            {slippageSource === 'spread-derived' && (
+              <button
+                onClick={() => setSlippageSource('default')}
+                style={{ fontSize: 10, padding: '1px 6px', marginLeft: 6, cursor: 'pointer',
+                  background: 'none', border: '1px solid rgba(128,128,128,0.3)',
+                  borderRadius: 3, color: 'var(--text-muted)' }}
+                title="Reset to modeled slippage"
+              >↩ modeled</button>
+            )}
             <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 6 }}>
               {slippageSource === 'empirical' && slipInfo
                 ? `empirical: ${slipInfo.fill_count} fills`
