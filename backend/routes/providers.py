@@ -58,4 +58,21 @@ def set_poll_interval(body: dict):
         raise HTTPException(400, "ms must be integer between 100 and 60000")
     from bot_runner import set_poll_ms
     set_poll_ms(ms)
+    _persist_env("BOT_POLL_MS", str(ms))
     return {"poll_interval_ms": ms}
+
+
+def _persist_env(key: str, value: str):
+    """Write a key=value to backend/.env so it survives restarts."""
+    import pathlib
+    env_path = pathlib.Path(__file__).resolve().parent.parent / ".env"
+    lines = env_path.read_text().splitlines() if env_path.exists() else []
+    found = False
+    for i, line in enumerate(lines):
+        if line.startswith(f"{key}="):
+            lines[i] = f"{key}={value}"
+            found = True
+            break
+    if not found:
+        lines.append(f"{key}={value}")
+    env_path.write_text("\n".join(lines) + "\n")
