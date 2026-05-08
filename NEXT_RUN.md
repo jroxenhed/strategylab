@@ -35,20 +35,22 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-05-08 (build 16)
-**Branch:** `claude/wizardly-newton-xwoKZ`
+**Date:** 2026-05-08 (build 17)
+**Branch:** `claude/overnight-2026-05-08`
 
 **Shipped:**
-- **B5b** Total borrow cost in TradeJournal summary row — null-safe `totalBorrowCost` in `summaryStats`; summary Borrow cell shows `$X.XXXX` in red when > 0.
-- **B5c** Bot runner borrow cost on position resume — `entry_time` was never set when bot resumed tracking an externally-opened position, causing `_compute_borrow_cost()` to silently return 0.0. Fixed by setting `state.entry_time = now` in the resume block.
-- **F27** Concurrent `_fetch()` dedup — threading.Lock per `(symbol, interval)` in `shared.py`. Second concurrent caller blocks and hits the freshly-populated cache instead of firing a duplicate HTTP request.
+- **B10** TradeJournal CSV quoting — RFC 4180 `csvField()` helper wraps comma/quote-containing fields. Fixes column misalignment on timestamp fields like "May 8, 2026 10:30 AM".
+- **D26** FundBar invalid input feedback — inline red error message for empty/NaN/negative fund amounts. Previously silent no-op.
+- **C23** Optimizer validation — pre-submit guard for `min > max` and `steps < 2` in `runOptimizer()`. Error shown before loading spinner starts.
+- **F28** Backend input validation — Pydantic `Field` + `field_validator` across 6 request models (backtest_quick, bots, trading, quote). Rejects negative capitals, invalid directions, zero qty.
+- **F26** Shared OHLCV cache — `fetch_ohlcv_async()` in shared.py deduplicates concurrent asyncio coroutines at Future level. Multiple bots on same symbol share one executor call.
 
-**Review findings:** 0 findings (P0: 0, P1: 0, P2: 0), 0 auto-fixed. Build clean.
+**Review findings:** 0 findings (P0: 0, P1: 0, P2: 0), 0 auto-fixed, 1 build iteration. All 109 frontend tests pass.
 
 **Deferred:**
-- **A8** viewport-only rendering — estimated 500-700 lines across 5-6 files, 6-8 hours, high regression risk on pan/zoom and multi-pane sync. Needs multi-session approach with feature flag.
-- **F26** shared OHLCV cache — architectural follow-up to F27. F27 covers the critical concurrent-miss problem; F26 eliminates per-bot calls entirely. Lower urgency now.
+- **A8** viewport-only rendering — large multi-session task, deferred.
+- Nothing else deferred — all 5 [next] easy/medium tasks shipped.
 
-**Previous run:** 2026-05-08 (build 15), branch `claude/wizardly-newton-AAkXw` — B5a (borrow column UI), B8a (use live spread button). Post-merge review found 2 P1s, both fixed.
+**Previous run:** 2026-05-08 (build 16), branch `claude/wizardly-newton-xwoKZ` — B5b (borrow total), B5c (bot resume borrow), F27 (concurrent _fetch dedup).
 
-**Next up:** F28 backend validation [next][easy], C23 optimizer validation [next][easy], D26 FundBar feedback [next][easy], B10 CSV quoting [next][easy], F26 shared OHLCV cache [next][medium], A8 off-screen downsampling [next][medium].
+**Next up:** A14 chart loading skeleton [next][easy], D27 bot status tooltip [next][easy], F29 watchlist ticker validation [easy], C25 optimizer NaN handling [easy], F30 fetch_ohlcv_async test coverage [easy], A8 off-screen downsampling [medium].

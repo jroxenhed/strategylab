@@ -117,6 +117,13 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
   }
 
   const exportCsv = () => {
+    const csvField = (v: unknown): string => {
+      const s = String(v ?? '')
+      return (s.includes(',') || s.includes('"') || s.includes('\n'))
+        ? '"' + s.replace(/"/g, '""') + '"'
+        : s
+    }
+    const csvRow = (fields: unknown[]) => fields.map(csvField).join(',')
     const headers = ['Time', 'Symbol', 'Broker', 'Side', 'Qty', 'Expected', 'Price', 'P&L', 'Gain %', 'Slippage', 'Source', 'Reason', ...(hasBorrowCost ? ['Borrow'] : [])]
     const rows = [...filtered].reverse().map(t => {
       const pnl = exitPnl.get(t.id)
@@ -126,7 +133,7 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
         : ''
       const cost = costBpsOf(t)
       const slippage = cost != null ? cost.toFixed(1) + ' bps' : ''
-      return [
+      return csvRow([
         fmtTime(t.timestamp),
         t.symbol,
         t.broker || '',
@@ -140,9 +147,9 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
         t.source,
         t.reason || '',
         ...(hasBorrowCost ? [t.borrow_cost != null ? t.borrow_cost.toFixed(4) : ''] : []),
-      ].join(',')
+      ])
     })
-    const csv = [headers.join(','), ...rows].join('\n')
+    const csv = [csvRow(headers), ...rows].join('\n')
     const blob = new Blob([csv], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')

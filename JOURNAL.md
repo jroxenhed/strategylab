@@ -4,6 +4,18 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-08 (build 17 — overnight)
+
+- **[B10](TODO.md#b--strategy-engine--rules)** TradeJournal CSV quoting — replaced bare `.join(',')` with a `csvField()` RFC 4180 helper (wraps fields containing commas, double-quotes, or newlines). Applied to both header row and all data rows. Prevents column misalignment for timestamps like "May 8, 2026 10:30 AM" that contain a comma.
+
+- **[D26](TODO.md#d--bots-live-trading)** FundBar invalid input feedback — `FundBar` now validates input in `handleSet()` and shows an inline error message (red border + descriptive text) for empty, non-numeric, or negative values. Previously silently no-opped.
+
+- **[C23](TODO.md#c--strategy-summary--analytics)** Optimizer validation — `runOptimizer()` validates `min ≤ max` and `steps ≥ 2` for each active param row before setting the loading spinner. Descriptive error includes the param label. Prevents sending nonsensical sweep grids to the backend.
+
+- **[F28](TODO.md#f--architecture--housekeeping)** Backend input validation hardening — Pydantic `Field` constraints across six request models: `QuickBacktestRequest`/`BatchQuickBacktestRequest` (capital gt=0, lookback gt=0, stop_loss ge=0, direction enum, ticker strip+length), `SetFundRequest` (amount ge=0), `UpdateBotRequest` (capital gt=0, spread/drawdown/borrow ge=0, direction enum), `BuyRequest` (qty gt=0, stop_loss_pct ge=0 le=100), `SellRequest` (qty gt=0 when set), `get_quote` (empty/oversized ticker 400 response).
+
+- **[F26](TODO.md#f--architecture--housekeeping)** Shared OHLCV cache — added `fetch_ohlcv_async()` to `shared.py`: async wrapper around `_fetch()` that deduplicates concurrent bot coroutines at the asyncio Future level. Multiple bots awaiting the same symbol/interval/date range share one `run_in_executor` Future. Safe under asyncio cooperative scheduling. bot_runner now calls `fetch_ohlcv_async()` instead of `_run_in_executor(_fetch, ...)`.
+
 ## 2026-05-08 (interactive review session)
 
 - **PR #21 review + merge** (B5a + B8a + B8b) — overnight builder PR: borrow cost journal column + live spread button. 3-agent review caught 2 P1s: spread-derived slippage overwritten by 60s auto-refresh, button shown at zero spread. Fixed both + added "↩ modeled" reset button (UX gap found during visual verification). B8b (auto-reset guard) resolved as part of P1 fix. Added B5c to TODO (bot runner doesn't pass borrow_cost to log_trade).

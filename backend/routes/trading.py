@@ -4,7 +4,7 @@ import math
 import time
 from datetime import datetime, timezone
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 import pandas as pd
 
@@ -24,13 +24,13 @@ router = APIRouter(prefix="/api/trading")
 
 class BuyRequest(BaseModel):
     symbol: str
-    qty: float
-    stop_loss_pct: Optional[float] = None
+    qty: float = Field(..., gt=0)
+    stop_loss_pct: Optional[float] = Field(default=None, ge=0, le=100)
 
 
 class SellRequest(BaseModel):
     symbol: str
-    qty: Optional[float] = None
+    qty: Optional[float] = Field(default=None, gt=0)
 
 
 class ScanRequest(BaseModel):

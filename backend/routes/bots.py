@@ -18,7 +18,7 @@ FastAPI treating "fund" as a bot_id.
 
 from typing import Optional
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from bot_manager import BotConfig, BotManager
 from models import RegimeConfig
@@ -40,11 +40,11 @@ def _get_manager() -> BotManager:
 # ---------------------------------------------------------------------------
 
 class SetFundRequest(BaseModel):
-    amount: float
+    amount: float = Field(..., ge=0)
 
 
 class UpdateBotRequest(BaseModel):
-    allocated_capital: Optional[float] = None
+    allocated_capital: Optional[float] = Field(default=None, gt=0)
     strategy_name: Optional[str] = None
     buy_rules: Optional[list] = None
     sell_rules: Optional[list] = None
@@ -58,13 +58,20 @@ class UpdateBotRequest(BaseModel):
     short_sell_rules: Optional[list] = None
     short_buy_logic: Optional[str] = None
     short_sell_logic: Optional[str] = None
-    max_spread_bps: Optional[float] = None
-    drawdown_threshold_pct: Optional[float] = None
-    borrow_rate_annual: Optional[float] = None
+    max_spread_bps: Optional[float] = Field(default=None, ge=0)
+    drawdown_threshold_pct: Optional[float] = Field(default=None, ge=0)
+    borrow_rate_annual: Optional[float] = Field(default=None, ge=0)
     data_source: Optional[str] = None
     direction: Optional[str] = None
     broker: Optional[str] = None
     regime: Optional[RegimeConfig] = None
+
+    @field_validator('direction')
+    @classmethod
+    def validate_direction(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ('long', 'short'):
+            raise ValueError("direction must be 'long' or 'short'")
+        return v
 
 
 class ReorderBotsRequest(BaseModel):

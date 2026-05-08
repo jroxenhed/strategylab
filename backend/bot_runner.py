@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from bot_manager import BotConfig, BotState, BotManager
 
 from signal_engine import compute_indicators, eval_rules, migrate_rule
-from shared import _fetch
+from shared import _fetch, fetch_ohlcv_async
 from broker import get_trading_provider, OrderRequest as BrokerOrderRequest, OrderResult
 from journal import _log_trade, compute_realized_pnl, compute_bidirectional_pnl
 from post_loss import is_post_loss_trigger
@@ -230,8 +230,8 @@ class BotRunner(RegimeMixin, ExitsMixin):
         start_date = (date.today() - timedelta(days=30)).isoformat()
 
         try:
-            df = await self._run_in_executor(
-                _fetch, cfg.symbol, start_date, end_date, cfg.interval, cfg.data_source
+            df = await fetch_ohlcv_async(
+                cfg.symbol, start_date, end_date, cfg.interval, cfg.data_source
             )
         except Exception as e:
             self._log("WARN", f"Fetch failed: {e}")
