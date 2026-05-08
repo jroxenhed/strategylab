@@ -103,7 +103,9 @@ def _recent_fills(symbol: str, limit: int) -> list[Fill]:
 def _spread_derived_bps(symbol: str) -> float | None:
     """Return half-spread in bps from the active broker's live quote.
     Returns None when: no broker configured, market closed, quote stale
-    (outside 09:30-16:00 ET), or spread exceeds the safety cap."""
+    (outside 09:30-16:00 ET), spread exceeds the safety cap, or provider
+    lacks NBBO-quality quotes (Alpaca free tier returns IEX-only spreads
+    which are 10-50x wider than NBBO for most stocks)."""
     try:
         from datetime import datetime as _dt
         from zoneinfo import ZoneInfo
@@ -111,8 +113,10 @@ def _spread_derived_bps(symbol: str) -> float | None:
         hour_min = now_et.hour * 100 + now_et.minute
         if hour_min < 930 or hour_min >= 1600 or now_et.weekday() >= 5:
             return None
-        from broker import get_trading_provider
+        from broker import get_trading_provider, AlpacaTradingProvider
         provider = get_trading_provider()
+        if isinstance(provider, AlpacaTradingProvider):
+            return None  # IEX-only quotes, not NBBO — unsuitable for spread modeling
         bid, ask = provider.get_latest_quote(symbol)
         if bid > 0 and ask > bid:
             mid = (bid + ask) / 2
