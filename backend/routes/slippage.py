@@ -20,10 +20,19 @@ def get_slippage(symbol: str):
     live_spread_bps = None
     half_spread_bps = None
     try:
-        from broker import get_trading_provider, AlpacaTradingProvider
-        provider = get_trading_provider()
-        if isinstance(provider, AlpacaTradingProvider):
-            raise ValueError("IEX-only quotes, not NBBO")
+        from broker import get_trading_provider, AlpacaTradingProvider, IBKRTradingProvider
+        provider = None
+        try:
+            p = get_trading_provider("ibkr")
+            if isinstance(p, IBKRTradingProvider):
+                provider = p
+        except Exception:
+            pass
+        if provider is None:
+            p = get_trading_provider()
+            if isinstance(p, AlpacaTradingProvider):
+                raise ValueError("IEX-only quotes, not NBBO")
+            provider = p
         bid, ask = provider.get_latest_quote(symbol.upper())
         if bid > 0 and ask > bid:
             mid = (bid + ask) / 2.0
