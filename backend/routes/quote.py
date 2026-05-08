@@ -9,6 +9,10 @@ def get_quote(ticker: str, source: str = "yahoo"):
     """Return latest price + daily change % for a single ticker."""
     from datetime import date, timedelta
 
+    ticker = ticker.strip().upper()
+    if not ticker or len(ticker) > 20:
+        raise HTTPException(status_code=400, detail="Invalid ticker symbol")
+
     today = date.today().isoformat()
     # Fetch last 5 trading days of daily data — enough to get prev close
     start = (date.today() - timedelta(days=10)).isoformat()

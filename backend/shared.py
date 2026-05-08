@@ -1,6 +1,7 @@
 from typing import Protocol
 from collections import deque
 from fastapi import HTTPException
+import asyncio
 import logging
 import os
 import threading
@@ -460,6 +461,36 @@ def _fetch(ticker: str, start: str, end: str, interval: str, source: str = "yaho
             _evict_cache()
         _fetch_cache[key] = (now, df)
         return df
+
+
+# Async-level task dedup: multiple concurrent bot coroutines awaiting the same
+# (symbol, start, end, interval, source) share one executor Future instead of
+# each dispatching an independent run_in_executor call.
+_async_ohlcv_futures: dict[tuple, "asyncio.Future[pd.DataFrame]"] = {}
+
+
+async def fetch_ohlcv_async(
+    ticker: str, start: str, end: str, interval: str,
+    source: str = "yahoo", extended_hours: bool = False,
+) -> pd.DataFrame:
+    """Async wrapper around _fetch() with Future-level dedup for concurrent callers.
+
+    Safe under asyncio cooperative scheduling: no await between the dict check
+    and the dict store, so no other coroutine can interleave and create a duplicate.
+    """
+    key = (ticker.upper(), start, end, interval, source, extended_hours)
+    existing = _async_ohlcv_futures.get(key)
+    if existing is not None and not existing.done():
+        return await existing
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future[pd.DataFrame] = loop.run_in_executor(
+        None, _fetch, ticker, start, end, interval, source, extended_hours
+    )
+    _async_ohlcv_futures[key] = fut
+    try:
+        return await fut
+    finally:
+        _async_ohlcv_futures.pop(key, None)
 
 
 def cache_info() -> dict:

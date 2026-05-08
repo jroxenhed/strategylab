@@ -97,6 +97,22 @@ export default function OptimizerPanel({ lastRequest }: Props) {
 
   async function runOptimizer() {
     if (activeRows.length === 0 || loading) return
+    // Validate param ranges before submitting
+    for (const p of activeRows) {
+      const opt = paramOptions.find(o => o.path === p.path)
+      if (!opt) continue
+      const minN = p.min !== '' ? parseFloat(p.min) : opt.defaultMin
+      const maxN = p.max !== '' ? parseFloat(p.max) : opt.defaultMax
+      const steps = parseInt(p.steps) || 0
+      if (minN > maxN) {
+        setError(`"${opt.label}": Min (${minN}) cannot be greater than Max (${maxN})`)
+        return
+      }
+      if (steps < 2) {
+        setError(`"${opt.label}": Steps must be at least 2`)
+        return
+      }
+    }
     setLoading(true)
     setError('')
     setResult(null)

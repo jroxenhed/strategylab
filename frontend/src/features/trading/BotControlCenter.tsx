@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { BotSummary, BotFundStatus } from '../../shared/types'
 import {
@@ -29,22 +29,36 @@ import { CSS } from '@dnd-kit/utilities'
 function FundBar({ fund, onSetFund }: { fund: BotFundStatus | null; onSetFund: (n: number) => void }) {
   const [editing, setEditing] = useState(false)
   const [input, setInput] = useState('')
+  const [inputError, setInputError] = useState('')
 
   const handleSet = () => {
     const n = parseFloat(input)
-    if (!isNaN(n) && n >= 0) { onSetFund(n); setEditing(false) }
+    if (input.trim() === '') { setInputError('Enter an amount'); return }
+    if (isNaN(n)) { setInputError('Must be a number'); return }
+    if (n < 0) { setInputError('Amount cannot be negative'); return }
+    setInputError('')
+    onSetFund(n)
+    setEditing(false)
   }
+
+  const errorStyle: React.CSSProperties = { color: '#ef5350', fontSize: 12, marginTop: 2 }
+  const inputWithError = (hasError: boolean): React.CSSProperties =>
+    hasError ? { ...inputStyle, border: '1px solid #ef5350' } : inputStyle
 
   if (!fund || fund.bot_fund === 0) {
     return (
-      <div style={{ ...sectionStyle, display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ ...sectionStyle, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <span style={{ color: '#888', fontSize: 13 }}>Set your bot fund to get started:</span>
-        <input
-          type="number" placeholder="e.g. 50000"
-          value={input} onChange={e => setInput(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && handleSet()}
-          style={inputStyle}
-        />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <input
+            type="number" placeholder="e.g. 50000"
+            value={input}
+            onChange={e => { setInput(e.target.value); setInputError('') }}
+            onKeyDown={e => e.key === 'Enter' && handleSet()}
+            style={inputWithError(!!inputError)}
+          />
+          {inputError && <span style={errorStyle}>{inputError}</span>}
+        </div>
         <button onClick={handleSet} style={btnStyle('#1e3a5f')}>Set Fund</button>
       </div>
     )
@@ -58,10 +72,15 @@ function FundBar({ fund, onSetFund }: { fund: BotFundStatus | null; onSetFund: (
         <span style={{ color: '#e6edf3', fontWeight: 600, fontSize: 13 }}>Bot Fund</span>
         {editing ? (
           <>
-            <input type="number" value={input} onChange={e => setInput(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleSet()} style={inputStyle} autoFocus />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <input type="number" value={input}
+                onChange={e => { setInput(e.target.value); setInputError('') }}
+                onKeyDown={e => e.key === 'Enter' && handleSet()}
+                style={inputWithError(!!inputError)} autoFocus />
+              {inputError && <span style={errorStyle}>{inputError}</span>}
+            </div>
             <button onClick={handleSet} style={btnStyle('#1e3a5f')}>Save</button>
-            <button onClick={() => setEditing(false)} style={btnStyle('#1e2530')}>Cancel</button>
+            <button onClick={() => { setEditing(false); setInputError('') }} style={btnStyle('#1e2530')}>Cancel</button>
           </>
         ) : (
           <>
