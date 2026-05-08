@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*132 / 147 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*132 / 153 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -193,3 +193,9 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] **B5b** Total borrow cost in TradeJournal summary row — added `totalBorrowCost` to `summaryStats` IIFE (null-safe reduce). Summary row Borrow cell shows `$X.XXXX` in red when total > 0, empty otherwise.
 - [x] **B8b** Slippage auto-reset overrides "Use live spread" — the `useEffect` in StrategyBuilder.tsx that auto-applies `slipInfo` on ticker change includes `slippageSource` in its dep array, so it re-fires when user clicks "Use live spread". If `slipInfo.source === 'empirical'` (20+ fills), the effect immediately overrides the spread-derived value back to empirical. Fix: guard effect body with `if (slippageSource === 'default' || !slippageSource)` so it only auto-applies when source is still at default. [easy]
 - [x] **F27** Concurrent `_fetch()` dedup — added `threading.Lock` per `(symbol, interval)` in `shared.py`. Lock wraps the entire check→fetch→populate block; second concurrent caller blocks then hits the freshly-populated cache. Meta-lock protects the lock-dict from concurrent key creation. `threading` was already imported.
+- [ ] **F28** Backend input validation hardening — add Pydantic `Field` constraints and `@field_validator` across request models: `QuickBacktestRequest` (negative stop_loss_pct, zero capital/lookback, invalid direction), `SetFundRequest` (negative amount), `UpdateBotRequest` (negative max_spread_bps/drawdown/borrow_rate, invalid direction), `BuyRequest` (qty ≤ 0, stop_loss_pct out of range), `SellRequest` (qty = 0 silent no-op), `get_quote` (empty/oversized ticker). [easy] [next]
+- [ ] **C23** Optimizer min/max/steps validation — OptimizerPanel.tsx allows `min > max` and `steps ≤ 0`, producing empty or nonsensical grids. Add frontend guard with error message before submitting. [easy] [next]
+- [ ] **D26** FundBar invalid input feedback — BotControlCenter FundBar silently ignores unparseable or negative fund amounts. Show red border + inline error when input is invalid instead of silent no-op. [easy] [next]
+- [ ] **B10** TradeJournal CSV quoting — CSV export uses `.join(',')` without quoting fields that may contain commas. Wrap fields in double-quotes or use a proper CSV serializer to prevent column misalignment. Pre-existing issue, worsened by conditional Borrow column (B5a). [easy] [next]
+- [ ] **A14** Chart loading skeleton — show a lightweight placeholder (pulsing grey bars or spinner) while OHLCV data is fetching, instead of a blank chart area. Improves perceived load time on slow connections or large date ranges. [easy]
+- [ ] **D27** Bot status tooltip — hovering over a bot's status badge (running/stopped/error) should show a tooltip with last tick time, current P&L, and position size. Currently requires expanding the bot row to see this info. [easy]

@@ -48,7 +48,7 @@ Every agent session (interactive or automated) follows this protocol to prevent 
 3. If working on a specific TODO item, check for a linked spec/plan in `docs/superpowers/`
 
 ### On End
-1. Update `TODO.md` — check off completed items, add new items if work surfaced them (gaps, edge cases, natural follow-ups discovered during implementation — not speculative feature requests)
+1. Update `TODO.md` — check off completed items, add new items if work surfaced them. **Every implementation session must surface at least 1–2 new items** — if you found zero, you weren't looking hard enough. Edge cases, missing validation, UX gaps, performance concerns, and natural follow-ups all count. Tag new items with the parent task ID (e.g. B5d from B5c). The only things that don't belong are speculative feature requests with no connection to the work you just did.
 2. Append to `JOURNAL.md` — reuse today's date header if it exists, one bullet per shipped item with bold **[ID]** cross-reference
 3. Tag suitable unchecked items `[next]` for the next overnight run (prefer prereqs of in-progress work, then `[easy]` items)
 4. Both updates in the **same commit** as the code changes (atomic)

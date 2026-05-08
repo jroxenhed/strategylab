@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout *)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "case \"$CLAUDE_FILE_PATH\" in */frontend/src/*.ts|*/frontend/src/*.tsx) cd /Users/jroxenhed/Documents/strategylab/frontend && npx tsc -b 2>&1 | head -5 ;; esac",
+            "timeout": 15000
+          }
+        ]
+      }
+    ]
+  }
+}

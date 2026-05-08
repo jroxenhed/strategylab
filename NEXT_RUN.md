@@ -51,4 +51,4 @@ Tasks to skip even if tagged `[next]`:
 
 **Previous run:** 2026-05-08 (build 15), branch `claude/wizardly-newton-AAkXw` — B5a (borrow column UI), B8a (use live spread button). Post-merge review found 2 P1s, both fixed.
 
-**Next up:** F26 shared OHLCV cache [next][medium], A8 off-screen downsampling [next][medium].
+**Next up:** F28 backend validation [next][easy], C23 optimizer validation [next][easy], D26 FundBar feedback [next][easy], B10 CSV quoting [next][easy], F26 shared OHLCV cache [next][medium], A8 off-screen downsampling [next][medium].
