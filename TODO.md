@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*137 / 157 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*137 / 159 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -201,4 +201,6 @@ Own multi-session research project. Needs its own design work before implementat
 - [ ] **D27** Bot status tooltip — hovering over a bot's status badge (running/stopped/error) should show a tooltip with last tick time, current P&L, and position size. Currently requires expanding the bot row to see this info. [easy] [next]
 - [ ] **F29** Watchlist quote endpoint ticker validation — `GET /api/quote/{ticker}` now validates tickers in `get_quote()`, but the batch `POST /api/quotes` iterates `symbols[:20]` without validating individual entries. Add per-symbol validation (strip, uppercase, length guard) to avoid passing garbage to `_fetch()`. [easy]
 - [ ] **C25** Optimizer param range NaN handling — if user types a non-numeric value (e.g. 'abc') into the Min/Max fields, `parseFloat` returns NaN which silently produces an all-NaN linspace. Add a `isNaN(minN) || isNaN(maxN)` check to the C23 validation guard. [easy]
+- [ ] **F28b** Validate `buy_logic`/`sell_logic` fields — `eval_rules()` silently falls back to OR semantics for any non-`"AND"` string (e.g. `"all"`, `"BOTH"`). Add `@field_validator` on `QuickBacktestRequest`, `BatchQuickBacktestRequest`, and `BotConfig` restricting to `"AND" | "OR"`. Asymmetric gap: `direction` was hardened in F28 but the adjacent logic fields were not. [easy] [next]
+- [ ] **F28c** Fix `cache_info()` 6-tuple unpack crash — `GET /api/cache` unpacks `_fetch_cache` keys as 5-tuples but keys are 6-tuples (includes `extended_hours`). Every call raises `ValueError`. Pre-existing but worsened by F26 making cache diagnostics more important. [easy] [next]
 - [ ] **F30** `fetch_ohlcv_async` coverage — F26 added `fetch_ohlcv_async()` to `shared.py` but the bot_runner test harness (F20) still uses `_run_in_executor(_fetch, ...)` via a mock executor. Update `test_bot_runner.py` to verify the shared-fetch dedup path (two simultaneous tick() calls on same symbol share one Future). [easy]
