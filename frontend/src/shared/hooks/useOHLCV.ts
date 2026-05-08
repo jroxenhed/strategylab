@@ -165,5 +165,6 @@ export function useBroker() {
     switchBroker,
     pollIntervalMs: query.data?.poll_interval_ms ?? null,
     apiCallsPerMinute: query.data?.api_calls_per_minute ?? 0,
+    dataCallsPerMinute: query.data?.data_calls_per_minute ?? 0,
   }
 }

@@ -12,6 +12,14 @@ def list_providers():
     return {"providers": get_available_providers()}
 
 
+def _get_data_rpm() -> int:
+    try:
+        from shared import get_data_rate_counter
+        return get_data_rate_counter().calls_per_minute()
+    except Exception:
+        return 0
+
+
 def _broker_payload():
     from bot_runner import get_poll_ms
     monitor = get_monitor()
@@ -24,6 +32,7 @@ def _broker_payload():
         "heartbeat_warmup": warmup,
         "poll_interval_ms": get_poll_ms() or None,
         "api_calls_per_minute": get_rate_counter().calls_per_minute(),
+        "data_calls_per_minute": _get_data_rpm(),
     }
 
 

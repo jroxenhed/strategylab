@@ -211,6 +211,7 @@ export interface BrokerInfo {
   heartbeat_warmup: boolean
   poll_interval_ms: number | null
   api_calls_per_minute: number
+  data_calls_per_minute: number
 }
 
 export async function fetchBroker(): Promise<BrokerInfo> {

@@ -2,7 +2,7 @@ import { useBroker } from '../../shared/hooks/useOHLCV'
 import { useAccountQuery } from '../../shared/hooks/useTradingQueries'
 
 export default function AccountBar() {
-  const { broker, available, health, heartbeatWarmup, switchBroker, apiCallsPerMinute } = useBroker()
+  const { broker, available, health, heartbeatWarmup, switchBroker, apiCallsPerMinute, dataCallsPerMinute } = useBroker()
   const { data: account, isError, isLoading, error } = useAccountQuery()
 
   if (isError) return <div style={styles.bar}><span style={{ color: '#f85149' }}>Account error: {(error as Error)?.message ?? 'unknown'}</span></div>
@@ -75,13 +75,14 @@ export default function AccountBar() {
         </div>
       ))}
       <div style={styles.metric}>
-        <span style={styles.label}>API Rate</span>
+        <span style={styles.label}>API</span>
         <span style={{
           ...styles.value,
           fontSize: 13,
           color: apiCallsPerMinute > 190 ? '#ef5350' : apiCallsPerMinute > 150 ? '#f0883e' : '#3fb950',
         }}>
-          {broker === 'ibkr' ? `${apiCallsPerMinute}/min` : `${apiCallsPerMinute}/200`}
+          T:{broker === 'ibkr' ? `${apiCallsPerMinute}/min` : `${apiCallsPerMinute}/200`}
+          {' '}D:{dataCallsPerMinute}/min
         </span>
       </div>
       {account.trading_blocked && <span style={{ color: '#f85149', fontSize: 12 }}>TRADING BLOCKED</span>}

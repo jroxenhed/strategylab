@@ -1,4 +1,5 @@
 from typing import Protocol
+from collections import deque
 from fastapi import HTTPException
 import logging
 import os
@@ -8,6 +9,30 @@ import pandas as pd
 import yfinance as yf
 
 logger = logging.getLogger(__name__)
+
+
+class DataRateCounter:
+    """Sliding-window counter for data API calls (60s window)."""
+
+    def __init__(self, window_secs: float = 60.0):
+        self._window = window_secs
+        self._calls: deque[float] = deque()
+
+    def record(self):
+        self._calls.append(time.monotonic())
+
+    def calls_per_minute(self) -> int:
+        cutoff = time.monotonic() - self._window
+        while self._calls and self._calls[0] < cutoff:
+            self._calls.popleft()
+        return len(self._calls)
+
+
+_data_rate_counter = DataRateCounter()
+
+
+def get_data_rate_counter() -> DataRateCounter:
+    return _data_rate_counter
 
 
 _INTRADAY_INTERVALS = {'1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h'}
@@ -27,6 +52,7 @@ class DataProvider(Protocol):
 
 class YahooProvider:
     def fetch(self, ticker: str, start: str, end: str, interval: str, extended_hours: bool = False) -> pd.DataFrame:
+        _data_rate_counter.record()
         # Clamp date range to yfinance limits for intraday intervals
         max_days = _INTERVAL_MAX_DAYS.get(interval)
         if max_days is not None:
@@ -72,6 +98,7 @@ class AlpacaProvider:
         self._feed = feed
 
     def fetch(self, ticker: str, start: str, end: str, interval: str, extended_hours: bool = False) -> pd.DataFrame:
+        _data_rate_counter.record()
         if interval in _ALPACA_UNSUPPORTED:
             raise HTTPException(
                 status_code=400,
@@ -167,6 +194,7 @@ class IBKRDataProvider:
         self._lock = threading.Lock()
 
     def fetch(self, ticker: str, start: str, end: str, interval: str, extended_hours: bool = False) -> pd.DataFrame:
+        _data_rate_counter.record()
         if interval in _IBKR_UNSUPPORTED:
             raise HTTPException(
                 status_code=400,
