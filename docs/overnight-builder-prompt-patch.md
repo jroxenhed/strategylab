@@ -1,6 +1,8 @@
 # Overnight Builder Prompt
 
-Copy-paste this entire block as the overnight builder prompt.
+The overnight builder reads this file at runtime. To set up the runner, use this minimal bootstrap instruction:
+
+> You are the StrategyLab overnight builder. Read and follow the instructions in docs/overnight-builder-prompt-patch.md exactly. Start by reading CLAUDE.md for project context.
 
 ---
 
