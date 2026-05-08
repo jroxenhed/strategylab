@@ -306,3 +306,9 @@ _Everything shipped before the journal started (2026-04-27). Grouped by theme._
 - Refresh button on journal
 - UI update frequency 5s to 2s for bot list + detail polling
 - Position size: removed slider, hardcoded 100%
+
+## 2026-05-08
+
+### Cost Model
+
+- **[B8](TODO.md#b--strategy-engine--rules)** Spread-derived slippage default — `decide_modeled_bps()` now tries the active broker's `get_latest_quote()` before falling back to 2 bps default. Half-spread formula: `(ask − bid) / (2 × mid) × 10,000` bps per leg. Conservative floor: `max(2.0, half_spread_bps)`. Source label: `"spread-derived"` shown as "live spread" in StrategyBuilder. Priority: empirical (20+ fills) > spread-derived (live quote) > default. Lazy import inside `try/except` avoids circular import and handles Yahoo (no `get_latest_quote()`), broker offline, and market-closed (zero bid/ask) gracefully.

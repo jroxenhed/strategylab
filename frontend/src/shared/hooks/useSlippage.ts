@@ -6,7 +6,7 @@ export interface SlippageInfo {
   measured_bps: number | null
   fill_bias_bps: number | null
   fill_count: number
-  source: 'default' | 'empirical'
+  source: 'default' | 'empirical' | 'spread-derived'
   live_spread_bps?: number | null
   half_spread_bps?: number | null
 }
