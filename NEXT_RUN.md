@@ -46,4 +46,4 @@ Tasks to skip even if tagged `[next]`:
 
 **Previous run:** 2026-05-08 (builds 13+14), branch `claude/sharp-allen-igMUK` — B5 (borrow cost live bots), B8 (spread-derived slippage). Post-merge review found 10 total findings across 2 PRs, all fixed.
 
-**Next up:** A8 viewport-only rendering [medium], D24b regime bot visual verification (manual QA), F26 shared OHLCV cache [medium].
+**Next up:** A8 viewport-only rendering [next][medium], F26 shared OHLCV cache [next][medium], B5b total borrow in summary row [easy], B8b slippage auto-reset bug [easy], F27 concurrent fetch dedup [easy].
