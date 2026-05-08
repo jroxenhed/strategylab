@@ -402,5 +402,57 @@ class TestTickStateTransitions(unittest.TestCase):
         self.assertEqual(runner.state.skip_remaining, 1)
 
 
+class TestFetchOhlcvAsyncDedup(unittest.TestCase):
+    """Verify fetch_ohlcv_async deduplicates concurrent calls for the same key."""
+
+    def test_concurrent_calls_share_one_fetch(self):
+        """Two simultaneous fetch_ohlcv_async calls for the same key invoke _fetch only once."""
+        import time
+        from shared import fetch_ohlcv_async
+
+        call_count = 0
+
+        def slow_fetch(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            time.sleep(0.05)  # ensure the Future is still pending when the second coroutine runs
+            return make_df()
+
+        async def run():
+            with patch("shared._fetch", side_effect=slow_fetch):
+                args = ("AAPL", "2026-01-01", "2026-01-10", "1d", "yahoo", False)
+                r1, r2 = await asyncio.gather(
+                    fetch_ohlcv_async(*args),
+                    fetch_ohlcv_async(*args),
+                )
+            return r1, r2
+
+        r1, r2 = asyncio.run(run())
+        self.assertEqual(call_count, 1, "concurrent calls must share one _fetch Future")
+        self.assertFalse(r1.empty)
+        self.assertFalse(r2.empty)
+
+    def test_sequential_calls_each_fetch(self):
+        """Sequential calls (after first Future resolves) each invoke _fetch independently."""
+        import time
+        from shared import fetch_ohlcv_async
+
+        call_count = 0
+
+        def counting_fetch(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return make_df()
+
+        async def run():
+            with patch("shared._fetch", side_effect=counting_fetch):
+                args = ("AAPL", "2026-01-01", "2026-01-10", "1d", "yahoo", False)
+                await fetch_ohlcv_async(*args)
+                await fetch_ohlcv_async(*args)  # second call after first completes
+
+        asyncio.run(run())
+        self.assertEqual(call_count, 2, "sequential calls must each invoke _fetch")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,18 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-08 (build 19 — overnight)
+
+- **[F29](TODO.md#f--architecture--housekeeping)** Batch `/api/quotes` ticker validation — added `sym = sym.strip().upper()` + empty/length guard at the top of the batch loop in `routes/quote.py`. Previously raw symbols (with whitespace, excessive length) passed through to `get_quote()`; now they short-circuit before hitting `_fetch()`.
+
+- **[F30](TODO.md#f--architecture--housekeeping)** `fetch_ohlcv_async` dedup coverage — added `TestFetchOhlcvAsyncDedup` class to `test_bot_runner.py` with two tests: (1) concurrent dedup — two simultaneous `gather` coroutines on the same key share one `_fetch` Future (verified via `slow_fetch` with `time.sleep(0.05)` to keep Future pending); (2) sequential independence — two sequential awaits each invoke `_fetch` independently after the Future is cleaned up.
+
+- **[F28d](TODO.md#f--architecture--housekeeping)** `StrategyRequest.direction` validator — added `@field_validator('direction')` to `StrategyRequest` in `models.py` restricting to `"long" | "short"`. Matches existing pattern in `QuickBacktestRequest` / `BatchQuickBacktestRequest`. Closes the F28 validation pass for the main backtest model.
+
+- **[F31](TODO.md#f--architecture--housekeeping)** `eval_rules()` `Literal` type annotation — changed `logic: str` to `logic: Literal['AND', 'OR']` in `signal_engine.py`. Added `Literal` to the `from typing` import. No runtime change; provides type-checker enforcement at the engine sink.
+
+- **[F32](TODO.md#f--architecture--housekeeping)** BotCard.tsx unsafe optional chains — changed all 8 occurrences of `detail?.state.X` to `detail?.state?.X` in `BotCard.tsx` (covers: `last_tick` ×2, `equity_snapshots` ×4, `activity_log` ×2, `pause_reason` ×2). Prevents `TypeError` when `detail` is truthy but `state` is transiently undefined during first detail poll.
+
 ## 2026-05-08 (PR #25 review fixes)
 
 Multi-agent review of build 18 (A14, D27, F28b, F28c, C25) via `ce:review`. Found 1 P1 + 8 P2 + 8 P3.

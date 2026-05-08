@@ -94,6 +94,13 @@ class StrategyRequest(BaseModel):
     long_position_size: Optional[float] = None
     short_position_size: Optional[float] = None
 
+    @field_validator('direction')
+    @classmethod
+    def validate_direction(cls, v: str) -> str:
+        if v not in ('long', 'short'):
+            raise ValueError("direction must be 'long' or 'short'")
+        return v
+
     @field_validator('position_size')
     @classmethod
     def clamp_position_size(cls, v: float) -> float:

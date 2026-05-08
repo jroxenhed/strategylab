@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel
 
 class Rule(BaseModel):
@@ -454,7 +454,7 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
     return False
 
 
-def eval_rules(rules: list[Rule], logic: str, indicators: dict[str, pd.Series], i: int) -> bool:
+def eval_rules(rules: list[Rule], logic: Literal['AND', 'OR'], indicators: dict[str, pd.Series], i: int) -> bool:
     """Evaluate a list of rules with AND/OR logic. Negated rules are inverted,
     except when i < 1 (no prior bar) where we always return False."""
     results = []
