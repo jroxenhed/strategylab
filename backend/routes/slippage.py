@@ -20,8 +20,10 @@ def get_slippage(symbol: str):
     live_spread_bps = None
     half_spread_bps = None
     try:
-        from broker import get_trading_provider
+        from broker import get_trading_provider, AlpacaTradingProvider
         provider = get_trading_provider()
+        if isinstance(provider, AlpacaTradingProvider):
+            raise ValueError("IEX-only quotes, not NBBO")
         bid, ask = provider.get_latest_quote(symbol.upper())
         if bid > 0 and ask > bid:
             mid = (bid + ask) / 2.0
