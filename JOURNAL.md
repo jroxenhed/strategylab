@@ -12,7 +12,11 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 - **PR #20 review fixes** (B8 spread-derived) — 3-agent review caught IBKR timeout risk + design tensions. Fixed: extracted `_spread_derived_bps()` helper (deduplication), 50 bps cap (`SLIPPAGE_MAX_SPREAD_BPS`), market-hours guard (09:30–16:00 ET weekdays only). Discovered IEX quotes are 10–50x wider than NBBO for individual stocks — gated spread-derived path on provider type (IBKR only, skip Alpaca free tier). Yahoo `info` bid/ask also unreliable (119 bps for MSFT).
 
-- **IBC (IB Controller) setup** — installed IBC 3.23.0 at `~/ibc/install`, configured for IBKR Gateway paper trading with auto-login, 2FA retry, auto-restart at 05:00 ET. `launchd` plist at `~/Library/LaunchAgents/local.ibc-gateway.plist` recovers hourly on weekdays. Only manual step: weekly Sunday 2FA push approval on IBKR Mobile.
+- **[D25](TODO.md#d--bots-live-trading)** IBC Gateway automation — installed IBC 3.23.0 at `~/ibc/install`, configured for IBKR Gateway paper trading with auto-login, 2FA retry, auto-restart at 05:00 ET. `launchd` plist recovers hourly on weekdays. Only manual step: weekly Sunday 2FA push on IBKR Mobile.
+
+- **IBKR spread-derived slippage wired** — `_spread_derived_bps()` and live spread display now prefer IBKR by name regardless of active trading broker. IBKR quotes use delayed market data (`reqMarketDataType(3)`) — free, no subscription needed, 15-min lag NBBO. Verified: MSFT shows 1.9 bps full spread (realistic). Alpaca IEX and Yahoo bid/ask both confirmed unreliable for individual stocks.
+
+- **[F24](TODO.md#f--architecture--housekeeping)** Configurable poll interval + API rate counter — global `BOT_POLL_MS` (default per-bar-interval fallback), runtime `PATCH /api/broker/poll-interval`, persisted to `.env`. `RateCounter` (trading) + `DataRateCounter` (data fetches) with 60s sliding windows. AccountBar shows `T:26/200 D:15/min @100ms`. Poll input in BotControlCenter with focus-aware sync. Discovered: actual tick rate is bottlenecked by `_fetch()` network latency (~200-500ms), not the sleep interval — 10ms and 100ms produce identical throughput.
 
 ## 2026-05-07 (overnight build 13)
 
