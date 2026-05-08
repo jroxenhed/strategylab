@@ -152,7 +152,11 @@ export default function BotControlCenter() {
   const [brokerBannerDismissed, setBrokerBannerDismissed] = useState(false)
   const [botsErrorDismissed, setBotsErrorDismissed] = useState(false)
   const [error, setError] = useState('')
-  const [pollInput, setPollInput] = useState('')
+  const [pollInput, setPollInput] = useState(pollIntervalMs != null ? String(pollIntervalMs) : '')
+  const [pollFocused, setPollFocused] = useState(false)
+  useEffect(() => {
+    if (!pollFocused) setPollInput(pollIntervalMs != null ? String(pollIntervalMs) : '')
+  }, [pollIntervalMs, pollFocused])
   // Track user-set order; updated on drag-end and reconciled with server data
   const orderRef = useRef<string[]>([])
 
@@ -231,15 +235,14 @@ export default function BotControlCenter() {
   }
 
   const handlePollIntervalCommit = async () => {
-    const ms = parseInt(pollInput, 10)
     if (!pollInput.trim()) return
+    const ms = parseInt(pollInput, 10)
     if (isNaN(ms) || ms < 100 || ms > 60000) {
       setError('Poll interval must be between 100 and 60000 ms')
       return
     }
     try {
       await api.patch('/api/broker/poll-interval', { ms })
-      setPollInput('')
     } catch (e) {
       setError(apiErrorDetail(e, 'Failed to set poll interval'))
     }
@@ -348,9 +351,10 @@ export default function BotControlCenter() {
             type="number"
             value={pollInput}
             onChange={e => setPollInput(e.target.value)}
-            onBlur={handlePollIntervalCommit}
+            onFocus={() => setPollFocused(true)}
+            onBlur={() => { setPollFocused(false); handlePollIntervalCommit() }}
             onKeyDown={e => { if (e.key === 'Enter') { e.currentTarget.blur() } }}
-            placeholder={pollIntervalMs != null ? String(pollIntervalMs) : 'auto'}
+            placeholder="auto"
             min={100}
             max={60000}
             style={{
