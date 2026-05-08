@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*126 / 142 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
+\*\*128 / 142 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details. Items below `### Pre-numbering` predate the addressing scheme.
 
 | Section | Topic |
 |---------|-------|
@@ -48,8 +48,8 @@
 - [x] **B6** Realistic cost model in backtester — IBKR Fixed per-share commission (`per_share_rate` + `min_per_order`), empirical per-symbol slippage via `GET /api/slippage/{symbol}` + `useEmpiricalSlippage` hook, short borrow cost (`borrow_rate_annual`). Results shows Borrow column + Cost Breakdown block.
 - [x] **B7** Slippage model redesign — separate *measured* slippage (diagnostics) from *modeled* slippage (backtest assumption). Always ≥ 0 everywhere it surfaces. Floor empirical at default, gate on minimum fill_count, single shared signed-cost helper in `backend/slippage.py`. Fixes journal display (wrong sign for sells/shorts), bot runner log sign drift, and the "favorable empirical auto-carries into Capital & Fees" pitfall. [plan](docs/superpowers/plans/2026-04-15-b7-slippage-redesign.md)
 - [x] **B8** Spread-derived slippage (follow-up to B7) — live spread display + spread-derived modeled default. `/api/slippage/{symbol}` returns `live_spread_bps`/`half_spread_bps` when IBKR is active (NBBO). `decide_modeled_bps()` uses half-spread when <20 empirical fills (floor 2 bps, cap 50 bps, market-hours only). Skipped for Alpaca free tier (IEX-only quotes are 10-50x wider than NBBO).
-- [ ] **B5a** Show `borrow_cost` in TradeJournal UI — add a Borrow column to the journal table (only shown when any row has a non-null `borrow_cost`). Data is already stored in journal JSON from B5. Pure frontend. [easy]
-- [ ] **B8a** "Use live spread" button in Capital & Fees — small button next to the slippage input that pre-fills `slippageBps` from `slipInfo.half_spread_bps` when a live quote is available. Cleaner than auto-apply (user-triggered, reproducible). [easy]
+- [x] **B5a** Show `borrow_cost` in TradeJournal UI — add a Borrow column to the journal table (only shown when any row has a non-null `borrow_cost`). Data is already stored in journal JSON from B5. Pure frontend. [easy]
+- [x] **B8a** "Use live spread" button in Capital & Fees — small button next to the slippage input that pre-fills `slippageBps` from `slipInfo.half_spread_bps` when a live quote is available. Cleaner than auto-apply (user-triggered, reproducible). [easy]
 - [ ] **B9** Cost model v2 (deferred from B6):
   - Debit-balance-aware margin interest for shorts (charge margin rate only on days net cash is negative)
   - IBKR Tiered pricing (exchange fees, SEC fee, FINRA TAF, clearing pass-throughs)

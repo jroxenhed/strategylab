@@ -91,6 +91,7 @@ export interface JournalTrade {
   slippage_bps: number | null
   bot_id: string | null
   direction: string | null
+  borrow_cost: number | null
 }
 
 export interface StaleAware<T> {

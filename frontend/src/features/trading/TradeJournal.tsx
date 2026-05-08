@@ -81,6 +81,8 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
     }
   }
 
+  const hasBorrowCost = filtered.some(t => t.borrow_cost != null && t.borrow_cost > 0)
+
   const summaryStats = (() => {
     let totalQty = 0
     let totalPnl = 0
@@ -113,7 +115,7 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
   }
 
   const exportCsv = () => {
-    const headers = ['Time', 'Symbol', 'Broker', 'Side', 'Qty', 'Expected', 'Price', 'P&L', 'Gain %', 'Slippage', 'Source', 'Reason']
+    const headers = ['Time', 'Symbol', 'Broker', 'Side', 'Qty', 'Expected', 'Price', 'P&L', 'Gain %', 'Slippage', 'Source', 'Reason', ...(hasBorrowCost ? ['Borrow'] : [])]
     const rows = [...filtered].reverse().map(t => {
       const pnl = exitPnl.get(t.id)
       const entryPx = exitEntryPrice.get(t.id)
@@ -135,6 +137,7 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
         slippage,
         t.source,
         t.reason || '',
+        ...(hasBorrowCost ? [t.borrow_cost != null ? t.borrow_cost.toFixed(4) : ''] : []),
       ].join(',')
     })
     const csv = [headers.join(','), ...rows].join('\n')
@@ -177,7 +180,7 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
       ) : (<>
         <div style={{ ...styles.table, maxHeight: tableHeight }}>
           <div style={styles.headRow}>
-            {['Time', 'Symbol', 'Broker', 'Side', 'Qty', 'Expected', 'Price', 'P&L', 'Gain %', 'Slippage', 'Source', 'Reason'].map(h => (
+            {['Time', 'Symbol', 'Broker', 'Side', 'Qty', 'Expected', 'Price', 'P&L', 'Gain %', 'Slippage', 'Source', 'Reason', ...(hasBorrowCost ? ['Borrow'] : [])].map(h => (
               <span key={h} style={styles.headCell}>{h}</span>
             ))}
           </div>
@@ -200,6 +203,7 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
             </span>
             <span style={styles.summaryCell} />  {/* Source */}
             <span style={styles.summaryCell} />  {/* Reason */}
+            {hasBorrowCost && <span style={styles.summaryCell} />}  {/* Borrow */}
           </div>
           {[...filtered].reverse().map(t => (
             <div key={t.id} style={{ ...styles.row, background: rowBackground(t, exitPnl) }}>
@@ -256,6 +260,11 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
               <span style={{ ...styles.cell, color: reasonColor(t.reason, exitPnl.get(t.id)) }}>
                 {t.reason || '—'}
               </span>
+              {hasBorrowCost && (
+                <span style={{ ...styles.cell, color: t.borrow_cost != null && t.borrow_cost > 0 ? '#f85149' : '#484f58' }}>
+                  {t.borrow_cost != null && t.borrow_cost > 0 ? `$${t.borrow_cost.toFixed(4)}` : '—'}
+                </span>
+              )}
             </div>
           ))}
         </div>
