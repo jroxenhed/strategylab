@@ -103,17 +103,33 @@ export default function OptimizerPanel({ lastRequest }: Props) {
       if (!opt) continue
       const minN = p.min !== '' ? parseFloat(p.min) : opt.defaultMin
       const maxN = p.max !== '' ? parseFloat(p.max) : opt.defaultMax
-      const steps = parseInt(p.steps) || 0
-      if (isNaN(minN) || isNaN(maxN)) {
-        setError(`"${opt.label}": Min and Max must be valid numbers`)
+      const stepsN = p.steps !== '' ? parseInt(p.steps) : NaN
+      if (p.min === '' && isNaN(minN)) {
+        setError(`"${opt.label}": System default Min is missing — enter a value manually`)
+        return
+      }
+      if (p.max === '' && isNaN(maxN)) {
+        setError(`"${opt.label}": System default Max is missing — enter a value manually`)
+        return
+      }
+      if (isNaN(minN)) {
+        setError(`"${opt.label}": Min is not a valid number`)
+        return
+      }
+      if (isNaN(maxN)) {
+        setError(`"${opt.label}": Max is not a valid number`)
+        return
+      }
+      if (isNaN(stepsN)) {
+        setError(`"${opt.label}": Steps is not a valid number`)
+        return
+      }
+      if (stepsN < 2) {
+        setError(`"${opt.label}": Steps must be at least 2`)
         return
       }
       if (minN > maxN) {
         setError(`"${opt.label}": Min (${minN}) cannot be greater than Max (${maxN})`)
-        return
-      }
-      if (steps < 2) {
-        setError(`"${opt.label}": Steps must be at least 2`)
         return
       }
     }

@@ -129,7 +129,7 @@ export default function App() {
   const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', start, end, chartInterval, dataSource, extendedHours, chartEnabled && showSpy)
   const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', start, end, chartInterval, dataSource, extendedHours, chartEnabled && showQqq)
 
-  const { data: instanceData = {}, refetch: refetchIndicators } = useInstanceIndicators(
+  const { data: instanceData = {}, refetch: refetchIndicators, isLoading: instanceLoading } = useInstanceIndicators(
     ticker, start, end, interval, chartEnabled ? indicators : [], dataSource, extendedHours, viewInterval,
   )
 
@@ -248,6 +248,7 @@ export default function App() {
                           showQqq={showQqq}
                           indicators={indicators}
                           instanceData={instanceData}
+                          instanceLoading={instanceLoading}
                           trades={trades}
                           emaOverlays={emaOverlays}
                           ruleSignals={ruleSignals}

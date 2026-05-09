@@ -35,19 +35,24 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-05-09 (PR #26 review fixes)
-**Branch:** `claude/kind-shannon-SeZIp` → merged to main
+**Date:** 2026-05-09 (build 20 — overnight)
+**Branch:** `claude/jolly-babbage-hh8n4`
 
 **Shipped:**
-- **F28e** `BotConfig.direction` validator — replaced `@field_validator('direction')` pattern with shared `DirectionField = Annotated[Literal['long', 'short'], BeforeValidator(str.lower)]` type alias in `models.py`. Applied to `StrategyRequest.direction` AND `BotConfig.direction`. Removed duplicate validator from `UpdateBotRequest`. Mirrors the LogicField pattern from PR #25 and closes the F28 validation pass across all models.
-- **P3** Removed dead `import time` from `TestFetchOhlcvAsyncDedup` in `test_bot_runner.py`.
+- **A14a** SubPane loading state — `useInstanceIndicators` exposes `isLoading` aggregated across all active queries (regular + htf groups), threaded `App → Chart → SubPanelEntry → SubPane`. Overlay uses a constant-opacity scrim with the animated `<span>` only (backdrop pulse caused chart-content flicker).
+- **C25a** Optimizer NaN guard improvements — split `runOptimizer()` validation into per-field checks; `isNaN(stepsN)` guard fires before `< 2`; "system default ... is missing" message when blank field meets a NaN default.
 
-**Review:** 9 reviewers, 1 P1 + 4 P2 + 5 P3. P1 + 1 P3 fixed. Build: pass. Tests: 8 pass, 1 pre-existing failure (F33).
+**Review:** 4 manual personas (correctness, maintainability, project-standards, kieran-typescript). The `compound-engineering:ce-review` skill name from `docs/overnight-builder-prompt-patch.md` is not in the available-skills list for this environment — fell back to manual persona dispatch. Plain `review` skill IS listed but its description ("Review a pull request") suggests it expects an existing PR; was not used. **Builder env note for human:** debug the ce-review skill alias / install state so future runs can use the consolidated Skill call.
 
-**Deferred (added to TODO):** F39 (batch quote silent null), F40 (dedup test timing gate), F41 (BotDetail.state type mismatch), F42 (eval_rules runtime guard), F43 (log injection via tickers).
+**Findings summary:** 2 P2 + 6 P3 across both tasks.
+- Fixed: P2 `useOHLCV.ts` `isLoading` semantics (only-first-query bug + empty-success lock); P2 `SubPane.tsx` animation flicker (moved animation off backdrop); P3 inline rgba/hex colors in SubPane (now use existing `CHART_BG_SCRIM`/`TEXT` constants).
+- Deferred (added to TODO): **C25b** (OptimizerPanel submission `parseInt(p.steps) || 5` diverges from validation), **A14d** (loading flag is per-Chart not per-pane — fine today, revisit if HTF groups split), **F47** (section-header comment noise in SubPane.tsx + OptimizerPanel.tsx — pre-existing, CLAUDE.md "no comments" violation), **F48** (`steps`/`stepsN` naming inconsistency across 3 scopes in OptimizerPanel.tsx).
+- Skipped: P3 helper extraction in OptimizerPanel (advisory, current form is clear enough); P3 system-default NaN dead-code claim (TS reviewer; defensive code aligns with original C25a spec — disagree with finding); P3 inline animation string CSS coupling (advisory).
 
-**Previous run:** 2026-05-08 (build 19 — F29/F30/F28d/F31/F32).
+**Build:** pass. **Smoke test:** N/A (frontend-only changes).
 
-**Next up:** A14a SubPane loading state [easy][next], C25a Optimizer NaN guard improvements [easy][next], F33 fetch-path test audit [easy], F39–F43 housekeeping batch [easy], D27a status tooltip popover [medium], A8 off-screen downsampling [medium].
+**Visual verification:** Not visually verified — flagged in PR description.
 
-**Note (PR #27, build 2026-05-09, branch `claude/kind-shannon-99Iw3`):** ran in parallel with PR #26 review. Contributed: F33 fix (patched `shared.fetch_ohlcv_async` in `_base_patches`), improved dedup tests in `TestFetchOhlcvAsyncDedup`, and new `test_quote_endpoint.py` with 5 F29 route tests. Two builder-surfaced items renumbered F45/F46 to avoid collision with main's F37/F38.
+**Previous run:** 2026-05-09 PR #27 (build 19 — F33/F30/F29 dedup tests + quote endpoint coverage). Before that: 2026-05-09 PR #26 review fixes (F28e + dead import).
+
+**Next up:** F39 (batch quote silent null) [easy][next], F41 (BotDetail.state type mismatch) [easy][next], F40/F42/F43 housekeeping batch [easy], C25b (Optimizer submission divergence) [easy], A14d (per-pane loading map) [medium], D27a (status tooltip popover) [medium], A8 off-screen downsampling [medium].
