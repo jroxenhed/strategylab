@@ -98,7 +98,13 @@ export function useInstanceIndicators(
     : htfGroups.length > 0 ? (htfQueryResults[0]?.fetchStatus ?? 'idle')
     : 'idle'
 
-  return { data: merged, refetch, isSuccess, fetchStatus }
+  const allQueries = [
+    ...(regularInstances.length > 0 ? [regularQuery] : []),
+    ...htfQueryResults,
+  ]
+  const isLoading = allQueries.some(q => q.isLoading)
+
+  return { data: merged, refetch, isSuccess, fetchStatus, isLoading }
 }
 
 export function useProviders() {

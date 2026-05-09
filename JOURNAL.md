@@ -4,6 +4,13 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-09 (build 20 — overnight)
+
+- **[A14a](TODO.md#a--charts--indicators)** SubPane loading state — `useInstanceIndicators` exposes `isLoading` aggregated across all active queries (`allQueries.some(q => q.isLoading)` over `regularQuery` + every `htfQueryResults` entry). Replaces the earlier hand-rolled `fetchStatus === 'fetching' && !merged-keys` condition that (a) only saw the first query branch and (b) locked at true on a successful empty response. Threaded a single `instanceLoading: boolean` from `App.tsx → Chart.tsx → SubPanelEntry → SubPane.tsx`. SubPane renders a constant-opacity scrim (`CHART_BG_SCRIM`) with the animated `<span>` only — putting `chart-skeleton-pulse` on the backdrop made the chart underneath flicker.
+- **[C25a](TODO.md#c--strategy-summary--analytics)** Optimizer NaN guard improvements — `runOptimizer()` validation split into per-field checks. (a) "Min/Max/Steps is not a valid number" identifies the offending field (was: generic "Min and Max must be valid numbers"). (b) `isNaN(stepsN)` guard fires before `< 2` so non-numeric Steps no longer surfaces as the misleading "Steps must be at least 2". (c) Distinguishes user-typed NaN from system-default NaN: when user leaves the field blank and `opt.defaultMin/Max` is NaN, error reads "system default Min is missing — enter a value manually" rather than blaming the user.
+
+**Review:** 4 manual personas (correctness/maintainability/project-standards/kieran-typescript) — `compound-engineering:ce-review` skill not in this environment's skill list, fell back to manual dispatch. 2 P2 + 6 P3 surfaced; both P2s + 1 P3 fixed (`useOHLCV.ts` isLoading semantics, SubPane animation/colors). Deferred P2 to **C25b** (OptimizerPanel submission path divergence) and 3 P3s to **A14d/F47/F48**. Build: pass.
+
 ## 2026-05-09 (build 19 — overnight, PR #27)
 
 *This run started in parallel with PR #26's review session. F29/F30 were already shipped in PR #26, so PR #27 contributed F33 fix, improved dedup tests, and new F29 test coverage. F37/F38 items surfaced by the PR #27 builder were renumbered to F45/F46 to avoid collision with main's F37/F38.*

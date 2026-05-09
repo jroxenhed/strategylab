@@ -25,9 +25,11 @@ interface SubPaneProps {
   toET: (time: string | number) => any
   label: string
   tzMode?: string
+  loading?: boolean
 }
 
 const CHART_BG = '#0d1117'
+const CHART_BG_SCRIM = 'rgba(13, 17, 23, 0.6)'
 const GRID = '#1c2128'
 const TEXT = '#8b949e'
 const UP = '#26a641'
@@ -47,7 +49,7 @@ const chartOptions = {
 export default function SubPane({
   paneKey, instances, instanceData, mainChartRef, mainSeriesRef,
   paneRegistryRef, syncWidthsRef,
-  markers, toET, label, tzMode,
+  markers, toET, label, tzMode, loading,
 }: SubPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -280,6 +282,18 @@ export default function SubPane({
     <div style={{ height: '100%', borderTop: '1px solid #1c2128', position: 'relative' }}>
       <span style={{ position: 'absolute', top: 4, left: 8, fontSize: 10, color: '#8b949e', zIndex: 1 }}>{label}</span>
       <div ref={containerRef} style={{ height: '100%', width: '100%' }} />
+      {loading && (
+        <div style={{
+          position: 'absolute', inset: 0, background: CHART_BG_SCRIM,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 2, pointerEvents: 'none',
+        }}>
+          <span style={{
+            fontSize: 11, color: TEXT,
+            animation: 'chart-skeleton-pulse 1.6s ease-in-out infinite',
+          }}>Loading…</span>
+        </div>
+      )}
     </div>
   )
 }
