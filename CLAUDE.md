@@ -24,9 +24,9 @@ Interactive trading strategy backtester + live paper trading platform. Read this
   8. Verify + commit (orchestrator) — run `npm run build`, check fixes, update TODO/JOURNAL atomically, push
   9. Repeat
 - **Pipeline parallelism across tasks.** Don't wait for Task A's full cycle before starting Task B. While Task A is in review (the slowest phase), Task B can be in explore/implement — as long as their files don't overlap. The orchestrator tracks multiple tasks at different pipeline stages. Typical overlap: Task A in review + Task B in implement = ~2x wall-clock speedup on multi-task sessions. Use `run_in_background: true` on review agents, then dispatch the next task's explore+implement while reviews run. When review results arrive, synthesize and fix Task A, then move to Task B's review.
-- **Model routing for subagents.** haiku for reads/exploration, sonnet for coding/implementation/review, opus only when complexity demands it. Set the `model` parameter on every Agent call.
+- **Model routing.** Orchestrator/judgment work runs Opus 4.7 (xHigh effort when available). Subagents: haiku for fast reads, sonnet for routine implementation/review (cheap parallel personas), opus 4.7 for complex review or synthesis where missing a P1 is expensive. Cost is not the primary constraint — wall-clock and quality are. Set `model` on every Agent call.
 - **Review rules.** Pass file paths and intent to reviewers, not diff content. Always use absolute paths. Skip review for trivial (<10 line) changes; single reviewer for medium; parallel personas for large.
-- **Overnight PR review.** Before merging overnight builder PRs, use the `ce:review` skill against the PR branch. Never hand-roll review agents — they get hijacked by the skills system. The builder's self-review consistently misses P1s that multi-agent review catches (8 P1s found across 2 PRs in 2026-05-03). Fix confirmed P1s, verify with a quick review pass, then merge. Takes ~5 minutes.
+- **Overnight PR review.** Before merging overnight builder PRs, run multi-agent review on the PR branch. Prefer the `ce:review` skill (it handles persona selection, dedup, fix-loop natively). When the skill isn't available or you need a specific persona that ce:review didn't dispatch, manual Task-tool dispatch with explicit persona prompts works fine — verified across 11+ manual dispatches in the 2026-05-08/09 sessions, none hijacked. The builder's own review still misses things multi-agent review catches; never skip the morning review pass. Fix confirmed P1s, optional second-pass verification, merge. ~5 minutes.
 - **Anti-patterns to avoid:**
   - "Just check one thing" trap — any investigation in the main session is a delegation failure; dispatch a haiku agent instead
   - Reading full diffs into orchestrator context — wasteful; pass file paths, let reviewers gather evidence
@@ -54,12 +54,12 @@ Every agent session (interactive or automated) follows this protocol to prevent 
 4. Both updates in the **same commit** as the code changes (atomic)
 5. Send Slack summary (silently skips if webhook not configured):
    ```
-   bash bin/slack-report.sh "Overnight build 2026-05-02
-   Shipped: A13a (Multi-TF foundation), C15 (streak panel), C16 (Kelly sizing)
-   Review: 0 P0, 0 P1, 1 P2
-   Branch: claude/overnight-2026-05-02
-   Next tagged: A13b, B21
-   Build: pass"
+   bash bin/slack-report.sh "Overnight build YYYY-MM-DD
+   Shipped: <ID> (<title>), <ID> (<title>), ...
+   Review: <P0> P0, <P1> P1, <P2> P2
+   Branch: <branch-name>
+   Next tagged: <IDs>
+   Build: pass | fail (<reason>)"
    ```
 
 ### Priority tags in TODO.md
