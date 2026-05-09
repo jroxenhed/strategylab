@@ -139,9 +139,9 @@ Dispatch all applicable personas in parallel via the Task tool. Each agent gets:
 - **maintainability** — coupling, duplication, naming, dead code
 - **project-standards** — CLAUDE.md compliance. CRITICAL: grep `git log --oneline -30 origin/main` for type aliases, helpers, or validators recently introduced/refactored. If your code uses the OLD pattern, that's a P1.
 - **reliability** — error paths, retries, timeouts, async semantics, state-machine transitions, stale-while-revalidate behaviour. (Promoted to always-on 2026-05-10: build 2026-05-09 shipped a `useOHLCV.isLoading` semantics shift that reliability would have framed sharply; correctness caught the bug for a different reason.)
+- **testing** — coverage gaps, untested ordering invariants, brittle assertions. (Promoted to always-on 2026-05-10: PR #28 morning review caught a P2 ordering invariant in `OptimizerPanel.tsx` (7-branch NaN guard where reordering would silently break validation) that the builder's "skip for plumbing" heuristic missed. The project HAS frontend test infra (`useOHLCV.test.ts`, `BotCard.test.tsx`, etc.) so test recommendations are actionable, not aspirational.)
 
 **Conditional personas (run when the diff warrants):**
-- **testing** — when logic is added/changed; skip for pure plumbing or constant moves
 - **security** — when diff touches input validation, auth, public endpoints, or persisted data
 - **kieran-python** — when `.py` files changed
 - **kieran-typescript** — when `.ts`/`.tsx` files changed
