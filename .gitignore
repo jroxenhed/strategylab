@@ -16,6 +16,10 @@ frontend/dist/
 # Claude Code
 .claude/
 
+# Compound engineering / skill artifacts (local session state)
+.context/
+.memsearch/
+
 # Git worktrees
 .worktrees/
 
