@@ -35,26 +35,17 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-05-08 (build 18 + PR #25 review fixes)
-**Branch:** `claude/overnight-2026-05-08`
+**Date:** 2026-05-09 (build 19)
+**Branch:** `claude/kind-shannon-99Iw3`
 
-**Shipped (build 18):**
-- **A14** Chart loading skeleton — pulsing grey bars skeleton while OHLCV loads; "No data for {ticker}" when load completes empty. CSS animation in index.css. Not visually verified.
-- **D27** Bot status tooltip — native `title` on status badge (compact + expanded) with status, P&L, position flag, last tick.
-- **F28b** `buy_logic`/`sell_logic` validation — `@field_validator` restricting to `"AND" | "OR"` across 5 models (QuickBacktestRequest, BatchQuickBacktestRequest, StrategyRequest, BotConfig, UpdateBotRequest).
-- **F28c** `cache_info()` crash fixed — 5-tuple unpack corrected to 6-tuple. `GET /api/cache` now works.
-- **C25** Optimizer NaN guard — `isNaN(minN) || isNaN(maxN)` added before min > max check.
+**Shipped:**
+- **F29** `POST /api/quotes` per-symbol validation — strip/uppercase/length guard before calling `get_quote()`. Invalid symbols return null entry and continue.
+- **F30** `fetch_ohlcv_async` dedup coverage — `TestFetchOhlcvDedup` (2 tests) in `test_bot_runner.py`. Fixed stale `bot_runner._fetch` mock → `bot_runner.fetch_ohlcv_async` AsyncMock. All 9 tests pass.
 
-**Review fixes (PR #25, 1 P1 + 8 P2 + 8 P3):**
-- P1: `LogicField` type alias + `BeforeValidator` across all 8 models (startup cascade fix)
-- P2: 3 missed models validated (ScanRequest, RegimeConfig, PerformanceRequest)
-- P2: 5 duplicate `validate_logic` methods eliminated
-- P2: App.tsx isError branch shows "Failed to load" on network failure
-- P2: cache_info star-unpack for future key growth resilience
-- P3: cache_info +ext flag, BotCard lastTickStr dedup (3 IIFEs removed)
+**Review:** 0 findings (P0: 0, P1: 0, P2: 0), 0 auto-fixed, 0 iterations.
 
-**Deferred (added to TODO):** A14b (skeleton stale-cache), A14c (ChartSkeleton location), C25a (NaN guard gaps), F31 (eval_rules defense-in-depth), F32 (BotCard unsafe optional chain).
+**New TODO items added:** F37 (error entry symbol truncation), F38 (TestFetchOhlcvDedup teardown isolation).
 
-**Previous run:** 2026-05-08 (build 17), branch `claude/overnight-2026-05-08` — B10 (CSV quoting), D26 (FundBar error), C23 (optimizer validation), F28 (backend validation), F26 (shared OHLCV cache).
+**Previous run:** 2026-05-08 (build 18 + PR #25 review fixes), branch `claude/overnight-2026-05-08`.
 
-**Next up:** F30 fetch_ohlcv_async test coverage [next][easy], F29 watchlist ticker validation [next][easy], F28d StrategyRequest direction validation [easy], F31 eval_rules defense-in-depth [easy], F32 BotCard unsafe optional chain [easy], A14a SubPane loading state [easy], A8 off-screen downsampling [medium].
+**Next up:** F28d StrategyRequest direction validation [next][easy], F31 eval_rules defense-in-depth [next][easy], F32 BotCard unsafe optional chain [easy], A14a SubPane loading state [easy], B30 RuleRow overflow [easy], F37 error entry truncation [easy].

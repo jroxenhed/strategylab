@@ -4,6 +4,12 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-09 (build 19 — overnight)
+
+- **[F29](TODO.md#f--architecture--housekeeping)** Watchlist batch ticker validation — `POST /api/quotes` now normalizes (`strip().upper()`) and validates (empty / len > 20 guard) each symbol before calling `get_quote()`. Invalid entries return `{price: null, change_pct: null}` and continue; no garbage reaches `_fetch()`.
+
+- **[F30](TODO.md#f--architecture--housekeeping)** `fetch_ohlcv_async` test coverage — added `TestFetchOhlcvDedup` class (2 tests) to `test_bot_runner.py`: (1) two concurrent calls for the same symbol share one `_fetch` invocation (`call_count == 1`); (2) different symbols each call `_fetch` separately (`call_count == 2`). Fixed stale `bot_runner._fetch` mock in `_base_patches` to `bot_runner.fetch_ohlcv_async` (AsyncMock), which is the actual call path since F26. All 9 tests pass in 1.20s.
+
 ## 2026-05-08 (PR #25 review fixes)
 
 Multi-agent review of build 18 (A14, D27, F28b, F28c, C25) via `ce:review`. Found 1 P1 + 8 P2 + 8 P3.

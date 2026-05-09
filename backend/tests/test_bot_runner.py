@@ -144,7 +144,7 @@ class MockProvider:
 def _base_patches(df, eval_side_effect, provider):
     """Return a list of patch context managers used by every test."""
     return [
-        patch("bot_runner._fetch", return_value=df),
+        patch("bot_runner.fetch_ohlcv_async", new_callable=AsyncMock, return_value=df),
         patch("bot_runner.get_trading_provider", return_value=provider),
         patch("bot_runner.eval_rules", side_effect=eval_side_effect),
         patch("bot_runner.compute_indicators", return_value={}),
@@ -400,6 +400,65 @@ class TestTickStateTransitions(unittest.TestCase):
 
         provider.submit_order.assert_not_called()
         self.assertEqual(runner.state.skip_remaining, 1)
+
+
+class TestFetchOhlcvDedup(unittest.TestCase):
+    """Verify fetch_ohlcv_async deduplicates concurrent calls for the same key."""
+
+    def test_concurrent_same_key_calls_fetch_once(self):
+        """Two concurrent fetch_ohlcv_async calls for same symbol share one _fetch call."""
+        import time
+        import shared
+        from shared import fetch_ohlcv_async
+
+        df = make_df([100.0, 100.0])
+        call_count = 0
+
+        def slow_fetch(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            time.sleep(0.01)  # hold thread so Future is still pending when task2 checks
+            return df
+
+        async def run():
+            r1, r2 = await asyncio.gather(
+                fetch_ohlcv_async("AAPL", "2026-01-01", "2026-01-10", "1d"),
+                fetch_ohlcv_async("AAPL", "2026-01-01", "2026-01-10", "1d"),
+            )
+            return r1, r2
+
+        shared._async_ohlcv_futures.clear()
+        with patch.object(shared, "_fetch", slow_fetch):
+            asyncio.run(run())
+
+        self.assertEqual(call_count, 1, "_fetch should be called once — dedup shares one Future")
+
+    def test_different_symbols_call_fetch_separately(self):
+        """Different symbols each invoke _fetch independently (no false dedup)."""
+        import time
+        import shared
+        from shared import fetch_ohlcv_async
+
+        df = make_df([100.0, 100.0])
+        call_count = 0
+
+        def slow_fetch(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            time.sleep(0.01)
+            return df
+
+        async def run():
+            await asyncio.gather(
+                fetch_ohlcv_async("AAPL", "2026-01-01", "2026-01-10", "1d"),
+                fetch_ohlcv_async("MSFT", "2026-01-01", "2026-01-10", "1d"),
+            )
+
+        shared._async_ohlcv_futures.clear()
+        with patch.object(shared, "_fetch", slow_fetch):
+            asyncio.run(run())
+
+        self.assertEqual(call_count, 2, "_fetch called twice for different symbols — no false dedup")
 
 
 if __name__ == "__main__":
