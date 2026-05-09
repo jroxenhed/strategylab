@@ -35,23 +35,17 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-05-08 (build 19 — overnight)
-**Branch:** `claude/kind-shannon-SeZIp`
+**Date:** 2026-05-09 (PR #26 review fixes)
+**Branch:** `claude/kind-shannon-SeZIp` → merged to main
 
 **Shipped:**
-- **F29** Batch `/api/quotes` ticker validation — strip/upper/length guard before `get_quote()` in loop.
-- **F30** `fetch_ohlcv_async` dedup tests — `TestFetchOhlcvAsyncDedup` with concurrent + sequential tests.
-- **F28d** `StrategyRequest.direction` validator — `@field_validator` restricting to `'long' | 'short'`.
-- **F31** `eval_rules()` `Literal` annotation — `logic: Literal['AND', 'OR']` in `signal_engine.py`.
-- **F32** BotCard.tsx unsafe optional chains — all 8 `detail?.state.X` → `detail?.state?.X`.
+- **F28e** `BotConfig.direction` validator — replaced `@field_validator('direction')` pattern with shared `DirectionField = Annotated[Literal['long', 'short'], BeforeValidator(str.lower)]` type alias in `models.py`. Applied to `StrategyRequest.direction` AND `BotConfig.direction`. Removed duplicate validator from `UpdateBotRequest`. Mirrors the LogicField pattern from PR #25 and closes the F28 validation pass across all models.
+- **P3** Removed dead `import time` from `TestFetchOhlcvAsyncDedup` in `test_bot_runner.py`.
 
-**Review:** 0 findings (P0: 0, P1: 0, P2: 0). Build: pass.
+**Review:** 9 reviewers, 1 P1 + 4 P2 + 5 P3. P1 + 1 P3 fixed. Build: pass. Tests: 8 pass, 1 pre-existing failure (F33).
 
-**Deferred (added to TODO):** F28e (BotConfig.direction validator), F33 (TestTickStateTransitions fetch-path audit), C25a moved to [next].
+**Deferred (added to TODO):** F39 (batch quote silent null), F40 (dedup test timing gate), F41 (BotDetail.state type mismatch), F42 (eval_rules runtime guard), F43 (log injection via tickers).
 
-**Concerns for human review:**
-- F33: existing TestTickStateTransitions tests patch `bot_runner._fetch` but `_tick()` now calls `fetch_ohlcv_async()` → `shared._fetch`. The `bot_runner._fetch` patch may not intercept the actual fetch path — tests may be silently not exercising the mock data path. Needs a `patch("shared.fetch_ohlcv_async")` in `_base_patches` to be sure.
+**Previous run:** 2026-05-08 (build 19 — F29/F30/F28d/F31/F32).
 
-**Previous run:** 2026-05-08 (build 18 + PR #25 review fixes).
-
-**Next up:** A14a SubPane loading state [easy][next], C25a Optimizer NaN guard improvements [easy][next], F28e BotConfig.direction validator [easy], F33 fetch-path test audit [easy], D27a status tooltip popover [medium], A8 off-screen downsampling [medium].
+**Next up:** A14a SubPane loading state [easy][next], C25a Optimizer NaN guard improvements [easy][next], F33 fetch-path test audit [easy], F39–F43 housekeeping batch [easy], D27a status tooltip popover [medium], A8 off-screen downsampling [medium].
