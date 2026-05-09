@@ -1,0 +1,71 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "Drag reorder: no visual update until server round-trip",
+      "severity": "P2",
+      "file": "frontend/src/features/trading/BotControlCenter.tsx",
+      "line": 192,
+      "why_it_matters": "After a user drags a bot card to a new position, the cards do not snap to their new order. They remain visually in the old order until reorderBots() network call resolves and invalidateBots() triggers a React Query refetch. orderedBots useMemo depends only on bots (React Query state), not on orderRef.current directly. Setting orderRef.current does not trigger a re-render. On a slow connection the UI appears frozen for 1-2 seconds after dragging.",
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": false,
+      "confidence": 0.88,
+      "evidence": [
+        "orderedBots useMemo at line 178 depends only on [bots]. It recomputes only when bots (React Query state) changes.",
+        "handleDragEnd at line 190 sets orderRef.current = newOrder, then at line 192: reorderBots(newOrder).then(() => invalidateBots()).catch(() => {}). No synchronous re-render is triggered.",
+        "Removed line from old code: setBots(prev => [...prev]) \u2014 this mutated React state to force an immediate re-render, which recomputed orderedBots from the already-updated orderRef.current.",
+        "With the new code, the only render trigger is the refetch from invalidateBots(), which fires after the network round-trip completes."
+      ],
+      "suggested_fix": "Call invalidateBots() synchronously before awaiting reorderBots, so the cache invalidation triggers an immediate re-render from the same bots data but with the updated orderRef.current: orderRef.current = newOrder; invalidateBots(); reorderBots(newOrder).catch(() => {}).",
+      "pre_existing": false
+    },
+    {
+      "title": "Optimizer loop aborts entirely on unexpected non-HTTP exception from _apply_param",
+      "severity": "P2",
+      "file": "backend/routes/backtest_optimizer.py",
+      "line": 93,
+      "why_it_matters": "The param-application inner try-except only catches HTTPException (line 93) and re-raises it as a fast-fail. Any non-HTTPException from model_copy or _apply_param escapes the loop and returns an unhandled 500 to the caller with no results, instead of skipping the offending combo and continuing. Today _apply_param only raises HTTPException, so this is a forward-looking fragility, not an active bug.",
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": false,
+      "confidence": 0.7,
+      "evidence": [
+        "backtest_optimizer.py lines 89-94: except HTTPException: raise \u2014 only HTTPException propagates; any other exception type exits the for-combo loop entirely.",
+        "run_backtest (backtest.py lines 934-937) wraps all exceptions as HTTPException(500) before returning, so the run_backtest block (lines 96-109) is correctly guarded.",
+        "_apply_param in backtest_sweep.py currently raises only HTTPException, making the risk forward-looking not present today."
+      ],
+      "suggested_fix": "Broaden the param-application catch: except HTTPException as e: if e.status_code == 400: raise; skipped += 1; continue. This preserves fast-fail for invalid param_path (400) while treating unexpected model_copy errors as skipped combos.",
+      "pre_existing": false
+    },
+    {
+      "title": "useBotsQuery drops React Query AbortSignal silently",
+      "severity": "P3",
+      "file": "frontend/src/shared/hooks/useTradingQueries.ts",
+      "line": 23,
+      "why_it_matters": "React Query provides an AbortSignal in QueryFunctionContext to cancel in-flight requests on unmount or query cancellation. useBotsQuery uses queryFn: listBots where listBots takes no arguments, so the signal is never forwarded to the axios call. Bots requests cannot be cancelled mid-flight, wasting bandwidth on unmount and preventing cleanup.",
+      "autofix_class": "safe_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "confidence": 0.82,
+      "evidence": [
+        "useTradingQueries.ts line 23: queryFn: listBots \u2014 listBots signature: async function listBots(): Promise<BotListResponse> (bots.ts line 19) \u2014 accepts no arguments.",
+        "Other hooks in the same file correctly forward the signal, e.g. line 34: queryFn: ({ signal }) => fetchJournal(undefined, brokerFilter, signal).",
+        "React Query v5 passes QueryFunctionContext as first arg to queryFn; since listBots ignores all args the signal is silently dropped."
+      ],
+      "suggested_fix": "Update listBots to accept an optional AbortSignal and pass it to api.get. Then use queryFn: ({ signal }) => listBots(signal) in useBotsQuery.",
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "C22 optimizer endpoint is synchronous and holds a FastAPI worker thread for the full duration. 200 complex regime backtests can block other API requests for 30-60s. NEXT_RUN.md notes this. Consider asyncio.wait_for or a threadpool executor.",
+    "estimatedCombos in OptimizerPanel does not account for integer deduplication (new Set after Math.round). The estimate can overstate the actual combo count, keeping the Run button disabled when real combos are under 200. Conservative direction (overestimate blocks) is safe but frustrating.",
+    "useAccountQuery uses queryKey: [account] without the active broker. switchBroker calls invalidateQueries([account]) immediately after switching, so stale cross-broker account data is visible for only one render cycle. This is a pre-existing pattern preserved by the migration."
+  ],
+  "testing_gaps": [
+    "No test for handleDragEnd optimistic ordering: verify bot cards snap to new position immediately after drag without waiting for server response.",
+    "No test for optimizer with all-skipped combos (every run_backtest returns 500): verify completed=0, skipped=total_combos, results=[] and UI shows no-valid-results message.",
+    "No test for duplicate param paths in optimizer request (two params with same path): dict comprehension on line 88 silently deduplicates, so only one path is applied.",
+    "No integration test verifying PositionsTable and TradeJournal share a single cache entry for journal data and do not issue duplicate /api/trading/journal requests when mounted together."
+  ]
+}

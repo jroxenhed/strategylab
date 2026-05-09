@@ -4,6 +4,16 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-09 (build 19 — overnight, PR #27)
+
+*This run started in parallel with PR #26's review session. F29/F30 were already shipped in PR #26, so PR #27 contributed F33 fix, improved dedup tests, and new F29 test coverage. F37/F38 items surfaced by the PR #27 builder were renumbered to F45/F46 to avoid collision with main's F37/F38.*
+
+- **[F33](TODO.md#f--architecture--housekeeping)** `TestTickStateTransitions` fetch-path audit — patched `shared.fetch_ohlcv_async` (AsyncMock) in `_base_patches` of `test_bot_runner.py`. The old `bot_runner._fetch` patch did not intercept the actual call path since F26 moved bots to `fetch_ohlcv_async`. All 9 tests pass.
+
+- **[F30](TODO.md#f--architecture--housekeeping)** Improved dedup test coverage — `TestFetchOhlcvAsyncDedup` replaced with a more thorough version: concurrent dedup test (two simultaneous calls share one Future) + sequential independence test. Removed stale `bot_runner._fetch` mock.
+
+- **[F29](TODO.md#f--architecture--housekeeping)** Quote endpoint test coverage — added `test_quote_endpoint.py` with 5 tests for the `GET /api/quote/{ticker}` and `POST /api/quotes` routes (valid ticker, empty ticker, oversized ticker, batch validation, batch dedup).
+
 ## 2026-05-08 (build 19 — overnight)
 
 - **[F29](TODO.md#f--architecture--housekeeping)** Batch `/api/quotes` ticker validation — added `sym = sym.strip().upper()` + empty/length guard at the top of the batch loop in `routes/quote.py`. Previously raw symbols (with whitespace, excessive length) passed through to `get_quote()`; now they short-circuit before hitting `_fetch()`.

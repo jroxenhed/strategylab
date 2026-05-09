@@ -49,3 +49,5 @@ Tasks to skip even if tagged `[next]`:
 **Previous run:** 2026-05-08 (build 19 — F29/F30/F28d/F31/F32).
 
 **Next up:** A14a SubPane loading state [easy][next], C25a Optimizer NaN guard improvements [easy][next], F33 fetch-path test audit [easy], F39–F43 housekeeping batch [easy], D27a status tooltip popover [medium], A8 off-screen downsampling [medium].
+
+**Note (PR #27, build 2026-05-09, branch `claude/kind-shannon-99Iw3`):** ran in parallel with PR #26 review. Contributed: F33 fix (patched `shared.fetch_ohlcv_async` in `_base_patches`), improved dedup tests in `TestFetchOhlcvAsyncDedup`, and new `test_quote_endpoint.py` with 5 F29 route tests. Two builder-surfaced items renumbered F45/F46 to avoid collision with main's F37/F38.

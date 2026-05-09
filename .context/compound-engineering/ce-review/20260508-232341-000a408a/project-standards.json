@@ -1,0 +1,42 @@
+{
+  "reviewer": "project-standards",
+  "findings": [
+    {
+      "id": "PS-1",
+      "severity": "P2",
+      "confidence": 0.85,
+      "title": "F28d uses @field_validator instead of LogicField-style Annotated type alias \u2014 diverges from established pattern",
+      "file": "backend/models.py",
+      "lines": "97-102",
+      "description": "The PR adds a @field_validator(direction) method to StrategyRequest to validate the direction field. The existing codebase established a reusable Annotated type alias pattern (LogicField = Annotated[Literal[AND, OR], BeforeValidator(...)]) for the equivalent logic field validations across all 8 models. F28d does not follow that pattern \u2014 it introduces a @field_validator method instead of defining DirectionField = Annotated[Literal[long, short], ...] reusable across StrategyRequest, BotConfig (F28e), and future models. TODO item F28e created by this PR will need to repeat this inline validator rather than applying a shared type alias, widening the inconsistency.",
+      "rule_citation": "CLAUDE.md, Key Bugs Fixed: The established LogicField pattern (models.py line 7, applied at lines 48, 58-68) exists to define validated field types once and reuse them. F28d introduces a parallel validation style for direction that is inconsistent with the reuse pattern already present in the same file.",
+      "evidence": "Base commit models.py line 7: LogicField = Annotated[Literal[AND, OR], BeforeValidator(...)]. PR diff adds @field_validator(direction) @classmethod def validate_direction instead of a DirectionField type alias. The direction field type annotation also stays as str rather than the Literal-annotated form.",
+      "pre_existing": false
+    },
+    {
+      "id": "PS-2",
+      "severity": "P3",
+      "confidence": 0.82,
+      "title": "F32 BotCard.tsx UI change has no visual verification note in JOURNAL.md",
+      "file": "JOURNAL.md",
+      "lines": "F32 journal entry",
+      "description": "F32 modifies BotCard.tsx (frontend UI component) by changing 8 optional chain expressions. CLAUDE.md requires: Visually verify UI changes in browser or flag not visually verified. The JOURNAL.md entry for F32 documents the code change but does not include a visual verification note or a not-visually-verified flag.",
+      "rule_citation": "CLAUDE.md, Working Style: Visually verify UI changes in browser or flag not visually verified.",
+      "evidence": "JOURNAL.md diff adds F32 bullet documenting the 8 optional chain fixes in BotCard.tsx with no visual verification flag. Compare with A14 in NEXT_RUN.md base content which explicitly noted Not visually verified.",
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    {
+      "id": "RR-1",
+      "description": "F33 (TestTickStateTransitions fetch-path audit) is deferred. The PRs own NEXT_RUN.md Concerns section correctly flags that existing TestTickStateTransitions tests patch bot_runner._fetch rather than shared._fetch, meaning mock data may not reach the actual fetch path invoked by _tick(). This is a known test validity gap flagged but not fixed in this PR.",
+      "severity": "P2"
+    }
+  ],
+  "testing_gaps": [
+    {
+      "id": "TG-1",
+      "description": "F28d adds a @field_validator for StrategyRequest.direction but no unit test verifies the validator (e.g., a test posting direction=LONG or direction=sideways to /api/backtest and asserting a 422 response). The equivalent coverage for F28b validators exists; F28d coverage is absent from the test diff."
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "reviewer": "project-standards",
+  "findings": [
+    {
+      "title": "Negation (Rule.negated) not applied in per-rule visualization signal loop",
+      "severity": "P1",
+      "file": "backend/routes/backtest.py",
+      "line": "438-445",
+      "confidence": 0.97,
+      "autofix_class": "logic",
+      "owner": "backend",
+      "requires_verification": false,
+      "pre_existing": false,
+      "rule_citation": "CLAUDE.md, Signal Engine section: 'Rule negation (NOT): Rule.negated: bool. Applied in eval_rules() — if negated and i >= 1, the rule result is inverted. Guard condition (i < 1) always returns False regardless of negation.'",
+      "violation": "The viz loop calls eval_rule(rule, indicators, i) directly at line 441 without inverting the result for negated rules. eval_rule() does not apply negation — only eval_rules() does (line 465 of signal_engine.py: `result = (not raw) if (r.negated and i >= 1) else raw`). A rule with negated=True and visualize=True will show raw (uninverted) signal hits, which are the opposite of what the rule actually matches in trade logic.",
+      "suggested_fix": "Apply the same negation logic used in eval_rules: `raw = eval_rule(rule, indicators, i); fired = (not raw) if (rule.negated and i >= 1) else raw; if fired: signals.append(...)`"
+    },
+    {
+      "title": "Muted rules with visualize=True generate chart signals despite being excluded from trade logic",
+      "severity": "P2",
+      "file": "backend/routes/backtest.py",
+      "line": "432-436",
+      "confidence": 0.88,
+      "autofix_class": "logic",
+      "owner": "backend",
+      "requires_verification": false,
+      "pre_existing": false,
+      "rule_citation": "CLAUDE.md, Signal Engine section: 'Rule fields: ... muted ... Conditions include ...'. eval_rules() in signal_engine.py line 462-463: 'if r.muted: continue' — muted rules are excluded from trade evaluation. The Key Bugs Fixed section establishes that the signal engine is authoritative for trade logic; visualization must match trade behavior.",
+      "violation": "viz_rules is built from `r.visualize` only, with no `not r.muted` guard (lines 433-436). A rule with muted=True and visualize=True will appear in viz_rules and generate signals, even though muted rules do not participate in actual buy/sell decisions. This creates misleading chart signals showing rule fires that never contributed to any trade.",
+      "suggested_fix": "Filter viz_rules to exclude muted rules: `[('buy', i, r) for i, r in enumerate(buy_rules) if r.visualize and not r.muted]`"
+    },
+    {
+      "title": "B4 not checked off in TODO.md despite full implementation being present",
+      "severity": "P2",
+      "file": "TODO.md",
+      "line": "41",
+      "confidence": 0.95,
+      "autofix_class": "tracking",
+      "owner": "process",
+      "requires_verification": false,
+      "pre_existing": false,
+      "rule_citation": "CLAUDE.md, Handoff Contract, On End rule 1: 'Update TODO.md — check off completed items, add new items if work surfaced them.'",
+      "violation": "TODO.md line 41 still reads `- [ ] **B4** Per-rule signal visualization toggles` (unchecked) even though the implementation is complete across all 7 changed files. New items B20, C9, C10, D20 were added but B4 was not checked off.",
+      "suggested_fix": "Change `- [ ] **B4**` to `- [x] **B4**` in TODO.md."
+    },
+    {
+      "title": "JOURNAL.md not updated — Handoff Contract requires atomic commit with both TODO.md and JOURNAL.md",
+      "severity": "P2",
+      "file": "JOURNAL.md",
+      "line": null,
+      "confidence": 0.95,
+      "autofix_class": "tracking",
+      "owner": "process",
+      "requires_verification": false,
+      "pre_existing": false,
+      "rule_citation": "CLAUDE.md, Handoff Contract, On End rules 2-3: 'Append to JOURNAL.md — reuse today's date header if it exists, one bullet per shipped item with bold [ID] cross-reference. Both updates in the same commit as the code changes (atomic).' Handoff Contract Rules: 'Never commit code without updating the tracking files.'",
+      "violation": "JOURNAL.md has no entry for the B4 per-rule signal visualization feature. The file does not appear in the git diff at all. The Handoff Contract requires JOURNAL.md to be updated in the same commit as code changes.",
+      "suggested_fix": "Append a bullet to JOURNAL.md under today's date (2026-04-29): `- **[B4]** Per-rule signal visualization — eye-icon toggle on each RuleRow, backend emits rule_signals in BacktestResult, Chart.tsx merges signals into main markers with color-coded legend overlay.`"
+    }
+  ],
+  "residual_risks": [
+    {
+      "description": "The rule_index used for color assignment (RULE_SIGNAL_COLORS[rs.rule_index % length]) is the index within buy_rules or sell_rules separately. If a user has buy rule 0 and sell rule 0, both get the same color (#58a6ff). There is no cross-side deduplication of rule_index. This is a UX risk, not a correctness bug.",
+      "severity": "low"
+    },
+    {
+      "description": "ruleSignalMarkers memo depends on [ruleSignals, tzMode] but the inner loop applies toET() which also depends on tzMode implicitly. If tzMode changes, the memo correctly recomputes — no risk. However, marker timestamps are sorted using string/number comparison (a.time < b.time) rather than numeric comparison. For intraday unix timestamps (numbers) this works correctly, but if daily string dates are mixed with intraday unix timestamps in the same ruleSignals array the sort is undefined. This is a pre-existing pattern from the trade markers logic.",
+      "severity": "low"
+    }
+  ],
+  "testing_gaps": [
+    {
+      "description": "No test coverage for the negation inversion in the viz loop. A unit test should assert that a negated visualized rule produces signals on bars where eval_rule returns False (not True), matching the behavior of eval_rules().",
+      "file": "backend/routes/backtest.py"
+    },
+    {
+      "description": "No test for muted+visualize=True combination — should verify that muted rules produce no viz signals.",
+      "file": "backend/routes/backtest.py"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "reviewer": "project-standards",
+  "findings": [],
+  "residual_risks": [
+    "CLAUDE.md requires 'Visually verify UI changes in browser or flag not visually verified.' The overnight builder correctly flagged both F19 and C22 as not visually verified in NEXT_RUN.md. This is compliant with the rule, but the flagged verification debt (bot polling behavior, journal deduplication, optimizer tab UI) remains open for a human to close before relying on these features in production."
+  ],
+  "testing_gaps": []
+}

@@ -1,0 +1,84 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "id": "COR-01",
+      "severity": "high",
+      "confidence": 0.95,
+      "feature": "D20",
+      "file": "backend/bot_runner.py",
+      "lines": "576-596",
+      "title": "Bot-managed exit path never fires notify_exit or notify_stop",
+      "description": "Two distinct exit code paths exist in _tick(). The detected-external path (~line 239) correctly calls notify_exit then conditionally notify_stop. The bot-managed-close path (starts ~line 471, calls provider.close_position()) journals the fill, clears state, and returns \u2014 notify_exit and notify_stop are never called. Signal-triggered exits, time_stop exits, and trailing_stop exits initiated by the bot itself produce zero notifications.",
+      "reproduction": "Run a bot with a sell rule. When the sell signal fires, the bot enters the exit_reason block at line 471, places a close order, waits for fill, calls _log_trade at line 577, clears state at lines 588-595. notify_exit is not in this path.",
+      "fix": "Insert await notify_exit(...) and conditional await notify_stop(...) immediately after the _log_trade call at line 577 in the bot-managed-close block, mirroring the pattern at lines 239-254."
+    },
+    {
+      "id": "COR-02",
+      "severity": "medium",
+      "confidence": 0.9,
+      "feature": "C10",
+      "file": "backend/routes/backtest.py",
+      "lines": "128-130",
+      "title": "Breakeven trades (pnl == 0) counted as losses, making wins + losses > trade_count impossible but wins + losses != trade_count",
+      "description": "In compute_session_analytics, the win/loss branch is: if pnl > 0: wins += 1 / else: losses += 1. A breakeven trade with pnl == 0.00 (possible when slippage exactly offsets the move) lands in the else branch and increments losses. This means losses can exceed trade_count - wins, producing output where wins + losses == trade_count but losses is inflated relative to true losing trades. The win_rate calculation (wins / trade_count) is unaffected but the losses field in the JSON response is misleading.",
+      "reproduction": "Backtest produces a trade where pnl rounds to 0.00. Bucket shows trade_count=1, wins=0, losses=1.",
+      "fix": "Change the else branch to: if pnl < 0: b[\"losses\"] += 1. Breakeven trades contribute to trade_count but neither wins nor losses."
+    },
+    {
+      "id": "COR-03",
+      "severity": "medium",
+      "confidence": 0.85,
+      "feature": "D20",
+      "file": "backend/notifications.py",
+      "lines": "15-17",
+      "title": "Module-level httpx.AsyncClient is never closed on server shutdown",
+      "description": "_client = httpx.AsyncClient(timeout=5.0) is created at import time. The FastAPI lifespan in main.py has no hook to call await _client.aclose(). On server shutdown (including --reload file-change restarts), the event loop closes with the client open, causing ResourceWarning and potential connection pool leak.",
+      "reproduction": "Start server, hit /api/notifications/test, stop server with Ctrl+C. asyncio reports unclosed client session.",
+      "fix": "Either (a) create the client lazily per-call using async with httpx.AsyncClient() as client inside notify() (simplest), or (b) expose close_client() and call it from the lifespan finally block in main.py."
+    },
+    {
+      "id": "COR-04",
+      "severity": "medium",
+      "confidence": 0.88,
+      "feature": "D20",
+      "file": "backend/bot_runner.py",
+      "lines": "613-617",
+      "title": "asyncio.ensure_future() in synchronous IBKR error callback may target wrong event loop",
+      "description": "_on_ibkr_error is a synchronous callback invoked from ib_insync's EReader thread, not from the FastAPI async event loop. asyncio.ensure_future() without an explicit loop argument calls asyncio.get_event_loop() which is deprecated in Python 3.10+ and returns the loop attached to the calling thread, not the FastAPI loop. The coroutine may be silently dropped or raise \"no running event loop\".",
+      "reproduction": "IBKR sends a structural reject. _on_ibkr_error fires from EReader thread. ensure_future calls get_event_loop() in that thread context, which may not be the FastAPI event loop.",
+      "fix": "Store the FastAPI event loop at bot start: self._loop = asyncio.get_running_loop() in the async run() method. Then use asyncio.run_coroutine_threadsafe(notify_error(...), self._loop) in _on_ibkr_error instead of ensure_future."
+    },
+    {
+      "id": "COR-05",
+      "severity": "low",
+      "confidence": 0.82,
+      "feature": "D20",
+      "file": "backend/routes/notifications.py",
+      "lines": "39-44",
+      "title": "Test endpoint always returns sent:True when NOTIFY_URL is set, even on network failure",
+      "description": "notify() swallows all exceptions internally (bare except at line 47 of notifications.py, logs and returns None). The try/except in send_test_notification() can never catch a notification failure \u2014 notify() silently returns None regardless of outcome. When NOTIFY_URL is set but the target is unreachable, the endpoint returns {sent: True} indicating success.",
+      "reproduction": "Set NOTIFY_URL to an invalid host. Call GET /api/notifications/test. httpx raises ConnectionError inside notify(), which catches it, logs it, returns None. Endpoint returns {\"sent\": True, \"url\": ...}.",
+      "fix": "Have notify() return bool (True=sent, False=suppressed/failed), or expose a re-raising variant for the test endpoint to use."
+    }
+  ],
+  "residual_risks": [
+    {
+      "area": "C10 \u2014 open position at end of backtest",
+      "description": "If the backtest ends with an open position, trades list has an odd count. The while i+1 < len(trades) loop stops before the unmatched entry, silently skipping it. This is correct behavior but means the final open trade contributes zero to session analytics, slightly understating activity in short backtests."
+    },
+    {
+      "area": "D20 \u2014 double notification on stop events",
+      "description": "In the external-detection path, both notify_exit AND notify_stop fire for stop/trailing_stop reasons, producing two notifications per stop event. If COR-01 is fixed by mirroring this pattern, the bot-managed path will also double-notify. Whether this is intentional (separate exit + stop alert) should be clarified before the fix."
+    },
+    {
+      "area": "C9 \u2014 equity curve alignment across strategies with different warmup periods",
+      "description": "Equity curves from strategies with different indicator warmup periods (e.g. one uses EMA200, another uses EMA20) will have different start timestamps. lightweight-charts aligns by time value, so early bars present in one curve but not another will leave gaps. No crash, but the overlay may look misleading if warmup offsets are large."
+    }
+  ],
+  "testing_gaps": [
+    "Bot-managed close path (signal exit, time_stop, trailing_stop initiated by bot) has no test verifying notify_exit fires \u2014 only broker-detected external fills are covered by the current notification placement.",
+    "compute_session_analytics is not tested with an odd-length trades list (open position at EOD) or with a trades list containing a string date field (daily interval, which should be caught by the isinstance guard).",
+    "No test for /api/notifications/test when NOTIFY_URL targets an unreachable host \u2014 the always-returns-sent:True behavior (COR-05) would be caught by such a test."
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "cache_info key display omits extended_hours — ambiguous duplicate-key rows in /api/cache output",
+      "severity": "P3",
+      "file": "backend/shared.py",
+      "line": 503,
+      "confidence": 0.90,
+      "autofix_class": "safe_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "pre_existing": true,
+      "why_it_matters": "Two separate cache entries that differ only by extended_hours=True vs False display the same key string in /api/cache output. The cache itself is correct (full 6-tuple key), but the diagnostic endpoint becomes ambiguous when both variants are cached simultaneously during a debugging session.",
+      "evidence": [
+        "Cache key at line 428: (ticker.upper(), start, end, interval, source, extended_hours) — 6-tuple",
+        "Display key at line 503: f\"{ticker} {interval} {start}→{end} [{source}]\" — _ext is discarded",
+        "F28c fix correctly unpacks _ext but does not include it in the display string"
+      ],
+      "suggested_fix": "Change display key to: f\"{ticker} {interval} {start}\\u2192{end} [{source}]{chr(32) + chr(43) + chr(101) + chr(120) + chr(116) if _ext else chr(39) + chr(39)}\""
+    },
+    {
+      "title": "OptimizerPanel NaN guard omits steps field — misleading error message on non-numeric input",
+      "severity": "P3",
+      "file": "frontend/src/features/strategy/OptimizerPanel.tsx",
+      "line": 106,
+      "confidence": 0.75,
+      "autofix_class": "safe_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "pre_existing": false,
+      "why_it_matters": "parseInt of a non-numeric string returns NaN, then || 0 converts to 0, causing the steps < 2 check to fire with the message Steps must be at least 2 rather than Steps must be a valid integer. Not a crash, but the error message is misleading when the user types non-numeric text into the steps field.",
+      "evidence": [
+        "Line 106: const steps = parseInt(p.steps) || 0",
+        "parseInt(\"abc\") returns NaN, NaN || 0 = 0, steps < 2 fires",
+        "The new isNaN guard at line 107 covers min/max but not steps"
+      ],
+      "suggested_fix": "Add before the minN/maxN NaN check: if (isNaN(parseInt(p.steps))) { setError(`\"${opt.label}\": Steps must be a valid integer`); return }"
+    }
+  ],
+  "residual_risks": [
+    "cache_info extended_hours display gap: if debugging a session with both extended and non-extended cache entries for the same symbol, the /api/cache output will show duplicate-looking keys — pre-existing, minor.",
+    "ChartSkeleton shows only on isLoading (first-fetch with no cache), not on isFetching (refetch with stale cache). This is intentional react-query v5 behavior and the correct UX, but means the skeleton will not appear on manual refetch or stale-revalidation cycles."
+  ],
+  "testing_gaps": [
+    "No test covers UpdateBotRequest validator with invalid logic values (e.g. buy_logic=XOR) to confirm the validator fires for all 6 Optional fields.",
+    "No test exercises cache_info() after a _fetch() call with extended_hours=True to verify the 6-tuple unpack fix end-to-end.",
+    "No test for OptimizerPanel runOptimizer() with non-numeric min/max inputs to confirm the new NaN guard fires."
+  ]
+}
