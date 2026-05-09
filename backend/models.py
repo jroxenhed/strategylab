@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, field_validator, BeforeValidator
 from signal_engine import Rule
 
 LogicField = Annotated[Literal['AND', 'OR'], BeforeValidator(lambda v: v.upper() if isinstance(v, str) else v)]
+DirectionField = Annotated[Literal['long', 'short'], BeforeValidator(lambda v: v.lower().strip() if isinstance(v, str) else v)]
 
 
 class TrailingStopConfig(BaseModel):
@@ -80,7 +81,7 @@ class StrategyRequest(BaseModel):
     skip_after_stop: Optional[SkipAfterStopConfig] = None
     trading_hours: Optional[TradingHoursConfig] = None
     source: str = "yahoo"
-    direction: str = "long"  # "long" | "short"
+    direction: DirectionField = "long"
     debug: bool = False
     extended_hours: bool = False
     regime: Optional[RegimeConfig] = None
@@ -93,13 +94,6 @@ class StrategyRequest(BaseModel):
     short_max_bars_held: Optional[int] = None
     long_position_size: Optional[float] = None
     short_position_size: Optional[float] = None
-
-    @field_validator('direction')
-    @classmethod
-    def validate_direction(cls, v: str) -> str:
-        if v not in ('long', 'short'):
-            raise ValueError("direction must be 'long' or 'short'")
-        return v
 
     @field_validator('position_size')
     @classmethod

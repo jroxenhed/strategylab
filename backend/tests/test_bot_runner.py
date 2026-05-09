@@ -9,6 +9,7 @@ from os.path import dirname, abspath
 sys_path.insert(0, dirname(dirname(abspath(__file__))))
 
 import asyncio
+import time
 import unittest
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -407,9 +408,7 @@ class TestFetchOhlcvAsyncDedup(unittest.TestCase):
 
     def test_concurrent_calls_share_one_fetch(self):
         """Two simultaneous fetch_ohlcv_async calls for the same key invoke _fetch only once."""
-        import time
         from shared import fetch_ohlcv_async
-
         call_count = 0
 
         def slow_fetch(*args, **kwargs):
@@ -434,9 +433,7 @@ class TestFetchOhlcvAsyncDedup(unittest.TestCase):
 
     def test_sequential_calls_each_fetch(self):
         """Sequential calls (after first Future resolves) each invoke _fetch independently."""
-        import time
         from shared import fetch_ohlcv_async
-
         call_count = 0
 
         def counting_fetch(*args, **kwargs):

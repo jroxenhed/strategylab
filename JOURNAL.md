@@ -392,3 +392,12 @@ _Everything shipped before the journal started (2026-04-27). Grouped by theme._
 - **[B5c](TODO.md#b--strategy-engine--rules)** Bot runner borrow cost on position resume — `exits.py` was already computing and logging `borrow_cost` on all exit paths via `_compute_borrow_cost()`. Gap: `entry_time` was never set when the bot resumed tracking an externally-opened position (`entry_price is None`). Fixed by setting `state.entry_time = datetime.now(timezone.utc).isoformat()` in the resume block, matching the pattern at entry fill. `_compute_borrow_cost()` returns 0.0 when `entry_time` is None, so short borrow was silently zeroed on externally-opened positions.
 
 - **[F27](TODO.md#f--architecture--housekeeping)** Concurrent `_fetch()` dedup via threading.Lock — added `_fetch_dedup_locks: dict[tuple, threading.Lock]` (one lock per `(symbol, interval)`) and `_fetch_dedup_locks_meta` (threading.Lock protecting dict creation) to `shared.py`. The entire check→fetch→populate block runs inside `with _lock:`, so a second concurrent caller blocks until the first finishes and then hits the freshly-populated TTL cache. Zero overhead on warm-cache ticks. Eliminates redundant parallel HTTP requests when multiple bots on the same symbol start simultaneously.
+
+## 2026-05-09 (PR #26 review fixes)
+
+Multi-agent review of build 19 (PR #26: F29, F30, F28d, F31, F32) via `ce:review`. 9 reviewers — found 1 P1 + 4 P2 + 5 P3.
+
+- **P1 fixed — [F28e](TODO.md#f--architecture--housekeeping):** Replaced the `@field_validator('direction')` pattern with a shared `DirectionField = Annotated[Literal['long', 'short'], BeforeValidator(str.lower)]` type alias in `models.py`. Applied to `StrategyRequest.direction` AND `BotConfig.direction`. Removed duplicate `@field_validator` from `UpdateBotRequest` in `routes/bots.py`. Closes the F28 direction-validation pass across all models.
+- **P3 fixed:** Removed dead `import time` from `TestFetchOhlcvAsyncDedup` in `test_bot_runner.py`. Kept `from shared import fetch_ohlcv_async` as inline imports (module-level import breaks test patch bindings — pre-existing pattern).
+
+Deferred findings added to TODO.md as F39–F43: batch quote silent null (F39), dedup test timing gate (F40), BotDetail.state type mismatch (F41), eval_rules runtime guard (F42), log injection via tickers (F43). Removed duplicate C25a entry (builder re-added it; canonical copy at bottom of F section with [next] tag was already present).
