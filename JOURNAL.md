@@ -4,6 +4,18 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-08 (build 19 — overnight)
+
+- **[F29](TODO.md#f--architecture--housekeeping)** Batch `/api/quotes` ticker validation — added `sym = sym.strip().upper()` + empty/length guard at the top of the batch loop in `routes/quote.py`. Previously raw symbols (with whitespace, excessive length) passed through to `get_quote()`; now they short-circuit before hitting `_fetch()`.
+
+- **[F30](TODO.md#f--architecture--housekeeping)** `fetch_ohlcv_async` dedup coverage — added `TestFetchOhlcvAsyncDedup` class to `test_bot_runner.py` with two tests: (1) concurrent dedup — two simultaneous `gather` coroutines on the same key share one `_fetch` Future (verified via `slow_fetch` with `time.sleep(0.05)` to keep Future pending); (2) sequential independence — two sequential awaits each invoke `_fetch` independently after the Future is cleaned up.
+
+- **[F28d](TODO.md#f--architecture--housekeeping)** `StrategyRequest.direction` validator — added `@field_validator('direction')` to `StrategyRequest` in `models.py` restricting to `"long" | "short"`. Matches existing pattern in `QuickBacktestRequest` / `BatchQuickBacktestRequest`. Closes the F28 validation pass for the main backtest model.
+
+- **[F31](TODO.md#f--architecture--housekeeping)** `eval_rules()` `Literal` type annotation — changed `logic: str` to `logic: Literal['AND', 'OR']` in `signal_engine.py`. Added `Literal` to the `from typing` import. No runtime change; provides type-checker enforcement at the engine sink.
+
+- **[F32](TODO.md#f--architecture--housekeeping)** BotCard.tsx unsafe optional chains — changed all 8 occurrences of `detail?.state.X` to `detail?.state?.X` in `BotCard.tsx` (covers: `last_tick` ×2, `equity_snapshots` ×4, `activity_log` ×2, `pause_reason` ×2). Prevents `TypeError` when `detail` is truthy but `state` is transiently undefined during first detail poll.
+
 ## 2026-05-08 (PR #25 review fixes)
 
 Multi-agent review of build 18 (A14, D27, F28b, F28c, C25) via `ce:review`. Found 1 P1 + 8 P2 + 8 P3.
@@ -380,3 +392,12 @@ _Everything shipped before the journal started (2026-04-27). Grouped by theme._
 - **[B5c](TODO.md#b--strategy-engine--rules)** Bot runner borrow cost on position resume — `exits.py` was already computing and logging `borrow_cost` on all exit paths via `_compute_borrow_cost()`. Gap: `entry_time` was never set when the bot resumed tracking an externally-opened position (`entry_price is None`). Fixed by setting `state.entry_time = datetime.now(timezone.utc).isoformat()` in the resume block, matching the pattern at entry fill. `_compute_borrow_cost()` returns 0.0 when `entry_time` is None, so short borrow was silently zeroed on externally-opened positions.
 
 - **[F27](TODO.md#f--architecture--housekeeping)** Concurrent `_fetch()` dedup via threading.Lock — added `_fetch_dedup_locks: dict[tuple, threading.Lock]` (one lock per `(symbol, interval)`) and `_fetch_dedup_locks_meta` (threading.Lock protecting dict creation) to `shared.py`. The entire check→fetch→populate block runs inside `with _lock:`, so a second concurrent caller blocks until the first finishes and then hits the freshly-populated TTL cache. Zero overhead on warm-cache ticks. Eliminates redundant parallel HTTP requests when multiple bots on the same symbol start simultaneously.
+
+## 2026-05-09 (PR #26 review fixes)
+
+Multi-agent review of build 19 (PR #26: F29, F30, F28d, F31, F32) via `ce:review`. 9 reviewers — found 1 P1 + 4 P2 + 5 P3.
+
+- **P1 fixed — [F28e](TODO.md#f--architecture--housekeeping):** Replaced the `@field_validator('direction')` pattern with a shared `DirectionField = Annotated[Literal['long', 'short'], BeforeValidator(str.lower)]` type alias in `models.py`. Applied to `StrategyRequest.direction` AND `BotConfig.direction`. Removed duplicate `@field_validator` from `UpdateBotRequest` in `routes/bots.py`. Closes the F28 direction-validation pass across all models.
+- **P3 fixed:** Removed dead `import time` from `TestFetchOhlcvAsyncDedup` in `test_bot_runner.py`. Kept `from shared import fetch_ohlcv_async` as inline imports (module-level import breaks test patch bindings — pre-existing pattern).
+
+Deferred findings added to TODO.md as F39–F43: batch quote silent null (F39), dedup test timing gate (F40), BotDetail.state type mismatch (F41), eval_rules runtime guard (F42), log injection via tickers (F43). Removed duplicate C25a entry (builder re-added it; canonical copy at bottom of F section with [next] tag was already present).

@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from slippage import slippage_cost_bps, fill_bias_bps
 
-from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest, RegimeConfig, LogicField
+from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest, RegimeConfig, LogicField, DirectionField
 from routes.backtest import run_backtest
 from signal_engine import migrate_rule, Rule
 from shared import _fetch
@@ -69,7 +69,7 @@ class BotConfig(BaseModel):
     drawdown_threshold_pct: Optional[float] = None  # auto-pause if peak-to-trough exceeds this % of allocated_capital
     pnl_epoch: Optional[str] = None          # ISO timestamp; only journal rows >= this count toward displayed P&L
     data_source: str = "alpaca-iex"    # yahoo | alpaca | alpaca-iex | ibkr
-    direction: str = "long"            # "long" | "short"
+    direction: DirectionField = "long"
     broker: str = "alpaca"             # "alpaca" | "ibkr" — which broker executes orders
     regime: Optional[RegimeConfig] = None
     # B23/D24: dual rule sets for regime bots (None = use buy_rules/sell_rules)
