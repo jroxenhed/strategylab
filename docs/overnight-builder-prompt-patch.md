@@ -140,9 +140,10 @@ Dispatch all applicable personas in parallel via the Task tool. Each agent gets:
 - **project-standards** — CLAUDE.md compliance. CRITICAL: grep `git log --oneline -30 origin/main` for type aliases, helpers, or validators recently introduced/refactored. If your code uses the OLD pattern, that's a P1.
 - **reliability** — error paths, retries, timeouts, async semantics, state-machine transitions, stale-while-revalidate behaviour. (Promoted to always-on 2026-05-10: build 2026-05-09 shipped a `useOHLCV.isLoading` semantics shift that reliability would have framed sharply; correctness caught the bug for a different reason.)
 - **testing** — coverage gaps, untested ordering invariants, brittle assertions. (Promoted to always-on 2026-05-10: PR #28 morning review caught a P2 ordering invariant in `OptimizerPanel.tsx` (7-branch NaN guard where reordering would silently break validation) that the builder's "skip for plumbing" heuristic missed. The project HAS frontend test infra (`useOHLCV.test.ts`, `BotCard.test.tsx`, etc.) so test recommendations are actionable, not aspirational.)
+- **security** — input validation, auth, persistence boundaries, exploitable patterns. (Promoted to always-on 2026-05-10: this is a trading platform — almost any diff could have security implications. The conditional gating ("auth/persistence/input") was too narrow and would have skipped scenarios where a UI change indirectly weakens a defence. Cheap to run; high downside if missed.)
+- **adversarial** — actively constructs failure scenarios: race conditions, cascade failures, malformed inputs, startup edge cases. (Promoted to always-on 2026-05-10: PR #25 review caught a P1 startup cascade — `BotConfig` validation rejected pre-existing lowercase logic values in `bots.json`, silently dropping all bots on next deploy — that no other persona surfaced. For a trading platform, the cost of one undetected adversarial-class bug exceeds the cost of running it on every diff.)
 
 **Conditional personas (run when the diff warrants):**
-- **security** — when diff touches input validation, auth, public endpoints, or persisted data
 - **kieran-python** — when `.py` files changed
 - **kieran-typescript** — when `.ts`/`.tsx` files changed
 
