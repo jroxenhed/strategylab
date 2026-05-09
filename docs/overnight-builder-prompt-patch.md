@@ -115,15 +115,17 @@ If the smoke test fails or warns, investigate before proceeding to review. A fie
 
 Single-pass self-review consistently misses P1s that multi-agent review catches. Past evidence: PR #25 build 6 shipped with "0 self-review findings" but morning multi-agent review found 2 P1s. PR #25 and #26 each had a P1 about pattern consistency that 5+ reviewers flagged but builder self-review missed. This step closes that gap.
 
-**First, try the ce:review skill:**
+**First, probe for a working ce:review skill name.** Build 2026-05-09 confirmed `compound-engineering:ce-review` does not resolve in this environment. Try these candidates in order, stopping at the first that loads:
 
 ```
 Skill('compound-engineering:ce-review', args='base:origin/main mode:autofix')
+Skill('ce-review', args='base:origin/main mode:autofix')
+Skill('ce:review', args='base:origin/main mode:autofix')
 ```
 
-If the skill loads and runs, it handles persona selection, parallel dispatch, finding merge, the fix loop, and the bounded re-review automatically. Capture the verdict and findings in your commit message and continue to step 5.
+Record in NEXT_RUN.md which name (if any) succeeded. If one works, it handles persona selection, parallel dispatch, finding merge, the fix loop, and bounded re-review automatically — capture the verdict in your commit message and continue to step 5.
 
-**If the skill is not available** in this environment (errors like "skill not found" / "unknown skill"), fall back to manual persona dispatch and log the failure to NEXT_RUN.md so the human can debug the routine env.
+**If all three fail**, fall back to manual persona dispatch (below) and note "all ce:review skill names failed — manual dispatch used" in NEXT_RUN.md.
 
 **Manual persona dispatch (fallback):**
 
@@ -132,14 +134,17 @@ Dispatch all applicable personas in parallel via the Task tool. Each agent gets:
 - The intent (what task you're shipping and why)
 - Instruction to return JSON: `{findings: [{severity: "P0-P3", file, line, title, suggested_fix, autofix_class}], residual_risks: []}`
 
-Personas (skip the ones whose file types aren't in the diff):
+**Always-on personas (run unconditionally on every diff):**
 - **correctness** — logic errors, edge cases, state bugs, error propagation
-- **testing** — coverage gaps, weak assertions, brittle tests
 - **maintainability** — coupling, duplication, naming, dead code
 - **project-standards** — CLAUDE.md compliance. CRITICAL: grep `git log --oneline -30 origin/main` for type aliases, helpers, or validators recently introduced/refactored. If your code uses the OLD pattern, that's a P1.
-- **security** — only if diff touches input validation, auth, public endpoints, or persisted data
-- **kieran-python** — only if `.py` files changed
-- **kieran-typescript** — only if `.ts`/`.tsx` files changed
+- **reliability** — error paths, retries, timeouts, async semantics, state-machine transitions, stale-while-revalidate behaviour. (Promoted to always-on 2026-05-10: build 2026-05-09 shipped a `useOHLCV.isLoading` semantics shift that reliability would have framed sharply; correctness caught the bug for a different reason.)
+
+**Conditional personas (run when the diff warrants):**
+- **testing** — when logic is added/changed; skip for pure plumbing or constant moves
+- **security** — when diff touches input validation, auth, public endpoints, or persisted data
+- **kieran-python** — when `.py` files changed
+- **kieran-typescript** — when `.ts`/`.tsx` files changed
 
 **Project-specific checks the personas might miss** (re-verify yourself):
 - All frontend HTTP calls must use `api.get()`/`api.post()` from `frontend/src/api/client.ts`, NEVER raw `fetch()`.
@@ -165,19 +170,7 @@ Include a review summary in your commit message: `Review: X findings (P0: N, P1:
 
 ### 5. Final Verify + Commit
 Run `npm run build` one last time. If clean:
-- Create a feature branch with collision-safe naming. Use `claude/overnight-YYYY-MM-DD` as the base; if a branch with that name already exists locally or on origin, append `-2`, `-3`, etc.:
-  ```bash
-  BASE="claude/overnight-$(date +%Y-%m-%d)"
-  BRANCH="$BASE"
-  N=1
-  while git show-ref --verify --quiet "refs/heads/$BRANCH" \
-        || git ls-remote --heads origin "$BRANCH" | grep -q .; do
-    N=$((N+1))
-    BRANCH="$BASE-$N"
-  done
-  git checkout -b "$BRANCH"
-  ```
-  IMPORTANT: branch name MUST start with `claude/` — the sandbox git proxy blocks pushes to other branch prefixes.
+- The routine creates the working branch automatically (typically `claude/<adjective>-<surname>-<id>`). Verify with `git branch --show-current` that the current branch starts with `claude/` — abort and flag if not, since the sandbox git proxy blocks pushes to other branch prefixes.
 - **Before staging, work through this checklist line by line. Do not skip any item.**
   1. Check off completed items in TODO.md.
   2. **⛔ DO NOT SKIP: Add new TODO items.** This step is REQUIRED and has been skipped repeatedly. Do it now, before git add. Two required categories — both must be addressed:
