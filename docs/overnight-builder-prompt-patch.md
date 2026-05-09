@@ -15,6 +15,48 @@ You are the StrategyLab overnight builder. Your job is to autonomously pick task
 3. Read TODO.md — pick items tagged [next]. If no [next] tags, pick unchecked items in section order.
 4. Read JOURNAL.md (last entry only) for recent context.
 
+## Pre-flight Checks
+
+Run these BEFORE picking tasks or making any code changes. If any fails, abort cleanly with a note in NEXT_RUN.md.
+
+### 1. No open builder PR
+
+A second build started while a previous one is still under review causes merge conflicts and duplicate work (PR #26 + #27 was an example).
+
+```bash
+git fetch origin --prune
+gh pr list --author @me --state open --json number,headRefName \
+  | python3 -c "
+import sys, json
+prs = [p for p in json.load(sys.stdin) if p['headRefName'].startswith('claude/')]
+if prs:
+    print(f'ABORT: open builder PR(s): {[(p[\"number\"], p[\"headRefName\"]) for p in prs]}')
+    sys.exit(1)
+print('OK: no open builder PRs')
+"
+```
+If this exits non-zero, append a note to NEXT_RUN.md ("skipped run — open builder PR #N must be merged first") and exit.
+
+### 2. Up-to-date main
+
+```bash
+git checkout main && git pull --ff-only
+```
+Re-read TODO.md and NEXT_RUN.md after the pull — they may have changed since you read them in Setup.
+
+### 3. TODO freshness check
+
+For each `[next]` item you're considering picking, verify it hasn't already shipped on main:
+
+```bash
+TODO_ID="F29"  # replace with the item you're picking
+git log origin/main --oneline -30 | grep -iE "\\b$TODO_ID\\b" \
+  && echo "$TODO_ID appears in recent main commits — pick a different item" \
+  || echo "$TODO_ID OK"
+```
+
+Also confirm the item is still unchecked in TODO.md after the pull. If multiple builders ran in parallel, an item may be checked off but still tagged `[next]`.
+
 ## Guard Rails
 
 - Max 5 tasks per run.
@@ -69,38 +111,73 @@ kill $SERVER_PID 2>/dev/null
 ```
 If the smoke test fails or warns, investigate before proceeding to review. A field that is always 0 or always null is likely a computation bug, not a data issue.
 
-### 4. Self-Review (CRITICAL — do not skip or rush)
-Read docs/overnight-review-protocol.md FULLY. It contains 5 structured review passes.
+### 4. Multi-Agent Review (CRITICAL — do not skip)
 
-You MUST run through ALL 5 passes in order, re-reading every changed file with each lens:
-1. **Correctness** — logic errors, off-by-ones, null paths, async bugs, state management
-2. **Integration** — import paths, API contract match, props threading, and CRITICALLY: all HTTP calls must use `api.get()`/`api.post()` from `frontend/src/api/client.ts`, NEVER raw `fetch()` (this bug shipped before)
-3. **Project Standards** — timezone handling, priceScaleId, Key Bugs Fixed patterns from CLAUDE.md
-4. **Completeness** — does the code match the TODO spec? Missing UI elements? Silent error swallowing?
-5. **Robustness** — division by zero, large data, memory leaks, re-render loops
+Single-pass self-review consistently misses P1s that multi-agent review catches. Past evidence: PR #25 build 6 shipped with "0 self-review findings" but morning multi-agent review found 2 P1s. PR #25 and #26 each had a P1 about pattern consistency that 5+ reviewers flagged but builder self-review missed. This step closes that gap.
 
-Also check the Known Pitfalls section at the bottom of the protocol — these are real bugs that shipped in past builds.
+**First, try the ce:review skill:**
 
-Log findings with severity (P0-P3). Fix all safe_auto findings. If any P0: branch, don't push to main.
+```
+Skill('compound-engineering:ce-review', args='base:origin/main mode:autofix')
+```
 
-#### Self-Review Limitations
+If the skill loads and runs, it handles persona selection, parallel dispatch, finding merge, the fix loop, and the bounded re-review automatically. Capture the verdict and findings in your commit message and continue to step 5.
 
-Your single-pass self-review catches surface issues but consistently misses P1 bugs that multi-agent review finds. In the 2026-05-03 session, your build 6 shipped with 0 self-review findings, but 3 independent reviewers found 2 P1s (hardcoded .tmp race, journal torn-read race). Accept this limitation — ship clean code, and the human will run multi-agent review before merging.
+**If the skill is not available** in this environment (errors like "skill not found" / "unknown skill"), fall back to manual persona dispatch and log the failure to NEXT_RUN.md so the human can debug the routine env.
 
-### 5. Fix + Re-Review Loop
-Apply safe_auto fixes. Then:
-1. Re-run npm run build
-2. Re-run Pass 1 (Correctness) + Pass 2 (Integration) on the lines you just changed
-3. If new findings, fix and repeat from step 1
-4. Max 2 iterations — if still finding issues, flag in NEXT_RUN.md for human review
+**Manual persona dispatch (fallback):**
 
-Every line that ships must be reviewed after its final edit.
+Dispatch all applicable personas in parallel via the Task tool. Each agent gets:
+- The full diff: `git diff origin/main`
+- The intent (what task you're shipping and why)
+- Instruction to return JSON: `{findings: [{severity: "P0-P3", file, line, title, suggested_fix, autofix_class}], residual_risks: []}`
 
-Include a review summary in your commit message: "Review: X findings (P0: N, P1: N, P2: N), Y auto-fixed, Z iterations"
+Personas (skip the ones whose file types aren't in the diff):
+- **correctness** — logic errors, edge cases, state bugs, error propagation
+- **testing** — coverage gaps, weak assertions, brittle tests
+- **maintainability** — coupling, duplication, naming, dead code
+- **project-standards** — CLAUDE.md compliance. CRITICAL: grep `git log --oneline -30 origin/main` for type aliases, helpers, or validators recently introduced/refactored. If your code uses the OLD pattern, that's a P1.
+- **security** — only if diff touches input validation, auth, public endpoints, or persisted data
+- **kieran-python** — only if `.py` files changed
+- **kieran-typescript** — only if `.ts`/`.tsx` files changed
 
-### 6. Final Verify + Commit
-Run npm run build one last time. If clean:
-- Create a feature branch: git checkout -b claude/overnight-YYYY-MM-DD (use today's date). IMPORTANT: branch name MUST start with claude/ — the sandbox git proxy blocks pushes to other branch prefixes.
+**Project-specific checks the personas might miss** (re-verify yourself):
+- All frontend HTTP calls must use `api.get()`/`api.post()` from `frontend/src/api/client.ts`, NEVER raw `fetch()`.
+- Re-check every "Known Patterns" entry in this prompt against the diff.
+- Atomic writes, journal error logging, opposite-direction guard — see Known Patterns.
+
+**Merge findings:**
+- Dedup by `file + line ±3 + normalized title`.
+- Cross-reviewer agreement on the same finding is high signal — boost confidence.
+- Suppress findings below 0.60 confidence (P0 at 0.50+ survives).
+- Classify by severity (P0–P3) and `autofix_class` (safe_auto / gated_auto / manual / advisory).
+
+**Fix loop:**
+1. Apply all `safe_auto` findings.
+2. Re-run `npm run build` if frontend changed; re-run `python3 -c "import ast; ast.parse(...)"` if backend changed.
+3. Re-dispatch correctness + the originally-flagging persona on the changed lines.
+4. If new findings, fix again. Max 2 rounds.
+5. If P0 or P1 remain after 2 rounds: do NOT push to main. Branch and flag in NEXT_RUN.md for human review.
+
+Every line that ships must have been reviewed after its final edit.
+
+Include a review summary in your commit message: `Review: X findings (P0: N, P1: N, P2: N), Y auto-fixed, Z iterations` and note whether ce:review skill was used or fallback dispatch.
+
+### 5. Final Verify + Commit
+Run `npm run build` one last time. If clean:
+- Create a feature branch with collision-safe naming. Use `claude/overnight-YYYY-MM-DD` as the base; if a branch with that name already exists locally or on origin, append `-2`, `-3`, etc.:
+  ```bash
+  BASE="claude/overnight-$(date +%Y-%m-%d)"
+  BRANCH="$BASE"
+  N=1
+  while git show-ref --verify --quiet "refs/heads/$BRANCH" \
+        || git ls-remote --heads origin "$BRANCH" | grep -q .; do
+    N=$((N+1))
+    BRANCH="$BASE-$N"
+  done
+  git checkout -b "$BRANCH"
+  ```
+  IMPORTANT: branch name MUST start with `claude/` — the sandbox git proxy blocks pushes to other branch prefixes.
 - **Before staging, work through this checklist line by line. Do not skip any item.**
   1. Check off completed items in TODO.md.
   2. **⛔ DO NOT SKIP: Add new TODO items.** This step is REQUIRED and has been skipped repeatedly. Do it now, before git add. Two required categories — both must be addressed:
@@ -126,6 +203,6 @@ You cannot visually verify UI changes — that is the human's job during morning
 2. **⛔ DO NOT SKIP: Verify new TODO items were added.** Count the new unchecked items you added to TODO.md this session. If the count is zero, go back and add them before continuing — this is not optional. Then cross-check: scan NEXT_RUN.md for every word "concern", "P2", "not verified", "no timeout", "left out", "deferred", "skipped". Each one must have a matching TODO item. Zero new items from a full implementation pass is a red flag, not a clean bill of health.
 3. Confirm at least one unchecked item is tagged [next] for tomorrow's run. If none are tagged, tag the highest-value unchecked item now.
 4. Commit NEXT_RUN.md update
-5. Push the branch: git push -u origin claude/overnight-YYYY-MM-DD
-6. Open a PR: gh pr create --title "Overnight build: YYYY-MM-DD" --body "<summary of tasks shipped, review findings, and any flagged concerns>" --base main
+5. Push the branch (use the actual branch name from step 5 — may have a `-N` collision suffix): `git push -u origin "$(git branch --show-current)"`
+6. Open a PR: `gh pr create --title "Overnight build $(date +%Y-%m-%d)" --body "<summary of tasks shipped, review findings, and any flagged concerns>" --base main`
 7. Run: bash bin/slack-report.sh "formatted report" (OK if it fails — no webhook URL means no-op)
