@@ -1,0 +1,88 @@
+{
+  "reviewer": "maintainability",
+  "findings": [
+    {
+      "title": "buildParamOptions and linspace fully duplicated across two files",
+      "severity": "P2",
+      "file": "frontend/src/features/strategy/OptimizerPanel.tsx",
+      "line": 355,
+      "why_it_matters": "Both SensitivityPanel.tsx and OptimizerPanel.tsx contain identical implementations of buildParamOptions (~90 lines) and linspace (~8 lines). The two copies have already diverged: SensitivityPanel uses defaultSteps: 9 everywhere; OptimizerPanel uses defaultSteps: 5. Any future fix — adding support for regime dual-rule fields (long_buy_rules, short_buy_rules) or a new indicator param key — must be applied in two places. One copy will be missed, producing different param lists between the Sensitivity and Optimizer tabs for the same strategy, which will confuse users who see a param in one tab but not the other.",
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": false,
+      "suggested_fix": "Extract buildParamOptions, linspace, and ParamOption into a shared module at frontend/src/features/strategy/paramOptions.ts. Both panels import from there. The defaultSteps difference is intentional (9 for single-sweep, 5 for multi-param grid) so pass it as an argument or keep the default at the call site.",
+      "confidence": 0.97,
+      "evidence": [
+        "SensitivityPanel.tsx lines 33-133: buildParamOptions with all defaultSteps: 9",
+        "OptimizerPanel.tsx lines 355-433: structurally identical buildParamOptions with all defaultSteps: 5 — already diverged constant",
+        "SensitivityPanel.tsx line 126 and OptimizerPanel.tsx line 435: identical linspace implementations",
+        "OptimizerPanel.tsx line 353 comment explicitly labels the duplication: Helpers (duplicated from SensitivityPanel to avoid coupling)"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "botsError banner has no dismiss path — sticky until query recovers",
+      "severity": "P2",
+      "file": "frontend/src/features/trading/BotControlCenter.tsx",
+      "line": 353,
+      "why_it_matters": "When botsError is true the merged error banner renders but the dismiss button (times sign) only clears the local error string state via setError. botsError is read-only from the hook and cannot be cleared by the user. A transient API blip that React Query retries may self-clear botsError, but during that window the user has no affordance to dismiss. Any developer maintaining this section must understand the asymmetric dismissal semantics of the two error sources that share one banner.",
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": false,
+      "suggested_fix": "Add a boolean state isBotsErrorDismissed that the dismiss button also sets to true, reset it to false in a useEffect whenever botsError transitions from true to false.",
+      "confidence": 0.82,
+      "evidence": [
+        "BotControlCenter.tsx line 353: {(error || botsError) && (...)}",
+        "BotControlCenter.tsx line 356: dismiss button onClick only calls setError() — does not affect botsError",
+        "botsError is derived from useBotsQuery().isError which is React Query state, not local state"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "adaptiveMs silently defaults to fast interval when broker cache is cold",
+      "severity": "P3",
+      "file": "frontend/src/shared/hooks/useTradingQueries.ts",
+      "line": 11,
+      "why_it_matters": "adaptiveMs reads the broker query cache synchronously via getQueryData. On first mount before the broker query has populated, getQueryData returns undefined and anyUnhealthy is false, so all polling hooks start at the normal fast interval even if the broker is actually unhealthy. The function signature gives no indication of this implicit dependency on a warm cache. A future maintainer adding a new hook that calls adaptiveMs may not realise the cold-cache edge case exists.",
+      "autofix_class": "advisory",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": null,
+      "confidence": 0.72,
+      "evidence": [
+        "useTradingQueries.ts line 12: queryClient.getQueryData<BrokerInfo>([broker]) returns undefined on cold cache",
+        "useTradingQueries.ts lines 13-15: anyUnhealthy evaluates to false when brokerData is undefined",
+        "The refetchInterval callback is re-evaluated each cycle so the logic self-corrects after the first broker response; the risk window is only the first polling cycle"
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "NONE_PATH sentinel is a magic empty string with misleading name",
+      "severity": "P3",
+      "file": "frontend/src/features/strategy/OptimizerPanel.tsx",
+      "line": 141,
+      "why_it_matters": "NONE_PATH = empty string is used as a sentinel meaning the param slot has no selection. The name reads as a URL path concept rather than an absence sentinel. The filter p.path !== NONE_PATH is fragile: a paramOption whose path is legitimately empty would be silently excluded. A future maintainer adding a new edge-case path must know to avoid empty string.",
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": false,
+      "suggested_fix": "Use path: string | null in ParamRow and filter p.path !== null, letting the type system enforce the sentinel instead of a string equality check.",
+      "confidence": 0.65,
+      "evidence": [
+        "OptimizerPanel.tsx line 141: const NONE_PATH = empty string",
+        "OptimizerPanel.tsx line 152: emptyRow defaults path to NONE_PATH when paramOptions is empty",
+        "OptimizerPanel.tsx line 161: activeRows filters p.path !== NONE_PATH"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "buildParamOptions in both panels does not enumerate long_buy_rules or short_buy_rules (regime dual-rule fields added in B28/B29). A regime close_and_reverse strategy will show no rule-threshold params in either Sensitivity or Optimizer tabs. The duplication makes it twice as likely this gap is missed in a future fix.",
+    "The optimizer endpoint runs up to 200 synchronous backtests with no timeout, blocking the uvicorn worker for potentially 30-60s on slow hardware. Future refactors must account for this before raising the combo cap or exposing the endpoint to concurrent users.",
+    "useOrdersQuery and useAccountQuery poll at fixed 30s regardless of broker health, unlike the three other hooks that use adaptiveMs. This asymmetry is undocumented and may cause confusion when a maintainer later tries to add adaptive behavior uniformly."
+  ],
+  "testing_gaps": [
+    "No unit tests for buildParamOptions: it drives the param list for both Sensitivity and Optimizer tabs but has no coverage for missing optional fields (stop_loss_pct null, no rule.params, empty buy_rules array).",
+    "No test for adaptiveMs when the broker cache is cold (undefined return) vs populated with an unhealthy broker — the interval fallback logic is unverified.",
+    "No test for the optimizer endpoint skipped counter: the HTTPException catch in the inner try block should increment skipped without aborting the run, but this path has no coverage."
+  ]
+}

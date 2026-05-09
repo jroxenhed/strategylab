@@ -1,0 +1,54 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "Spread block duplicated verbatim; silent drift risk if logic diverges",
+      "severity": "P3",
+      "file": "backend/slippage.py",
+      "line": 152,
+      "why_it_matters": "The identical 18-line try/except spread block is copy-pasted into both the n==0 branch and the n<SLIPPAGE_MIN_FILLS branch. The only difference is the ModeledSlippage fields. If the formula or guard logic is ever updated in one branch, the other silently stays stale.",
+      "autofix_class": "safe_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": false,
+      "suggested_fix": "Extract a helper _spread_derived_bps(symbol) -> float | None that returns the floored half_spread_bps or None on failure. Each branch calls it and builds its own ModeledSlippage.",
+      "confidence": 0.90,
+      "evidence": [
+        "Lines 128-144 and 152-168 in the diff are identical except for ModeledSlippage constructor arguments.",
+        "The formula (ask - bid) / (2 * mid) * 10_000 and the bid > 0 and ask > bid guard appear in both blocks without abstraction."
+      ],
+      "pre_existing": false
+    },
+    {
+      "title": "IBKR get_latest_quote blocks sync route handler up to 90 seconds",
+      "severity": "P2",
+      "file": "backend/slippage.py",
+      "line": 131,
+      "why_it_matters": "When IBKR is the active broker, get_latest_quote calls self._run(_quote()) which uses run_coroutine_threadsafe + future.result(timeout=30) with 3 retries and 1+2+4s backoff. decide_modeled_bps is called from the sync GET /api/slippage/{symbol} route. The endpoint was previously a fast journal-file read (~1ms). With IBKR configured but market data unavailable, the HTTP request hangs for up to ~90 seconds, blocking one threadpool worker and timing out HTTP clients.",
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "suggested_fix": "Add a short per-attempt timeout (3-5 seconds) for the spread quote call inside decide_modeled_bps, or cap the _run retries to 1 for this non-critical path by accepting an optional timeout/retries parameter.",
+      "confidence": 0.82,
+      "evidence": [
+        "IBKRTradingProvider._run() at broker.py:357: timeout=30.0, retries=3 with exponential backoff 1+2+4 seconds.",
+        "IBKRTradingProvider.get_latest_quote() at broker.py:665: calls self._run(_quote()) where _quote() includes await asyncio.sleep(1) for market data settlement.",
+        "routes/slippage.py:14: def get_slippage(symbol) is a sync FastAPI route calling decide_modeled_bps() directly.",
+        "Previously decide_modeled_bps only read the journal JSON file; network call is a new latency class introduced by this PR."
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "The except Exception: pass in both spread blocks swallows unexpected errors (e.g., wrong tuple shape from get_latest_quote causing ValueError on unpacking). Silent degradation to 2 bps with no observability.",
+    "Alpaca get_latest_quote (broker.py:248-256) has no NaN guard. NaN bid/ask from the API: NaN > 0 is False in Python so bid > 0 catches it safely, but this is untested.",
+    "No upper cap on half_spread_bps. For illiquid names with 100+ bps spread, max(2.0, 100.0) = 100 bps modeled slippage per leg. Technically correct per the conservative floor policy but may surprise users in backtest results."
+  ],
+  "testing_gaps": [
+    "No test covers the spread-derived happy path in decide_modeled_bps (valid bid/ask returned by a mock provider).",
+    "No test covers the floor behavior (spread < 2 bps should clamp to 2.0).",
+    "No test covers the n==0 spread fallback when broker raises HTTPException (should fall through to source=default).",
+    "No test covers the n<SLIPPAGE_MIN_FILLS spread path verifying measured_bps and fill_bias_bps are correctly propagated into the spread-derived ModeledSlippage.",
+    "No test for zero bid/ask guard (bid=0, ask=0) bypassing the spread block.",
+    "No regression test verifying existing tests still pass when the lazy from broker import get_trading_provider is attempted and fails gracefully."
+  ]
+}

@@ -41,7 +41,7 @@ function ActivityLog({ entries }: { entries: BotActivityEntry[] }) {
 
 function heartbeatColor(summary: BotSummary, detail: BotDetail | null): string {
   if (summary.status === 'stopped') return '#484f58'  // grey
-  const lastTick = detail?.state.last_tick ?? summary.last_tick
+  const lastTick = detail?.state?.last_tick ?? summary.last_tick
   if (!lastTick) return '#484f58'
   const elapsed = (Date.now() - new Date(lastTick).getTime()) / 1000
   const interval = POLL_SECONDS[summary.interval] ?? 60
@@ -124,7 +124,7 @@ export default function BotCard({
     ? (summary.total_pnl / summary.allocated_capital * 100).toFixed(1)
     : '0.0'
 
-  const lastTickStr = (() => { const t = detail?.state.last_tick ?? summary.last_tick; return t ? fmtTimeET(t) : 'No tick yet' })()
+  const lastTickStr = (() => { const t = detail?.state?.last_tick ?? summary.last_tick; return t ? fmtTimeET(t) : 'No tick yet' })()
   const statusTooltip = [
     `Status: ${summary.status}`,
     `P&L: ${fmtPnl(summary.total_pnl)} (${pnlPct}%)`,
@@ -292,14 +292,14 @@ export default function BotCard({
 
           {/* Right column — sparkline (matches expanded proportions) */}
           <div style={{ flex: 1, minWidth: 120, height: 24 }} onClick={e => e.stopPropagation()}>
-            <MiniSparkline equityData={detail?.state.equity_snapshots ?? summary.equity_snapshots ?? []} alignedRange={alignedRange} height={24} />
+            <MiniSparkline equityData={detail?.state?.equity_snapshots ?? summary.equity_snapshots ?? []} alignedRange={alignedRange} height={24} />
           </div>
         </div>
 
         {/* Expandable activity log */}
         {expanded && (
           <div style={{ padding: '0 8px 8px' }}>
-            <ActivityLog entries={detail?.state.activity_log ?? []} />
+            <ActivityLog entries={detail?.state?.activity_log ?? []} />
           </div>
         )}
       </div>
@@ -531,9 +531,9 @@ export default function BotCard({
           </div>
 
           {/* Pause reason (structural IBKR reject) */}
-          {(detail?.state.pause_reason ?? summary.pause_reason) && (
+          {(detail?.state?.pause_reason ?? summary.pause_reason) && (
             <div style={{ fontSize: 11, color: '#f0b74e', background: 'rgba(240,183,78,0.08)', padding: '3px 8px', borderRadius: 3 }}>
-              {detail?.state.pause_reason ?? summary.pause_reason}
+              {detail?.state?.pause_reason ?? summary.pause_reason}
             </div>
           )}
 
@@ -587,18 +587,18 @@ export default function BotCard({
 
         {/* Right column: mini chart */}
         <div style={{ flex: 1, minWidth: 120, minHeight: 60 }}>
-          <MiniSparkline equityData={detail?.state.equity_snapshots ?? summary.equity_snapshots ?? []} alignedRange={alignedRange} />
+          <MiniSparkline equityData={detail?.state?.equity_snapshots ?? summary.equity_snapshots ?? []} alignedRange={alignedRange} />
         </div>
       </div>
 
       {/* Daily P&L bar chart */}
-      {(detail?.state.equity_snapshots ?? summary.equity_snapshots ?? []).length >= 2 && (
-        <DailyPnlChart snapshots={detail?.state.equity_snapshots ?? summary.equity_snapshots ?? []} />
+      {(detail?.state?.equity_snapshots ?? summary.equity_snapshots ?? []).length >= 2 && (
+        <DailyPnlChart snapshots={detail?.state?.equity_snapshots ?? summary.equity_snapshots ?? []} />
       )}
 
       {/* Expandable activity log */}
       {expanded && (
-        <ActivityLog entries={detail?.state.activity_log ?? []} />
+        <ActivityLog entries={detail?.state?.activity_log ?? []} />
       )}
     </div>
   )

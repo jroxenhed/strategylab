@@ -35,17 +35,19 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
-**Date:** 2026-05-09 (build 19)
-**Branch:** `claude/kind-shannon-99Iw3`
+**Date:** 2026-05-09 (PR #26 review fixes)
+**Branch:** `claude/kind-shannon-SeZIp` → merged to main
 
 **Shipped:**
-- **F29** `POST /api/quotes` per-symbol validation — strip/uppercase/length guard before calling `get_quote()`. Invalid symbols return null entry and continue.
-- **F30** `fetch_ohlcv_async` dedup coverage — `TestFetchOhlcvDedup` (2 tests) in `test_bot_runner.py`. Fixed stale `bot_runner._fetch` mock → `bot_runner.fetch_ohlcv_async` AsyncMock. All 9 tests pass.
+- **F28e** `BotConfig.direction` validator — replaced `@field_validator('direction')` pattern with shared `DirectionField = Annotated[Literal['long', 'short'], BeforeValidator(str.lower)]` type alias in `models.py`. Applied to `StrategyRequest.direction` AND `BotConfig.direction`. Removed duplicate validator from `UpdateBotRequest`. Mirrors the LogicField pattern from PR #25 and closes the F28 validation pass across all models.
+- **P3** Removed dead `import time` from `TestFetchOhlcvAsyncDedup` in `test_bot_runner.py`.
 
-**Review:** 0 findings (P0: 0, P1: 0, P2: 0), 0 auto-fixed, 0 iterations.
+**Review:** 9 reviewers, 1 P1 + 4 P2 + 5 P3. P1 + 1 P3 fixed. Build: pass. Tests: 8 pass, 1 pre-existing failure (F33).
 
-**New TODO items added:** F37 (error entry symbol truncation), F38 (TestFetchOhlcvDedup teardown isolation).
+**Deferred (added to TODO):** F39 (batch quote silent null), F40 (dedup test timing gate), F41 (BotDetail.state type mismatch), F42 (eval_rules runtime guard), F43 (log injection via tickers).
 
-**Previous run:** 2026-05-08 (build 18 + PR #25 review fixes), branch `claude/overnight-2026-05-08`.
+**Previous run:** 2026-05-08 (build 19 — F29/F30/F28d/F31/F32).
 
-**Next up:** F28d StrategyRequest direction validation [next][easy], F31 eval_rules defense-in-depth [next][easy], F32 BotCard unsafe optional chain [easy], A14a SubPane loading state [easy], B30 RuleRow overflow [easy], F37 error entry truncation [easy].
+**Next up:** A14a SubPane loading state [easy][next], C25a Optimizer NaN guard improvements [easy][next], F33 fetch-path test audit [easy], F39–F43 housekeeping batch [easy], D27a status tooltip popover [medium], A8 off-screen downsampling [medium].
+
+**Note (PR #27, build 2026-05-09, branch `claude/kind-shannon-99Iw3`):** ran in parallel with PR #26 review. Contributed: F33 fix (patched `shared.fetch_ohlcv_async` in `_base_patches`), improved dedup tests in `TestFetchOhlcvAsyncDedup`, and new `test_quote_endpoint.py` with 5 F29 route tests. Two builder-surfaced items renumbered F45/F46 to avoid collision with main's F37/F38.

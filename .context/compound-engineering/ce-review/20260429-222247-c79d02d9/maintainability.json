@@ -1,0 +1,85 @@
+{
+  "reviewer": "maintainability",
+  "findings": [
+    {
+      "id": "M1",
+      "category": "dead_code",
+      "title": "ComparisonResult exported from types/index.ts but never imported \u2014 local redeclaration in StrategyComparison.tsx is the only live copy",
+      "file": "/Users/jroxenhed/Documents/strategylab/frontend/src/shared/types/index.ts",
+      "line_range": [
+        244,
+        250
+      ],
+      "detail": "ComparisonResult is declared as an exported interface in types/index.ts (lines 244-250). StrategyComparison.tsx declares an identical local interface at line 47 and uses that one. No file in the codebase imports ComparisonResult from shared types. The exported interface is dead. Either import it in StrategyComparison.tsx and drop the local redeclaration, or remove it from types/index.ts.",
+      "confidence": 0.95
+    },
+    {
+      "id": "M2",
+      "category": "dead_code",
+      "title": "migrateRule / MA_MIGRATION / PARAM_MIGRATION duplicated verbatim from StrategyBuilder.tsx into StrategyComparison.tsx",
+      "file": "/Users/jroxenhed/Documents/strategylab/frontend/src/features/strategy/StrategyComparison.tsx",
+      "line_range": [
+        6,
+        45
+      ],
+      "detail": "All three definitions (MA_MIGRATION, PARAM_MIGRATION, migrateRule) in StrategyComparison.tsx lines 6-45 are byte-for-byte copies of the versions in StrategyBuilder.tsx lines 10-74. A future indicator rename requires updating two files. These should be extracted to a shared utility (e.g., shared/utils/migrateRule.ts) and imported by both consumers.",
+      "confidence": 0.95
+    },
+    {
+      "id": "M3",
+      "category": "dead_code",
+      "title": "notify_stop fires redundantly after notify_exit for every stop exit \u2014 user receives two push notifications for the same event",
+      "file": "/Users/jroxenhed/Documents/strategylab/backend/bot_runner.py",
+      "line_range": [
+        239,
+        256
+      ],
+      "detail": "At lines 239-255, every stop exit sends notify_exit (which already embeds the reason 'stop_loss' or 'trailing_stop' in the message body) followed immediately by notify_stop. notify_stop adds no information not already present in notify_exit \u2014 it differs only in using priority='high'. That priority bump could be applied conditionally inside notify_exit when the reason is a stop, eliminating the second notification. notify_stop is called from exactly this one block, making it nearly dead code.",
+      "confidence": 0.82
+    },
+    {
+      "id": "M4",
+      "category": "unnecessary_indirection",
+      "title": "routes/notifications.py imports private _get_notify_url to re-read the URL itself rather than using a public accessor",
+      "file": "/Users/jroxenhed/Documents/strategylab/backend/routes/notifications.py",
+      "line_range": [
+        11,
+        11
+      ],
+      "detail": "The route module imports the underscore-prefixed _get_notify_url from notifications.py at line 11 and calls it directly at lines 19 and 29 to surface the URL in API responses. This couples a route to a private implementation detail. notifications.py should expose a public is_configured() or get_config() function; the route module should call that instead.",
+      "confidence": 0.85
+    },
+    {
+      "id": "M5",
+      "category": "naming_obscures_intent",
+      "title": "asyncio.ensure_future used at one notify_error call site while all others use await \u2014 asymmetry looks like an oversight without explanation",
+      "file": "/Users/jroxenhed/Documents/strategylab/backend/bot_runner.py",
+      "line_range": [
+        613,
+        617
+      ],
+      "detail": "Line 613 schedules notify_error via asyncio.ensure_future() inside a synchronous IBKR error callback that cannot use await. Every other notify_* call in the file uses await. The asymmetry will read as a bug to the next developer. A one-line comment explaining that the enclosing callback is not a coroutine and therefore cannot await would prevent misread and accidental cleanup.",
+      "confidence": 0.78
+    },
+    {
+      "id": "M6",
+      "category": "dead_code",
+      "title": "SessionBucket type locally defined in Results.tsx is structurally identical to the anonymous inline type in BacktestResult.session_analytics",
+      "file": "/Users/jroxenhed/Documents/strategylab/frontend/src/features/strategy/Results.tsx",
+      "line_range": [
+        832,
+        841
+      ],
+      "detail": "The SessionBucket type at lines 832-841 has the same eight fields as the anonymous object shape inside BacktestResult[\"session_analytics\"] in types/index.ts lines 173-182. Naming the type in types/index.ts as SessionBucket, reusing it in BacktestResult, and importing it in Results.tsx would eliminate the silent divergence risk at zero coupling cost.",
+      "confidence": 0.8
+    }
+  ],
+  "residual_risks": [
+    "StrategyComparison.tsx hard-codes a 3-strategy cap via the COLORS array length, with a silent COLORS[0] fallback at line 163. If COLORS is extended without also updating the cap guard at line 122, extra strategies silently receive the first color with no error.",
+    "The _notify_url_checked global in notifications.py means NOTIFY_URL is read exactly once per process lifetime. A developer who sets the env var after startup expects the server to pick it up; it will not. This behavior is undocumented."
+  ],
+  "testing_gaps": [
+    "compute_session_analytics has no test for a trades list with an odd number of entries (unpaired entry). The while-loop silently drops the orphan, which could mask data quality problems from the caller.",
+    "No test exercises the double-notification path for stop exits (M3), so the two-notification-per-event behavior is invisible to the test suite."
+  ]
+}

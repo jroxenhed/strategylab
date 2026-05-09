@@ -18,10 +18,10 @@ FastAPI treating "fund" as a bot_id.
 
 from typing import Optional
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from bot_manager import BotConfig, BotManager
-from models import RegimeConfig, LogicField
+from models import RegimeConfig, LogicField, DirectionField
 
 router = APIRouter(prefix="/api/bots")
 
@@ -62,16 +62,9 @@ class UpdateBotRequest(BaseModel):
     drawdown_threshold_pct: Optional[float] = Field(default=None, ge=0)
     borrow_rate_annual: Optional[float] = Field(default=None, ge=0)
     data_source: Optional[str] = None
-    direction: Optional[str] = None
+    direction: Optional[DirectionField] = None
     broker: Optional[str] = None
     regime: Optional[RegimeConfig] = None
-
-    @field_validator('direction')
-    @classmethod
-    def validate_direction(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and v not in ('long', 'short'):
-            raise ValueError("direction must be 'long' or 'short'")
-        return v
 
 
 

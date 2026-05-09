@@ -9,6 +9,7 @@ from os.path import dirname, abspath
 sys_path.insert(0, dirname(dirname(abspath(__file__))))
 
 import asyncio
+import time
 import unittest
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch

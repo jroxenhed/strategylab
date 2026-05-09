@@ -1,0 +1,92 @@
+{
+  "reviewer": "kieran-python",
+  "findings": [
+    {
+      "title": "Variable `i` in per-rule signal loop shadows the outer loop variable",
+      "severity": "P1",
+      "file": "/Users/jroxenhed/Documents/strategylab/backend/routes/backtest.py",
+      "line": 440,
+      "confidence": 0.95,
+      "autofix_class": "rename",
+      "owner": "implementer",
+      "requires_verification": false,
+      "pre_existing": false,
+      "suggested_fix": "Rename the inner loop variable: `for bar_idx in range(1, len(df)):` and update references on lines 441-444 (`eval_rule(rule, indicators, bar_idx)`, `df.index[bar_idx]`, `close.iloc[bar_idx]`). The outer simulation loop (line 148) also uses `i`, but that loop has already finished by this point, so this is a latent correctness risk rather than an active collision — however it is a hard-to-read trap that will bite anyone who restructures the code order."
+    },
+    {
+      "title": "`Rule.params` typed as bare `Optional[dict]` — shape is fully known",
+      "severity": "P2",
+      "file": "/Users/jroxenhed/Documents/strategylab/backend/signal_engine.py",
+      "line": 15,
+      "confidence": 0.85,
+      "autofix_class": "type-annotation",
+      "owner": "implementer",
+      "requires_verification": false,
+      "pre_existing": true,
+      "suggested_fix": "Narrow to `Optional[dict[str, int | float | str]]`. All call sites set string keys with int/float/str values (period, type, std, k_period, etc.). This is a pre-existing issue but the new `visualize` field makes the Rule model a new public surface worth tightening at the same time."
+    },
+    {
+      "title": "Per-rule signal loop re-evaluates every visualized rule over the full price history — O(rules × bars) with no short-circuit",
+      "severity": "P2",
+      "file": "/Users/jroxenhed/Documents/strategylab/backend/routes/backtest.py",
+      "line": 437,
+      "confidence": 0.80,
+      "autofix_class": "refactor",
+      "owner": "implementer",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Collect per-rule firing results in a side-accumulator during the existing simulation loop (lines 148–360) instead of making a second full pass. At each bar, for every `viz_rules` entry test `eval_rule` once and append if fired. This collapses two O(N) passes into one and avoids the inner-loop variable shadow. Only do this if the number of visualized rules or bar counts make the double-pass measurable in practice — at typical backtest lengths (~5000 bars) it is tolerable; at intraday 1-minute it materialises."
+    },
+    {
+      "title": "Negation is ignored for visualized rule signals",
+      "severity": "P2",
+      "file": "/Users/jroxenhed/Documents/strategylab/backend/routes/backtest.py",
+      "line": 441,
+      "confidence": 0.88,
+      "autofix_class": "logic",
+      "owner": "implementer",
+      "requires_verification": false,
+      "pre_existing": false,
+      "suggested_fix": "The loop calls `eval_rule(rule, indicators, i)` directly (line 441). `eval_rule` does not apply negation — that is done in `eval_rules`. A rule with `negated=True` and `visualize=True` will display the raw (un-negated) firings, which is semantically inconsistent with how that rule participates in the strategy. Either apply negation explicitly: `result = eval_rule(rule, indicators, bar_idx); fired = (not result) if (rule.negated and bar_idx >= 1) else result` — or document clearly that visualization shows the raw indicator signal, not the negated signal."
+    },
+    {
+      "title": "Muted rules with `visualize=True` silently produce no signals — mute takes priority without any guard",
+      "severity": "P3",
+      "file": "/Users/jroxenhed/Documents/strategylab/backend/routes/backtest.py",
+      "line": 432,
+      "confidence": 0.82,
+      "autofix_class": "defensive-guard",
+      "owner": "implementer",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Add `and not r.muted` to both comprehensions on lines 433 and 435 to exclude muted-visualized rules. Alternatively, exclude on `Rule` validation (`@model_validator` that sets `visualize=False` when `muted=True`). Without this, a user toggling mute on a visualized rule gets an empty `signals` list with no indication of why."
+    }
+  ],
+  "residual_risks": [
+    {
+      "description": "The `rule_signals` key is conditionally present in the response (`if rule_signals:`). Any frontend consumer must defensively handle its absence. This is consistent with the existing `ema_overlays` / `signal_trace` pattern in this codebase, so it is acceptable — but it means the contract is entirely implicit.",
+      "severity": "low"
+    },
+    {
+      "description": "`_rule_desc` is a closure defined inside `run_backtest`. It is now used both in the simulation loop and in the new per-rule signal block. If it ever needs testing or reuse it will need to be extracted. Not urgent at current scope.",
+      "severity": "low"
+    }
+  ],
+  "testing_gaps": [
+    {
+      "description": "No test coverage for `visualize=True` + `negated=True` interaction. The negation inconsistency (P2 finding above) would not be caught without a test that asserts the visualized signal set equals the complement of the non-negated set.",
+      "file": "/Users/jroxenhed/Documents/strategylab/backend/routes/backtest.py",
+      "line": 441
+    },
+    {
+      "description": "No test asserting that `rule_signals` is absent from the response when no rules carry `visualize=True` (guards the conditional-key contract).",
+      "file": "/Users/jroxenhed/Documents/strategylab/backend/routes/backtest.py",
+      "line": 484
+    },
+    {
+      "description": "No test for a muted rule with `visualize=True` — verifying either empty signals (current behaviour) or that such a rule is excluded from `viz_rules` entirely.",
+      "file": "/Users/jroxenhed/Documents/strategylab/backend/routes/backtest.py",
+      "line": 432
+    }
+  ]
+}

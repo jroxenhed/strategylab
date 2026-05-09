@@ -1,0 +1,62 @@
+{
+  "reviewer": "kieran-python",
+  "findings": [
+    {
+      "title": "Runtime validator duplicated 5x instead of using Literal['AND','OR']",
+      "severity": "P2",
+      "file": "/Users/jroxenhed/Documents/strategylab/backend/models.py",
+      "line": 95,
+      "confidence": 0.92,
+      "autofix_class": "type-annotation",
+      "owner": "backend",
+      "requires_verification": false,
+      "pre_existing": false,
+      "suggested_fix": "Declare all logic fields as Literal['AND', 'OR'] = 'AND' (from typing). Pydantic v2 enforces the constraint automatically, generates a correct JSON schema enum, enables static analysis, and eliminates all five validate_logic validator bodies. Same change applies in bot_manager.py, models.py, routes/backtest_quick.py (both classes), and routes/bots.py (Optional[Literal['AND','OR']] = None). The eval_rules() signature in signal_engine.py should also become logic: Literal['AND', 'OR'] for end-to-end static coverage."
+    },
+    {
+      "title": "validate_logic copy-pasted identically across 5 model classes with no shared definition",
+      "severity": "P2",
+      "file": "/Users/jroxenhed/Documents/strategylab/backend/routes/backtest_quick.py",
+      "line": 42,
+      "confidence": 0.88,
+      "autofix_class": "refactor",
+      "owner": "backend",
+      "requires_verification": false,
+      "pre_existing": false,
+      "suggested_fix": "The Literal approach (finding above) resolves this entirely. If runtime validation must be retained, extract a single module-level function _validate_logic(v: str) -> str and call it from each validator body, or define a reusable Annotated type alias once and reference it everywhere. Four identical 4-line blocks across 4 files is a maintenance hazard: any future extension requires 5 coordinated edits."
+    },
+    {
+      "title": "cache_info() unpack is fixed but positional key indexing in _evict_expired() is still fragile",
+      "severity": "P3",
+      "file": "/Users/jroxenhed/Documents/strategylab/backend/shared.py",
+      "line": 500,
+      "confidence": 0.72,
+      "autofix_class": "robustness",
+      "owner": "backend",
+      "requires_verification": false,
+      "pre_existing": false,
+      "suggested_fix": "The 6-tuple unpack fix is correct for the immediate crash. However, _evict_expired() at line 410 still accesses the key via positional indices k[2] and k[3] (end and interval). If the tuple grows again those silently use the wrong elements. Use a star-unpack in cache_info: ticker, start, end, interval, source, *_ = key to tolerate future key growth. Longer-term, a NamedTuple for the cache key makes all sites self-documenting and eliminates fragile index arithmetic."
+    },
+    {
+      "title": "UpdateBotRequest.validate_logic None guard is redundant and misleads readers",
+      "severity": "P3",
+      "file": "/Users/jroxenhed/Documents/strategylab/backend/routes/bots.py",
+      "line": 78,
+      "confidence": 0.82,
+      "autofix_class": "clarification",
+      "owner": "backend",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "In Pydantic v2, field_validator in default (after) mode does not invoke the validator when the resolved value is None for Optional fields -- Pydantic short-circuits before the validator runs. The if v is not None guard is dead code. It is harmless correctness-wise but misleads readers. Verify: UpdateBotRequest(buy_logic=None) should parse cleanly; UpdateBotRequest(buy_logic=\"NAND\") should raise ValidationError. The Literal approach eliminates this concern entirely."
+    }
+  ],
+  "residual_risks": [
+    "eval_rules() in signal_engine.py accepts any str for logic and silently falls back to any(results) (OR semantics) for any value that is not literally 'AND'. A typo such as 'and' (lowercase) bypasses validation at the model layer and silently applies OR logic. Literal typing on the parameter would surface this at parse time.",
+    "The _fetch_cache key tuple structure is spelled out at three independent call sites (line 428 in _fetch, line 481 in async_ohlcv, and the unpack in cache_info). Future key changes require coordinated edits at all three. A NamedTuple for the key makes the structure single-source."
+  ],
+  "testing_gaps": [
+    "No visible tests cover ValidationError paths for invalid logic values (e.g. 'and' lowercase, 'AND ' with trailing space, empty string). These are exactly the cases the new validators are designed to catch.",
+    "No test confirms UpdateBotRequest accepts None for all six logic fields without raising -- the None-handling correctness of bots.py line 79 is untested.",
+    "cache_info() has no smoke test after the 6-tuple fix. A test that populates _fetch_cache with a 6-tuple key and calls cache_info() would prevent regression if the key tuple changes again."
+  ]
+}

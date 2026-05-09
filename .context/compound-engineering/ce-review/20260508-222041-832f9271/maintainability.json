@@ -1,0 +1,49 @@
+{
+  "reviewer": "maintainability",
+  "findings": [
+    {
+      "title": "validate_logic duplicated verbatim across 5 Pydantic models \u2014 identical bodies will drift independently",
+      "severity": "P2",
+      "file": "/Users/jroxenhed/Documents/strategylab/backend/models.py",
+      "line": 95,
+      "confidence": 0.92,
+      "autofix_class": "refactor",
+      "owner": "backend",
+      "requires_verification": false,
+      "pre_existing": false,
+      "suggested_fix": "Extract a module-level helper (e.g. in backend/validators.py): VALID_LOGIC = frozenset({\"AND\", \"OR\"}) and def validate_logic_value(v, allow_none=False): ... Import and call it from each model field_validator. Four of the five bodies are byte-for-byte identical; the fifth (UpdateBotRequest) handles Optional[str] \u2014 the helper should accept an allow_none flag. This makes the allowed values a single source of truth and prevents one model from silently accepting a third value if the set ever expands. Affected: backend/models.py:95, backend/bot_manager.py:56, backend/routes/bots.py:76, backend/routes/backtest_quick.py:42, backend/routes/backtest_quick.py:82."
+    },
+    {
+      "title": "last_tick resolution IIFE duplicated three times in BotCard.tsx \u2014 lastTickStr defined but not reused at lines 170 and 337",
+      "severity": "P3",
+      "file": "/Users/jroxenhed/Documents/strategylab/frontend/src/features/trading/BotCard.tsx",
+      "line": 127,
+      "confidence": 0.88,
+      "autofix_class": "refactor",
+      "owner": "frontend",
+      "requires_verification": false,
+      "pre_existing": false,
+      "suggested_fix": "The expression detail?.state.last_tick ?? summary.last_tick appears at line 44 inside heartbeatColor and is re-derived at lines 127, 170, and 337. Hoist to component scope as const lastTick = detail?.state.last_tick ?? summary.last_tick, then derive lastTickStr once and reference it for all three title attributes. This removes three independent readings of the same nullable chain."
+    },
+    {
+      "title": "ChartSkeleton defined in App.tsx with a single call site \u2014 chart loading state belongs in chart feature directory",
+      "severity": "P3",
+      "file": "/Users/jroxenhed/Documents/strategylab/frontend/src/App.tsx",
+      "line": 59,
+      "confidence": 0.65,
+      "autofix_class": "move",
+      "owner": "frontend",
+      "requires_verification": false,
+      "pre_existing": false,
+      "suggested_fix": "ChartSkeleton is a pure presentational component related to chart loading state. App.tsx is the orchestration hub \u2014 chart-specific UI does not belong here. Move to frontend/src/features/chart/ChartSkeleton.tsx and import it. Low urgency since the component is small, but App.tsx is already large and this establishes the right boundary."
+    }
+  ],
+  "residual_risks": [
+    "The _ext (extended_hours) field added to the cache key tuple in shared.py means pre-existing in-process cache entries with the old 5-tuple shape will miss (not crash) on first access after deploy \u2014 correct behavior, no residual risk from the cache_info fix itself.",
+    "The validate_logic duplication (P2) means if a third logic operator is added in the future, it must be added to 5 separate validator bodies. Any missed update will produce inconsistent validation across endpoints silently at runtime \u2014 one endpoint accepting the new value while another rejects it."
+  ],
+  "testing_gaps": [
+    "No test coverage for the validate_logic validators \u2014 a unit test asserting that each model rejects invalid values (e.g. NAND) would immediately surface drift between the five copies.",
+    "The NaN guard in OptimizerPanel.tsx (C25) has no automated test \u2014 a blank string for min/max is the trigger path; this is user-controlled input with no validation at the API level."
+  ]
+}

@@ -1,0 +1,94 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "rule_index collision: buy rule 0 and sell rule 0 share color index 0",
+      "severity": "P2",
+      "file": "backend/routes/backtest.py",
+      "line": 432,
+      "confidence": 0.97,
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": false,
+      "pre_existing": false,
+      "description": "Both viz_rules list comprehensions use enumerate() independently starting at 0. If buy_rules[0] and sell_rules[0] both have visualize=True, both emit rule_index=0. The frontend uses rule_index % RULE_SIGNAL_COLORS.length for color, so they get the same color and share a legend key. A user cannot distinguish buy rule 0 signals from sell rule 0 signals visually.",
+      "suggested_fix": "Use a global counter or offset sell-rule indices by len(buy_rules): change the sell comprehension to `('sell', len(buy_rules) + i, r) for i, r in enumerate(sell_rules) if r.visualize`."
+    },
+    {
+      "title": "React key collision in legend when buy rule 0 and sell rule 0 both visualized",
+      "severity": "P2",
+      "file": "frontend/src/features/chart/Chart.tsx",
+      "line": 730,
+      "confidence": 0.97,
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": false,
+      "pre_existing": false,
+      "description": "The legend renders `<div key={rs.rule_index}>`. Because buy rule 0 and sell rule 0 both have rule_index=0 (see finding above), React receives duplicate keys. React silently drops the second item, so one of the two legend entries disappears. If the backend fix is applied (offset sell indices), this becomes key={rs.rule_index} on unique values and is fine. If the backend is not fixed, the legend renders incorrectly.",
+      "suggested_fix": "Use a composite key: `key={rs.side + '-' + rs.rule_index}` to guarantee uniqueness regardless of the backend representation."
+    },
+    {
+      "title": "negated rules not respected in signal visualization loop",
+      "severity": "P2",
+      "file": "backend/routes/backtest.py",
+      "line": 441,
+      "confidence": 0.95,
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": false,
+      "pre_existing": false,
+      "description": "The per-rule signal collection loop calls `eval_rule(rule, indicators, i)` directly. `eval_rule` is the raw evaluator and does NOT apply `Rule.negated`. The negation inversion happens only in `eval_rules()`. If a user activates visualize on a negated rule, the chart shows the un-negated signal dots — the inverse of what the backtest engine actually used for entry/exit decisions.",
+      "suggested_fix": "Apply negation: `result = eval_rule(rule, indicators, i); fired = (not result) if (rule.negated and i >= 1) else result; if fired: signals.append(...)`"
+    },
+    {
+      "title": "muted rules with visualize=True still emit signal markers",
+      "severity": "P3",
+      "file": "backend/routes/backtest.py",
+      "line": 432,
+      "confidence": 0.90,
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": false,
+      "pre_existing": false,
+      "description": "The viz_rules list comprehension filters `r.visualize` but not `r.muted`. A muted rule is excluded from eval_rules(), so it never influences trades, but if a user has both muted=True and visualize=True, the backend still collects its signals and the chart still displays dots for a rule that does not affect the backtest. This is semantically misleading.",
+      "suggested_fix": "Add `and not r.muted` to both viz_rules comprehensions: `if r.visualize and not r.muted`."
+    },
+    {
+      "title": "viz_rules inner loop variable `i` shadows outer baseline_curve comprehension variable `i`",
+      "severity": "P3",
+      "file": "backend/routes/backtest.py",
+      "line": 440,
+      "confidence": 0.85,
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": false,
+      "pre_existing": false,
+      "description": "Python list comprehensions (line 422, baseline_curve) create a local scope for `i` in Python 3, so that variable is not the concern. However, the inner `for i in range(1, len(df)):` at line 440 inside the `if viz_rules:` block reuses the name `i` that was already used in the main simulation loop (line 148). After the main loop finishes, `i` holds `len(df)-1`. The viz loop then reassigns it with its own range(1, len(df)). No actual data corruption occurs here because the main loop is fully complete before viz_rules runs, but it is a latent hazard if code is ever reordered. The variable should be renamed (e.g., `bar_i`) for clarity and safety.",
+      "suggested_fix": "Rename the inner loop variable: `for bar_i in range(1, len(df)): if eval_rule(rule, indicators, bar_i): signals.append({'time': _format_time(df.index[bar_i], req.interval), 'price': round(float(close.iloc[bar_i]), 4)})`"
+    }
+  ],
+  "residual_risks": [
+    {
+      "title": "Trade arrow and rule-signal circle overlap at the same bar",
+      "description": "When a rule fires on the same bar as a trade entry/exit, both a trade arrow and a rule circle are placed at the same position (both 'belowBar' for buy-side rules and buy entries, or both 'aboveBar' for sell-side rules and sell exits). lightweight-charts stacks markers by insertion order within the same position, so neither is lost, but they visually occlude each other. This is a UX concern, not a correctness bug."
+    },
+    {
+      "title": "rule_signals omitted from response when all signals lists are empty",
+      "description": "If a rule has visualize=True but never fires over the date range, rule_signals still contains an entry with an empty signals list. The frontend handles this correctly (the legend still shows the rule label). However, if ALL visualized rules produce zero signals, rule_signals is a non-empty list of empty-signals entries — the `if rule_signals:` guard at line 484 will be True and the key will be included in the response. The chart legend will render the rule label with its color but no markers, which is arguably correct but could confuse users."
+    }
+  ],
+  "testing_gaps": [
+    {
+      "title": "No test for visualize=True + negated=True rule",
+      "description": "The interaction between visualization and negation is untested. A negated buy rule that normally inverts its signal should show the inverted dots, but currently shows the raw (un-negated) signal. A unit test calling the /api/backtest endpoint with a negated+visualized rule and asserting the returned signal timestamps match the negated evaluation would catch this."
+    },
+    {
+      "title": "No test for color/key collision when buy[0] and sell[0] both have visualize=True",
+      "description": "A test with one visualized buy rule and one visualized sell rule should assert that the two rule_signals entries have distinct rule_index values so they receive distinct colors."
+    },
+    {
+      "title": "No test for muted + visualize interaction",
+      "description": "A test with a muted+visualized rule should assert that rule_signals contains zero entries for that rule (or that it is omitted entirely)."
+    }
+  ]
+}
