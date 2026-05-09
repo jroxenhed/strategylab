@@ -405,8 +405,13 @@ class TestTickStateTransitions(unittest.TestCase):
 class TestFetchOhlcvDedup(unittest.TestCase):
     """Verify fetch_ohlcv_async deduplicates concurrent calls for the same key."""
 
+    def setUp(self):
+        import shared
+        shared._async_ohlcv_futures.clear()
+        self.addCleanup(shared._async_ohlcv_futures.clear)
+
     def test_concurrent_same_key_calls_fetch_once(self):
-        """Two concurrent fetch_ohlcv_async calls for same symbol share one _fetch call."""
+        """Two concurrent fetch_ohlcv_async calls for same symbol share one _fetch call AND receive the same result."""
         import time
         import shared
         from shared import fetch_ohlcv_async
@@ -417,7 +422,7 @@ class TestFetchOhlcvDedup(unittest.TestCase):
         def slow_fetch(*args, **kwargs):
             nonlocal call_count
             call_count += 1
-            time.sleep(0.01)  # hold thread so Future is still pending when task2 checks
+            time.sleep(0.01)  # hold thread so Future is still pending (not done()) when task2 runs its dedup check
             return df
 
         async def run():
@@ -427,11 +432,11 @@ class TestFetchOhlcvDedup(unittest.TestCase):
             )
             return r1, r2
 
-        shared._async_ohlcv_futures.clear()
         with patch.object(shared, "_fetch", slow_fetch):
-            asyncio.run(run())
+            r1, r2 = asyncio.run(run())
 
         self.assertEqual(call_count, 1, "_fetch should be called once — dedup shares one Future")
+        self.assertIs(r1, r2, "both awaiters must receive the same DataFrame object — catches 'second caller got null/garbage' regressions that call_count alone misses")
 
     def test_different_symbols_call_fetch_separately(self):
         """Different symbols each invoke _fetch independently (no false dedup)."""
@@ -454,7 +459,6 @@ class TestFetchOhlcvDedup(unittest.TestCase):
                 fetch_ohlcv_async("MSFT", "2026-01-01", "2026-01-10", "1d"),
             )
 
-        shared._async_ohlcv_futures.clear()
         with patch.object(shared, "_fetch", slow_fetch):
             asyncio.run(run())
 
