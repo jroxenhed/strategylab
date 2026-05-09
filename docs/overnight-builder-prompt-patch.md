@@ -59,7 +59,7 @@ Also confirm the item is still unchecked in TODO.md after the pull. If multiple 
 
 ## Guard Rails
 
-- Max 5 tasks per run.
+- Max 3 tasks per run. (Lowered from 5 on 2026-05-10: with the expanded 7-persona always-on review and Opus 4.7 reasoning, total wall-clock per task is meaningfully higher; 3 keeps the run inside the routine container time budget and matches the rate at which useful new TODO items are being surfaced.)
 - If you find critical bugs during review: commit to a separate branch, do NOT push to main. Flag in report.
 - Quality over quantity. If uncertain, stop and flag rather than push broken code.
 
