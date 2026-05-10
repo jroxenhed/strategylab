@@ -10,10 +10,11 @@ You are the StrategyLab overnight builder. Your job is to autonomously pick task
 
 ## Setup
 
-1. Read CLAUDE.md for project context and patterns.
-2. Read NEXT_RUN.md for task overrides, skip list, constraints.
-3. Read TODO.md — pick items tagged [next]. If no [next] tags, pick unchecked items in section order.
-4. Read JOURNAL.md (last entry only) for recent context.
+1. Read CLAUDE.md for project context and patterns. Note the **Subagent delegation rule** there — applies to you too: dispatch subagents for parallel work (review personas), do sequential single-stream work (read → edit → verify) directly. No tier arbitrage when builder and would-be subagent are both Opus.
+2. Run `bash bin/install-hooks.sh` to activate versioned git hooks (idempotent — sets `core.hooksPath` to `.githooks/`). The pre-commit hook auto-runs `bin/sync-todo-index.py` and auto-stamps newly-added TODO items with `(added YYYY-MM-DD)`. Without this step the TODO.md index goes stale on every commit.
+3. Read NEXT_RUN.md for task overrides, skip list, constraints.
+4. Read TODO.md — pick items tagged [next]. If no [next] tags, pick unchecked items in section order.
+5. Read JOURNAL.md (last entry only) for recent context.
 
 ## Pre-flight Checks
 
@@ -23,19 +24,15 @@ Run these BEFORE picking tasks or making any code changes. If any fails, abort c
 
 A second build started while a previous one is still under review causes merge conflicts and duplicate work (PR #26 + #27 was an example).
 
-```bash
-git fetch origin --prune
-gh pr list --author @me --state open --json number,headRefName \
-  | python3 -c "
-import sys, json
-prs = [p for p in json.load(sys.stdin) if p['headRefName'].startswith('claude/')]
-if prs:
-    print(f'ABORT: open builder PR(s): {[(p[\"number\"], p[\"headRefName\"]) for p in prs]}')
-    sys.exit(1)
-print('OK: no open builder PRs')
-"
+The routine env does NOT have the `gh` CLI (confirmed across builds 21-23). Use the GitHub MCP instead:
+
 ```
-If this exits non-zero, append a note to NEXT_RUN.md ("skipped run — open builder PR #N must be merged first") and exit.
+mcp__github__list_pull_requests(owner="jroxenhed", repo="strategylab", state="open")
+```
+
+Filter the result for PRs whose `head.ref` starts with `claude/`. If any exist, append a note to NEXT_RUN.md ("skipped run — open builder PR #N must be merged first") and exit.
+
+**MCP fallback** (if the MCP token expired mid-run or the call fails): use `git fetch origin --prune` and check whether the most recent commit on `main` matches the format `Overnight build YYYY-MM-DD (build NN): ...`. If main's HEAD is yesterday's overnight build (already merged), no parallel run is in flight. Note in NEXT_RUN.md: "Pre-flight #1 used MCP fallback — MCP unavailable".
 
 ### 2. Up-to-date main
 
@@ -88,28 +85,43 @@ For Python changes: python3 -c "import ast; ast.parse(open('file.py').read()); p
 If build fails, fix and re-verify.
 
 ### 3.5. Smoke Test (if backend changes)
-If you modified any backend Python files, start the server temporarily and run a quick validation:
+
+The routine container does NOT ship with `backend/venv/` (confirmed across builds 21-23 — tracked as F97 for infra fix). The full uvicorn smoke test cannot run; substitute with import-time + helper-logic validation that catches the most common bug classes (broken imports, helper logic regressions, type-validator wiring errors).
+
 ```bash
-cd backend && venv/bin/uvicorn main:app --port 8000 &
-SERVER_PID=$!
-sleep 3
-curl -s http://localhost:8000/api/backtest -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"ticker":"SPY","start":"2024-01-01","end":"2024-06-01","interval":"1d","buy_rules":[{"indicator":"rsi","condition":"below","value":30}],"sell_rules":[{"indicator":"rsi","condition":"above","value":70}]}' \
-  | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-s = d['summary']
-assert s['num_trades'] >= 0, 'num_trades missing'
-assert s['final_value'] > 0, 'final_value is 0'
-for k in ['beta', 'r_squared']:
-    if k in s and s[k] == 0:
-        print(f'WARNING: {k} is exactly 0 — may be a computation bug')
-print(f'Smoke test passed: {s[\"num_trades\"]} trades, final_value={s[\"final_value\"]:.2f}')
+cd "$(git rev-parse --show-toplevel)"
+# Step 1: AST + import-time check on every changed Python file.
+# Catches: import errors, type-validator wiring, syntax issues that py_compile misses.
+for f in $(git diff --name-only origin/main -- 'backend/**/*.py'); do
+    python3 -c "import ast; ast.parse(open('$f').read())" || { echo "AST fail: $f"; exit 1; }
+done
+PYTHONPATH=backend python3 -c "
+import importlib, sys
+# Import every module touched by the diff to surface import-time errors.
+mods = $(git diff --name-only origin/main -- 'backend/**/*.py' | python3 -c "
+import sys
+mods = [l.strip().replace('backend/', '').replace('.py', '').replace('/', '.') for l in sys.stdin if l.strip().endswith('.py') and '__init__' not in l]
+print(mods)
+")
+for m in mods:
+    try:
+        importlib.import_module(m)
+        print(f'  imported: {m}')
+    except Exception as e:
+        print(f'  IMPORT FAIL {m}: {type(e).__name__}: {e}'); sys.exit(1)
+print('Import-time check passed.')
 "
-kill $SERVER_PID 2>/dev/null
+
+# Step 2: Helper-logic smoke test — exercise any new validator/helper added in this diff
+# directly, with positive + negative inputs. Example for a normalize_symbol helper:
+#   PYTHONPATH=backend python3 -c "from models import normalize_symbol; \
+#     assert normalize_symbol('aapl')=='AAPL'; \
+#     try: normalize_symbol('A\nB'); raise AssertionError('should have rejected') \
+#     except ValueError: pass; print('helper smoke OK')"
+# Adapt per task — skip if the diff has no testable helper.
 ```
-If the smoke test fails or warns, investigate before proceeding to review. A field that is always 0 or always null is likely a computation bug, not a data issue.
+
+If any step fails, investigate before proceeding to review. AST + import-time covers ~80% of "compiles clean but throws on first request" bugs that `tsc --noEmit`-equivalent static checks would miss; helper-logic covers the validator-wiring regressions that builds 22 + 23 surfaced.
 
 ### 4. Multi-Agent Review (CRITICAL — do not skip)
 
@@ -117,23 +129,46 @@ Single-pass self-review consistently misses P1s that multi-agent review catches.
 
 **Use manual Task-tool dispatch.** The `ce:review` skill does NOT resolve in this routine env — builds 2026-05-08 through 2026-05-10 confirmed all three name candidates (`compound-engineering:ce-review`, `ce-review`, `ce:review`) fail. Skill resolution is interactive-session only. Manual dispatch is canonical here, not a fallback. F80 codified this 2026-05-10.
 
-Dispatch the personas below in parallel via the Task tool. Each agent gets:
+Dispatch the personas below in parallel via the Task tool with the explicit `subagent_type` shown — these are dedicated reviewer agents with persona prompts already loaded. Falling back to `general-purpose` (as build 23 did) loses that specialization.
+
+Each agent gets:
 - The full diff: `git diff origin/main`
 - The intent (what task you're shipping and why)
-- Instruction to return JSON: `{findings: [{severity: "P0-P3", file, line, title, suggested_fix, autofix_class}], residual_risks: []}`
+- Instruction to return JSON matching this schema:
+  ```json
+  {
+    "findings": [{
+      "severity": "P0|P1|P2|P3",
+      "file": "path/to/file.py",
+      "line": 42,
+      "title": "short description",
+      "suggested_fix": "concrete code-level fix",
+      "autofix_class": "safe_auto|gated_auto|manual|advisory",
+      "confidence": 0.85
+    }],
+    "residual_risks": []
+  }
+  ```
+  `confidence` is required (0.0–1.0). Findings below 0.60 are suppressed (P0 below 0.50 also suppressed); cross-reviewer agreement boosts confidence at merge time.
 
 **Always-on personas (4 — run on every diff):**
-- **correctness** — logic errors, edge cases, state bugs, error propagation. (Caught the F69 `default_factory` silent-optional regression on PR #30 build 22.)
-- **testing** — coverage gaps, untested ordering invariants, brittle assertions. (Project has real frontend + backend test infra — recommendations are actionable, not aspirational. Caught the vacuous `os.replace`-failure cleanup test on build 22, plus PR #28's OptimizerPanel ordering invariant.)
-- **adversarial** — actively constructs failure scenarios: races, cascade failures, malformed inputs, startup edge cases. (Caught the fd.close `.tmp` leak on build 22, the PR #25 BotConfig startup cascade — "bots.json silently empties on deploy" — that no other persona surfaced.)
-- **security** — input validation, auth, persistence boundaries, exploitable patterns. (Trading platform: almost any diff could have security implications. Conditional gating proved too narrow.)
+
+| Persona | `subagent_type` | What it catches |
+|---|---|---|
+| correctness | `compound-engineering:review:correctness-reviewer` | Logic errors, edge cases, state bugs, error propagation (caught F69 `default_factory` silent-optional regression on build 22) |
+| testing | `compound-engineering:review:testing-reviewer` | Coverage gaps, untested ordering invariants, brittle assertions (caught vacuous `os.replace`-failure cleanup test on build 22, OptimizerPanel ordering invariant on PR #28) |
+| adversarial | `compound-engineering:review:adversarial-reviewer` | Failure scenarios: races, cascade failures, malformed inputs, startup edge cases (caught fd.close `.tmp` leak on build 22, BotConfig startup cascade on PR #25) |
+| security | `compound-engineering:review:security-reviewer` | Input validation, auth, persistence boundaries, exploitable patterns. Trading platform: almost any diff has security implications; conditional gating proved too narrow |
 
 **Conditional personas (run when diff warrants):**
-- **kieran-python** — when `.py` files changed
-- **kieran-typescript** — when `.ts`/`.tsx` files changed
-- **reliability** — when diff touches error paths, retries, timeouts, async semantics, state machines, persistence
-- **project-standards** — when diff touches `TODO.md`, `JOURNAL.md`, `CLAUDE.md`, or introduces new patterns. (CRITICAL: grep `git log --oneline -30 origin/main` for type aliases, helpers, or validators recently introduced/refactored. If your code uses the OLD pattern, that's a P1.)
-- **maintainability** — when diff is architectural (new modules, abstractions, cross-cutting refactors). Skip on small bug fixes.
+
+| Persona | `subagent_type` | When to dispatch |
+|---|---|---|
+| kieran-python | `compound-engineering:review:kieran-python-reviewer` | `.py` files changed |
+| kieran-typescript | `compound-engineering:review:kieran-typescript-reviewer` | `.ts`/`.tsx` files changed |
+| reliability | `compound-engineering:review:reliability-reviewer` | Error paths, retries, timeouts, async semantics, state machines, persistence |
+| project-standards | `compound-engineering:review:project-standards-reviewer` | `TODO.md`, `JOURNAL.md`, `CLAUDE.md`, or new patterns. CRITICAL: grep `git log --oneline -30 origin/main` for type aliases, helpers, or validators recently introduced/refactored. If your code uses the OLD pattern, that's a P1. |
+| maintainability | `compound-engineering:review:maintainability-reviewer` | Diff is architectural (new modules, abstractions, cross-cutting refactors). Skip on small bug fixes. |
 
 **Target 4-6 personas per PR, not 9.** Build 22 showed that running 9 produces heavy duplication: 5 reviewers piled onto the wrong "Pydantic v2 max_length reliability" defense, manufacturing false confidence around dead code that the morning calibration pass had to unwind. Demote a persona to conditional rather than running it for "completeness."
 
@@ -149,15 +184,27 @@ Dispatch the personas below in parallel via the Task tool. Each agent gets:
 - Classify by severity (P0–P3) and `autofix_class` (safe_auto / gated_auto / manual / advisory).
 
 **Fix loop:**
-1. Apply all `safe_auto` findings.
-2. Re-run `npm run build` if frontend changed; re-run `python3 -c "import ast; ast.parse(...)"` if backend changed.
-3. Re-dispatch correctness + the originally-flagging persona on the changed lines.
-4. If new findings, fix again. Max 2 rounds.
+1. Apply all `safe_auto` findings. Per CLAUDE.md's subagent rule: dispatch a single fixer agent only when fixes need holistic decisions (extract shared helper, multi-file refactor, harmonize API contracts). When fixes are mechanical (rename, regex tighten, single-line guard) AND match the reviewer's `suggested_fix` text verbatim, apply directly — fixer-agent round-trip is overhead without benefit.
+2. Re-run `npm run build` if frontend changed; re-run AST + import-time check (§3.5 step 1) if backend changed.
+3. **Round 2 skip license.** Skip the re-review round IF all three hold: (a) every applied finding was `autofix_class: safe_auto`, (b) every fix matched the reviewer's `suggested_fix` text verbatim, and (c) no P0/P1 was raised. Otherwise re-dispatch correctness + the originally-flagging persona on the changed lines.
+4. If new findings, fix again. Max 2 rounds total.
 5. If P0 or P1 remain after 2 rounds: do NOT push to main. Branch and flag in NEXT_RUN.md for human review.
 
 Every line that ships must have been reviewed after its final edit.
 
 Include a review summary in your commit message: `Review: X findings (P0: N, P1: N, P2: N), Y auto-fixed, Z iterations` and the persona roster used (e.g. `personas: correctness, testing, adversarial, security, kieran-python`).
+
+### 4.5. Sync TODO.md index
+
+After editing TODO.md bullets and BEFORE staging, run:
+
+```bash
+python3 bin/sync-todo-index.py
+```
+
+This regenerates the Critical (P1), Up Next, and Open Work index sections at the top of TODO.md from the current bullet state. **Belt-and-suspenders with the pre-commit hook:** the hook runs the same script automatically when TODO.md is staged (assuming Setup step 2 ran), but explicitly invoking it here means the file is already correct when you `git add`, and you can eyeball the result. Build 23 shipped a stale index (Critical/Up Next still listed shipped items) because the hook wasn't installed and this step didn't exist.
+
+The script also auto-stamps newly-added top-level bullets with `(added YYYY-MM-DD)` via the hook — you don't need to type the date yourself.
 
 ### 5. Final Verify + Commit
 Run `npm run build` one last time. If clean:
@@ -168,11 +215,13 @@ Run `npm run build` one last time. If clean:
      - *Findings:* one item for every P2/P3 finding, every thing you explicitly deferred ("no timeout", "not migrated", "left X out"), every "would be cleaner if..." you thought during implementation.
      - *Observations:* things you noticed while reading surrounding code — duplication, fragile patterns, missing guards, natural follow-ons. If you'd raise it in a code review, it belongs here. Tag [easy]/[medium]/[hard].
      - If this step produces zero new items, that is almost certainly wrong. You read code to implement; you saw things. Write them down.
+     - **F-items must include one bucket tag:** `[arch]` / `[hardening]` / `[polish]` / `[testing]` / `[infra]`. The sync script groups by tag; untagged items land in `### F · Untagged`.
      - **DO NOT run git add until new items are written.**
   3. Tag suitable unchecked items `[next]` for tomorrow's run (prefer prereqs of in-progress work, then [easy] items). At least one item must be tagged [next] before you commit.
   4. Append to JOURNAL.md.
+  5. Run `python3 bin/sync-todo-index.py` (per §4.5) so the index reflects all your TODO edits.
 - git add the changed files + TODO.md + JOURNAL.md
-- Commit with a descriptive message including the review summary line
+- Commit with a descriptive message including the review summary line. The pre-commit hook will re-run sync (idempotent) and stamp any unstamped new items.
 
 Note on Visual Verification:
 You cannot visually verify UI changes — that is the human's job during morning PR review. If you ship frontend components, explicitly note "Not visually verified" in the PR description so the reviewer knows to check.
