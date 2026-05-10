@@ -1,0 +1,77 @@
+#!/bin/sh
+# Auto-stamp new TODO items + sync index before commit.
+# Installed via: bin/install-hooks.sh
+
+set -e
+
+# Only run if TODO.md is staged
+if git diff --cached --name-only | grep -qx 'TODO.md'; then
+    if [ ! -f bin/sync-todo-index.py ]; then
+        echo "pre-commit: bin/sync-todo-index.py missing, skipping sync"
+        exit 0
+    fi
+
+    # --- Date-stamp newly-added top-level TODO items ---
+    today=$(date +%Y-%m-%d)
+
+    # IDs already present in the prior committed file (empty string on initial commit)
+    prior_ids=$(git show HEAD:TODO.md 2>/dev/null \
+        | grep -oE '^\- \[[ x]\] \*\*[A-Z]+[0-9]+[a-z]?\*\*' \
+        | grep -oE '[A-Z]+[0-9]+[a-z]?' || true)
+
+    # Top-level bullet lines that appear as additions in the staged diff
+    new_lines=$(git diff --cached --unified=0 -- TODO.md \
+        | grep '^+' | grep -v '^+++' \
+        | sed 's/^+//' \
+        | grep -E '^\- \[[ x]\] \*\*[A-Z]+[0-9]+[a-z]?\*\*' || true)
+
+    if [ -n "$new_lines" ]; then
+        # Build pipe-delimited list of IDs that are genuinely new (not in prior commit)
+        new_ids=""
+        while IFS= read -r line; do
+            id=$(printf '%s' "$line" | grep -oE '[A-Z]+[0-9]+[a-z]?' | head -1)
+            if [ -n "$id" ] && ! printf '%s\n' $prior_ids | grep -qx "$id"; then
+                new_ids="${new_ids}|${id}"
+            fi
+        done <<DIFFEOF
+$new_lines
+DIFFEOF
+        new_ids="${new_ids#|}"  # strip leading pipe
+
+        if [ -n "$new_ids" ]; then
+            # Stamp matching lines using awk (BSD-awk-compatible; pipe-delimited IDs)
+            tmpfile=$(mktemp)
+            awk -v ids="$new_ids" -v stamp="(added $today)" '
+            BEGIN {
+                n = split(ids, arr, "|")
+                for (i = 1; i <= n; i++) {
+                    if (arr[i] != "") id_set[arr[i]] = 1
+                }
+            }
+            /^\- \[[ x]\] \*\*[A-Z]+[0-9]+[a-z]?\*\*/ {
+                line = $0
+                if (match(line, /\*\*[A-Z]+[0-9]+[a-z]?\*\*/)) {
+                    id_raw = substr(line, RSTART, RLENGTH)
+                    gsub(/\*/, "", id_raw)
+                    already = (line ~ /\(added [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)$/)
+                    if ((id_raw in id_set) && !already) {
+                        print line " " stamp
+                        next
+                    }
+                }
+            }
+            { print }
+            ' TODO.md > "$tmpfile"
+            mv "$tmpfile" TODO.md
+        fi
+    fi
+    # --- End date-stamp ---
+
+    python3 bin/sync-todo-index.py
+
+    # Re-stage TODO.md if stamping or sync modified it
+    if ! git diff --quiet TODO.md; then
+        echo "pre-commit: re-staged TODO.md after date-stamp + sync-todo-index"
+        git add TODO.md
+    fi
+fi

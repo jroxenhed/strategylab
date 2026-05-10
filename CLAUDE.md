@@ -50,7 +50,7 @@ Every agent session (interactive or automated) follows this protocol to prevent 
 3. If working on a specific TODO item, check for a linked spec/plan in `docs/superpowers/`
 
 ### On End
-1. Update `TODO.md` — check off completed items, add new items if work surfaced them. **Every implementation session must surface at least 1–2 new items** — if you found zero, you weren't looking hard enough. Edge cases, missing validation, UX gaps, performance concerns, and natural follow-ups all count. Tag new items with the parent task ID (e.g. B5d from B5c). The only things that don't belong are speculative feature requests with no connection to the work you just did.
+1. Update `TODO.md` — check off completed items, add new items if work surfaced them. **Every implementation session must surface at least 1–2 new items** — if you found zero, you weren't looking hard enough. Edge cases, missing validation, UX gaps, performance concerns, and natural follow-ups all count. Tag new items with the parent task ID (e.g. B5d from B5c). New F-items must include one bucket tag: `[arch]` / `[hardening]` / `[polish]` / `[testing]` / `[infra]`. The only things that don't belong are speculative feature requests with no connection to the work you just did — those go in `IDEAS.md` (graduate to `TODO.md` once they have a clear what+why+how).
 2. Append to `JOURNAL.md` — reuse today's date header if it exists, one bullet per shipped item with bold **[ID]** cross-reference
 3. Tag suitable unchecked items `[next]` for the next overnight run (prefer prereqs of in-progress work, then `[easy]` items)
 4. Both updates in the **same commit** as the code changes (atomic)
@@ -72,6 +72,12 @@ Every agent session (interactive or automated) follows this protocol to prevent 
 - Never commit code without updating the tracking files.
 - Never update tracking files without corresponding code.
 - If all `[next]` items are done, fall back to unchecked items in section order (A before B, etc.).
+
+### TODO.md tooling
+- `bin/sync-todo-index.py` regenerates the index table, anchors, F-bucket H3 grouping, and Critical (P1) section. Idempotent.
+- `.githooks/pre-commit` runs the sync automatically when `TODO.md` is staged AND auto-stamps newly added items with `(added YYYY-MM-DD)`. Install once per clone via `bin/install-hooks.sh`.
+- Author just types `- [ ] **F94** Title — body. [easy] [hardening]`; the hook handles anchor + date + index regeneration.
+- Half-formed ideas without a clear what+why+how go in `IDEAS.md`, not `TODO.md`. Graduate to `TODO.md` once specifics exist.
 
 ## Chart.tsx Architecture
 
