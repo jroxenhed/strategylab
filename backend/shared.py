@@ -423,7 +423,7 @@ def _fetch(ticker: str, start: str, end: str, interval: str, source: str = "yaho
     """
     provider = _providers.get(source)
     if provider is None:
-        raise HTTPException(status_code=400, detail=f"Unknown data source: {source}")
+        raise HTTPException(status_code=400, detail="Unknown data source")
 
     key = (ticker.upper(), start, end, interval, source, extended_hours)
     now = time.monotonic()

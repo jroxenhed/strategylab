@@ -110,3 +110,20 @@ def test_watchlist_validation_exactly_20_char_symbol(client, tmp_path, monkeypat
     resp = client.post("/api/trading/watchlist", json={"symbols": ["A" * 20]})
     assert resp.status_code == 200
     assert resp.json()["symbols"] == ["A" * 20]
+
+
+def test_watchlist_validation_rejects_invalid_chars(client, tmp_path, monkeypatch):
+    """F38/F85: a symbol containing chars outside [A-Z0-9.-] fails the whole
+    request with 422.
+
+    This pins the *strict* contract introduced in build 23 (delegating to
+    normalize_symbol). Pre-build-23 the validator only checked length — it would
+    have uppercased `'AAPL;evil'` and persisted it. Now it 422s. A future change
+    that softens this back to silent-drop (e.g. catch+continue inside the
+    validator) would silently regress F38's log-injection coverage; this test
+    locks the strict contract in place.
+    """
+    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", tmp_path / "watchlist.json")
+    for bad in ["AAPL;evil", "AAPL\nevil", "AAPL evil", "AA@PL"]:
+        resp = client.post("/api/trading/watchlist", json={"symbols": [bad]})
+        assert resp.status_code == 422, f"expected 422 for {bad!r}, got {resp.status_code}"

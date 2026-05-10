@@ -1,11 +1,40 @@
 """Shared Pydantic models used across backtest, bot_manager, and trading routes."""
 
+import re
 from typing import Annotated, Literal, Optional
 from pydantic import BaseModel, Field, field_validator, BeforeValidator
 from signal_engine import Rule
 
 LogicField = Annotated[Literal['AND', 'OR'], BeforeValidator(lambda v: v.upper() if isinstance(v, str) else v)]
 DirectionField = Annotated[Literal['long', 'short'], BeforeValidator(lambda v: v.lower().strip() if isinstance(v, str) else v)]
+
+# Allowlist: must start with an alphanumeric, then up to 19 chars from
+# [A-Z0-9.-]. Covers BRK.B, BF-B, AAPL while rejecting '..', '.env', '-A',
+# and anything containing whitespace, control chars, or shell metacharacters
+# (F38 log-injection, F85 character allowlist). Index symbols like ^GSPC are
+# intentionally excluded — the codebase only deals with equity / ETF tickers.
+_SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,19}$")
+
+
+def normalize_symbol(v: object) -> str:
+    """Strict per-symbol normalize+validate. Strips, uppercases, regex-checks.
+
+    Raises ValueError on empty / oversized / disallowed-characters input.
+    Use via SymbolField in Pydantic models, or call directly for path params.
+    """
+    if not isinstance(v, str):
+        raise ValueError("symbol must be a string")
+    s = v.strip().upper()
+    if not s:
+        raise ValueError("symbol must not be empty")
+    if len(s) > 20:
+        raise ValueError(f"symbol too long (max 20 chars): {s[:20]!r}...")
+    if not _SYMBOL_RE.fullmatch(s):
+        raise ValueError(f"invalid symbol characters: {s!r}")
+    return s
+
+
+SymbolField = Annotated[str, BeforeValidator(normalize_symbol)]
 
 
 class TrailingStopConfig(BaseModel):
