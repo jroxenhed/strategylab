@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, HTTPException
 import hashlib
 import json
@@ -27,6 +29,7 @@ def borrow_cost(shares: float, entry_price: float, entry_ts, exit_ts,
     return position_value * (req.borrow_rate_annual / 100 / 365) * hold_days
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Single-entry cache for macro endpoint re-aggregation.
@@ -938,5 +941,6 @@ def run_backtest(req: StrategyRequest):
         return result
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("/api/backtest failed")
+        raise HTTPException(status_code=500, detail="backtest failed")

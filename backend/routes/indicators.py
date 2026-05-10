@@ -121,5 +121,6 @@ def post_indicators(ticker: str, body: IndicatorsPostRequest):
         return result
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("/api/indicators failed")
+        raise HTTPException(status_code=500, detail="indicator compute failed")

@@ -15,27 +15,26 @@ Smuggling-resistance hardening (build 24 adversarial review):
 """
 
 import json
+from starlette.types import ASGIApp, Scope, Receive, Send
 
 DEFAULT_MAX_BYTES = 1_048_576  # 1 MB
 
 
 class BodySizeLimitMiddleware:
-    """ASGI middleware that rejects HTTP request bodies exceeding max_bytes.
+    """Limits HTTP request body size via Content-Length fast path with chunked-body slow path fallback.
 
-    Pure ASGI rather than BaseHTTPMiddleware to avoid the well-known
-    BaseHTTPMiddleware/lifespan interactions and so the rejection happens
-    before any FastAPI route dispatch.
+    Pure ASGI (not BaseHTTPMiddleware) to avoid lifespan interaction issues.
     """
 
     BODY_METHODS = frozenset(("POST", "PUT", "PATCH"))
 
-    def __init__(self, app, max_bytes: int = DEFAULT_MAX_BYTES):
+    def __init__(self, app: ASGIApp, max_bytes: int = DEFAULT_MAX_BYTES) -> None:
         if max_bytes <= 0:
             raise ValueError("max_bytes must be positive")
         self.app = app
         self.max_bytes = max_bytes
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         # Non-HTTP scopes (WebSocket, lifespan) bypass the body cap — they don't
         # have HTTP request bodies in the same shape. If WebSocket routes are
         # added later, design a separate frame-size limit; do NOT assume this middleware covers them.
@@ -56,7 +55,18 @@ class BodySizeLimitMiddleware:
             if name == b"content-length":
                 cl_values.append(value)
             elif name == b"transfer-encoding":
-                has_transfer_encoding = True
+                # F112: 'identity' is the no-op encoding (RFC 7230 §4) — treat as
+                # absent so the Content-Length fast path still applies.
+                if value.strip().lower() != b"identity":
+                    has_transfer_encoding = True
+
+        # F111: reject Content-Length with leading/trailing whitespace (RFC 7230 §3.2.4).
+        # `b' 50'` or `b'50 '` would otherwise parse via int() but signals a malformed
+        # or smuggled header — reject up-front.
+        for v in cl_values:
+            if v.strip() != v:
+                await _reply(send, 400, "Invalid Content-Length")
+                return
 
         # Reject duplicate Content-Length outright — RFC 7230 §3.3.2 says
         # differing values MUST 400 and even matching values are a smuggling
@@ -130,7 +140,7 @@ class BodySizeLimitMiddleware:
         await self.app(scope, replay_receive, send)
 
 
-async def _reply(send, status: int, detail: str) -> None:
+async def _reply(send: Send, status: int, detail: str) -> None:
     payload = json.dumps({"detail": detail}).encode("utf-8")
     await send({
         "type": "http.response.start",

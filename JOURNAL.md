@@ -6,6 +6,23 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-11
 
+### F125 — third easy-hardening bundle (9 items, 4 parallel agents)
+
+- Third pre-overnight batch. Orchestrator protocol: 4 parallel Sonnet agents grouped by file independence (zero file overlap across groups), verification + test triage + commit owned by orchestrator. Scaling up: 9 items in ~5 min wall-clock implementation + ~3 min verification, vs ~25 min serial.
+  - **[F72](TODO.md#f72)** `QuoteResult` Pydantic model + `response_model=list[QuoteResult]` on `POST /api/quotes`. Contract change surfaced 3 stale tests pinning the asymmetric pre-F72 dict shape (success rows omitted `error`); updated 1 test to expect uniform 4-field shape with `error: None`.
+  - **[F73](TODO.md#f73)** Orphan `.tmp` cleanup — new `backend/fileutil.py` module with `cleanup_orphan_tmps()` wired into FastAPI lifespan before `init_ibkr()`. Scans `data/` and `backend/`, unlinks `*.tmp` >1h old. Covers all four atomic-write sites (journal/bot_manager/watchlist/providers env).
+  - **[F75](TODO.md#f75)** `/api/quotes` exception leak closed. Inner `get_quote` 500 → fixed `"quote fetch failed"`. Batch `get_quotes` classifies inner HTTPException status: 404 passes through `"No data for X"`, anything else maps to `"fetch failed"`. 2 stale tests (`test_fetch_exception_returns_error_field`, `test_fetch_empty_exception_message_falls_back`) had pinned the leak behavior — updated to assert the new sanitized contract.
+  - **[F88](TODO.md#f88)** `GET /api/trading/watchlist` filter-on-read. Disk entries run through `normalize_symbol()` in forgiving mode — invalid entries dropped with a single warning log + dedup. Closes the "reads OK, writes 422" trap from F95's SymbolField rollout. Write-strict / read-tolerant asymmetry preserved.
+  - **[F109](TODO.md#f109)** `BodySizeLimitMiddleware` class docstring trimmed 4→2 lines (module docstring already covers the threat model).
+  - **[F110](TODO.md#f110)** ASGI type annotations added: `ASGIApp/Scope/Receive/Send` from `starlette.types` on `__init__`, `__call__`, `_reply`. Type-only.
+  - **[F111](TODO.md#f111)** `BodySizeLimitMiddleware` rejects `Content-Length` with leading/trailing whitespace per RFC 7230 §3.2.4.
+  - **[F112](TODO.md#f112)** `Transfer-Encoding: identity` no longer forces slow path — the Content-Length fast path stays active for the no-op encoding.
+  - **[F115](TODO.md#f115)** Provider exception strings sanitized across `data.py`, `indicators.py`, `backtest.py`, `backtest_quick.py` per-symbol rows (`quote.py` covered by F75). Each now uses a fixed error message + `logger.exception()` server-side.
+- **New TODO filed:**
+  - **[F126](TODO.md#f126)** `GET /api/trading/account` still leaks broker exception details (`routes/trading.py:84` was outside F115's file list). Also flagged `routes/bots.py` 400/404 sites for audit — most look intentional (ValueError messages from domain code), but worth confirming. [hardening]
+- Verification: 224 backend tests pass. 5 deselected pre-existing failures (F120). One IBKR test-order flake (pre-existing on `main`). Test triage: 5 quote-endpoint failures appeared after the F72/F75 contract changes — 1 fixed by removing `response_model_exclude_none=True` (chose uniform 4-field shape over asymmetric old behavior), 2 tests rewritten to match F75's sanitized strings (the prior assertions explicitly pinned the leak vector F75 closed), 2 cleared automatically once the 4-field shape was uniform.
+- **Orchestrator notes:** 4 themed agents > 9 individual dispatches for this workload — the test-failure triage was tight enough that orchestrator-context judgment was the right place to resolve it (test-vs-code-vs-contract decision needed cross-file context). Initial dispatch overlap (quote.py wanted by both F72 and F75) caught at planning time and folded into one agent — would have created merge conflicts if shipped as written.
+
 ### F122 — second easy-hardening bundle (7 items, parallel orchestrator dispatch)
 
 - Second pre-overnight batch. Used the orchestrator protocol from CLAUDE.md: finished F58 in main context (already half-done), then dispatched 2 parallel Sonnet implementers for the other 6 items grouped by theme (data-layer hardening vs Pydantic/middleware). Total wall-clock: ~3 min for implementation, vs ~10 min serial. Verification + commit owned by orchestrator (Opus).

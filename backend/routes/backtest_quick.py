@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter
 from typing import Optional
 import numpy as np
@@ -9,6 +11,7 @@ from shared import _fetch, _format_time
 from signal_engine import Rule, compute_indicators, eval_rules, migrate_rule
 from models import LogicField, SymbolField, DirectionField, normalize_symbol, TrailingStopConfig
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -87,8 +90,9 @@ def _run_quick(req: QuickBacktestRequest) -> QuickBacktestResult:
 
     try:
         df = _fetch(ticker, start_str, end_str, req.interval)
-    except Exception as e:
-        return QuickBacktestResult(ticker=ticker, error=f"No data for {ticker}: {str(e)}")
+    except Exception:
+        logger.exception("quick-backtest fetch failed for %s", ticker)
+        return QuickBacktestResult(ticker=ticker, error=f"No data for {ticker}")
 
     if df is None or len(df) < 2:
         return QuickBacktestResult(ticker=ticker, error=f"No data for {ticker}")
@@ -226,7 +230,8 @@ def quick_backtest_batch(req: BatchQuickBacktestRequest):
         )
         try:
             result = _run_quick(single_req)
-        except Exception as e:
-            result = QuickBacktestResult(ticker=symbol.upper(), error=str(e))
+        except Exception:
+            logger.exception("batch quick-backtest failed for %s", symbol)
+            result = QuickBacktestResult(ticker=symbol.upper(), error="quick-backtest failed")
         results.append(result)
     return {"results": results}

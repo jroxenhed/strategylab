@@ -40,21 +40,27 @@ def test_overlong_symbol_returns_null_entry():
 
 
 def test_lowercase_padded_symbol_normalized_then_fetched(stub_fetch):
-    """`'  aapl  '` should normalize to 'AAPL' and proceed through get_quote() → real result."""
+    """`'  aapl  '` should normalize to 'AAPL' and proceed through get_quote() → real result.
+
+    F72 added `response_model=list[QuoteResult]` so every entry has the full 4-field shape
+    `{symbol, price, change_pct, error}`. On success, `error` is `None` (Pydantic serializes
+    the default). Previously the dict-shaped response omitted `error` entirely on success.
+    """
     body = TestClient(app).post("/api/quotes", json=["  aapl  "]).json()
     assert len(body) == 1
     assert body[0]["symbol"] == "AAPL"
     assert body[0]["price"] == 101.0
     assert body[0]["change_pct"] == pytest.approx(1.0)
-    assert "error" not in body[0]
+    assert body[0]["error"] is None
 
 
 def test_fetch_exception_returns_error_field(monkeypatch):
-    """Exception during get_quote() surfaces as `error` field, not silent null.
+    """Exception during get_quote() surfaces as a generic `error` field, not the raw
+    exception message.
 
-    `_fetch` raises → `get_quote` re-raises as HTTPException(500, detail=str(e)) →
-    `get_quotes` catches HTTPException and uses `e.detail` so the status prefix never
-    leaks into the public error string.
+    F75 sanitizes the inner HTTPException(500) detail to a fixed string so provider
+    internals (IBKR host:port, ib_insync log paths, yfinance URLs) can't leak via the
+    batch endpoint. Any non-404 inner status maps to "fetch failed".
     """
     def boom(ticker, start, end, tf, source="yahoo"):
         raise RuntimeError("upstream timeout")
@@ -62,17 +68,25 @@ def test_fetch_exception_returns_error_field(monkeypatch):
     body = TestClient(app).post("/api/quotes", json=["AAPL"]).json()
     assert body[0]["symbol"] == "AAPL"
     assert body[0]["price"] is None
-    assert body[0]["error"] == "upstream timeout"
+    assert body[0]["error"] == "fetch failed"
+    # Original message must NOT leak.
+    assert "upstream timeout" not in body[0]["error"]
 
 
 def test_fetch_empty_exception_message_falls_back(monkeypatch):
-    """Exception with empty message → `error` field falls back to 'no data'."""
+    """Exception with empty message → `error` field is the fixed "fetch failed" string.
+
+    Pre-F75 the empty-message branch fell back to "no data"; after F75 the message
+    content is irrelevant — any non-404 inner status maps to the same sanitized
+    string. This is intentional: the dropoff between "no data" and "fetch failed"
+    can't be controlled by provider exception wording anymore.
+    """
     def boom(ticker, start, end, tf, source="yahoo"):
         raise RuntimeError("")
     monkeypatch.setattr(quote_mod, "_fetch", boom)
     body = TestClient(app).post("/api/quotes", json=["AAPL"]).json()
     assert body[0]["symbol"] == "AAPL"
-    assert body[0]["error"] == "no data"
+    assert body[0]["error"] == "fetch failed"
 
 
 def test_no_data_dataframe_uses_404_detail(monkeypatch):

@@ -4,6 +4,7 @@ load_dotenv()
 
 import logging
 import os
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import warnings
@@ -42,6 +43,11 @@ from middleware import BodySizeLimitMiddleware, DEFAULT_MAX_BYTES
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from fileutil import cleanup_orphan_tmps
+    from journal import DATA_DIR  # data/ — used by journal, bot_manager, trading watchlist
+    backend_dir = Path(__file__).resolve().parent
+    cleanup_orphan_tmps([DATA_DIR, backend_dir])
+
     from shared import init_ibkr
     from broker import _trading_providers
     from broker_health import HeartbeatMonitor

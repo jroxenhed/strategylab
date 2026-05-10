@@ -1,6 +1,9 @@
+import logging
+
 from fastapi import APIRouter, HTTPException
 from shared import _fetch, _format_time, require_valid_source
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -26,5 +29,6 @@ def get_ohlcv(ticker: str, start: str = "2023-01-01", end: str = "2024-01-01", i
         }
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("/api/ohlcv failed for %s [%s]", ticker, source)
+        raise HTTPException(status_code=500, detail="data fetch failed")

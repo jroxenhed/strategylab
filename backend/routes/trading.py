@@ -438,9 +438,23 @@ def get_journal(symbol: Optional[str] = None, broker: str = "all"):
 
 @router.get("/watchlist")
 def get_watchlist():
-    if WATCHLIST_PATH.exists():
-        return json.loads(WATCHLIST_PATH.read_text())
-    return {"symbols": []}
+    if not WATCHLIST_PATH.exists():
+        return {"symbols": []}
+    raw = json.loads(WATCHLIST_PATH.read_text()).get("symbols", [])
+    cleaned: list[str] = []
+    dropped = 0
+    for sym in raw:
+        if not isinstance(sym, str) or not sym.strip():
+            dropped += 1
+            continue
+        try:
+            cleaned.append(normalize_symbol(sym))
+        except ValueError:
+            dropped += 1
+    cleaned = list(dict.fromkeys(cleaned))  # F93 dedup pattern
+    if dropped:
+        logger.warning("watchlist read-time filter dropped %d invalid entries", dropped)
+    return {"symbols": cleaned}
 
 
 @router.post("/watchlist")

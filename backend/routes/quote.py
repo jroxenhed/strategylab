@@ -1,13 +1,25 @@
 import re
+import logging
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from shared import _fetch, require_valid_source
 from models import normalize_symbol
+
+logger = logging.getLogger(__name__)
 
 # Echo-back sanitizer for invalid batch-quote symbols: keep only allowlist chars
 # so a JSON consumer that decodes and forwards the response can't propagate
 # null bytes / control chars an attacker embedded in the request payload.
 _DISPLAY_CLEAN = re.compile(r"[^A-Z0-9.\-]")
+
+
+class QuoteResult(BaseModel):
+    symbol: str
+    price: float | None = None
+    change_pct: float | None = None
+    error: str | None = None
+
 
 router = APIRouter()
 
@@ -50,12 +62,13 @@ def get_quote(ticker: str, source: str = "yahoo"):
         return {"symbol": ticker.upper(), "price": price, "change_pct": change_pct}
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("get_quote failed for %s [%s]", ticker, source)
+        raise HTTPException(status_code=500, detail="quote fetch failed")
 
 
-@router.post("/api/quotes")
-def get_quotes(symbols: list[str], source: str = "yahoo"):
+@router.post("/api/quotes", response_model=list[QuoteResult])
+def get_quotes(symbols: list[str], source: str = "yahoo") -> list[QuoteResult]:
     """Batch quote endpoint — returns quotes for multiple symbols."""
     # F37/F94: same boundary validation as the single-ticker route. Reject up
     # front so the per-symbol HTTPException catch can't quietly turn an unknown
@@ -81,6 +94,9 @@ def get_quotes(symbols: list[str], source: str = "yahoo"):
             q = get_quote(normalized, source)
             results.append(q)
         except HTTPException as e:
-            detail = e.detail if isinstance(e.detail, str) else str(e.detail) if e.detail else None
-            results.append({"symbol": normalized, "price": None, "change_pct": None, "error": detail or "no data"})
+            if e.status_code == 404:
+                detail = e.detail if isinstance(e.detail, str) else "no data"
+            else:
+                detail = "fetch failed"
+            results.append({"symbol": normalized, "price": None, "change_pct": None, "error": detail})
     return results
