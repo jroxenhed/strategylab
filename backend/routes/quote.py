@@ -1,7 +1,7 @@
 import re
 
 from fastapi import APIRouter, HTTPException
-from shared import _fetch, get_available_providers
+from shared import _fetch, require_valid_source
 from models import normalize_symbol
 
 # Echo-back sanitizer for invalid batch-quote symbols: keep only allowlist chars
@@ -24,11 +24,11 @@ def get_quote(ticker: str, source: str = "yahoo"):
         # original ValueError doesn't ride into structured log sinks.
         raise HTTPException(status_code=400, detail="Invalid ticker symbol") from None
 
-    # F37: validate source at the route boundary so unknown providers can't be
-    # silently swallowed by callers that catch broad Exception (e.g. get_quotes),
-    # which would leak provider-registration state via timing/error differentials.
-    if source not in get_available_providers():
-        raise HTTPException(status_code=400, detail="Invalid source")
+    # F37/F94: shared allowlist + case-normalize at the route boundary so
+    # unknown providers can't be silently swallowed by callers that catch
+    # broad Exception (e.g. get_quotes), which would leak provider state via
+    # timing/error differentials.
+    source = require_valid_source(source)
 
     today = date.today().isoformat()
     # Fetch last 5 trading days of daily data — enough to get prev close
@@ -57,14 +57,11 @@ def get_quote(ticker: str, source: str = "yahoo"):
 @router.post("/api/quotes")
 def get_quotes(symbols: list[str], source: str = "yahoo"):
     """Batch quote endpoint — returns quotes for multiple symbols."""
-    # F37: same boundary validation as the single-ticker route. Reject up front
-    # so the per-symbol HTTPException catch can't quietly turn an unknown source
-    # into 20 "no data" rows (provider enumeration vector). Note: get_quote()
-    # below also validates source — that inner check is dead code under this
-    # call path, kept as defense-in-depth so a future direct caller of get_quote
-    # can't bypass it.
-    if source not in get_available_providers():
-        raise HTTPException(status_code=400, detail="Invalid source")
+    # F37/F94: same boundary validation as the single-ticker route. Reject up
+    # front so the per-symbol HTTPException catch can't quietly turn an unknown
+    # source into 20 "no data" rows (provider enumeration vector). get_quote()
+    # below also validates source — defense-in-depth for any future direct caller.
+    source = require_valid_source(source)
     results = []
     for sym in symbols[:20]:  # cap at 20 to prevent abuse
         try:

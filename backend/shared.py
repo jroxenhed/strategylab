@@ -380,6 +380,22 @@ def get_available_providers() -> list[str]:
     return list(_providers.keys())
 
 
+def require_valid_source(source: str) -> str:
+    """F94 boundary check shared across route modules.
+
+    Lowercases the input (provider keys are stored lowercase, so 'YAHOO'
+    would otherwise slip past the in-set test and surface as a different
+    'Unknown data source' error from `_fetch`) and raises HTTPException(400)
+    on unknown providers. Returns the normalized source for callers to use.
+    """
+    if not isinstance(source, str):
+        raise HTTPException(status_code=400, detail="Invalid source")
+    normalized = source.strip().lower()
+    if normalized not in _providers:
+        raise HTTPException(status_code=400, detail="Invalid source")
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # TTL cache for _fetch()
 # Historical data (end < today): 1 hour TTL — won't change.

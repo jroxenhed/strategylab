@@ -35,6 +35,55 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
+**Date:** 2026-05-10 (build 24 — overnight)
+**Branch:** `claude/jolly-babbage-4Rfjg`
+
+**Shipped:**
+- **F86** [P1] HTTP body size limit middleware — `backend/middleware.py` `BodySizeLimitMiddleware` (pure ASGI). 1 MB default, env-overrideable via `STRATEGYLAB_MAX_BODY_BYTES`. Wired into `main.py` after CORS so it's outermost. Adversarial-hardened in-PR: rejects duplicate Content-Length, forces slow byte-counting when Transfer-Encoding is present (closes CL=0+chunked and TE+CL smuggling), replay-receive returns synthetic empty body on second call to prevent downstream hangs.
+- **F91** [P1] BatchQuickBacktestRequest cap parity — 500-entry list cap + `SymbolField` per-element on `BatchQuickBacktestRequest.symbols`; `SymbolField` on `QuickBacktestRequest.ticker`. Direction validators collapsed to `DirectionField`. Closes OOM vector on /api/backtest/quick/batch.
+- **F94** Source allowlist on data routes — extracted `require_valid_source(source)` helper to `shared.py` (lowercase + 400). 5 sites refactored: data.py, indicators.py, backtest.py, quote.py ×2. Closes the case-sensitivity gap (`source=YAHOO` now uniformly 400s with "Invalid source").
+
+**Review:** 6 personas round 1 (correctness/testing/adversarial/security/kieran-python/reliability) — dedicated `compound-engineering:review:*` agents still not resolvable in routine env (4th run with this gap; F80 codified). Used `general-purpose` with persona-injected prompts. Round 2 (correctness + adversarial) re-verified smuggling/helper fixes — clean. Findings: 3 P1 + 7 P2 + 13 P3 round 1, all P1s fixed in-PR, ~8 P2s applied, 12 deferred → F102–F113.
+
+**Findings → fix loop applied:**
+- **P1 ×3 (adversarial):** middleware request-smuggling. Duplicate Content-Length headers now 400; Transfer-Encoding presence forces slow path overruling declared CL; both fixes covered by new tests.
+- **P2 replay-receive double-call hang** (reliability + adversarial converged): synthetic empty-body terminal on second receive call so downstream re-reads can't block on a never-arriving `http.disconnect`.
+- **P2 source-check duplication + case sensitivity** (kieran + adversarial converged): extracted `require_valid_source` to `shared.py` (5 sites refactored, lowercases input).
+- **P2 DirectionField swap** (kieran 0.95): `direction: str = "long"` + hand-rolled validator → `direction: DirectionField = "long"` on both Quick/Batch request classes; deletes 8 lines.
+- **P2 testing — vacuous + boundary gaps** (testing 0.85–0.92): added `received`-list assertion on the 500-symbol acceptance test, exactly-20-char SymbolField test, exactly-at-cap and one-byte-over body-size tests, positive-allowlist tests for /api/indicators and /api/backtest, duplicate-CL test, TE+CL coexistence test, replay-empty-second-call test.
+
+**Deferred → TODO (F102–F113):**
+- **F102** [next] cap `buy_rules`/`sell_rules` list length on quick-backtest models (security P2 0.90).
+- **F103** `trailing_stop: Optional[dict]` → `Optional[TrailingStopConfig]` (security P2 0.85).
+- **F104** harmonize empty-list-after-strip between F69 (silent `[]`) and F91 (422) — reliability P2 0.88.
+- **F105** `interval` field allowlist via `Literal[...]` across 5 models (security P3 0.75).
+- **F106** allowlist `Rule.indicator` / `Rule.condition` in `signal_engine.py` (security P3 0.65).
+- **F107** middleware HEAD/OPTIONS/DELETE method tests (testing P3 0.78).
+- **F108** `STRATEGYLAB_MAX_BODY_BYTES` env-var fallback test (testing residual).
+- **F109** trim middleware docstring overlap (kieran P3 0.7).
+- **F110** ASGI type annotations on `__call__` via `starlette.types` (kieran P3 0.6).
+- **F111** reject Content-Length with leading whitespace (adversarial P3 0.65).
+- **F112** consider excluding `Transfer-Encoding: identity` from slow-path forcing (round-2 adv P3 0.75).
+- **F113** quick-backtest endpoints have no `source` field — yahoo-only by default; add `source` + `require_valid_source` if multi-provider intended (round-2 correctness P3).
+
+**Build:** frontend `npm run build` pass. **Smoke test:** AST + standalone middleware end-to-end smoke via `asyncio.run` (duplicate-CL rejection, TE+CL slow path, replay-empty contract). `backend/venv/` still missing in routine container — F97 pending.
+
+**Visual verification:** N/A — backend-only PR.
+
+**Builder env notes:**
+1. **Dedicated `compound-engineering:review:*-reviewer` agents still unavailable** in the routine env — 4th overnight in a row (builds 21 / 22 / 23 / 24). The `Agent` tool's `subagent_type` field rejects every persona name from the F80 roster. Falling back to `general-purpose` with persona role injected at the prompt head; this preserves the persona's *behavioral framing* but loses any persona-specific tool restrictions or system-prompt scaffolding the dedicated agents carry. Worth filing a container-image issue to install / publish the compound-engineering plugin alongside the routine builder so the F80 roster is faithfully reproducible.
+2. **`backend/venv/` still missing** — F97 unchanged for the 4th build.
+
+**Next up:**
+- **F102** [next] rule-list cap on quick-backtest models — easy, blocked by nothing
+- **F95** [next] remaining `SymbolField` rollout (StrategyRequest, BotConfig, ScanRequest, PerformanceRequest) — medium, F100 migration pre-req
+- **F104** [easy] harmonize empty-list contract F69 vs F91
+- **F107** [easy] middleware HEAD/OPTIONS/DELETE explicit tests
+
+**Previous run:** 2026-05-10 PR #31 (build 23 — F37 + F38 + F70 + F76 + F81 + F85).
+
+## Build 23 Run
+
 **Date:** 2026-05-10 (build 23 — overnight)
 **Branch:** `claude/jolly-babbage-KxUMl`
 

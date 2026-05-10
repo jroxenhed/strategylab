@@ -2,7 +2,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 import pandas as pd
-from shared import _fetch, _format_time, fetch_higher_tf, align_htf_to_ltf, htf_lookback_days, _INTRADAY_INTERVALS
+from shared import _fetch, _format_time, fetch_higher_tf, align_htf_to_ltf, htf_lookback_days, _INTRADAY_INTERVALS, require_valid_source
 from indicators import compute_instance, OHLCVSeries
 
 router = APIRouter()
@@ -44,6 +44,9 @@ class IndicatorsPostRequest(BaseModel):
 
 @router.post("/api/indicators/{ticker}")
 def post_indicators(ticker: str, body: IndicatorsPostRequest):
+    # F94: shared allowlist + case-normalize. Runs before any fetch_higher_tf
+    # or compute_instance call so unknown-source requests can't do work.
+    body.source = require_valid_source(body.source)
     try:
         df = _fetch(ticker, body.start, body.end, body.interval, source=body.source, extended_hours=body.extended_hours)
 
