@@ -2,11 +2,12 @@ import json
 import logging
 import math
 import os
+import shutil
 import tempfile
 import time
 from datetime import datetime, timezone
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 import pandas as pd
 
@@ -49,6 +50,21 @@ class ScanRequest(BaseModel):
 
 class WatchlistRequest(BaseModel):
     symbols: list[str]
+
+    @field_validator('symbols')
+    @classmethod
+    def _validate_symbols(cls, v: list[str]) -> list[str]:
+        if len(v) > 500:
+            raise ValueError(f"too many symbols (max 500, got {len(v)})")
+        cleaned = []
+        for sym in v:
+            sym = sym.strip().upper()
+            if not sym:
+                continue
+            if len(sym) > 20:
+                raise ValueError(f"symbol too long (max 20 chars): {sym[:20]!r}...")
+            cleaned.append(sym)
+        return cleaned
 
 
 @router.get("/account")
@@ -429,9 +445,14 @@ def save_watchlist(req: WatchlistRequest):
         fd.flush()
         os.fsync(fd.fileno())
         fd.close()
+        if WATCHLIST_PATH.exists():
+            shutil.copymode(str(WATCHLIST_PATH), fd.name)
         os.replace(fd.name, str(WATCHLIST_PATH))
     except Exception:
-        fd.close()
+        try:
+            fd.close()
+        except Exception:
+            pass
         try:
             os.unlink(fd.name)
         except OSError:

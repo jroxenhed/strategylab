@@ -1,6 +1,8 @@
 import os
 import pathlib
+import shutil
 import tempfile
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -66,9 +68,10 @@ def set_poll_interval(body: dict):
     return {"poll_interval_ms": ms}
 
 
-def _persist_env(key: str, value: str):
+def _persist_env(key: str, value: str, env_path: Optional[pathlib.Path] = None):
     """Write a key=value to backend/.env so it survives restarts."""
-    env_path = pathlib.Path(__file__).resolve().parent.parent / ".env"
+    if env_path is None:
+        env_path = pathlib.Path(__file__).resolve().parent.parent / ".env"
     lines = env_path.read_text().splitlines() if env_path.exists() else []
     found = False
     for i, line in enumerate(lines):
@@ -87,9 +90,14 @@ def _persist_env(key: str, value: str):
         fd.flush()
         os.fsync(fd.fileno())
         fd.close()
+        if env_path.exists():
+            shutil.copymode(str(env_path), fd.name)
         os.replace(fd.name, str(env_path))
     except Exception:
-        fd.close()
+        try:
+            fd.close()
+        except Exception:
+            pass
         try:
             os.unlink(fd.name)
         except OSError:

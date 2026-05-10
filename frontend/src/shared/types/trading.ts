@@ -90,7 +90,7 @@ export interface BotSummary {
 
 export interface BotDetail {
   config: BotConfig
-  state: BotState
+  state?: BotState
 }
 
 export interface BotListResponse {
