@@ -73,7 +73,15 @@ async def lifespan(app: FastAPI):
                 logger.warning("IBKR disconnect on shutdown failed: %s", e)
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    lifespan=lifespan,
+    responses={
+        413: {
+            "description": "Request body exceeds STRATEGYLAB_MAX_BODY_BYTES (default 1 MB).",
+            "content": {"application/json": {"schema": {"type": "object", "properties": {"detail": {"type": "string"}}}}},
+        },
+    },
+)
 
 app.add_middleware(
     CORSMiddleware,

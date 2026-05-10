@@ -39,7 +39,12 @@ class QuickBacktestResult(BaseModel):
 
 
 class BatchQuickBacktestRequest(BaseModel):
-    symbols: list[str]
+    # F91: Field(min_length, max_length) surfaces minItems/maxItems in the
+    # OpenAPI JSON schema so agent clients can discover the cap without
+    # probing. The mode='before' validator below still runs first and keeps
+    # the custom error message ("too many symbols (max 500, got N)") that
+    # the test contract pins.
+    symbols: list[str] = Field(min_length=1, max_length=500)
     interval: str = "1d"
     lookback_days: int = Field(default=90, gt=0)
     buy_rules: list[Rule]
@@ -51,12 +56,15 @@ class BatchQuickBacktestRequest(BaseModel):
     stop_loss_pct: float = Field(default=0.0, ge=0)
     trailing_stop: Optional[dict] = None
 
-    @field_validator('symbols')
+    @field_validator('symbols', mode='before')
     @classmethod
-    def _validate_symbols(cls, v: list[str]) -> list[str]:
-        # F91: list-level cap mirrors F69 watchlist. Custom message survives any
-        # future Field(max_length=...) drift. /batch is unauthenticated and
-        # sequential _fetch() per symbol is OOM-feasible without this cap.
+    def _validate_symbols(cls, v):
+        # F91: list-level cap mirrors F69 watchlist. mode='before' ensures
+        # this custom message wins over Pydantic's generic max_length message.
+        # /batch is unauthenticated and sequential _fetch() per symbol is
+        # OOM-feasible without this cap.
+        if not isinstance(v, list):
+            raise TypeError("symbols must be a list")
         if len(v) > 500:
             raise ValueError(f"too many symbols (max 500, got {len(v)})")
         cleaned: list[str] = []

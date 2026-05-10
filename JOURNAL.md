@@ -4,6 +4,20 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-11
+
+### PR #32 morning ce:review
+
+- Morning calibration pass on build 24 (PR #32) with the F80 4-persona roster (adversarial / agent-native / security / reliability) via ce:review. 0 P0/P1 in PR scope. Adversarial overshot severity on 2 of 4 findings (claimed P1 source-injection on quick routes was invalidated — Pydantic `extra='ignore'` silently drops the unknown field; claimed P2 `require_valid_source` ordering issue on `backtest.py` was invalidated by reliability's cross-check AND grep — line 301 is the first statement of `run_backtest`). Reliability re-confirmed F87/F104, F102, F112 at the builder's deferred severities — net new findings from the second-pass adversarial + reliability personas: zero. Net signal came from agent-native and security.
+- **Safe fixes in-PR:**
+  - `backend/main.py:76` — added `responses={413: ...}` to `FastAPI()` init so the body-size middleware's 413 surfaces in `/openapi.json`. Pure ASGI middleware was previously invisible to FastAPI's schema generator.
+  - `backend/routes/backtest_quick.py:46` — `BatchQuickBacktestRequest.symbols` switched to `list[str] = Field(min_length=1, max_length=500)`; validator flipped to `mode='before'` so the custom "too many symbols" message still wins over Pydantic's generic constraint message (test contract preserved).
+- **New TODOs filed:**
+  - **[F114](TODO.md#f114)** `MonteCarloRequest.pnls` length cap (pre-existing CPU-DoS: 50k floats × 5000 sim = 250M iterations on a single thread). [hardening]
+  - **[F115](TODO.md#f115)** Sanitize provider exception strings in 500 details across data/indicators/backtest/quote and batch per-symbol rows (pre-existing info leak — IBKR hostnames, ib_insync paths). [hardening]
+  - **[F116](TODO.md#f116)** Document `BodySizeLimitMiddleware`'s non-HTTP-scope passthrough so a future WebSocket route doesn't assume the body cap applies. [polish]
+  - **[F117](TODO.md#f117)** Resolve status-code split between `require_valid_source` (400) and Pydantic field errors (422) — option (a) raise 422 / option (b) per-route `responses={400}`. Needs design decision before fixing. [arch]
+
 ## 2026-05-10
 
 ### build 24 — overnight
