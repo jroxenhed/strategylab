@@ -44,11 +44,13 @@ def get_quotes(symbols: list[str], source: str = "yahoo"):
     for sym in symbols[:20]:  # cap at 20 to prevent abuse
         sym = sym.strip().upper()
         if not sym or len(sym) > 20:
-            results.append({"symbol": sym, "price": None, "change_pct": None})
+            results.append({"symbol": sym, "price": None, "change_pct": None, "error": "invalid symbol"})
             continue
         try:
             q = get_quote(sym, source)
             results.append(q)
-        except Exception:
-            results.append({"symbol": sym, "price": None, "change_pct": None})
+        except HTTPException as e:
+            results.append({"symbol": sym, "price": None, "change_pct": None, "error": e.detail or "no data"})
+        except Exception as e:
+            results.append({"symbol": sym, "price": None, "change_pct": None, "error": str(e).strip() or "no data"})
     return results

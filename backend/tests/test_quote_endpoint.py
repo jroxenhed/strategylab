@@ -22,20 +22,20 @@ def stub_fetch(monkeypatch):
 def test_empty_string_returns_null_entry_without_fetch():
     """Empty string short-circuits to a null entry — `_fetch` is never invoked."""
     body = TestClient(app).post("/api/quotes", json=[""]).json()
-    assert body == [{"symbol": "", "price": None, "change_pct": None}]
+    assert body == [{"symbol": "", "price": None, "change_pct": None, "error": "invalid symbol"}]
 
 
 def test_whitespace_only_normalizes_to_empty_then_null():
     """All-whitespace input strips to empty → null entry."""
     body = TestClient(app).post("/api/quotes", json=["   "]).json()
-    assert body == [{"symbol": "", "price": None, "change_pct": None}]
+    assert body == [{"symbol": "", "price": None, "change_pct": None, "error": "invalid symbol"}]
 
 
 def test_overlong_symbol_returns_null_entry():
     """Symbol > 20 chars (post-normalize) returns null entry, echoing the normalized symbol back."""
     long_sym = "A" * 25
     body = TestClient(app).post("/api/quotes", json=[long_sym]).json()
-    assert body == [{"symbol": long_sym, "price": None, "change_pct": None}]
+    assert body == [{"symbol": long_sym, "price": None, "change_pct": None, "error": "invalid symbol"}]
 
 
 def test_lowercase_padded_symbol_normalized_then_fetched(stub_fetch):
@@ -45,6 +45,44 @@ def test_lowercase_padded_symbol_normalized_then_fetched(stub_fetch):
     assert body[0]["symbol"] == "AAPL"
     assert body[0]["price"] == 101.0
     assert body[0]["change_pct"] == pytest.approx(1.0)
+    assert "error" not in body[0]
+
+
+def test_fetch_exception_returns_error_field(monkeypatch):
+    """Exception during get_quote() surfaces as `error` field, not silent null.
+
+    `_fetch` raises → `get_quote` re-raises as HTTPException(500, detail=str(e)) →
+    `get_quotes` catches HTTPException and uses `e.detail` so the status prefix never
+    leaks into the public error string.
+    """
+    def boom(ticker, start, end, tf, source="yahoo"):
+        raise RuntimeError("upstream timeout")
+    monkeypatch.setattr(quote_mod, "_fetch", boom)
+    body = TestClient(app).post("/api/quotes", json=["AAPL"]).json()
+    assert body[0]["symbol"] == "AAPL"
+    assert body[0]["price"] is None
+    assert body[0]["error"] == "upstream timeout"
+
+
+def test_fetch_empty_exception_message_falls_back(monkeypatch):
+    """Exception with empty message → `error` field falls back to 'no data'."""
+    def boom(ticker, start, end, tf, source="yahoo"):
+        raise RuntimeError("")
+    monkeypatch.setattr(quote_mod, "_fetch", boom)
+    body = TestClient(app).post("/api/quotes", json=["AAPL"]).json()
+    assert body[0]["symbol"] == "AAPL"
+    assert body[0]["error"] == "no data"
+
+
+def test_no_data_dataframe_uses_404_detail(monkeypatch):
+    """Empty DataFrame → get_quote raises HTTPException(404, ...) → detail is surfaced cleanly (no '404:' prefix)."""
+    import pandas as pd
+    def empty_fetch(ticker, start, end, tf, source="yahoo"):
+        return pd.DataFrame({"Close": []})
+    monkeypatch.setattr(quote_mod, "_fetch", empty_fetch)
+    body = TestClient(app).post("/api/quotes", json=["AAPL"]).json()
+    assert body[0]["error"] == "No data for AAPL"
+    assert "404" not in body[0]["error"]
 
 
 def test_mixed_batch_validates_per_entry(stub_fetch):
@@ -53,7 +91,7 @@ def test_mixed_batch_validates_per_entry(stub_fetch):
         "/api/quotes",
         json=["", "AAPL", "X" * 21],
     ).json()
-    assert body[0] == {"symbol": "", "price": None, "change_pct": None}
+    assert body[0] == {"symbol": "", "price": None, "change_pct": None, "error": "invalid symbol"}
     assert body[1]["symbol"] == "AAPL"
     assert body[1]["price"] == 101.0
-    assert body[2] == {"symbol": "X" * 21, "price": None, "change_pct": None}
+    assert body[2] == {"symbol": "X" * 21, "price": None, "change_pct": None, "error": "invalid symbol"}
