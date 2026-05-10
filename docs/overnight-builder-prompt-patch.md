@@ -236,6 +236,41 @@ You cannot visually verify UI changes — that is the human's job during morning
 2. **⛔ DO NOT SKIP: Verify new TODO items were added.** Count the new unchecked items you added to TODO.md this session. If the count is zero, go back and add them before continuing — this is not optional. Then cross-check: scan NEXT_RUN.md for every word "concern", "P2", "not verified", "no timeout", "left out", "deferred", "skipped". Each one must have a matching TODO item. Zero new items from a full implementation pass is a red flag, not a clean bill of health.
 3. Confirm at least one unchecked item is tagged [next] for tomorrow's run. If none are tagged, tag the highest-value unchecked item now.
 4. Commit NEXT_RUN.md update
-5. Push the branch (use the actual branch name from step 5 — may have a `-N` collision suffix): `git push -u origin "$(git branch --show-current)"`
-6. Open a PR: `gh pr create --title "Overnight build $(date +%Y-%m-%d)" --body "<summary of tasks shipped, review findings, and any flagged concerns>" --base main`
-7. Run: bash bin/slack-report.sh "formatted report" (OK if it fails — no webhook URL means no-op)
+5. **Write a process review.** Path: `docs/postmortems/YYYY-MM-DD-build-N.md` (date-prefixed, build-N suffix; use the same N as the work commit). This is mandatory — every run produces one, even clean runs. It's a separate commit on top of the work commit, before the PR opens. Use the template below. Then `git add` + commit with message `docs: build N process review`.
+
+   ```markdown
+   # Build N Process Review
+
+   How well the overnight builder process worked from the inside, written by the builder.
+
+   ## Compliance checklist
+
+   Tick each item honestly. "n/a" is allowed when the step genuinely did not apply (e.g. no backend changes → no §3.5 smoke test).
+
+   - [ ] Setup step 2 ran: `bash bin/install-hooks.sh` activated hooks at start of session
+   - [ ] All three pre-flight checks ran (no open builder PR, up-to-date main, TODO freshness)
+   - [ ] §3 build verify (`npm run build`) ran before commit
+   - [ ] §3.5 backend smoke test ran (or substituted with documented reason)
+   - [ ] §4 multi-agent review ran with the F80 roster (4 always-on + conditionals, target 4-6 total)
+   - [ ] §4.5 explicit `python3 bin/sync-todo-index.py` ran before staging
+   - [ ] §5 step 2.2: every new F-item has a bucket tag (`[arch]` / `[hardening]` / `[polish]` / `[testing]` / `[infra]`) — pre-commit hook gates this
+   - [ ] §5 step 2.3: at least one unchecked item tagged `[next]` — pre-commit hook gates this when items are checked off
+   - [ ] Atomic commit: code + TODO + JOURNAL + NEXT_RUN in one commit on the `claude/`-prefixed branch
+   - [ ] Draft PR opened via GitHub MCP after push
+
+   ## What I followed well
+   <Short bullets, specific. "Followed §4 roster" is not enough — name which personas, which findings converged, which auto-fixes landed.>
+
+   ## What I skipped or substituted, and why
+   <For each protocol step you did NOT follow as written: name the step number, what you did instead, and why. Environment limits (no `gh`, no venv) are valid reasons but must be named. "Forgot" is also a valid reason — flag it so the protocol can be tightened.>
+
+   ## Friction points
+   <Places where the protocol disagrees with itself, where the env makes a step impossible, or where you had to make a judgment call the doc doesn't cover. These are the most valuable items in this doc — they feed the next round of protocol tuning.>
+
+   ## Recommendations
+   <Concrete changes to `docs/overnight-builder-prompt-patch.md` or `CLAUDE.md` that would have prevented friction points or caught skipped steps automatically. Each one ideally maps to a TODO item (file it in §5 step 2.2 if it's a code/infra change, or to this doc if it's prose-only).>
+   ```
+
+6. Push the branch (use the actual branch name from step 5 — may have a `-N` collision suffix): `git push -u origin "$(git branch --show-current)"`
+7. Open a PR: `gh pr create --title "Overnight build $(date +%Y-%m-%d)" --body "<summary of tasks shipped, review findings, and any flagged concerns>" --base main`. Link to the process review file from the PR body so the morning reviewer reads it before the code.
+8. Run: bash bin/slack-report.sh "formatted report" (OK if it fails — no webhook URL means no-op)
