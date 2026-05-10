@@ -69,6 +69,37 @@ DIFFEOF
 
     python3 bin/sync-todo-index.py
 
+    # --- F-item bucket tag gate ---
+    # sync-todo-index.py groups F-items by bucket tag ([arch] / [hardening] /
+    # [polish] / [testing] / [infra]). Items without one of those tags land
+    # in `### F · Untagged`. Hard-fail the commit so the author tags them
+    # before shipping. Build 23 shipped 7 untagged completed F-items because
+    # this gate did not exist; never again.
+    if grep -q '^### F · Untagged' TODO.md; then
+        echo "pre-commit: TODO.md has F-items missing a bucket tag." >&2
+        echo "" >&2
+        echo "Each F-item must end its description with one of:" >&2
+        echo "  [arch]  [hardening]  [polish]  [testing]  [infra]" >&2
+        echo "" >&2
+        echo "Untagged items currently in TODO.md:" >&2
+        awk '
+            /^### F · Untagged/ { flag = 1; next }
+            /^### / { flag = 0 }
+            flag && /^- \[/ {
+                if (match($0, /\*\*[A-Z]+[0-9]+[a-z]?\*\*/)) {
+                    id = substr($0, RSTART, RLENGTH)
+                    gsub(/\*/, "", id)
+                    print "  - " id
+                }
+            }
+        ' TODO.md >&2
+        echo "" >&2
+        echo "Append the appropriate tag to each line, then commit again." >&2
+        echo "(The hook re-runs sync-todo-index.py automatically.)" >&2
+        exit 1
+    fi
+    # --- End F-item bucket tag gate ---
+
     # Re-stage TODO.md if stamping or sync modified it
     if ! git diff --quiet TODO.md; then
         echo "pre-commit: re-staged TODO.md after date-stamp + sync-todo-index"
