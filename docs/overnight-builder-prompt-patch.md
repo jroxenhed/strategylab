@@ -127,9 +127,23 @@ If any step fails, investigate before proceeding to review. AST + import-time co
 
 Single-pass self-review consistently misses P1s that multi-agent review catches. Past evidence: PR #25 build 6 shipped with "0 self-review findings" but morning multi-agent review found 2 P1s. PR #25 and #26 each had a P1 about pattern consistency that 5+ reviewers flagged but builder self-review missed. This step closes that gap.
 
-**Use manual Task-tool dispatch.** The `ce:review` skill does NOT resolve in this routine env — builds 2026-05-08 through 2026-05-10 confirmed all three name candidates (`compound-engineering:ce-review`, `ce-review`, `ce:review`) fail. Skill resolution is interactive-session only. Manual dispatch is canonical here, not a fallback. F80 codified this 2026-05-10.
+**Use manual Task-tool dispatch with `general-purpose` + a persona-prompt-injection prefix.** This is canonical for the routine env, not a fallback. Two routine-env gaps make it the only path that works:
 
-Dispatch the personas below in parallel via the Task tool with the explicit `subagent_type` shown — these are dedicated reviewer agents with persona prompts already loaded. Falling back to `general-purpose` (as build 23 did) loses that specialization.
+1. The `ce:review` skill does NOT resolve — builds 2026-05-08 through 2026-05-10 confirmed all three name candidates (`compound-engineering:ce-review`, `ce-review`, `ce:review`) fail. F80 codified this.
+2. The dedicated `compound-engineering:review:*-reviewer` agent types also do NOT resolve — builds 21, 22, 23, 24 each returned `Agent type ... not found` for every persona in the tables below. Treat those `subagent_type` values as the interactive-session names; in the routine env use `general-purpose` and inject the persona via the prompt.
+
+**Persona-prompt-injection prefix.** Every reviewer dispatch starts with this block, with `{PERSONA}` filled in (e.g. "ADVERSARIAL", "CORRECTNESS", "KIERAN-PYTHON"):
+
+```
+You are the {PERSONA} REVIEWER persona. Stay strictly in your lane —
+do not comment outside the {PERSONA} remit. Return JSON matching the
+schema below, nothing else. Findings outside your lane belong to other
+reviewers and must be omitted.
+```
+
+Then append the diff, the intent, and the JSON schema (see below).
+
+Dispatch the personas listed below in parallel via the Task tool. The `subagent_type` column documents the dedicated agent name for the day the routine env loads them; until then, every dispatch uses `subagent_type: general-purpose` with the prefix above.
 
 Each agent gets:
 - The full diff: `git diff origin/main`
@@ -153,7 +167,7 @@ Each agent gets:
 
 **Always-on personas (4 — run on every diff):**
 
-| Persona | `subagent_type` | What it catches |
+| Persona | Dedicated `subagent_type` (interactive-only) | What it catches |
 |---|---|---|
 | correctness | `compound-engineering:review:correctness-reviewer` | Logic errors, edge cases, state bugs, error propagation (caught F69 `default_factory` silent-optional regression on build 22) |
 | testing | `compound-engineering:review:testing-reviewer` | Coverage gaps, untested ordering invariants, brittle assertions (caught vacuous `os.replace`-failure cleanup test on build 22, OptimizerPanel ordering invariant on PR #28) |
@@ -162,7 +176,7 @@ Each agent gets:
 
 **Conditional personas (run when diff warrants):**
 
-| Persona | `subagent_type` | When to dispatch |
+| Persona | Dedicated `subagent_type` (interactive-only) | When to dispatch |
 |---|---|---|
 | kieran-python | `compound-engineering:review:kieran-python-reviewer` | `.py` files changed |
 | kieran-typescript | `compound-engineering:review:kieran-typescript-reviewer` | `.ts`/`.tsx` files changed |
