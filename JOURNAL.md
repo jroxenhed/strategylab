@@ -6,6 +6,18 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-10
 
+### PR #31 morning ce:review
+
+- Morning calibration pass on build 23 (PR #31) with the F80 4-persona roster (adversarial / agent-native / security / reliability). 0 P0/P1 confirmed in PR scope — security's P1 calls (SEC-01..05) re-flagged the already-tracked F94/F95 follow-ups; downgraded to P2 follow-up per F80 calibration role. **Strong cross-reviewer signal** (3 reviewers agreed): `ScanRequest.symbols` + `PerformanceRequest.symbol` are the highest-impact remaining hole — F95 scope expanded.
+- **Safe fix in-PR:** `backend/shared.py:426` dropped the user-input echo in `f"Unknown data source: {source}"` → static `"Unknown data source"`. Closes a reflected-input adjacency that data.py / indicators.py / backtest.py routes hit before F94's route-level allowlist lands. Existing test assertions use substring match so contract preserved.
+- **New TODOs filed from morning pass:**
+  - **[F97](TODO.md#f97)** Structured error contract for `SymbolField` rejections (resolves ADV-02 vs AN-2 tension — repr-echo removal + machine-readable detail in one cut). [arch]
+  - **[F98](TODO.md#f98)** Expose `SymbolField` regex in OpenAPI schema via `Field(pattern=...)` (agent-native AN-1, 0.95 conf). [arch]
+  - **[F99](TODO.md#f99)** `BotManager.load()` migration step for when F95 promotes `BotConfig.symbol` to `SymbolField` — without it, non-conforming symbols silently drop all affected bots on first post-upgrade load. Two reviewers agreed (REL-05 + SEC-02 residual). Tied to F95 brief. [hardening]
+  - **[F100](TODO.md#f100)** `.env` permission preservation when `copymode` silently swallows `FileNotFoundError` — explicit `chmod 0o600` after replace, belt-and-suspenders for the F76 TOCTOU guard. [hardening]
+- **F88 update:** annotated with the build-23 SymbolField sharpening — the asymmetric load/save trap is now user-visible (UI shows opaque "save failed" 422) rather than cosmetic.
+- **F95 update:** added `PerformanceRequest.symbol` to coverage list; cross-referenced the F99 migration prereq.
+
 ### build 23 — overnight
 
 - **[F81](TODO.md#f81)** + **[F85](TODO.md#f85)** + **[F38](TODO.md#f38)** Shared `normalize_symbol(v) -> str` + `SymbolField = Annotated[str, BeforeValidator(normalize_symbol)]` in `backend/models.py`. Strict regex `^[A-Z0-9][A-Z0-9.\-]{0,19}$` (tightened from the spec's `^[A-Z0-9.\-]{1,20}$` after the security reviewer flagged that the original allowed `..`, `.env`, `-A`). Wired into `routes/quote.py` `get_quote()` (path-param), `get_quotes()` (per-symbol), and `routes/trading.py` `WatchlistRequest._validate_symbols`. The list-level cap with the F69 custom error message stays inline so the 422 boundary tests still see the human-readable wording; per-symbol normalization is delegated to the helper. **Behavior shift documented:** `WatchlistRequest` previously accepted any non-empty symbol of length ≤ 20; it now 422s on chars outside the allowlist (`AAPL;evil`, `AAPL\nevil`). New test `test_watchlist_validation_rejects_invalid_chars` pins the strict contract so a future "soften back to silent-drop" rewrite has to consciously break it. As **adjacencies** the security + adversarial reviewers asked for, `BuyRequest.symbol` and `SellRequest.symbol` also picked up `SymbolField` (one-line each) — partial close on F43's log-injection scope.
