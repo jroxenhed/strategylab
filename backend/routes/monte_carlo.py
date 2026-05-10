@@ -1,12 +1,12 @@
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import random
 from typing import List
 
 router = APIRouter()
 
 class MonteCarloRequest(BaseModel):
-    pnls: List[float]
+    pnls: List[float] = Field(min_length=2, max_length=50000)
     initial_capital: float
     n_simulations: int = 1000
 

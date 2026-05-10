@@ -36,6 +36,9 @@ class BodySizeLimitMiddleware:
         self.max_bytes = max_bytes
 
     async def __call__(self, scope, receive, send):
+        # Non-HTTP scopes (WebSocket, lifespan) bypass the body cap — they don't
+        # have HTTP request bodies in the same shape. If WebSocket routes are
+        # added later, design a separate frame-size limit; do NOT assume this middleware covers them.
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return

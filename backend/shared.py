@@ -448,7 +448,7 @@ def _fetch(ticker: str, start: str, end: str, interval: str, source: str = "yaho
     # Serialize concurrent requests for the same (symbol, interval) so that a
     # second caller waiting on the lock hits the cache the first caller populated,
     # instead of firing a duplicate HTTP request.
-    dedup_key = (ticker.upper(), interval)
+    dedup_key = (ticker.upper(), interval, source, extended_hours)
     with _fetch_dedup_locks_meta:
         if dedup_key not in _fetch_dedup_locks:
             _fetch_dedup_locks[dedup_key] = threading.Lock()

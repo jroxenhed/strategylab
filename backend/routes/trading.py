@@ -105,7 +105,7 @@ def place_buy(req: BuyRequest):
     try:
         current_price = provider.get_latest_price(req.symbol)
     except Exception:
-        pass
+        logger.exception("get_latest_price failed in /buy for %s", req.symbol)
 
     stop_price = None
     order_type = "market"
@@ -163,7 +163,7 @@ def _clear_bot_entry_state(symbol: str):
                 state.trail_stop_price = None
         bot_manager.save()
     except Exception:
-        pass
+        logger.exception("_clear_bot_entry_state failed for %s", symbol)
 
 
 @router.post("/sell")
@@ -178,7 +178,7 @@ def place_sell(req: SellRequest):
             if o["side"] == "sell":
                 provider.cancel_order(o["id"])
     except Exception:
-        pass
+        logger.exception("cancel pending stop-loss failed before /sell %s", req.symbol)
 
     if req.qty is None:
         try:
@@ -317,12 +317,14 @@ def scan_signals(req: ScanRequest):
                         })
                         existing_positions.discard(symbol)
                     except Exception:
+                        logger.exception("scan auto-execute close_position failed for %s", symbol)
                         actions.append({
                             "symbol": symbol, "action": "SELL_FAILED",
                         })
 
             results.append(result)
         except Exception as e:
+            logger.exception("scan failed for %s", symbol)
             results.append({"symbol": symbol, "signal": "ERROR", "error": str(e)})
 
     response = {"signals": results, "scanned_at": str(pd.Timestamp.now(tz='UTC'))}
@@ -398,6 +400,7 @@ def get_performance(req: PerformanceRequest):
         ))
         bt_summary = bt_result["summary"]
     except Exception:
+        logger.exception("/performance backtest fallback for %s", req.symbol)
         bt_summary = None
 
     return {

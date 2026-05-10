@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from shared import _fetch, _format_time
 from signal_engine import Rule, compute_indicators, eval_rules, migrate_rule
-from models import LogicField, SymbolField, DirectionField, normalize_symbol
+from models import LogicField, SymbolField, DirectionField, normalize_symbol, TrailingStopConfig
 
 router = APIRouter()
 
@@ -23,7 +23,7 @@ class QuickBacktestRequest(BaseModel):
     direction: DirectionField = "long"
     initial_capital: float = Field(default=10000.0, gt=0)
     stop_loss_pct: float = Field(default=0.0, ge=0)
-    trailing_stop: Optional[dict] = None
+    trailing_stop: Optional[TrailingStopConfig] = None
 
 
 class QuickBacktestResult(BaseModel):
@@ -54,7 +54,7 @@ class BatchQuickBacktestRequest(BaseModel):
     direction: DirectionField = "long"
     initial_capital: float = Field(default=10000.0, gt=0)
     stop_loss_pct: float = Field(default=0.0, ge=0)
-    trailing_stop: Optional[dict] = None
+    trailing_stop: Optional[TrailingStopConfig] = None
 
     @field_validator('symbols', mode='before')
     @classmethod

@@ -1,9 +1,12 @@
+import logging
 import os
 import pathlib
 import shutil
 import tempfile
 import threading
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -115,6 +118,7 @@ def _persist_env(key: str, value: str, env_path: Optional[pathlib.Path] = None):
             fd.flush()
             os.fsync(fd.fileno())
             fd.close()
+            copy_mode_failed = False
             # Only copy mode when the source file existed at read time. Avoids
             # masking a real failure (e.g. chmod on the temp file) under the
             # same FileNotFoundError as the legitimate "first-time write" case.
@@ -124,8 +128,16 @@ def _persist_env(key: str, value: str, env_path: Optional[pathlib.Path] = None):
                 except FileNotFoundError:
                     # External unlink between read_text and copymode — proceed
                     # with the temp file's default mode rather than aborting.
-                    pass
+                    copy_mode_failed = True
             os.replace(fd.name, str(env_path))
+            # F101: ensure secrets file is never world-readable. Act when the
+            # file is new (no prior mode to copy) or copymode failed (mode may
+            # have reverted to umask default after os.replace).
+            if copy_mode_failed or not existed:
+                try:
+                    os.chmod(str(env_path), 0o600)
+                except OSError:
+                    logger.warning("could not chmod 0600 on %s", env_path)
         except Exception:
             try:
                 fd.close()

@@ -128,12 +128,7 @@ class ExitsMixin:
             bot_id=cfg.bot_id,
         ))
 
-        state.equity_snapshots.append({
-            "time": datetime.now(timezone.utc).isoformat(),
-            "value": round(self._bot_pnl(cfg, state), 2),
-        })
-        if len(state.equity_snapshots) > 500:
-            state.equity_snapshots = state.equity_snapshots[-500:]
+        state.append_equity_snapshot(self._bot_pnl(cfg, state))
 
         if cfg.drawdown_threshold_pct and state.equity_snapshots:
             snaps = [s["value"] for s in state.equity_snapshots]
@@ -405,12 +400,7 @@ class ExitsMixin:
             bot_id=cfg.bot_id,
         ))
 
-        state.equity_snapshots.append({
-            "time": datetime.now(timezone.utc).isoformat(),
-            "value": round(self._bot_pnl(cfg, state), 2),
-        })
-        if len(state.equity_snapshots) > 500:
-            state.equity_snapshots = state.equity_snapshots[-500:]
+        state.append_equity_snapshot(self._bot_pnl(cfg, state))
 
         if cfg.drawdown_threshold_pct and state.equity_snapshots:
             snaps = [s["value"] for s in state.equity_snapshots]

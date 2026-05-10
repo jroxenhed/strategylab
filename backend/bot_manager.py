@@ -155,6 +155,15 @@ class BotState:
         if len(self.slippage_bps) > 1000:
             self.slippage_bps = self.slippage_bps[-1000:]
 
+    def append_equity_snapshot(self, value: float) -> None:
+        """Append a {time, value} snapshot and cap at 500 entries."""
+        self.equity_snapshots.append({
+            "time": datetime.now(timezone.utc).isoformat(),
+            "value": round(value, 2),
+        })
+        if len(self.equity_snapshots) > 500:
+            self.equity_snapshots = self.equity_snapshots[-500:]
+
     def to_dict(self) -> dict:
         return {
             "status": self.status,

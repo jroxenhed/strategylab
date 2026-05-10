@@ -6,6 +6,22 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-11
 
+### F122 — second easy-hardening bundle (7 items, parallel orchestrator dispatch)
+
+- Second pre-overnight batch. Used the orchestrator protocol from CLAUDE.md: finished F58 in main context (already half-done), then dispatched 2 parallel Sonnet implementers for the other 6 items grouped by theme (data-layer hardening vs Pydantic/middleware). Total wall-clock: ~3 min for implementation, vs ~10 min serial. Verification + commit owned by orchestrator (Opus).
+  - **[F58](TODO.md#f58)** `BotState.append_equity_snapshot(value)` helper added — mirrors F119's `append_slippage_bps` pattern. Replaced both 6-line `equity_snapshots.append + cap` blocks in `exits.py` with one-line calls. Cap-at-500 and `{time, value}` shape now live in one place.
+  - **[F66](TODO.md#f66)** `_fetch_dedup_locks` key shape — `(ticker.upper(), interval)` → `(ticker.upper(), interval, source, extended_hours)`. Deliberately a stable-subset shape (not full cache key with start/end): two callers with different `source` no longer over-serialize on the same lock, and dict growth stays bounded by meaningful discriminators rather than scaling with time-window count. F124 filed for the broader eviction question.
+  - **[F67](TODO.md#f67)** `logger.exception(...)` added at 6 sites in `routes/trading.py`: `/buy` price fetch, `_clear_bot_entry_state`, `/sell` pre-cancel stops, scan SELL_FAILED branch, scan per-symbol fallback, `/performance` backtest fallback. Skipped 3 intentional broad catches (polling break, atomic-write cleanup paths).
+  - **[F101](TODO.md#f101)** `.env` permission preservation — `_persist_env` now tracks `copy_mode_failed` and explicitly `os.chmod(env_path, 0o600)` after `os.replace` when the file is new or `copymode` failed. Closes the umask-default-after-failure leak; preserves existing modes on the success path.
+  - **[F103](TODO.md#f103)** `trailing_stop: Optional[dict]` → `Optional[TrailingStopConfig]` on `QuickBacktestRequest` and `BatchQuickBacktestRequest`. Validation now happens at request entry instead of being deferred to `StrategyRequest` re-validation.
+  - **[F114](TODO.md#f114)** `MonteCarloRequest.pnls` capped at `Field(min_length=2, max_length=50000)`. Pins the existing runtime `< 2` guard at the schema level and bounds inner-loop work at 50k × 5000 sim = 250M iterations vs previously unbounded.
+  - **[F116](TODO.md#f116)** Comment added at `BodySizeLimitMiddleware`'s non-HTTP-scope guard documenting that WebSocket/lifespan scopes intentionally bypass the body cap and that future WS routes need a separate frame-size limit.
+- **New TODOs filed:**
+  - **[F123](TODO.md#f123)** Unit-test `BotState.append_equity_snapshot` cap + shape (pair with F121 in one `test_bot_state.py`). [testing]
+  - **[F124](TODO.md#f124)** `_fetch_dedup_locks` eviction policy — F66 alignment keeps growth bounded but the dict still never shrinks. Drop locks on cache eviction or add periodic cleanup. [hardening]
+- Verification: 224 backend tests pass, 5 deselected pre-existing failures (F120). One order-dependent IBKR flake — confirmed pre-existing on `main` with identical reproduction (passes alone, fails after broker suite).
+- **Orchestrator note:** Tier arbitrage paid off here. Each Sonnet agent absorbed 3-4 small mechanical edits in a single round-trip; orchestrator wrote 2 detailed prompts (~5 min) instead of 7 individual edits (~15 min). Verification still ~2 min (spot-checks + tests). Net win even on a small batch when the items are decomposable into 2-3 themed groups.
+
 ### F119 — pre-overnight easy-hardening bundle (8 items, 1 commit)
 
 - 30-minute opportunistic batch before the overnight run picked up an eight-item slice of `[easy]` `[hardening]` F-items. All landed on `main` with no new test failures (4 pre-existing failures confirmed via stash-bisect, filed as **[F120](TODO.md#f120)**).
