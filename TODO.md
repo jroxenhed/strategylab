@@ -14,7 +14,7 @@
 - [F94](#f94) — [easy] [next] F37-style `source` allowlist on the remaining data routes [easy]
 - [F95](#f95) — [medium] [next] Apply `SymbolField` to the remaining ticker/symbol fields [medium]
 
-## Open Work — 85 items
+## Open Work — 86 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -26,7 +26,7 @@
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 12 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F58](#f58), [F63](#f63), [F71](#f71), [F96](#f96), [F98](#f98)–[F99](#f99) |
 | [F · Hardening](#f-hardening) | Security, reliability, validation | 31 | [F42](#f42)–[F43](#f43), [F49](#f49), [F54](#f54)–[F57](#f57), [F59](#f59)–[F60](#f60), [F62](#f62), [F64](#f64)–[F67](#f67), [F72](#f72)–[F75](#f75), [F77](#f77), [F82](#f82)–[F83](#f83), [F86](#f86)–[F88](#f88), [F91](#f91)–[F95](#f95), [F100](#f100)–[F101](#f101) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 7 | [F34](#f34)–[F36](#f36), [F44](#f44), [F47](#f47)–[F48](#f48), [F78](#f78) |
-| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 8 | [F40](#f40), [F46](#f46), [F50](#f50)–[F51](#f51), [F61](#f61), [F79](#f79), [F84](#f84), [F89](#f89) |
+| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 9 | [F40](#f40), [F46](#f46), [F50](#f50)–[F51](#f51), [F61](#f61), [F79](#f79), [F84](#f84), [F89](#f89), [F97](#f97) |
 
 ## A — Charts & Indicators
 
@@ -182,6 +182,7 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f80"></a> **F80** Two-tier review architecture — codified 2026-05-10 (build 22 morning pass). **Decisions made:** (a) `ce:review` is interactive-session only — three skill-name candidates failed across builds 20-22; the routine env doesn't load the plugin registry. Stop the probe ceremony. Manual Task-tool dispatch is canonical for overnight, not "fallback" — verified across 11+ runs. (b) Builder roster trimmed 9 → 4-6 — always-on: correctness, testing, adversarial, security. Conditional: kieran-python/typescript by file type, reliability for async/persistence diffs, project-standards for tracking-file diffs, maintainability for architecture diffs. Build 22 showed 9-persona heavy duplication produced false confidence (5 reviewers piled on a wrong "Pydantic max_length reliability" defense, which morning pass found was dead code). (c) Morning calibration roster fixed at 4 — adversarial, agent-native, security, reliability. Drops correctness/testing/maintainability/kieran-* (heavy overlap with builder roster) and learnings/project-standards (lower per-run impact). (d) Two tiers stay structurally distinct — coverage (builder) vs calibration (morning). Don't consolidate. CLAUDE.md updated; `docs/overnight-builder-prompt-patch.md` skill probe removed. (from 2026-05-10 PR #30 morning ce:review pass) [infra]
 - [ ] <a id="f84"></a> **F84** `BotCard.test.tsx` does not exercise `state: undefined` path — F41 (PR #30) made `BotDetail.state` optional; existing tests always mock a populated `state` object. Add a test variant where `fetchBotDetail` resolves with `{config: {...}, state: undefined}` and assert BotCard renders without crashing (falls back to `summary.equity_snapshots` / `summary.activity_log` / `summary.last_tick`). Documents the defensive `?.state?.` chains' actual purpose. [easy] (from PR #30 testing + kieran-typescript — 2 reviewers agreed) [testing]
 - [ ] <a id="f89"></a> **F89** TestClient lifespan side-effects in `test_trading.py` — `TestClient(app)` triggers `BotManager.load()`, `HeartbeatMonitor.start()`, and `init_ibkr()` on first use. CI without IBKR creds short-circuits but background tasks may produce noise / interfere with test isolation. Use `with TestClient(app) as client:` context-manager fixture (calls lifespan shutdown) or override the lifespan via `app.dependency_overrides`. Same risk in pre-existing `test_broker_route_health.py`. [medium] (from PR #30 adversarial review) [testing]
+- [ ] <a id="f97"></a> **F97** [medium] Provision `backend/venv/` in routine builder container — overnight builds 21/22/23 all hit the same gap: §3.5 backend smoke test originally specified `cd backend && venv/bin/uvicorn …` but the routine container ships without a venv. Spec now codifies AST + import-time check as the substitute. Real fix: the container image includes `backend/venv/` with pinned deps (Pydantic, FastAPI, pytest). Once landed, restore the full uvicorn smoke test path. Container/infra change, not application code. (from build 23 process review) [infra]
 
 ### F · Untagged
 - [x] <a id="f37"></a> **F37** `source` param allowlist on quote endpoints — both `GET /api/quote/{ticker}` and `POST /api/quotes` now reject unknown `source` via `if source not in get_available_providers(): raise HTTPException(400, "Invalid source")` before any fetch. Closes the silent-swallow provider-enumeration vector. (Build 23 — partial: backtest / indicators / ohlcv routes tracked under F94.)
