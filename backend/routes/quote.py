@@ -50,7 +50,6 @@ def get_quotes(symbols: list[str], source: str = "yahoo"):
             q = get_quote(sym, source)
             results.append(q)
         except HTTPException as e:
-            results.append({"symbol": sym, "price": None, "change_pct": None, "error": e.detail or "no data"})
-        except Exception as e:
-            results.append({"symbol": sym, "price": None, "change_pct": None, "error": str(e).strip() or "no data"})
+            detail = e.detail if isinstance(e.detail, str) else str(e.detail) if e.detail else None
+            results.append({"symbol": sym, "price": None, "change_pct": None, "error": detail or "no data"})
     return results

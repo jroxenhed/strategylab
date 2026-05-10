@@ -76,7 +76,6 @@ def test_fetch_empty_exception_message_falls_back(monkeypatch):
 
 def test_no_data_dataframe_uses_404_detail(monkeypatch):
     """Empty DataFrame → get_quote raises HTTPException(404, ...) → detail is surfaced cleanly (no '404:' prefix)."""
-    import pandas as pd
     def empty_fetch(ticker, start, end, tf, source="yahoo"):
         return pd.DataFrame({"Close": []})
     monkeypatch.setattr(quote_mod, "_fetch", empty_fetch)

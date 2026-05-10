@@ -426,6 +426,8 @@ def save_watchlist(req: WatchlistRequest):
     )
     try:
         fd.write(content)
+        fd.flush()
+        os.fsync(fd.fileno())
         fd.close()
         os.replace(fd.name, str(WATCHLIST_PATH))
     except Exception:
