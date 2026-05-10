@@ -62,6 +62,18 @@ SECTION_LETTER_RE = re.compile(r'^([A-Z])\d')
 HTML_COMMENT_RE = re.compile(r'^<!--.*-->$')
 
 GENERATED_SECTION_PREFIXES = ("## Critical (P1)", "## Up Next", "## Open Work")
+
+# Header counter: **N / M shipped.**
+# Visible bullets in TODO.md only cover items still in the file; items
+# archived out (via --archive-before or earlier manual moves) are gone from
+# the parse but should still count toward the "we've shipped X over time"
+# vibe-check at the top of the file. The two offsets below capture that
+# historical baseline as of 2026-05-11 — visible counts at that time were
+# 50 checked / 149 total, while the header read 159 / 235.
+# Bump these constants when an archive operation runs.
+HISTORICAL_SHIPPED_OFFSET = 109
+HISTORICAL_TOTAL_OFFSET = 86
+SHIPPED_HEADER_RE = re.compile(r'(\\\*\\\*)(\d+) / (\d+)( shipped\.\\\*\\\*)')
 P1_RE = re.compile(r'\[P1\]')
 
 # ---------------------------------------------------------------------------
@@ -230,6 +242,31 @@ def insert_anchors(lines: list[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 # Job 2a — Critical (P1) section
 # ---------------------------------------------------------------------------
+
+def update_shipped_counter(lines: list[str], bullets: list[dict]) -> list[str]:
+    """Update the **N / M shipped.** header to reflect current visible state.
+
+    Counter formula: visible_checked + HISTORICAL_SHIPPED_OFFSET in the
+    numerator, visible_total + HISTORICAL_TOTAL_OFFSET in the denominator.
+    The offsets are module constants — bump them only when an archive
+    operation removes items from TODO.md. Day-to-day shipping and item
+    additions are absorbed by the visible-count terms.
+    """
+    visible_checked = sum(1 for b in bullets if b['checked'])
+    visible_total = len(bullets)
+    numerator = visible_checked + HISTORICAL_SHIPPED_OFFSET
+    denominator = visible_total + HISTORICAL_TOTAL_OFFSET
+
+    for i, line in enumerate(lines):
+        if SHIPPED_HEADER_RE.search(line):
+            lines[i] = SHIPPED_HEADER_RE.sub(
+                lambda m: f'{m.group(1)}{numerator} / {denominator}{m.group(4)}',
+                line,
+                count=1,
+            )
+            break
+    return lines
+
 
 def render_critical_p1(bullets: list[dict]) -> str:
     p1_items = sorted(
@@ -1000,6 +1037,9 @@ def process(
     new_block = critical_p1 + '\n' + up_next + '\n' + open_work
 
     lines = replace_generated_sections(lines, new_block)
+
+    # Job 6 — update the **N / M shipped.** header counter
+    lines = update_shipped_counter(lines, bullets)
 
     new_text = ''.join(lines)
 
