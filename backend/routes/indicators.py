@@ -1,3 +1,4 @@
+import logging
 from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -5,6 +6,7 @@ import pandas as pd
 from shared import _fetch, _format_time, fetch_higher_tf, align_htf_to_ltf, htf_lookback_days, _INTRADAY_INTERVALS, require_valid_source
 from indicators import compute_instance, OHLCVSeries
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -79,6 +81,7 @@ def post_indicators(ticker: str, body: IndicatorsPostRequest):
                 except ValueError as e:
                     result[inst.id] = {"error": "invalid_params", "detail": str(e)}
                 except Exception:
+                    logger.exception("indicator compute failed for %s (htf path)", inst.type)
                     result[inst.id] = {"error": "compute_failed"}
             return result
 
@@ -113,6 +116,7 @@ def post_indicators(ticker: str, body: IndicatorsPostRequest):
             except ValueError as e:
                 result[inst.id] = {"error": "invalid_params", "detail": str(e)}
             except Exception:
+                logger.exception("indicator compute failed for %s", inst.type)
                 result[inst.id] = {"error": "compute_failed"}
         return result
     except HTTPException:

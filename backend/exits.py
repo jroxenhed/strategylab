@@ -379,7 +379,7 @@ class ExitsMixin:
         side_key = "cover" if pos_is_short else "sell"
         cost_bps = slippage_cost_bps(side_key, expected=price, fill=sell_fill)
         bias_bps = fill_bias_bps(side_key, expected=price, fill=sell_fill)
-        state.slippage_bps.append(round(cost_bps, 2))
+        state.append_slippage_bps(cost_bps)
         self._log(
             "TRADE",
             f"{exit_label} {cfg.symbol} @ {sell_fill:.2f} | PnL={pnl:+.2f} | reason={exit_reason} "

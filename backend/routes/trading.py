@@ -68,7 +68,9 @@ class WatchlistRequest(BaseModel):
             if isinstance(sym, str) and not sym.strip():
                 continue
             cleaned.append(normalize_symbol(sym))
-        return cleaned
+        # F93: dedup while preserving first-occurrence order. Prevents 500 duplicate
+        # "AAPL" entries from amplifying scanner backtests 500x.
+        return list(dict.fromkeys(cleaned))
 
 
 @router.get("/account")
@@ -294,7 +296,7 @@ def scan_signals(req: ScanRequest):
                             order_type=order_type,
                             stop_price=stop_price,
                         ))
-                        _log_trade(symbol, "buy", qty, price=price,
+                        _log_trade(symbol, "buy", qty, price=price, direction="long",
                                    source="auto", stop_loss_price=stop_price, reason="entry")
                         action = {
                             "symbol": symbol, "action": "BUY",
@@ -308,7 +310,7 @@ def scan_signals(req: ScanRequest):
                 elif signal == "SELL" and symbol in existing_positions:
                     try:
                         provider.close_position(symbol)
-                        _log_trade(symbol, "sell", 0, price=price, source="auto", reason="signal")
+                        _log_trade(symbol, "sell", 0, price=price, direction="long", source="auto", reason="signal")
                         actions.append({
                             "symbol": symbol, "action": "SELL",
                             "detail": "position_closed",

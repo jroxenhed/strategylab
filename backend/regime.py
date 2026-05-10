@@ -188,7 +188,7 @@ class RegimeMixin:
         side_key = "cover" if pos_is_short_now else "sell"
         cost_bps = br.slippage_cost_bps(side_key, expected=price, fill=sell_fill)
         bias_bps = br.fill_bias_bps(side_key, expected=price, fill=sell_fill)
-        state.slippage_bps.append(round(cost_bps, 2))
+        state.append_slippage_bps(cost_bps)
         state.last_signal = f"{exit_label} (regime_flip)"
 
         state.consec_sl_count = 0

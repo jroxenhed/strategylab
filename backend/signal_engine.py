@@ -457,6 +457,8 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
 def eval_rules(rules: list[Rule], logic: Literal['AND', 'OR'], indicators: dict[str, pd.Series], i: int) -> bool:
     """Evaluate a list of rules with AND/OR logic. Negated rules are inverted,
     except when i < 1 (no prior bar) where we always return False."""
+    if logic not in ('AND', 'OR'):
+        raise ValueError(f"logic must be 'AND' or 'OR', got {logic!r}")
     results = []
     for r in rules:
         if r.muted:

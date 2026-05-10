@@ -80,8 +80,14 @@ def _persist_env(key: str, value: str, env_path: Optional[pathlib.Path] = None):
     gunicorn worker, a deployment script editing .env) are not protected and
     will lose the race on whichever process called os.replace second.
     """
+    # F77: defensive newline guard — current callers pass sanitized inputs,
+    # but a future caller forwarding user data could inject extra env vars.
+    if "\n" in key or "\n" in value or "\r" in key or "\r" in value:
+        raise ValueError("env key/value must not contain newlines")
     if env_path is None:
         env_path = pathlib.Path(__file__).resolve().parent.parent / ".env"
+    # F92: resolve symlinks so os.replace lands on the actual file, not the link.
+    env_path = env_path.resolve()
     with _env_lock:
         # F76: avoid the exists()→read_text() TOCTOU. A concurrent unlink between
         # the two calls would raise FileNotFoundError on read_text; treat it the

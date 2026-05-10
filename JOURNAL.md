@@ -6,6 +6,22 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-11
 
+### F119 — pre-overnight easy-hardening bundle (8 items, 1 commit)
+
+- 30-minute opportunistic batch before the overnight run picked up an eight-item slice of `[easy]` `[hardening]` F-items. All landed on `main` with no new test failures (4 pre-existing failures confirmed via stash-bisect, filed as **[F120](TODO.md#f120)**).
+  - **[F42](TODO.md#f42)** `eval_rules()` runtime guard on `logic` — invalid value now raises `ValueError` instead of silently falling back to OR semantics.
+  - **[F54](TODO.md#f54)** `/scan` auto-execute `_log_trade` calls now pass explicit `direction="long"` at both call sites (scan is long-only today; documents the assumption so the default isn't silent when scan grows short support).
+  - **[F56](TODO.md#f56)** `BotState.append_slippage_bps(bps)` helper added — appends + caps at 1000. Replaced 4 raw `.append()` sites (`bot_manager.py`, `bot_runner.py`, `exits.py`, `regime.py`) so the cap can't drift across exit paths. Better than per-site inline caps for the same reason F71 / F58 want shared helpers.
+  - **[F57](TODO.md#f57)** Bare `except:` in `BotManager.save()` narrowed to `except Exception:` — `KeyboardInterrupt` / `SystemExit` now propagate.
+  - **[F60](TODO.md#f60)** `routes/indicators.py` — added module logger and `logger.exception(...)` on both per-instance `compute_failed` branches (htf path + main path). Server logs distinguish pandas shape mismatch from missing-data.
+  - **[F77](TODO.md#f77)** `_persist_env(key, value)` rejects newlines (`\n` or `\r`) on either argument — closes the env-injection vector for any future caller forwarding user data.
+  - **[F92](TODO.md#f92)** `_persist_env` now calls `env_path = env_path.resolve()` so `os.replace` lands on the real file when `.env` is a symlink, not the link itself.
+  - **[F93](TODO.md#f93)** `WatchlistRequest._validate_symbols` dedups via `list(dict.fromkeys(cleaned))` — preserves first-occurrence order, closes the 500× scanner amplification vector that the F69 length cap alone couldn't.
+- **New TODOs filed:**
+  - **[F120](TODO.md#f120)** Pre-existing stale-test cleanup — `test_ohlcv_rejects_unknown_source` asserts the pre-F94 error string; three `test_backtest_costs.py` tests appear to predate the commission-defaults change to `0.0` / `0.0`; `test_empty_journal_returns_default` also failing on main. [testing]
+  - **[F121](TODO.md#f121)** Unit-test the new `BotState.append_slippage_bps` cap (1001 appends → length 1000, last sample preserved, first dropped, rounded to 2 dp). [testing]
+- Verification: 224 backend tests pass, 4 pre-existing failures (filed as F120), 2 deselected. No frontend changes — frontend build not exercised.
+
 ### F118 — protocol patch bundle (post-PR-32)
 
 - **[F118](TODO.md#f118)** Three coordinated protocol changes landed in one commit now that PR #32 is merged and main is quiet:

@@ -149,6 +149,12 @@ class BotState:
     pending_regime_flip: bool = False          # True = close failed last tick, retry next tick
     was_running: bool = False                  # True if bot was running when server last restarted
 
+    def append_slippage_bps(self, bps: float) -> None:
+        """Append a slippage sample and cap the list at 1000 to prevent unbounded growth."""
+        self.slippage_bps.append(round(bps, 2))
+        if len(self.slippage_bps) > 1000:
+            self.slippage_bps = self.slippage_bps[-1000:]
+
     def to_dict(self) -> dict:
         return {
             "status": self.status,
@@ -437,7 +443,7 @@ class BotManager:
         side_key = "short" if is_short else "buy"
         cost_bps = slippage_cost_bps(side_key, expected=price, fill=fill_price)
         bias_bps = fill_bias_bps(side_key, expected=price, fill=fill_price)
-        state.slippage_bps.append(round(cost_bps, 2))
+        state.append_slippage_bps(cost_bps)
         state.entry_price = fill_price
         state.entry_time = datetime.now(timezone.utc).isoformat()
         state.trail_peak = fill_price
@@ -565,7 +571,7 @@ class BotManager:
             json.dump(data, fd, indent=2, default=str)
             fd.close()
             os.replace(fd.name, DATA_PATH)
-        except:
+        except Exception:
             fd.close()
             os.unlink(fd.name)
             raise

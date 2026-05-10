@@ -174,7 +174,7 @@ class BotRunner(RegimeMixin, ExitsMixin):
         side_key = "short" if entry_is_short else "buy"
         cost_bps = slippage_cost_bps(side_key, expected=price, fill=fill_price)
         bias_bps = fill_bias_bps(side_key, expected=price, fill=fill_price)
-        state.slippage_bps.append(round(cost_bps, 2))
+        state.append_slippage_bps(cost_bps)
         self._log(
             "TRADE",
             f"{side_label} {qty} {cfg.symbol} @ {fill_price:.2f} "
