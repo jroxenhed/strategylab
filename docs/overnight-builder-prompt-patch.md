@@ -115,37 +115,27 @@ If the smoke test fails or warns, investigate before proceeding to review. A fie
 
 Single-pass self-review consistently misses P1s that multi-agent review catches. Past evidence: PR #25 build 6 shipped with "0 self-review findings" but morning multi-agent review found 2 P1s. PR #25 and #26 each had a P1 about pattern consistency that 5+ reviewers flagged but builder self-review missed. This step closes that gap.
 
-**First, probe for a working ce:review skill name.** Build 2026-05-09 confirmed `compound-engineering:ce-review` does not resolve in this environment. Try these candidates in order, stopping at the first that loads:
+**Use manual Task-tool dispatch.** The `ce:review` skill does NOT resolve in this routine env — builds 2026-05-08 through 2026-05-10 confirmed all three name candidates (`compound-engineering:ce-review`, `ce-review`, `ce:review`) fail. Skill resolution is interactive-session only. Manual dispatch is canonical here, not a fallback. F80 codified this 2026-05-10.
 
-```
-Skill('compound-engineering:ce-review', args='base:origin/main mode:autofix')
-Skill('ce-review', args='base:origin/main mode:autofix')
-Skill('ce:review', args='base:origin/main mode:autofix')
-```
-
-Record in NEXT_RUN.md which name (if any) succeeded. If one works, it handles persona selection, parallel dispatch, finding merge, the fix loop, and bounded re-review automatically — capture the verdict in your commit message and continue to step 5.
-
-**If all three fail**, fall back to manual persona dispatch (below) and note "all ce:review skill names failed — manual dispatch used" in NEXT_RUN.md.
-
-**Manual persona dispatch (fallback):**
-
-Dispatch all applicable personas in parallel via the Task tool. Each agent gets:
+Dispatch the personas below in parallel via the Task tool. Each agent gets:
 - The full diff: `git diff origin/main`
 - The intent (what task you're shipping and why)
 - Instruction to return JSON: `{findings: [{severity: "P0-P3", file, line, title, suggested_fix, autofix_class}], residual_risks: []}`
 
-**Always-on personas (run unconditionally on every diff):**
-- **correctness** — logic errors, edge cases, state bugs, error propagation
-- **maintainability** — coupling, duplication, naming, dead code
-- **project-standards** — CLAUDE.md compliance. CRITICAL: grep `git log --oneline -30 origin/main` for type aliases, helpers, or validators recently introduced/refactored. If your code uses the OLD pattern, that's a P1.
-- **reliability** — error paths, retries, timeouts, async semantics, state-machine transitions, stale-while-revalidate behaviour. (Promoted to always-on 2026-05-10: build 2026-05-09 shipped a `useOHLCV.isLoading` semantics shift that reliability would have framed sharply; correctness caught the bug for a different reason.)
-- **testing** — coverage gaps, untested ordering invariants, brittle assertions. (Promoted to always-on 2026-05-10: PR #28 morning review caught a P2 ordering invariant in `OptimizerPanel.tsx` (7-branch NaN guard where reordering would silently break validation) that the builder's "skip for plumbing" heuristic missed. The project HAS frontend test infra (`useOHLCV.test.ts`, `BotCard.test.tsx`, etc.) so test recommendations are actionable, not aspirational.)
-- **security** — input validation, auth, persistence boundaries, exploitable patterns. (Promoted to always-on 2026-05-10: this is a trading platform — almost any diff could have security implications. The conditional gating ("auth/persistence/input") was too narrow and would have skipped scenarios where a UI change indirectly weakens a defence. Cheap to run; high downside if missed.)
-- **adversarial** — actively constructs failure scenarios: race conditions, cascade failures, malformed inputs, startup edge cases. (Promoted to always-on 2026-05-10: PR #25 review caught a P1 startup cascade — `BotConfig` validation rejected pre-existing lowercase logic values in `bots.json`, silently dropping all bots on next deploy — that no other persona surfaced. For a trading platform, the cost of one undetected adversarial-class bug exceeds the cost of running it on every diff.)
+**Always-on personas (4 — run on every diff):**
+- **correctness** — logic errors, edge cases, state bugs, error propagation. (Caught the F69 `default_factory` silent-optional regression on PR #30 build 22.)
+- **testing** — coverage gaps, untested ordering invariants, brittle assertions. (Project has real frontend + backend test infra — recommendations are actionable, not aspirational. Caught the vacuous `os.replace`-failure cleanup test on build 22, plus PR #28's OptimizerPanel ordering invariant.)
+- **adversarial** — actively constructs failure scenarios: races, cascade failures, malformed inputs, startup edge cases. (Caught the fd.close `.tmp` leak on build 22, the PR #25 BotConfig startup cascade — "bots.json silently empties on deploy" — that no other persona surfaced.)
+- **security** — input validation, auth, persistence boundaries, exploitable patterns. (Trading platform: almost any diff could have security implications. Conditional gating proved too narrow.)
 
-**Conditional personas (run when the diff warrants):**
+**Conditional personas (run when diff warrants):**
 - **kieran-python** — when `.py` files changed
 - **kieran-typescript** — when `.ts`/`.tsx` files changed
+- **reliability** — when diff touches error paths, retries, timeouts, async semantics, state machines, persistence
+- **project-standards** — when diff touches `TODO.md`, `JOURNAL.md`, `CLAUDE.md`, or introduces new patterns. (CRITICAL: grep `git log --oneline -30 origin/main` for type aliases, helpers, or validators recently introduced/refactored. If your code uses the OLD pattern, that's a P1.)
+- **maintainability** — when diff is architectural (new modules, abstractions, cross-cutting refactors). Skip on small bug fixes.
+
+**Target 4-6 personas per PR, not 9.** Build 22 showed that running 9 produces heavy duplication: 5 reviewers piled onto the wrong "Pydantic v2 max_length reliability" defense, manufacturing false confidence around dead code that the morning calibration pass had to unwind. Demote a persona to conditional rather than running it for "completeness."
 
 **Project-specific checks the personas might miss** (re-verify yourself):
 - All frontend HTTP calls must use `api.get()`/`api.post()` from `frontend/src/api/client.ts`, NEVER raw `fetch()`.
@@ -167,7 +157,7 @@ Dispatch all applicable personas in parallel via the Task tool. Each agent gets:
 
 Every line that ships must have been reviewed after its final edit.
 
-Include a review summary in your commit message: `Review: X findings (P0: N, P1: N, P2: N), Y auto-fixed, Z iterations` and note whether ce:review skill was used or fallback dispatch.
+Include a review summary in your commit message: `Review: X findings (P0: N, P1: N, P2: N), Y auto-fixed, Z iterations` and the persona roster used (e.g. `personas: correctness, testing, adversarial, security, kieran-python`).
 
 ### 5. Final Verify + Commit
 Run `npm run build` one last time. If clean:
