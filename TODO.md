@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*158 / 234 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*158 / 235 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -10,10 +10,11 @@ _(none open)_
 
 ## Up Next
 
+- [F118](#f118) — [next] [easy] Post-PR-32 protocol patch bundle [easy]
 - [F95](#f95) — [medium] [next] Apply `SymbolField` to the remaining ticker/symbol fields [medium]
 - [F102](#f102) — [next] [easy] Cap `buy_rules` / `sell_rules` list length on `QuickBacktestRequest` and `BatchQuickBacktestRequest`. Pydantic accepts unbounded `list[Rule]` today; with 1 MB body cap (F86) an attacker can still submit thousands of small rules, driving O(n_rules × n_bars) compute on each backtest. Add `Field(max_length=100)` (or similar) to both lists in `backend/routes/backtest_quick.py` [easy]
 
-## Open Work — 99 items
+## Open Work — 100 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -22,7 +23,7 @@ _(none open)_
 | [C](#c-strategy-summary-analytics) | Strategy Summary & Analytics | 4 | [C25b](#c25b), [C25c](#c25c), [C26](#c26)–[C27](#c27) |
 | [D](#d-bots-live-trading) | Bots (live trading) | 5 | [D24b](#d24b), [D27a](#d27a), [D28](#d28)–[D30](#d30) |
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
-| [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 14 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F58](#f58), [F63](#f63), [F71](#f71), [F96](#f96), [F98](#f98)–[F99](#f99), [F113](#f113), [F117](#f117) |
+| [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 15 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F58](#f58), [F63](#f63), [F71](#f71), [F96](#f96), [F98](#f98)–[F99](#f99), [F113](#f113), [F117](#f117)–[F118](#f118) |
 | [F · Hardening](#f-hardening) | Security, reliability, validation | 37 | [F42](#f42)–[F43](#f43), [F49](#f49), [F54](#f54)–[F57](#f57), [F59](#f59)–[F60](#f60), [F62](#f62), [F64](#f64)–[F67](#f67), [F72](#f72)–[F75](#f75), [F77](#f77), [F82](#f82)–[F83](#f83), [F87](#f87)–[F88](#f88), [F92](#f92)–[F93](#f93), [F95](#f95), [F100](#f100)–[F106](#f106), [F111](#f111)–[F112](#f112), [F114](#f114)–[F115](#f115) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 10 | [F34](#f34)–[F36](#f36), [F44](#f44), [F47](#f47)–[F48](#f48), [F78](#f78), [F109](#f109)–[F110](#f110), [F116](#f116) |
 | [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 11 | [F40](#f40), [F46](#f46), [F50](#f50)–[F51](#f51), [F61](#f61), [F79](#f79), [F84](#f84), [F89](#f89), [F97](#f97), [F107](#f107)–[F108](#f108) |
@@ -116,6 +117,7 @@ Own multi-session research project. Needs its own design work before implementat
 - [ ] <a id="f99"></a> **F99** [easy] Expose `SymbolField` regex pattern in OpenAPI schema — `BeforeValidator(normalize_symbol)` injects no `pattern:` keyword into the generated JSON schema, so `/docs` shows `{"type": "string"}` for every SymbolField. Agent clients reading the schema have no way to know "BRK.B" is valid but "BRK B" isn't except by trial-and-error. Fix: change `SymbolField = Annotated[str, BeforeValidator(normalize_symbol)]` to also include `Field(pattern=r"^[A-Z0-9][A-Z0-9.\-]{0,19}$", min_length=1, max_length=20, examples=["AAPL", "BRK.B"])`. Verify Pydantic v2 honors both annotations (BeforeValidator + Field constraints) without conflict. (from PR #31 morning ce:review agent-native 0.95) [arch]
 - [ ] <a id="f113"></a> **F113** [easy] Quick-backtest endpoints have no `source` field — `_run_quick` always calls `_fetch` without specifying source, so the endpoints are implicitly yahoo-only. If multi-provider support is desired, add `source: str = "yahoo"` to `QuickBacktestRequest`/`BatchQuickBacktestRequest` and call `source = require_valid_source(req.source)` at the top of `_run_quick`. If yahoo-only is intentional, add a docstring note. (from build 24 round-2 correctness review) [arch]
 - [ ] <a id="f117"></a> **F117** [easy] Status-code split between `require_valid_source` (400) and Pydantic field errors (422) for structurally-equivalent invalid-input conditions. Agent clients with retry-on-422 logic silently won't retry on bad-source errors. Two options: (a) raise `HTTPException(status_code=422, detail=[{"loc": ["body", "source"], "msg": "Invalid source", "type": "value_error"}])` from `require_valid_source` to match Pydantic's envelope — breaks any caller catching 400; (b) add `responses={400: {"description": "Invalid source"}}` to the 5 affected route decorators (`data.py:get_ohlcv`, `indicators.py:post_indicators`, `backtest.py:run_backtest`, `quote.py:get_quote`, `quote.py:get_quotes`) so OpenAPI documents the split. Pick one and apply uniformly. (from PR #32 morning ce:review agent-native, 0.95) [arch]
+- [ ] <a id="f118"></a> **F118** [next] [easy] Post-PR-32 protocol patch bundle — three coordinated edits to `docs/overnight-builder-prompt-patch.md` (do as a single commit after PR #32 merges to avoid file-update conflicts): **(1)** raise the per-run task cap from 3 back to 5, with "up to 5 file-independent tasks; pick fewer if independence breaks down" framing — the original dial-back rationale (token cost from 9-persona review × Opus) is gone now that the roster is trimmed to 4–6. **(2)** Add a `Shipped vs surfaced` line to the postmortem template so the new-items multiplier per build is visible over time (e.g. "Shipped 3 / surfaced 12 — multiplier 4×"). Lets us see whether the TODO is converging or just shuffling. **(3)** Shrink the morning ce:review roster from 4 to 2: keep `agent-native` (only morning-only persona, consistent novel signal) + one severity-calibration sweep (reliability-style: re-judge builder deferrals, don't generate new findings). Drop adversarial + security from morning — both already run overnight; second pass overshoots (PR #32 adversarial returned 2 false positives) or finds mostly pre-existing items. Justification trail in PR #32 morning ce:review journal entry + the ROI table from that session. [arch]
 
 ### F · Hardening
 - [x] <a id="f27"></a> **F27** Concurrent `_fetch()` dedup — added `threading.Lock` per `(symbol, interval)` in `shared.py`. Lock wraps the entire check→fetch→populate block; second concurrent caller blocks then hits the freshly-populated cache. Meta-lock protects the lock-dict from concurrent key creation. `threading` was already imported. [hardening]
