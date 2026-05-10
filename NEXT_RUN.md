@@ -35,6 +35,37 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
+**Date:** 2026-05-10 (build 22 — overnight)
+**Branch:** `claude/jolly-babbage-RosJY`
+
+**Shipped:**
+- **F69** `routes/trading.py` `WatchlistRequest` Pydantic length caps (P1 security) — `Field(max_length=500)` + explicit `if len(v) > 500` first-line guard inside `@field_validator` (belt-and-suspenders for Pydantic v2 minor-version drift), per-symbol 20-char cap, strip + uppercase + drop-empties.
+- **F68** F52/F53 round-trip + crash-recovery tests — new `tests/test_trading.py` (7 tests) and `tests/test_routes_providers.py` (4 tests). Cleanup tests pre-create the original file and assert it survives the failed `os.replace`. `_persist_env(key, value, env_path=None)` accepts an injected path for testability.
+- **F41** `BotDetail.state` type aligned to runtime defensive chains — `state?: BotState` in `frontend/src/shared/types/trading.ts`. Build clean.
+
+**Review:** 9 manual personas (correctness, maintainability, project-standards, reliability, testing, security, adversarial, kieran-python, kieran-typescript). All 3 `ce:review` skill name candidates from the prompt still unavailable — same as builds 20 + 21. F80 stays [next].
+
+**Findings:** ~16 actionable findings across the 9 reviewers, ~6 fixed in-PR (Pydantic belt-and-suspenders, vacuous cleanup test, missing boundary tests, `raise_server_exceptions=False` scope, `default_factory=list` regression, fd.close() leak in both atomic-write sites, style consistency, error-message ordering); 9 deferred → F81–F89.
+
+**Build:** frontend `npm run build` pass. **Smoke test:** N/A — `backend/venv/` still missing in the routine container (build 21 already flagged for human investigation).
+
+**Visual verification:** N/A — type-only frontend change.
+
+**Builder env notes:**
+1. **`ce:review` skill names still unavailable** (3rd run in a row) — `compound-engineering:ce-review`, `ce-review`, `ce:review` all fail to resolve. F80 documents the action items; the routine container needs a plugin sync to match the interactive session.
+2. **`backend/venv/` missing** — Section 3.5 smoke test in `docs/overnight-builder-prompt-patch.md` requires `backend/venv/bin/uvicorn` and pytest. Every backend-touching run hits this. Either provision the venv in the container or refactor the smoke step to use system python + a constrained import test.
+
+**Next up:**
+- **F81** [easy] [next] Shared `SymbolField` type alias — unblocks F82 + F85, dedupes 3 inline call sites.
+- **F70** [easy] `_persist_env` lost-update lock — sitting unstarted for two builds.
+- **F86** [medium] [P1] HTTP body size middleware — platform-wide; F69's caps are post-parse so multi-GB JSON still hits the parser.
+- **A8** [medium] [next] Off-screen downsampling — chart perf at wide zoom.
+- **F80** [medium] [next] Two-tier review architecture / debug ce:review skill.
+
+**Previous run:** 2026-05-10 PR #29 (build 21 — F52/F53 atomic writes + F39 quote error field).
+
+## Build 21 Run
+
 **Date:** 2026-05-10 (build 21 — overnight)
 **Branch:** `claude/jolly-babbage-2gq8x`
 
