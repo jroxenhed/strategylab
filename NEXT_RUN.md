@@ -35,6 +35,57 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
+**Date:** 2026-05-10 (build 23 — overnight)
+**Branch:** `claude/jolly-babbage-KxUMl`
+
+**Shipped:**
+- **F81** + **F85** + **F38** Shared `normalize_symbol` + `SymbolField` in `models.py` (regex `^[A-Z0-9][A-Z0-9.\-]{0,19}$`) wired into `routes/quote.py` (path + per-symbol) and `routes/trading.py` (`WatchlistRequest`, `BuyRequest`, `SellRequest` — Buy/Sell adjacencies as P2 reviewer convergence). Tightened over the original spec to require an alphanumeric leading char.
+- **F37** Provider allowlist on both `GET /api/quote/{ticker}` and `POST /api/quotes` via `get_available_providers()`. Closes the silent-swallow provider-enumeration vector.
+- **F70** `_persist_env` module-level `threading.Lock` wraps the read-modify-write block. New 50-iter concurrent test with `threading.Barrier` + `join(timeout=5)`.
+- **F76** `_persist_env` TOCTOU closed via `try: read_text() except FileNotFoundError`; `existed` flag now gates `shutil.copymode` so first-time-write and external-chmod-fail aren't conflated.
+- **F45 side-effect close:** invalid-entry echo in `get_quotes` truncated + regex-sanitized.
+- **F43 partial close:** Buy/Sell now use `SymbolField`; remaining ticker/symbol fields tracked under F95.
+
+**Review:** 6 manual personas (correctness, testing, adversarial, security, kieran-python, reliability) — first build on the post-F80 4-6 roster (project-standards + maintainability dropped as diff is mostly reuse). 5 P2 + 13 P3 surfaced; all P2s either fixed in-PR or filed as follow-ups (F94/F95/F96). No P0/P1.
+
+**Findings → fix loop applied:**
+- Regex tightened (security P2): `^[A-Z0-9][A-Z0-9.\-]{0,19}$` rejects `..`/`.env`/`-A`.
+- `_normalize_symbol` renamed → `normalize_symbol` (kieran P2): public name once it's imported across modules.
+- Display echo sanitized via `_DISPLAY_CLEAN` regex (3 reviewers): null-byte / control-char strip on invalid-entry echo path.
+- F38 path-param test gained a clarifying comment about Starlette's `%3B`→`;` decoding (testing P1 — passes for the right reason, just under-documented).
+- F70 concurrent test loops 50× with `Barrier`+`join(timeout=5)` (testing P2): converts probabilistic → deterministic.
+- F76 TOCTOU test now explicitly asserts `EXISTING=v not in final` so the crash-safety-over-preservation trade-off is documented (testing P2).
+- New `test_watchlist_validation_rejects_invalid_chars` pins the strict-reject contract (testing+reliability P2 — was the "behavior shift, no test" gap).
+- `from None` exception suppression in `get_quote`'s `ValueError → HTTPException` (kieran P2).
+- `WatchlistRequest._validate_symbols` simplified `isinstance` branch — `normalize_symbol` already type-checks (kieran P3 + correctness P3).
+- `_persist_env` cross-process limitation documented in the function docstring (reliability P3).
+- `_persist_env` `copymode` split via `existed` bool so first-time-write and concurrent-unlink don't share an exception (reliability + adversarial P3).
+- Restored ellipsis on the overlong-symbol error message (correctness P3 cosmetic).
+
+**Deferred → TODO:**
+- **F94** [next] F37-style allowlist on `/api/backtest`, `/api/indicators`, `/api/ohlcv` — same enumeration vector class as F37 but separate routes. (security P2)
+- **F95** [next] Apply `SymbolField` to `StrategyRequest.ticker`, `BotConfig.symbol`, `QuickBacktestRequest.ticker`, `BatchQuickBacktestRequest.symbols`, `ScanRequest.symbols` — closes F38's coverage on backtest/bot/scan entry points. Subsumes F82. (security + adversarial P2)
+- **F96** `get_quotes` calls `get_quote` per-symbol → O(N) redundant `get_available_providers()` lookups + inconsistent error shape if a provider is ever deregistered mid-batch. Refactor: extract a private `_fetch_quote` helper. (kieran + reliability + adversarial P3 convergence)
+
+**Build:** frontend `npm run build` pass. **Smoke test:** AST checks + standalone `normalize_symbol` smoke (verifies `BRK.B`, `BF-B`, 20-char accept; `..`, `.env`, `-A`, `\n`, `;`, `>20`, `''` reject). **`backend/venv/` still missing** in the routine container — same as builds 21 + 22.
+
+**Visual verification:** N/A — backend-only PR.
+
+**Builder env notes:**
+1. `ce:review` skill remains unavailable in the routine env (now codified in F80, no probe ceremony this run).
+2. `backend/venv/` still missing — F50/F51 still pending.
+
+**Next up:**
+- **F94** [next] data routes source allowlist (extends F37) — easy
+- **F95** [next] SymbolField on ticker fields — medium, completes F38 coverage
+- **F86** [P1] HTTP body size middleware — platform-wide
+- **F91** [P1] BatchQuickBacktestRequest cap parity — easy, blocked by F81 (now unblocked)
+- **A8** off-screen downsampling — chart perf at wide zoom
+
+**Previous run:** 2026-05-10 PR #30 (build 22 — F69 + F68 + F41).
+
+## Build 22 Run (previously "Last Run")
+
 **Date:** 2026-05-10 (build 22 — overnight)
 **Branch:** `claude/jolly-babbage-RosJY`
 

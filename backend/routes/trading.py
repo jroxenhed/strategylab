@@ -17,7 +17,7 @@ from broker import get_trading_provider, OrderRequest as BrokerOrderRequest, _tr
 from broker_aggregate import aggregate_from_brokers
 from signal_engine import Rule, compute_indicators, eval_rules, migrate_rule
 from journal import _log_trade, DATA_DIR, JOURNAL_PATH
-from models import StrategyRequest, LogicField
+from models import StrategyRequest, LogicField, SymbolField, normalize_symbol
 from routes.backtest import run_backtest
 
 WATCHLIST_PATH = DATA_DIR / "watchlist.json"
@@ -26,13 +26,15 @@ router = APIRouter(prefix="/api/trading")
 
 
 class BuyRequest(BaseModel):
-    symbol: str
+    # SymbolField applies the strict normalize+regex check (F38/F85) so newlines
+    # in `symbol` can't ride into _log_trade or HTTPException details.
+    symbol: SymbolField
     qty: float = Field(..., gt=0)
     stop_loss_pct: Optional[float] = Field(default=None, ge=0, le=100)
 
 
 class SellRequest(BaseModel):
-    symbol: str
+    symbol: SymbolField
     qty: Optional[float] = Field(default=None, gt=0)
 
 
@@ -54,16 +56,18 @@ class WatchlistRequest(BaseModel):
     @field_validator('symbols')
     @classmethod
     def _validate_symbols(cls, v: list[str]) -> list[str]:
+        # List-level cap stays inline so the custom error message survives any
+        # future Field(max_length=...) drift (test_watchlist_validation_caps_length).
         if len(v) > 500:
             raise ValueError(f"too many symbols (max 500, got {len(v)})")
         cleaned = []
         for sym in v:
-            sym = sym.strip().upper()
-            if not sym:
+            # Drop empty/whitespace-only entries silently — pre-existing F69 behavior.
+            # Non-empty entries go through the strict normalize+regex path; invalid
+            # characters or oversized symbols raise → 422 for the whole request.
+            if isinstance(sym, str) and not sym.strip():
                 continue
-            if len(sym) > 20:
-                raise ValueError(f"symbol too long (max 20 chars): {sym[:20]!r}...")
-            cleaned.append(sym)
+            cleaned.append(normalize_symbol(sym))
         return cleaned
 
 
