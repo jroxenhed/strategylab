@@ -6,6 +6,14 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-11
 
+### F118 — protocol patch bundle (post-PR-32)
+
+- **[F118](TODO.md#f118)** Three coordinated protocol changes landed in one commit now that PR #32 is merged and main is quiet:
+  - `docs/overnight-builder-prompt-patch.md` §Guard Rails: per-run task cap raised from 3 → 5 with "up to 5 file-independent tasks; pick fewer if independence breaks down" framing. The original dial-back (2026-05-10) was driven by 9-persona-review × Opus token pressure; that pressure is gone since the §4 roster trim to 4–6.
+  - `docs/overnight-builder-prompt-patch.md` postmortem template: added `## Run metrics` section (Shipped / Surfaced / Multiplier / Cumulative open F-items / Reviewer roster). The multiplier number lets us see across builds whether the TODO is converging or just shuffling — instead of relying on gut feel about TODO bloat.
+  - `CLAUDE.md` morning roster: trimmed from 4 personas to 2. Kept `agent-native` (only morning-only persona, consistent novel signal — produced all 3 in-PR safe fixes on PR #32) + `reliability` (severity-calibration sweep: re-judge builder deferrals, debunk overshoots). Dropped `adversarial` (returned 2 false positives on PR #32 second pass) + `security` (mostly pre-existing items already filed). Builder runs both overnight already; second-pass dups inflate review count without proportional signal.
+- Memory files updated: `feedback_ce_review.md` and `feedback_two_tier_review.md` now describe the 2-persona morning roster.
+
 ### PR #32 morning ce:review
 
 - Morning calibration pass on build 24 (PR #32) with the F80 4-persona roster (adversarial / agent-native / security / reliability) via ce:review. 0 P0/P1 in PR scope. Adversarial overshot severity on 2 of 4 findings (claimed P1 source-injection on quick routes was invalidated — Pydantic `extra='ignore'` silently drops the unknown field; claimed P2 `require_valid_source` ordering issue on `backtest.py` was invalidated by reliability's cross-check AND grep — line 301 is the first statement of `run_backtest`). Reliability re-confirmed F87/F104, F102, F112 at the builder's deferred severities — net new findings from the second-pass adversarial + reliability personas: zero. Net signal came from agent-native and security.

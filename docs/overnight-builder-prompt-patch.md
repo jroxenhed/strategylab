@@ -56,7 +56,7 @@ Also confirm the item is still unchecked in TODO.md after the pull. If multiple 
 
 ## Guard Rails
 
-- Max 3 tasks per run. (Lowered from 5 on 2026-05-10: with the expanded 7-persona always-on review and Opus 4.7 reasoning, total wall-clock per task is meaningfully higher; 3 keeps the run inside the routine container time budget and matches the rate at which useful new TODO items are being surfaced.)
+- Up to 5 file-independent tasks per run. Pick fewer if you can't find that many tasks whose changed file sets don't overlap — independence is the constraint, 5 is the ceiling not the target. (Raised back from 3 on 2026-05-11 after the §4 roster trim to 4-6 personas removed the wall-clock pressure that motivated the 3-task cap on 2026-05-10. Build 24 demonstrated that 3 file-independent tasks is the easy case; verify independence with a file-list-per-task comparison before dispatching parallel implementation agents.)
 - If you find critical bugs during review: commit to a separate branch, do NOT push to main. Flag in report.
 - Quality over quantity. If uncertain, stop and flag rather than push broken code.
 
@@ -271,6 +271,16 @@ You cannot visually verify UI changes — that is the human's job during morning
    - [ ] §5 step 2.3: at least one unchecked item tagged `[next]` — pre-commit hook gates this when items are checked off
    - [ ] Atomic commit: code + TODO + JOURNAL + NEXT_RUN in one commit on the `claude/`-prefixed branch
    - [ ] Draft PR opened via GitHub MCP after push
+
+   ## Run metrics
+
+   Fill these in factually — they accumulate across builds so we can see whether the TODO is converging or just shuffling.
+
+   - **Shipped:** N items (F-IDs and one-line titles)
+   - **Surfaced:** M new TODO items (F-IDs and bucket tags)
+   - **Multiplier:** M / N (raw ratio; ≤1 means net burn-down, >1 means growth)
+   - **Cumulative open F-items:** XX (from `## Open Work — XX items` after sync)
+   - **Reviewer roster:** which personas you actually dispatched (always-on count + conditional count)
 
    ## What I followed well
    <Short bullets, specific. "Followed §4 roster" is not enough — name which personas, which findings converged, which auto-fixes landed.>
