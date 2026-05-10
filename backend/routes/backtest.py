@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
-from shared import _fetch, _format_time, _INTRADAY_INTERVALS, fetch_higher_tf, align_htf_to_ltf, htf_lookback_days
+from shared import _fetch, _format_time, _INTRADAY_INTERVALS, fetch_higher_tf, align_htf_to_ltf, htf_lookback_days, require_valid_source
 from signal_engine import Rule, compute_indicators, eval_rules, eval_rule, migrate_rule, resolve_series
 from routes.indicators import _series_to_list
 from models import TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, StrategyRequest, RegimeConfig
@@ -294,6 +294,11 @@ def _compute_regime_series(req: StrategyRequest, ltf_df: pd.DataFrame) -> "pd.Se
 
 @router.post("/api/backtest")
 def run_backtest(req: StrategyRequest):
+    # F94: shared allowlist + case-normalize at the route boundary. The
+    # regime path below also calls fetch_higher_tf(source=req.source) and
+    # ad-hoc _fetch calls; bouncing unknown providers up front keeps the
+    # failure mode uniform (400 Invalid source) rather than per-helper.
+    req.source = require_valid_source(req.source)
     try:
         df = _fetch(req.ticker, req.start, req.end, req.interval, source=req.source, extended_hours=req.extended_hours)
 

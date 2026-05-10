@@ -7,38 +7,24 @@ from pydantic import BaseModel, Field, field_validator
 
 from shared import _fetch, _format_time
 from signal_engine import Rule, compute_indicators, eval_rules, migrate_rule
-from models import LogicField
+from models import LogicField, SymbolField, DirectionField, normalize_symbol
 
 router = APIRouter()
 
 
 class QuickBacktestRequest(BaseModel):
-    ticker: str
+    ticker: SymbolField
     interval: str = "1d"
     lookback_days: int = Field(default=90, gt=0)
     buy_rules: list[Rule]
     sell_rules: list[Rule]
     buy_logic: LogicField = "AND"
     sell_logic: LogicField = "AND"
-    direction: str = "long"
+    direction: DirectionField = "long"
     initial_capital: float = Field(default=10000.0, gt=0)
     stop_loss_pct: float = Field(default=0.0, ge=0)
     trailing_stop: Optional[dict] = None
 
-    @field_validator('direction')
-    @classmethod
-    def validate_direction(cls, v: str) -> str:
-        if v not in ('long', 'short'):
-            raise ValueError("direction must be 'long' or 'short'")
-        return v
-
-    @field_validator('ticker')
-    @classmethod
-    def validate_ticker(cls, v: str) -> str:
-        v = v.strip().upper()
-        if not v or len(v) > 20:
-            raise ValueError("ticker must be 1–20 characters")
-        return v
 
 class QuickBacktestResult(BaseModel):
     ticker: str
@@ -60,17 +46,27 @@ class BatchQuickBacktestRequest(BaseModel):
     sell_rules: list[Rule]
     buy_logic: LogicField = "AND"
     sell_logic: LogicField = "AND"
-    direction: str = "long"
+    direction: DirectionField = "long"
     initial_capital: float = Field(default=10000.0, gt=0)
     stop_loss_pct: float = Field(default=0.0, ge=0)
     trailing_stop: Optional[dict] = None
 
-    @field_validator('direction')
+    @field_validator('symbols')
     @classmethod
-    def validate_direction(cls, v: str) -> str:
-        if v not in ('long', 'short'):
-            raise ValueError("direction must be 'long' or 'short'")
-        return v
+    def _validate_symbols(cls, v: list[str]) -> list[str]:
+        # F91: list-level cap mirrors F69 watchlist. Custom message survives any
+        # future Field(max_length=...) drift. /batch is unauthenticated and
+        # sequential _fetch() per symbol is OOM-feasible without this cap.
+        if len(v) > 500:
+            raise ValueError(f"too many symbols (max 500, got {len(v)})")
+        cleaned: list[str] = []
+        for sym in v:
+            if isinstance(sym, str) and not sym.strip():
+                continue
+            cleaned.append(normalize_symbol(sym))
+        if not cleaned:
+            raise ValueError("symbols must contain at least one non-empty entry")
+        return cleaned
 
 
 def _run_quick(req: QuickBacktestRequest) -> QuickBacktestResult:
