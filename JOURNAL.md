@@ -11,10 +11,10 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 - Morning calibration pass on build 23 (PR #31) with the F80 4-persona roster (adversarial / agent-native / security / reliability). 0 P0/P1 confirmed in PR scope — security's P1 calls (SEC-01..05) re-flagged the already-tracked F94/F95 follow-ups; downgraded to P2 follow-up per F80 calibration role. **Strong cross-reviewer signal** (3 reviewers agreed): `ScanRequest.symbols` + `PerformanceRequest.symbol` are the highest-impact remaining hole — F95 scope expanded.
 - **Safe fix in-PR:** `backend/shared.py:426` dropped the user-input echo in `f"Unknown data source: {source}"` → static `"Unknown data source"`. Closes a reflected-input adjacency that data.py / indicators.py / backtest.py routes hit before F94's route-level allowlist lands. Existing test assertions use substring match so contract preserved.
 - **New TODOs filed from morning pass:**
-  - **[F97](TODO.md#f97)** Structured error contract for `SymbolField` rejections (resolves ADV-02 vs AN-2 tension — repr-echo removal + machine-readable detail in one cut). [arch]
-  - **[F98](TODO.md#f98)** Expose `SymbolField` regex in OpenAPI schema via `Field(pattern=...)` (agent-native AN-1, 0.95 conf). [arch]
-  - **[F99](TODO.md#f99)** `BotManager.load()` migration step for when F95 promotes `BotConfig.symbol` to `SymbolField` — without it, non-conforming symbols silently drop all affected bots on first post-upgrade load. Two reviewers agreed (REL-05 + SEC-02 residual). Tied to F95 brief. [hardening]
-  - **[F100](TODO.md#f100)** `.env` permission preservation when `copymode` silently swallows `FileNotFoundError` — explicit `chmod 0o600` after replace, belt-and-suspenders for the F76 TOCTOU guard. [hardening]
+  - **[F98](TODO.md#f98)** Structured error contract for `SymbolField` rejections (resolves ADV-02 vs AN-2 tension — repr-echo removal + machine-readable detail in one cut). [arch]
+  - **[F99](TODO.md#f99)** Expose `SymbolField` regex in OpenAPI schema via `Field(pattern=...)` (agent-native AN-1, 0.95 conf). [arch]
+  - **[F100](TODO.md#f100)** `BotManager.load()` migration step for when F95 promotes `BotConfig.symbol` to `SymbolField` — without it, non-conforming symbols silently drop all affected bots on first post-upgrade load. Two reviewers agreed (REL-05 + SEC-02 residual). Tied to F95 brief. [hardening]
+  - **[F101](TODO.md#f101)** `.env` permission preservation when `copymode` silently swallows `FileNotFoundError` — explicit `chmod 0o600` after replace, belt-and-suspenders for the F76 TOCTOU guard. [hardening]
 - **F88 update:** annotated with the build-23 SymbolField sharpening — the asymmetric load/save trap is now user-visible (UI shows opaque "save failed" 422) rather than cosmetic.
 - **F95 update:** added `PerformanceRequest.symbol` to coverage list; cross-referenced the F99 migration prereq.
 
