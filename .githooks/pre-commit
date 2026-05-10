@@ -100,6 +100,34 @@ DIFFEOF
     fi
     # --- End F-item bucket tag gate ---
 
+    # --- [next]-tag gate on completion commits ---
+    # When a commit checks an item off (a newly-added top-level `- [x]`
+    # line in the staged diff), the chain runner needs at least one
+    # [next]-tagged unchecked item to pick up next. Build 23 shipped
+    # completions without [next] tags; a follow-up commit (bd16521) had
+    # to add them after the fact. Asymmetric on purpose — pure morning
+    # fixes that don't check anything off are not gated.
+    completed_ids=$(git diff --cached --unified=0 -- TODO.md \
+        | grep '^+- \[x\]' \
+        | grep -oE '\*\*[A-Z]+[0-9]+[a-z]?\*\*' \
+        | tr -d '*' \
+        | sort -u || true)
+
+    if [ -n "$completed_ids" ]; then
+        if ! grep -qE '^- \[ \].*\[next\]' TODO.md; then
+            echo "pre-commit: this commit checks items off but TODO.md has no" >&2
+            echo "[next]-tagged unchecked items left for the chain runner." >&2
+            echo "" >&2
+            echo "Items being checked off in this commit:" >&2
+            printf '  - %s\n' $completed_ids >&2
+            echo "" >&2
+            echo "Tag at least one unchecked item with [next] (prefer prereqs of" >&2
+            echo "in-progress work, then [easy] items), then commit again." >&2
+            exit 1
+        fi
+    fi
+    # --- End [next]-tag gate ---
+
     # Re-stage TODO.md if stamping or sync modified it
     if ! git diff --quiet TODO.md; then
         echo "pre-commit: re-staged TODO.md after date-stamp + sync-todo-index"
