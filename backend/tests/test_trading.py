@@ -16,6 +16,11 @@ def client():
     return TestClient(app)
 
 
+@pytest.fixture
+def tolerant_client():
+    return TestClient(app, raise_server_exceptions=False)
+
+
 def test_watchlist_round_trip(client, tmp_path, monkeypatch):
     """POST a small symbol list → response matches post-validated (stripped, uppercased) input
     and on-disk JSON equals {symbols: [...]}.
@@ -34,12 +39,18 @@ def test_watchlist_round_trip(client, tmp_path, monkeypatch):
 
 
 def test_watchlist_validation_caps_length(client, tmp_path, monkeypatch):
-    """POST a list of 501 symbols → 422 Unprocessable Entity."""
+    """POST a list of 501 symbols → 422 Unprocessable Entity with custom error message."""
     monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", tmp_path / "watchlist.json")
 
     symbols = [f"SYM{i}" for i in range(501)]
     resp = client.post("/api/trading/watchlist", json={"symbols": symbols})
     assert resp.status_code == 422
+    # Verify the custom validator error message is returned, not Pydantic's generic 'too_long'.
+    # If Field(max_length=500) were re-introduced, it would fire first and produce a
+    # generic 'too_long' error type, which would NOT contain this text — catching the regression.
+    body = resp.json()
+    detail_str = str(body.get("detail", ""))
+    assert "too many symbols" in detail_str
 
 
 def test_watchlist_validation_per_symbol_length(client, tmp_path, monkeypatch):
@@ -59,7 +70,7 @@ def test_watchlist_strips_and_uppercases(client, tmp_path, monkeypatch):
     assert resp.json()["symbols"] == ["SPY", "QQQ"]
 
 
-def test_watchlist_cleanup_on_replace_failure(tmp_path, monkeypatch):
+def test_watchlist_cleanup_on_replace_failure(tolerant_client, tmp_path, monkeypatch):
     """When os.replace raises, no .tmp files remain and WATCHLIST_PATH is unchanged."""
     watchlist_file = tmp_path / "watchlist.json"
     monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", watchlist_file)
@@ -72,8 +83,7 @@ def test_watchlist_cleanup_on_replace_failure(tmp_path, monkeypatch):
 
     monkeypatch.setattr(trading_mod.os, "replace", _boom)
 
-    local_client = TestClient(app, raise_server_exceptions=False)
-    resp = local_client.post("/api/trading/watchlist", json={"symbols": ["AAPL"]})
+    resp = tolerant_client.post("/api/trading/watchlist", json={"symbols": ["AAPL"]})
     # Route raises → FastAPI returns 500
     assert resp.status_code == 500
 

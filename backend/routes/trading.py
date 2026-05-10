@@ -2,6 +2,7 @@ import json
 import logging
 import math
 import os
+import shutil
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -48,7 +49,7 @@ class ScanRequest(BaseModel):
 
 
 class WatchlistRequest(BaseModel):
-    symbols: list[str] = Field(max_length=500)
+    symbols: list[str]
 
     @field_validator('symbols')
     @classmethod
@@ -444,6 +445,8 @@ def save_watchlist(req: WatchlistRequest):
         fd.flush()
         os.fsync(fd.fileno())
         fd.close()
+        if WATCHLIST_PATH.exists():
+            shutil.copymode(str(WATCHLIST_PATH), fd.name)
         os.replace(fd.name, str(WATCHLIST_PATH))
     except Exception:
         try:

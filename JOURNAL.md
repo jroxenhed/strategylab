@@ -4,7 +4,9 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
-## 2026-05-10 (build 22 — overnight)
+## 2026-05-10
+
+### build 22 — overnight
 
 - **[F69](TODO.md#f--architecture--housekeeping)** `WatchlistRequest` length caps (P1 security) — `routes/trading.py` now declares `symbols: list[str] = Field(max_length=500)` plus a `@field_validator` that explicit-checks `len(v) > 500` first (belt-and-suspenders against any Pydantic v2 list-`max_length` semantic drift), strips whitespace + uppercases, drops empties, enforces 20-char per-symbol cap. Closes the unauthenticated disk-fill / OOM DoS path that was the F69 raison d'être.
 - **[F68](TODO.md#f--architecture--housekeeping)** Round-trip + crash-recovery tests for F52/F53 — `backend/tests/test_trading.py` (7 tests: round-trip, 501-symbol 422, 21-char 422, boundary 500, boundary 20-char, strip/uppercase/empty-filter, cleanup-on-`os.replace`-failure that pre-creates `{"symbols": ["ORIG"]}` and asserts the original survives). `backend/tests/test_routes_providers.py` (4 tests: create / update-in-place / append / cleanup-on-failure with original `.env` preservation). `_persist_env` gained `env_path: Optional[pathlib.Path] = None` so tests can redirect without monkeypatching `__file__`.
@@ -23,7 +25,7 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 - **Build:** frontend `npm run build` pass. **Smoke test:** N/A — `backend/venv/` still doesn't exist in the routine container (build-21 NEXT_RUN flagged this; F50 / F51 follow-ups pending).
 - **Visual verification:** N/A — only frontend change is a single type-field annotation.
 
-## 2026-05-10 (build 21 — overnight)
+### build 21 — overnight
 
 - **[F52](TODO.md#f--architecture--housekeeping)** Watchlist atomic write — `routes/trading.py` `save_watchlist` now uses `tempfile.NamedTemporaryFile(delete=False, dir=WATCHLIST_PATH.parent)` + `os.replace` with cleanup-on-exception, mirroring `bot_manager.save()`. Closes the F14/F16-class atomicity gap surfaced in the architectural audit.
 - **[F53](TODO.md#f--architecture--housekeeping)** `.env` atomic write — `routes/providers.py` `_persist_env` switched to the same tempfile + `os.replace` pattern. Module-level `os` / `pathlib` / `tempfile` imports replaced the prior function-local imports (4 reviewers flagged the inconsistency with `journal.py` / `bot_manager.py` / `trading.py`).
@@ -32,7 +34,7 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 - **Review:** 8 manual personas (correctness/maintainability/project-standards/reliability/testing/security/adversarial/kieran-python). `ce-review` skill names still unavailable. Build 20's NEXT_RUN flagged this for human investigation; until resolved, manual dispatch remains the path. **1 P1 + 9 P2/P3 actioned**, 11 deferred to **F68–F78**. The P1 (HTTPException leakage + dead test) was caught by 5/8 reviewers; single-pass self-review would have shipped a broken test.
 - **Morning ce:review pass (interactive, 11 personas via skill):** caught a P1 the overnight builder missed (threadpool cascade — serial `_fetch()` in 20-symbol batch endpoint + no yfinance timeout, deferred for now), reclassified F69 P2→P1 (concrete OOM/disk-fill DoS on unauthenticated POST, not generic hardening), and applied 4 safe fixes inline: `fd.flush(); os.fsync(fd.fileno())` before `os.replace` at both new atomic-write sites (closes F74 in this PR's scope), `e.detail` `isinstance(str)` guard so list/dict details from Pydantic don't leak through the new `error` field, deletion of the structurally-dead `except Exception` branch in `get_quotes` (5/11 reviewers — `get_quote` always wraps to `HTTPException` first), and removal of duplicate `import pandas as pd` inside one test. 8/8 backend tests still pass; `npm run build` clean.
 
-## 2026-05-10 (architectural audit + pipeline calibration)
+### architectural audit + pipeline calibration
 
 - **Architectural audit at 155/202** — first audit since 2026-05-03 (was at 91/127); 64 items shipped past the ~20-item recommended cadence. Sonnet agent ran data integrity + error handling + concurrency + test coverage + perf + security passes. Surfaced **5 P1s** (atomicity gaps in watchlist/.env writes, missing `direction` on scan `_log_trade`, sync `bot_manager.save()` blocking event loop, unbounded `slippage_bps` list) and **10 P2/P3s** (test coverage gaps in exits/regime/bot_manager, journal O(n) reads per tick, file-size overruns, silent UI error swallows, etc.). Filed as **F52–F67**. F52 + F53 tagged `[next]` — both are 5-line fixes using existing patterns.
 - **Confirmed clean:** journal/bots.json atomicity, `compute_realized_pnl` bot_id scoping, no stray `yfinance.download()`, `LogicField`/`DirectionField` coverage, equity_snapshots/activity_log caps, async cleanup, fire-and-forget notification pattern. Audit doc'd these so the next pass knows what's already verified.

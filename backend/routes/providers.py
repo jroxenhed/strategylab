@@ -1,5 +1,6 @@
 import os
 import pathlib
+import shutil
 import tempfile
 from typing import Optional
 
@@ -89,6 +90,8 @@ def _persist_env(key: str, value: str, env_path: Optional[pathlib.Path] = None):
         fd.flush()
         os.fsync(fd.fileno())
         fd.close()
+        if env_path.exists():
+            shutil.copymode(str(env_path), fd.name)
         os.replace(fd.name, str(env_path))
     except Exception:
         try:
