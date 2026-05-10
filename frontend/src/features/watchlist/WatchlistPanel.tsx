@@ -8,6 +8,7 @@ interface Quote {
   symbol: string
   price: number | null
   change_pct: number | null
+  error?: string
 }
 
 function loadSymbols(): string[] {
@@ -125,7 +126,7 @@ export default function WatchlistPanel({
                     </span>
                   </>
                 ) : (
-                  <span style={styles.loading}>...</span>
+                  <span style={styles.loading} title={q?.error ?? undefined}>...</span>
                 )}
               </span>
               {isHovered && (

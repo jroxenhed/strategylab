@@ -1,6 +1,8 @@
 import json
 import logging
 import math
+import os
+import tempfile
 import time
 from datetime import datetime, timezone
 from fastapi import APIRouter
@@ -418,5 +420,19 @@ def get_watchlist():
 
 @router.post("/watchlist")
 def save_watchlist(req: WatchlistRequest):
-    WATCHLIST_PATH.write_text(json.dumps({"symbols": req.symbols}, indent=2))
+    content = json.dumps({"symbols": req.symbols}, indent=2)
+    fd = tempfile.NamedTemporaryFile(
+        mode='w', dir=str(WATCHLIST_PATH.parent), suffix='.tmp', delete=False
+    )
+    try:
+        fd.write(content)
+        fd.close()
+        os.replace(fd.name, str(WATCHLIST_PATH))
+    except Exception:
+        fd.close()
+        try:
+            os.unlink(fd.name)
+        except OSError:
+            pass
+        raise
     return {"symbols": req.symbols}
