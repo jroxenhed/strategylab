@@ -35,6 +35,53 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
+**Date:** 2026-05-11 (build 25 — overnight)
+**Branch:** `claude/jolly-babbage-naH4F`
+
+**Shipped:**
+- **F102** [next][easy] `Field(max_length=100)` on `buy_rules`/`sell_rules` for both `QuickBacktestRequest` and `BatchQuickBacktestRequest` in `backend/routes/backtest_quick.py`. Bounds O(n_rules × n_bars) per backtest. 7 new tests in `test_backtest_quick.py` (reject-101 × 4 paths, accept-exactly-100 × 2 boundaries: independent Field declarations on independent Pydantic models warrant independent boundary tests).
+- **F104** [easy] `WatchlistRequest._validate_symbols` raises 422 on empty-after-strip — matches `BatchQuickBacktestRequest._validate_symbols` (F91). Side-effect: closes **F87** silent-wipe of `watchlist.json`. Parametrized `test_watchlist_rejects_all_empty_symbols` covers 4 empty-list shapes and asserts on-disk file unchanged.
+- **F121** + **F123** New `backend/tests/test_bot_state.py` (6 tests) pinning `BotState.append_slippage_bps` (cap-1000, 2dp rounding, below-cap passthrough) and `BotState.append_equity_snapshot` (cap-500, ISO-8601 UTC, 2dp `value`, order preservation). Non-vacuous assertions distinguish wrong-boundary from no-op-cap regressions.
+
+**Review:** 5 personas round 1 (correctness / testing / adversarial / security / kieran-python) via manual `general-purpose` dispatch with persona-prompt-injection prefix — dedicated `compound-engineering:review:*-reviewer` agents still unresolved in routine env (5th run; F80 unchanged). Round 2 (correctness + adversarial) re-verified the in-PR fixes — clean, no new P0/P1/P2.
+
+**Findings → fix loop applied (6 in-PR):**
+- Testing + kieran converged P2 (0.92 + 0.90) → added `test_batch_accepts_exactly_100_rules` for the batch boundary (independent Field declaration on `BatchQuickBacktestRequest`).
+- Testing + kieran converged P2 (0.95 + 0.90) → docstring on `test_batch_rejects_more_than_100_sell_rules`.
+- Kieran P3 (0.80) → `_stub_rule()` function → `_STUB_RULE` module constant (round-2 adversarial 0.72 disagreed with mutable-global concern; kept the constant since round-2 correctness 0.97 confirmed Pydantic v2 doesn't mutate input dicts).
+- Kieran P2 (0.85) → replaced "see comment above" with per-class one-line WHY.
+- Kieran P2 (0.75) → trimmed F102 comment to one-line WHY (CLAUDE.md hygiene).
+- Testing P3 (0.78) → `@pytest.mark.parametrize` on F104 test for per-case node IDs.
+
+**Deferred → TODO (8 new items, F127–F134):**
+- **F127** [medium] Batch quick-backtest request-level deadline (adversarial P1 0.88). Architectural, out of F102 scope; cap-100 + body-cap F86 already mitigate worst-case 100×.
+- **F128** [next][medium] Apply `Field(max_length=100)` to remaining 5 sibling models — `StrategyRequest`/`BotConfig` (×6 lists each), `ScanRequest`, `PerformanceRequest`, `RegimeConfig.rules`. (adversarial 0.92 + security 0.90 converged).
+- **F129** `Rule.value` unbounded lookback in `signal_engine.py` — pairs with F106. (adversarial 0.80).
+- **F130** `compute_indicators` set-dedup gap — varied params bypass dedup. (adversarial 0.75).
+- **F131** [easy] Comment on `BotState.append_*` single-coroutine invariant. (adversarial P3 0.70).
+- **F132** [easy] Extract `BotState.append_activity_log()` helper — last unbounded-growth gap in BotState. (adversarial P3 0.72).
+- **F133** [easy] `scan_signals` raw `str(e)` leak — F115 follow-up. (security P3 0.72).
+- **F134** [easy] F104 no-pre-existing-file test variant. (testing P3 0.72).
+
+**Build:** frontend `npm run build` pass (sanity; no FE changes). **Smoke:** AST + import-time substitute (`backend/venv/` still missing in routine container — F97 unchanged 5th run).
+
+**Visual verification:** N/A — backend-only PR.
+
+**Builder env notes:**
+1. Dedicated `compound-engineering:review:*-reviewer` agents unresolved (5th run in a row, builds 21/22/23/24/25). `Agent` tool's `subagent_type` field rejects every persona name from the F80 roster; fallback to `general-purpose` with persona-injection prefix continues to work but loses any persona-specific system-prompt scaffolding.
+2. `backend/venv/` still missing — F97 unchanged 5th run.
+3. **Reviewer disagreement noted:** kieran-python (0.80, R1) wanted `_STUB_RULE` constant; adversarial (0.72, R2) flagged mutable-module-global hazard. Kept the constant on confidence + round-2 correctness's 0.97 confirmation that Pydantic v2 doesn't mutate inputs. If a future `mode='before'` validator mutates the input dict, the `[_STUB_RULE] * N` aliasing would corrupt test inputs — flagged as residual risk for morning review.
+
+**Next up:**
+- **F128** [next] Rule-list caps on the 5 sibling models — mechanically identical to F102, medium because of touch-count not complexity.
+- **F95** [next] Remaining `SymbolField` rollout on ticker/symbol fields — still blocked on F100 migration prereq.
+- **F127** [medium] Batch endpoint request-level deadline — closes the residual unbounded-walltime vector that F102 doesn't address.
+- **F129** + **F130** Rule.value lookback cap + compute_indicators dedup gap — both extend F106/F102 hardening surface.
+
+**Previous run:** 2026-05-11 PR #32 (build 24 — F86 + F91 + F94).
+
+## Build 24 Run
+
 **Date:** 2026-05-10 (build 24 — overnight)
 **Branch:** `claude/jolly-babbage-4Rfjg`
 

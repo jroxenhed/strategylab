@@ -179,3 +179,82 @@ def test_quick_single_ticker_normalizes(monkeypatch, client):
     )
     assert resp.status_code == 200
     assert received == ["BRK.B"]
+
+
+_STUB_RULE: dict = {"indicator": "rsi", "condition": "above", "value": 50}
+
+
+def test_quick_rejects_more_than_100_buy_rules(client):
+    """F102: >100 buy_rules → 422. Same DoS class as F86 body cap — without
+    the rule-list cap, the 1 MB body still admits thousands of small rules
+    driving O(n_rules × n_bars) compute per backtest."""
+    body = {
+        "ticker": "AAPL",
+        "buy_rules": [_STUB_RULE] * 101,
+        "sell_rules": [],
+    }
+    resp = client.post("/api/backtest/quick", json=body)
+    assert resp.status_code == 422
+
+
+def test_quick_rejects_more_than_100_sell_rules(client):
+    """F102: >100 sell_rules → 422 (same cap on the sell side)."""
+    body = {
+        "ticker": "AAPL",
+        "buy_rules": [],
+        "sell_rules": [_STUB_RULE] * 101,
+    }
+    resp = client.post("/api/backtest/quick", json=body)
+    assert resp.status_code == 422
+
+
+def test_quick_accepts_exactly_100_rules(monkeypatch, client):
+    """F102 boundary: exactly 100 rules per side is accepted (cap is inclusive)."""
+    from routes import backtest_quick as bq_mod
+
+    def fake_run(req):
+        return bq_mod.QuickBacktestResult(ticker=req.ticker)
+
+    monkeypatch.setattr(bq_mod, "_run_quick", fake_run)
+    body = {
+        "ticker": "AAPL",
+        "buy_rules": [_STUB_RULE] * 100,
+        "sell_rules": [_STUB_RULE] * 100,
+    }
+    resp = client.post("/api/backtest/quick", json=body)
+    assert resp.status_code == 200
+
+
+def test_batch_rejects_more_than_100_buy_rules(client):
+    """F102: rule-list cap applies to BatchQuickBacktestRequest too."""
+    body = _base_batch_body(buy_rules=[_STUB_RULE] * 101)
+    resp = client.post("/api/backtest/quick/batch", json=body)
+    assert resp.status_code == 422
+
+
+def test_batch_rejects_more_than_100_sell_rules(client):
+    """F102: >100 sell_rules on batch endpoint → 422 (mirrors quick-endpoint sell-side test)."""
+    body = _base_batch_body(sell_rules=[_STUB_RULE] * 101)
+    resp = client.post("/api/backtest/quick/batch", json=body)
+    assert resp.status_code == 422
+
+
+def test_batch_accepts_exactly_100_rules(monkeypatch, client):
+    """F102 boundary: 100 rules per side on the batch endpoint is accepted.
+
+    Independent of the quick-endpoint boundary test — the cap lives on
+    `BatchQuickBacktestRequest`'s own Field, so an off-by-one regression here
+    would not be caught by `test_quick_accepts_exactly_100_rules`.
+    """
+    from routes import backtest_quick as bq_mod
+
+    def fake_run(req):
+        return bq_mod.QuickBacktestResult(ticker=req.ticker)
+
+    monkeypatch.setattr(bq_mod, "_run_quick", fake_run)
+    body = _base_batch_body(
+        buy_rules=[_STUB_RULE] * 100,
+        sell_rules=[_STUB_RULE] * 100,
+    )
+    resp = client.post("/api/backtest/quick/batch", json=body)
+    assert resp.status_code == 200

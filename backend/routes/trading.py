@@ -68,6 +68,14 @@ class WatchlistRequest(BaseModel):
             if isinstance(sym, str) and not sym.strip():
                 continue
             cleaned.append(normalize_symbol(sym))
+        # F104: reject all-empty-after-strip to match BatchQuickBacktestRequest
+        # (F91). Closes F87 — POST {symbols: []} or {symbols: ["", "  "]} no
+        # longer silently overwrites the on-disk watchlist with []. Wiping the
+        # watchlist requires an explicit DELETE (not yet wired) or a non-empty
+        # POST first; the strict contract is consistent across both request
+        # models.
+        if not cleaned:
+            raise ValueError("symbols must contain at least one non-empty entry")
         # F93: dedup while preserving first-occurrence order. Prevents 500 duplicate
         # "AAPL" entries from amplifying scanner backtests 500x.
         return list(dict.fromkeys(cleaned))

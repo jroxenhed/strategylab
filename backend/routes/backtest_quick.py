@@ -19,8 +19,10 @@ class QuickBacktestRequest(BaseModel):
     ticker: SymbolField
     interval: str = "1d"
     lookback_days: int = Field(default=90, gt=0)
-    buy_rules: list[Rule]
-    sell_rules: list[Rule]
+    # F102: bound O(n_rules × n_bars) per backtest — body cap (F86) still
+    # admits thousands of small rules.
+    buy_rules: list[Rule] = Field(max_length=100)
+    sell_rules: list[Rule] = Field(max_length=100)
     buy_logic: LogicField = "AND"
     sell_logic: LogicField = "AND"
     direction: DirectionField = "long"
@@ -50,8 +52,9 @@ class BatchQuickBacktestRequest(BaseModel):
     symbols: list[str] = Field(min_length=1, max_length=500)
     interval: str = "1d"
     lookback_days: int = Field(default=90, gt=0)
-    buy_rules: list[Rule]
-    sell_rules: list[Rule]
+    # F102: same per-list cap as QuickBacktestRequest — bound per-symbol work.
+    buy_rules: list[Rule] = Field(max_length=100)
+    sell_rules: list[Rule] = Field(max_length=100)
     buy_logic: LogicField = "AND"
     sell_logic: LogicField = "AND"
     direction: DirectionField = "long"
