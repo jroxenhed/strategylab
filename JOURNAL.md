@@ -6,6 +6,20 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-11
 
+### Easy-F test hygiene bundle — 6 items, 1 commit, 1 follow-up
+
+- Interactive Tier A bundle, second of the day. All testing-only changes: zero production runtime impact, full diff confined to `tests/` + one helper extraction (`parse_max_body_env`) in `middleware.py`+`main.py` to make F108 testable.
+  - **[F120](TODO.md#f120)** Three stale tests aligned with current behavior: `test_ohlcv_rejects_unknown_source` now asserts `"Invalid source"` (post-F94 message via `require_valid_source`); `test_backtest_costs.py:_req()` defaults pin IBKR Fixed (0.0035/0.35) so commission tests stay independent of the Alpaca commission-free model defaults (0.0/0.0); `test_empty_journal_returns_default` expected dict expanded to include the `live_spread_bps`/`half_spread_bps` fields that the slippage route added.
+  - **[F40](TODO.md#f40)** Replaced `time.sleep(0.01)` in both `TestFetchOhlcvDedup` tests with a `threading.Event`. The executor thread holds on `release.wait(timeout=2.0)`; the test coroutine polls `call_count` until task1 has reached the executor, yields once more so task2 hits its dedup check, then sets the event. Deterministic under high system load.
+  - **[F46](TODO.md#f46)** Confirmed already addressed via `setUp()` + `self.addCleanup(shared._async_ohlcv_futures.clear)` — the modern unittest idiom is equivalent to the requested setUp/tearDown pair AND runs even when setUp partially fails. Checked off with a note explaining the equivalence.
+  - **[F107](TODO.md#f107)** Added `test_non_body_method_bypasses_cap_even_with_huge_content_length` (parametrized over HEAD/OPTIONS/DELETE) driving the ASGI middleware directly with `Content-Length: 10000` against `max_bytes=100`. Asserts the downstream handler is called and 413 is NOT emitted — closes the BODY_METHODS allowlist coverage gap.
+  - **[F108](TODO.md#f108)** Extracted `parse_max_body_env(value)` from `main.py:102-109` into `middleware.py`. New helper raises `ValueError` on non-numeric or non-positive input so callers can log+fallback uniformly. `main.py` now imports the helper and keeps the existing `logger.warning` + `DEFAULT_MAX_BYTES` fallback. 4 new tests pin the contract: returns default on None/empty, parses valid positive integers, raises on non-numeric, raises on non-positive.
+  - **[F134](TODO.md#f134)** Added `test_watchlist_422_does_not_create_file_when_absent` (parametrized over the same 4 empty-list shapes as the F104 sibling). Asserts `not watchlist_file.exists()` BOTH before and after the POST — pins the invariant that a 422 must not touch disk.
+- **Verification:** full backend pytest goes from `3 failed, 236 passed` (this morning) to `1 failed, 256 passed`. The remaining failure is `test_ibkr_provider_submit_market_order`, which passes in isolation — order-dependent test contamination, filed as F139.
+- **Tier A justification:** all 6 items tagged `[easy]`; testing-only changes plus one boundary helper extraction (the production-code delta is 4 lines: one import, one function call swap, 9 lines removed from `main.py`, helper added to `middleware.py`). No contract surface, no behavioral change. Orchestrator verification only — pytest + spot-check + grep.
+- **Follow-up surfaced:**
+  - **[F139](TODO.md#f139)** `test_ibkr_provider_submit_market_order` order-dependent failure — `RuntimeError: There is no current event loop` from `ib_insync._run` when run with the full suite, passes in isolation. Likely a prior test (suspect `test_alpaca_provider_submit_order` per the deprecation warning trail) leaves event-loop state ib_insync trips on. Filed `[medium]` because diagnosis path is bounded but the fix may need broker test fixtures.
+
 ### Easy-F backend hardening bundle — 5 items, 1 commit, 2 follow-ups
 
 - Interactive Tier A bundle (`[easy]` items, mechanical, no contract surface, no browser verification). Five backend hardening items shipped together — all from the F125 audit and build 25 review backlog. Total diff < 40 lines across `shared.py`, `routes/trading.py`, `bot_manager.py`, `bot_runner.py`.

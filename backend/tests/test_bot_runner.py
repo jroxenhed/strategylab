@@ -412,28 +412,40 @@ class TestFetchOhlcvDedup(unittest.TestCase):
         self.addCleanup(shared._async_ohlcv_futures.clear)
 
     def test_concurrent_same_key_calls_fetch_once(self):
-        """Two concurrent fetch_ohlcv_async calls for same symbol share one _fetch call AND receive the same result."""
-        import time
+        """Two concurrent fetch_ohlcv_async calls for same symbol share one _fetch call AND receive the same result.
+
+        Uses a threading.Event barrier (not time.sleep) so the executor thread
+        is pinned until the test has confirmed both coroutines have reached
+        their dedup check. Deterministic under high system load.
+        """
+        import threading
         import shared
         from shared import fetch_ohlcv_async
 
         df = make_df([100.0, 100.0])
         call_count = 0
+        release = threading.Event()
 
-        def slow_fetch(*args, **kwargs):
+        def blocking_fetch(*args, **kwargs):
             nonlocal call_count
             call_count += 1
-            time.sleep(0.01)  # hold thread so Future is still pending (not done()) when task2 runs its dedup check
+            assert release.wait(timeout=2.0), "release event never set — test setup bug"
             return df
 
         async def run():
-            r1, r2 = await asyncio.gather(
-                fetch_ohlcv_async("AAPL", "2026-01-01", "2026-01-10", "1d"),
-                fetch_ohlcv_async("AAPL", "2026-01-01", "2026-01-10", "1d"),
+            task1 = asyncio.create_task(
+                fetch_ohlcv_async("AAPL", "2026-01-01", "2026-01-10", "1d")
             )
-            return r1, r2
+            task2 = asyncio.create_task(
+                fetch_ohlcv_async("AAPL", "2026-01-01", "2026-01-10", "1d")
+            )
+            while call_count < 1:
+                await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            release.set()
+            return await asyncio.gather(task1, task2)
 
-        with patch.object(shared, "_fetch", slow_fetch):
+        with patch.object(shared, "_fetch", blocking_fetch):
             r1, r2 = asyncio.run(run())
 
         self.assertEqual(call_count, 1, "_fetch should be called once — dedup shares one Future")
@@ -441,26 +453,33 @@ class TestFetchOhlcvDedup(unittest.TestCase):
 
     def test_different_symbols_call_fetch_separately(self):
         """Different symbols each invoke _fetch independently (no false dedup)."""
-        import time
+        import threading
         import shared
         from shared import fetch_ohlcv_async
 
         df = make_df([100.0, 100.0])
         call_count = 0
+        release = threading.Event()
 
-        def slow_fetch(*args, **kwargs):
+        def blocking_fetch(*args, **kwargs):
             nonlocal call_count
             call_count += 1
-            time.sleep(0.01)
+            assert release.wait(timeout=2.0), "release event never set — test setup bug"
             return df
 
         async def run():
-            await asyncio.gather(
-                fetch_ohlcv_async("AAPL", "2026-01-01", "2026-01-10", "1d"),
-                fetch_ohlcv_async("MSFT", "2026-01-01", "2026-01-10", "1d"),
+            task1 = asyncio.create_task(
+                fetch_ohlcv_async("AAPL", "2026-01-01", "2026-01-10", "1d")
             )
+            task2 = asyncio.create_task(
+                fetch_ohlcv_async("MSFT", "2026-01-01", "2026-01-10", "1d")
+            )
+            while call_count < 2:
+                await asyncio.sleep(0)
+            release.set()
+            await asyncio.gather(task1, task2)
 
-        with patch.object(shared, "_fetch", slow_fetch):
+        with patch.object(shared, "_fetch", blocking_fetch):
             asyncio.run(run())
 
         self.assertEqual(call_count, 2, "_fetch called twice for different symbols — no false dedup")

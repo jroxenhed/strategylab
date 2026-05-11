@@ -10,9 +10,13 @@ from signal_engine import Rule
 
 
 def _req(**kw) -> StrategyRequest:
+    # Defaults pin the IBKR Fixed commission schedule (0.0035 per share, 0.35 min)
+    # so the helper-logic tests below remain independent of the model's own defaults,
+    # which flipped to 0.0/0.0 (Alpaca commission-free) per CLAUDE.md.
     defaults = dict(
         ticker="X", buy_rules=[Rule(indicator="price", condition="below", value=1)],
         sell_rules=[Rule(indicator="price", condition="above", value=1)],
+        per_share_rate=0.0035, min_per_order=0.35,
     )
     return StrategyRequest(**{**defaults, **kw})
 

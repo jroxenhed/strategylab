@@ -133,6 +133,23 @@ def test_watchlist_rejects_all_empty_symbols(client, tmp_path, monkeypatch, empt
     assert json.loads(watchlist_file.read_text()) == {"symbols": ["ORIG"]}
 
 
+@pytest.mark.parametrize("empty", [[], [""], ["   "], ["", "  ", "\t"]])
+def test_watchlist_422_does_not_create_file_when_absent(client, tmp_path, monkeypatch, empty):
+    """F134: F104 sibling — when no watchlist file exists, a 422 must not
+    accidentally create an empty one via partial path traversal in a future
+    refactor. Pins that the validator rejects BEFORE any disk write.
+    """
+    watchlist_file = tmp_path / "watchlist.json"
+    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", watchlist_file)
+    assert not watchlist_file.exists(), "fixture must start clean"
+
+    resp = client.post("/api/trading/watchlist", json={"symbols": empty})
+    assert resp.status_code == 422
+    assert not watchlist_file.exists(), (
+        "422 path must not touch disk — would regress to F87 silent-wipe class"
+    )
+
+
 def test_watchlist_validation_rejects_invalid_chars(client, tmp_path, monkeypatch):
     """F38/F85: a symbol containing chars outside [A-Z0-9.-] fails the whole
     request with 422.

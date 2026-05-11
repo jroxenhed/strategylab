@@ -32,12 +32,16 @@ def _fill(symbol="AAPL", side="buy", expected=100.0, price=100.0):
 def test_empty_journal_returns_default(fake_journal):
     fake_journal([])
     body = TestClient(app).get("/api/slippage/AAPL").json()
+    # live_spread_bps / half_spread_bps are None because no broker is configured
+    # in the test environment (route falls into the broad except at slippage.py:42).
     assert body == {
-        "modeled_bps":    2.0,
-        "measured_bps":   None,
-        "fill_bias_bps":  None,
-        "fill_count":     0,
-        "source":         "default",
+        "modeled_bps":     2.0,
+        "measured_bps":    None,
+        "fill_bias_bps":   None,
+        "fill_count":      0,
+        "source":          "default",
+        "live_spread_bps": None,
+        "half_spread_bps": None,
     }
 
 

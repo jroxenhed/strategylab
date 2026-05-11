@@ -20,6 +20,20 @@ from starlette.types import ASGIApp, Scope, Receive, Send
 DEFAULT_MAX_BYTES = 1_048_576  # 1 MB
 
 
+def parse_max_body_env(value: str | None) -> int:
+    """Parse STRATEGYLAB_MAX_BODY_BYTES env value. Raises ValueError on invalid input.
+
+    Returns DEFAULT_MAX_BYTES when value is None or empty; raises ValueError for
+    non-numeric or non-positive input so callers can log + fall back uniformly.
+    """
+    if not value:
+        return DEFAULT_MAX_BYTES
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError(f"STRATEGYLAB_MAX_BODY_BYTES must be positive, got {parsed}")
+    return parsed
+
+
 class BodySizeLimitMiddleware:
     """Limits HTTP request body size via Content-Length fast path with chunked-body slow path fallback.
 

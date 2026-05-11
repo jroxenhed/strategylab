@@ -138,12 +138,18 @@ def test_providers_endpoint_includes_yahoo():
 
 
 def test_ohlcv_rejects_unknown_source():
-    """GET /api/ohlcv returns 400 for unknown source."""
+    """GET /api/ohlcv returns 400 for unknown source.
+
+    Route layer pre-validates via `require_valid_source` (F94) which raises
+    "Invalid source". The deeper "Unknown data source" message in `_fetch`
+    only fires if a caller bypasses route validation (covered by
+    `test_fetch_rejects_unknown_source` above).
+    """
     from main import app
     client = TestClient(app)
     resp = client.get("/api/ohlcv/AAPL", params={"source": "nonexistent"})
     assert resp.status_code == 400
-    assert "Unknown data source" in resp.json()["detail"]
+    assert resp.json()["detail"] == "Invalid source"
 
 
 def test_ohlcv_defaults_to_yahoo(monkeypatch):

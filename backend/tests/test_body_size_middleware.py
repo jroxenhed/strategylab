@@ -18,7 +18,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from middleware import BodySizeLimitMiddleware
+from middleware import BodySizeLimitMiddleware, DEFAULT_MAX_BYTES, parse_max_body_env
 
 
 def _build_app(max_bytes: int = 1024) -> FastAPI:
@@ -302,3 +302,63 @@ def test_constructor_rejects_nonpositive_max_bytes():
         BodySizeLimitMiddleware(lambda scope, r, s: None, max_bytes=0)
     with pytest.raises(ValueError):
         BodySizeLimitMiddleware(lambda scope, r, s: None, max_bytes=-1)
+
+
+@pytest.mark.parametrize("method", ["HEAD", "OPTIONS", "DELETE"])
+def test_non_body_method_bypasses_cap_even_with_huge_content_length(method):
+    """F107: methods outside BODY_METHODS short-circuit to downstream regardless
+    of Content-Length. The frozenset is `{POST, PUT, PATCH}` — everything else
+    (GET test already exists at module level) must pass through.
+
+    Drives ASGI directly because TestClient strips request bodies on these
+    methods, masking the Content-Length signal.
+    """
+    downstream_calls: list[str] = []
+
+    async def fake_receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def fake_send(message):
+        pass
+
+    async def downstream(scope, receive, send):
+        downstream_calls.append(scope["method"])
+
+    mw = BodySizeLimitMiddleware(downstream, max_bytes=100)
+    scope = {
+        "type": "http",
+        "method": method,
+        "headers": [(b"content-length", b"10000")],
+    }
+    asyncio.run(mw(scope, fake_receive, fake_send))
+    assert downstream_calls == [method], (
+        f"{method} should pass through even with Content-Length=10000 > max_bytes=100"
+    )
+
+
+def test_parse_max_body_env_returns_default_when_unset():
+    """F108: empty/None env value → DEFAULT_MAX_BYTES (no warning)."""
+    assert parse_max_body_env(None) == DEFAULT_MAX_BYTES
+    assert parse_max_body_env("") == DEFAULT_MAX_BYTES
+
+
+def test_parse_max_body_env_accepts_valid_override():
+    """F108: a positive integer string parses to that exact value."""
+    assert parse_max_body_env("2048") == 2048
+    assert parse_max_body_env("1") == 1
+
+
+def test_parse_max_body_env_raises_on_non_numeric():
+    """F108: garbage env value surfaces as ValueError so main.py can warn + fall back."""
+    with pytest.raises(ValueError):
+        parse_max_body_env("not-a-number")
+    with pytest.raises(ValueError):
+        parse_max_body_env("1.5")  # int() rejects floats too
+
+
+def test_parse_max_body_env_raises_on_nonpositive():
+    """F108: zero or negative env value is invalid (matches BodySizeLimitMiddleware constructor)."""
+    with pytest.raises(ValueError):
+        parse_max_body_env("0")
+    with pytest.raises(ValueError):
+        parse_max_body_env("-100")

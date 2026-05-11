@@ -38,7 +38,7 @@ from routes.backtest_sweep import router as backtest_sweep_router
 from routes.backtest_optimizer import router as backtest_optimizer_router
 import routes.bots as bots_module
 from bot_manager import BotManager
-from middleware import BodySizeLimitMiddleware, DEFAULT_MAX_BYTES
+from middleware import BodySizeLimitMiddleware, DEFAULT_MAX_BYTES, parse_max_body_env
 
 
 @asynccontextmanager
@@ -101,10 +101,8 @@ app.add_middleware(
 # handling and before any route dispatch. Override via STRATEGYLAB_MAX_BODY_BYTES.
 _max_body_env = os.environ.get("STRATEGYLAB_MAX_BODY_BYTES")
 try:
-    _max_body = int(_max_body_env) if _max_body_env else DEFAULT_MAX_BYTES
-    if _max_body <= 0:
-        raise ValueError
-except ValueError:
+    _max_body = parse_max_body_env(_max_body_env)
+except (ValueError, TypeError):
     logger.warning("Invalid STRATEGYLAB_MAX_BODY_BYTES=%r, falling back to %d", _max_body_env, DEFAULT_MAX_BYTES)
     _max_body = DEFAULT_MAX_BYTES
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=_max_body)
