@@ -6,6 +6,33 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-11
 
+### Build 25 — F102 + F104 + F121 + F123 (overnight, 1 commit)
+
+- Three tight hardening + testing items behind one commit; closed the silent-wipe gap F87 as a side-effect of F104.
+  - **[F102](TODO.md#f102)** `Field(max_length=100)` on `buy_rules` and `sell_rules` for both `QuickBacktestRequest` and `BatchQuickBacktestRequest` (`backend/routes/backtest_quick.py`). Bounds O(n_rules × n_bars) per backtest below the 1 MB body-cap (F86) ceiling. 7 new tests in `test_backtest_quick.py` covering both endpoints × both rule lists × reject-101 / accept-exactly-100 boundaries (independent Field declarations on independent Pydantic models, so boundary tests cover both classes).
+  - **[F104](TODO.md#f104)** `WatchlistRequest._validate_symbols` now raises 422 on empty-after-strip — same shape as `BatchQuickBacktestRequest._validate_symbols` (F91). Closes the silent overwrite vector that **[F87](TODO.md#f87)** filed: POST `{"symbols": []}` / `{"symbols": ["", "  "]}` no longer wipes `watchlist.json`. Parametrized `test_watchlist_rejects_all_empty_symbols` exercises 4 empty-list shapes and asserts the on-disk file is unchanged.
+  - **[F121](TODO.md#f121)** + **[F123](TODO.md#f123)** New `backend/tests/test_bot_state.py` (6 tests) pinning the cap-at-1000 / cap-at-500 + rounding + ISO-8601 UTC contract on `BotState.append_slippage_bps` (F56/F119 helper) and `BotState.append_equity_snapshot` (F58/F122 helper). Non-vacuous assertions: each cap test verifies length AND first-survivor AND last-value so a wrong-boundary regression fails a distinct assertion from a no-op-cap regression.
+- **Review:** 5 personas round 1 (correctness / testing / adversarial / security / kieran-python) — manual `general-purpose` dispatch with persona-prompt-injection prefix (dedicated `compound-engineering:review:*-reviewer` agents still unresolved in routine env, 5th run in a row, F80 unchanged). 9 findings round 1: 1 P1, 8 P2/P3. Round 2 (correctness + adversarial) re-verified the in-PR fixes — clean, no new P0/P1/P2.
+- **Findings → fixes applied in-PR:**
+  - Testing P2 (0.92) + kieran P2 (0.90) converged on missing batch-side exact-100 boundary test → added `test_batch_accepts_exactly_100_rules`.
+  - Testing P2 (0.95) + kieran P2 (0.90) converged on missing docstring → added.
+  - Kieran P3 (0.80) on `_stub_rule()` function → replaced with module-level `_STUB_RULE` constant (matches the existing `_base_batch_body` constant idiom in the same file). Round-2 adversarial flagged the mutable-module-global hazard at 0.72 — kept as constant since (a) confidence is higher on kieran's finding, (b) round-2 correctness confirmed Pydantic v2 does not mutate input dicts (0.97), and (c) the alternative reintroduces the function-call overhead without proportional safety gain. Documented as a residual risk if a future BeforeValidator mutates input dicts.
+  - Kieran P2 (0.85) on "see comment above" dangling reference → replaced with per-class one-line WHY.
+  - Kieran P2 (0.75) on F102 comment verbosity → trimmed to one-line WHY (matches CLAUDE.md "no comments unless WHY non-obvious").
+  - Testing P3 (0.78) on F104 for-loop test isolation → converted to `@pytest.mark.parametrize` so each empty-list shape gets its own pytest node ID.
+- **Findings → deferred to TODOs (8 new items, all from cross-reviewer convergence):**
+  - **[F127](TODO.md#f127)** Batch quick-backtest request-level deadline — adversarial P1 (0.88, manual). Explicitly out of F102 scope; request-level timeout is an architectural change (asyncio.wait_for or middleware-wide deadline). Cap-100 + body-cap F86 already mitigates the worst-case 100×; F127 closes the residual unbounded-walltime vector.
+  - **[F128](TODO.md#f128)** [next] Apply `Field(max_length=100)` to the remaining 5 sibling models — adversarial 0.92 + security 0.90 converged. `StrategyRequest` (×6 lists), `BotConfig` (×6 lists), `ScanRequest`, `PerformanceRequest`, `RegimeConfig.rules`. Mechanically identical to F102; deferred to keep this PR focused on the quick-backtest entry point.
+  - **[F129](TODO.md#f129)** `Rule.value` unbounded lookback in signal_engine — `rising_over` / `falling_over` / `turns_up` / `turns_down` cast `Rule.value` to int and use it as a Series index; a crafted 1e9 makes the trough-scan O(i²) per bar. Pairs with F106 (allowlist Rule.indicator/condition). Adversarial 0.80.
+  - **[F130](TODO.md#f130)** `compute_indicators` set-dedup gap — varied `period` params bypass the dedup. 100 MA rules with distinct periods → 100 separate `compute_instance('ma', ...)` passes. Cap-100 (F102) doesn't bound this; per-family cap needed. Adversarial 0.75.
+  - **[F131](TODO.md#f131)** Document the single-coroutine-per-bot invariant on the `BotState.append_*` helpers — race-safe today only because no `await` separates the append from the slice. Adversarial P3 0.70.
+  - **[F132](TODO.md#f132)** Extract `BotState.append_activity_log()` helper — the 200-entry cap currently lives in `bot_runner._log()`, not in `BotState`. Last unbounded-growth gap in BotState. Adversarial P3 0.72.
+  - **[F133](TODO.md#f133)** `scan_signals` leaks raw `str(e)` in error rows — F115 closed this across 4 routes; the scan route was outside that diff. Security P3 0.72.
+  - **[F134](TODO.md#f134)** F104 test variant for the no-pre-existing-file path — current test only asserts unchanged-after-422 when the file pre-exists. Testing P3 0.72.
+- **Build:** frontend `npm run build` pass (clean; no frontend changes, sanity). **Smoke:** AST + import-time substitute (F97 unchanged — no `backend/venv/` in routine container for the 5th run in a row).
+- **Visual verification:** N/A — backend-only.
+- **Builder env notes:** dedicated `compound-engineering:review:*-reviewer` agents still unresolved (5th run); `backend/venv/` still missing (5th run). Both already filed (F80, F97).
+
 ### F125 — third easy-hardening bundle (9 items, 4 parallel agents)
 
 - Third pre-overnight batch. Orchestrator protocol: 4 parallel Sonnet agents grouped by file independence (zero file overlap across groups), verification + test triage + commit owned by orchestrator. Scaling up: 9 items in ~5 min wall-clock implementation + ~3 min verification, vs ~25 min serial.

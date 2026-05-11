@@ -112,6 +112,27 @@ def test_watchlist_validation_exactly_20_char_symbol(client, tmp_path, monkeypat
     assert resp.json()["symbols"] == ["A" * 20]
 
 
+@pytest.mark.parametrize("empty", [[], [""], ["   "], ["", "  ", "\t"]])
+def test_watchlist_rejects_all_empty_symbols(client, tmp_path, monkeypatch, empty):
+    """F104: harmonize empty-list-after-strip with BatchQuickBacktestRequest (F91).
+
+    Closes F87 — pre-F104 POST {symbols: []} or {symbols: ["", "  "]} silently
+    returned 200 and overwrote the on-disk watchlist with []. Now 422; wiping
+    the watchlist requires an explicit DELETE (not yet wired) or a non-empty
+    POST first.
+    """
+    watchlist_file = tmp_path / "watchlist.json"
+    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", watchlist_file)
+
+    # Pre-seed so we can prove the on-disk file is unchanged after the 422.
+    watchlist_file.write_text(json.dumps({"symbols": ["ORIG"]}))
+
+    resp = client.post("/api/trading/watchlist", json={"symbols": empty})
+    assert resp.status_code == 422
+    # On-disk content must NOT have been silently overwritten.
+    assert json.loads(watchlist_file.read_text()) == {"symbols": ["ORIG"]}
+
+
 def test_watchlist_validation_rejects_invalid_chars(client, tmp_path, monkeypatch):
     """F38/F85: a symbol containing chars outside [A-Z0-9.-] fails the whole
     request with 422.
