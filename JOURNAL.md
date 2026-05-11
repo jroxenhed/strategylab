@@ -6,6 +6,16 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-11
 
+### F143 — `routes/bots.py` PATCH HTTP-level smoke tests (Tier B, orchestrator)
+
+- Test-only Tier B item. Extended `tests/test_routes_bots.py` with FastAPI-level integration coverage for the PATCH validator. Single sonnet implementer + one correctness review pass (clean, only flagged a minor `_RULE_FIELDS` duplication that was applied directly).
+- **[F143](TODO.md#f143)** Added `client_with_stub_manager` fixture (TestClient + monkeypatched MagicMock `bot_manager`), 13 new tests: per-rule-field reject-101-via-HTTP (parametrized × 6 fields, asserts 422 + `"too_long"` in body), per-rule-field accept-100-via-HTTP (× 6, asserts 200 + `{"ok": True}`), plus the 503 guard test for `bot_manager is None`. F141's Pydantic-layer tests now have a sibling HTTP-layer pair.
+- **Cleanup:** correctness reviewer flagged the duplicate `_RULE_FIELDS` parametrize list (defined once at line ~22, then re-defined at line ~98). Consolidated to a single module constant — orchestrator applied the fix directly (mechanical, single grep-replace).
+- **Verification:** 27/27 tests in `test_routes_bots.py` pass. Full suite at 344/345 (F139 still the lone pre-existing failure).
+- **Tier B reflection:** the orchestrator review of a test-only addition is much lower-value than for runtime code — correctness reviewer's 7-focus-area pass turned up exactly one trivial cleanup. Validates the F136 rule (Tier B = correctness always) but suggests test-only `[medium]` items could ship with orchestrator-only verification + a lighter `npm run build`/pytest gate. Worth a future TODO if this pattern repeats.
+- **Follow-up surfaced:**
+  - **[F144](TODO.md#f144)** Integration test coverage gap for the other 12 routes/bots.py endpoints — POST (AddBotRequest), GET, DELETE, /start-all, /stop-all, /reorder, /stop-and-close-all, /{id}/start, /{id}/stop, /{id}/buy, /{id}/reset-pnl, /{id}/backtest, fund endpoints. F143 was minimum-scope per the original entry; broader coverage tracked separately. AddBotRequest is the highest priority because it doesn't have F128's field-level cap (the cap fires later on BotConfig reconstruct).
+
 ### F129 + F130 — signal_engine DoS hardening (Tier B, full orchestrator)
 
 - Second Tier B item of the day. Combined two related signal-engine DoS items into one orchestrator cycle (same file, related theme). Full pipeline: haiku explore → sonnet implementer → 2 parallel sonnet reviewers (correctness + kieran-python) → 1 sonnet fixer → Opus orchestrator.
