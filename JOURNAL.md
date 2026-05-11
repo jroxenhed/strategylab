@@ -6,6 +6,19 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-11
 
+### Build 25 morning calibration — PR #33 merged + F127 collision resolved
+
+- Ran the 2-persona morning calibration roster (agent-native + reliability) on PR #33 via `ce:review` skill with explicit roster override. Builder already ran 4-6 personas overnight; this pass adds only the deltas — novel-signal lanes the builder doesn't cover (agent-native) and severity calibration sweep (reliability). ~3 min wall-clock, 2 in-PR changes, 1 deferral.
+- **Findings shipped in-PR (commit 5a8d669 → merged via 322cd49):**
+  - **agent-native-001** (P2, 0.92): `WatchlistRequest.symbols` now `Field(min_length=1)`. Surfaces F104's "non-empty" constraint as `minItems: 1` in `/openapi.json` so agent clients see the cap without probing. Mirrors F91's pattern on `BatchQuickBacktestRequest.symbols`. Existing custom validator still wins for the strip-to-empty case.
+  - **reliability-001** (P2, 0.82): TODO/NEXT_RUN F127 (batch deadline) entry's fix sketch (`asyncio.wait_for` on a sync route) would crash per CLAUDE.md "Sync callbacks need `run_coroutine_threadsafe`". Replaced with three correct options: `concurrent.futures` timeout, async-convert + `run_in_executor`, or middleware-level deadline. This is exactly the calibration role — re-judging a deferral's implementation viability, not the deferral decision itself (P1 severity stays).
+- **Deferred:**
+  - **[F135](TODO.md#f135)** (agent-native-002, P2, 0.88): `SignalScanner.tsx:53` swallows F104's new 422 via `saveWatchlist(list).catch(() => {})`. Frontend gap exposed by the contract change. Same reason F87 was deferred from F125 batch 3 — frontend changes need browser verification and a coordinated fix.
+- **Debunked by reliability:**
+  - Adversarial's `_STUB_RULE` mutable-global concern (`test_backtest_quick.py:181`): Pydantic v2 doesn't mutate inputs, and the constant is only used as `TestClient.post(json=...)` which serializes to a fresh dict per call. No risk. Builder's R2 correctness rerun at 0.97 already confirmed; reliability provided the counter-evidence.
+- **F127 numbering collision — resolved:** my commit 23c69f9 ("F127 — severity-graded review tiers") and the overnight builder's TODO entry F127 (batch quick-backtest deadline) shipped concurrently. TODO.md only contains the overnight's F127 entry. Retroactively filed **[F136](TODO.md#f136)** (checked-off) to give the severity-graded review tiers work a unique anchor pointing at commit 23c69f9. Commit messages are immutable; this resolves the cross-reference ambiguity going forward.
+- **Tier classification of PR #33 vs F127 rule:** PR #33 was 341 / 14 lines across 9 files. F104 is a contract-surface change (POST endpoint now returns 422 where it returned 200). Under F136's tier rule this is **Tier C** (contract-surface override). The builder's overnight roster was warranted. F127's tier system would not have under-reviewed this PR — first real-world validation of the policy.
+
 ### Build 25 — F102 + F104 + F121 + F123 (overnight, 1 commit)
 
 - Three tight hardening + testing items behind one commit; closed the silent-wipe gap F87 as a side-effect of F104.
