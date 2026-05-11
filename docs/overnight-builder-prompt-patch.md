@@ -123,9 +123,23 @@ print('Import-time check passed.')
 
 If any step fails, investigate before proceeding to review. AST + import-time covers ~80% of "compiles clean but throws on first request" bugs that `tsc --noEmit`-equivalent static checks would miss; helper-logic covers the validator-wiring regressions that builds 22 + 23 surfaced.
 
-### 4. Multi-Agent Review (CRITICAL — do not skip)
+### 4. Multi-Agent Review (severity-graded — match review depth to actual risk)
 
-Single-pass self-review consistently misses P1s that multi-agent review catches. Past evidence: PR #25 build 6 shipped with "0 self-review findings" but morning multi-agent review found 2 P1s. PR #25 and #26 each had a P1 about pattern consistency that 5+ reviewers flagged but builder self-review missed. This step closes that gap.
+Single-pass self-review consistently misses P1s on architectural changes — that's why multi-agent review exists. But running 4-6 personas on every PR overshoots when the diff is a bundle of `[easy]` hardening items (caps, logger.exception, type tightening). 2026-05-11 evidence: F119 + F122 + F125 shipped 24 `[easy]` items across 3 interactive batches with parallel Sonnet implementers + Opus orchestrator verification + ZERO persona review + zero regressions (user-validated). Personas earn their tokens at the architectural/adversarial tails, not on mechanical hardening.
+
+**Before dispatching review, classify the PR into a tier (see CLAUDE.md "Severity-graded review tiers"):**
+
+| Tier | When | Personas |
+|---|---|---|
+| **A** | Bundle of `[easy]` items, total diff <100 lines, no contract surface | None. Orchestrator verifies via §3.5 smoke test + AST + full test suite + per-agent spot-check. Skip directly to §5 commit. |
+| **B** | `[medium]` items OR aggregate 100-300 lines OR >5 files touched | 2 max: `correctness` always + conditional file-type reviewer (`kieran-python` for `.py`, `kieran-typescript` for `.ts/.tsx`). |
+| **C** | `[hard]` / architectural / contract changes / aggregate >300 lines | 4-6 panel: the 4 always-on personas (correctness, testing, adversarial, security) + conditionals per file mix (kieran-*, reliability, project-standards, maintainability). |
+
+**Contract-surface override (always Tier C):** changing a Pydantic `response_model`, changing public API error wording/shape, changing auth/authz, changing persistence schema, changing TypeScript shared types in `frontend/shared/types/`, removing a public route. Blast radius is callers, not LOC.
+
+**Aggregate-bundle override:** even if every individual item is `[easy]`, total diff >100 lines OR >5 files touched bumps to Tier B. Total diff >300 lines OR contract surface bumps to Tier C. F125 (12 files, 184 insertions, QuoteResult response_model added) would have been Tier C under this rule.
+
+**Morning calibration pass remains constant** (2 personas: agent-native + reliability) regardless of builder tier. That's the human-in-loop safety net — runs in the interactive session against the merged PR, ~5 min.
 
 **Use manual Task-tool dispatch with `general-purpose` + a persona-prompt-injection prefix.** This is canonical for the routine env, not a fallback. Two routine-env gaps make it the only path that works:
 
@@ -165,7 +179,7 @@ Each agent gets:
   ```
   `confidence` is required (0.0–1.0). Findings below 0.60 are suppressed (P0 below 0.50 also suppressed); cross-reviewer agreement boosts confidence at merge time.
 
-**Always-on personas (4 — run on every diff):**
+**Tier C always-on personas (4 — only when tier C, see classification table above):**
 
 | Persona | Dedicated `subagent_type` (interactive-only) | What it catches |
 |---|---|---|
@@ -184,7 +198,9 @@ Each agent gets:
 | project-standards | `compound-engineering:review:project-standards-reviewer` | `TODO.md`, `JOURNAL.md`, `CLAUDE.md`, or new patterns. CRITICAL: grep `git log --oneline -30 origin/main` for type aliases, helpers, or validators recently introduced/refactored. If your code uses the OLD pattern, that's a P1. |
 | maintainability | `compound-engineering:review:maintainability-reviewer` | Diff is architectural (new modules, abstractions, cross-cutting refactors). Skip on small bug fixes. |
 
-**Target 4-6 personas per PR, not 9.** Build 22 showed that running 9 produces heavy duplication: 5 reviewers piled onto the wrong "Pydantic v2 max_length reliability" defense, manufacturing false confidence around dead code that the morning calibration pass had to unwind. Demote a persona to conditional rather than running it for "completeness."
+**Tier C target: 4-6 personas per PR, not 9.** Build 22 showed that running 9 produces heavy duplication: 5 reviewers piled onto the wrong "Pydantic v2 max_length reliability" defense, manufacturing false confidence around dead code that the morning calibration pass had to unwind. Demote a persona to conditional rather than running it for "completeness."
+
+**Tier A target: 0 personas.** This is not "skipping review" — it's matching review depth to risk. The orchestrator verification gate (AST, test suite, smoke test, per-agent spot-check, morning calibration) is the review for Tier A. Personas reviewing a 5-line cap-fix is pure token waste.
 
 **Project-specific checks the personas might miss** (re-verify yourself):
 - All frontend HTTP calls must use `api.get()`/`api.post()` from `frontend/src/api/client.ts`, NEVER raw `fetch()`.
