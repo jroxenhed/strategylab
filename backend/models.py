@@ -84,7 +84,7 @@ class RegimeConfig(BaseModel):
 
 
 class StrategyRequest(BaseModel):
-    ticker: str
+    ticker: SymbolField
     start: str = "2023-01-01"
     end: str = "2024-01-01"
     interval: str = "1d"

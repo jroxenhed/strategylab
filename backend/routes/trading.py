@@ -39,7 +39,7 @@ class SellRequest(BaseModel):
 
 
 class ScanRequest(BaseModel):
-    symbols: list[str]
+    symbols: list[SymbolField]
     interval: str = "15m"
     buy_rules: BoundedRuleList
     sell_rules: BoundedRuleList
@@ -48,6 +48,12 @@ class ScanRequest(BaseModel):
     auto_execute: bool = False
     position_size_usd: float = 5000.0
     stop_loss_pct: Optional[float] = None
+
+    @field_validator('symbols')
+    @classmethod
+    def _dedup_symbols(cls, v: list[str]) -> list[str]:
+        # F93 pattern: dedup post-normalize while preserving first-occurrence order.
+        return list(dict.fromkeys(v))
 
 
 class WatchlistRequest(BaseModel):
@@ -351,7 +357,7 @@ def scan_signals(req: ScanRequest):
 
 
 class PerformanceRequest(BaseModel):
-    symbol: str
+    symbol: SymbolField
     start: str
     end: Optional[str] = None
     interval: str = "15m"
@@ -370,7 +376,7 @@ def get_performance(req: PerformanceRequest):
     if JOURNAL_PATH.exists():
         journal = json.loads(JOURNAL_PATH.read_text())
         for t in journal.get("trades", []):
-            if t["symbol"].upper() != req.symbol.upper():
+            if t["symbol"].upper() != req.symbol:
                 continue
             ts = t["timestamp"][:10]  # YYYY-MM-DD
             if ts < req.start or ts > end:

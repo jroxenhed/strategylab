@@ -6,6 +6,25 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-11
 
+### F95 + F100 — SymbolField rollout + BotManager.load() migration (Tier C, full 6-persona panel)
+
+- First Tier C item of the day. The persistence-schema-change override per F136 promoted this from `[medium]`'s normal Tier B (2 personas) up to the full 4-6 panel. Full workflow: 1 haiku explore + 1 sonnet implementer + **6 parallel sonnet reviewers** (correctness, security, maintainability, testing, project-standards, kieran-python) + 1 sonnet fixer + Opus orchestrator. 8 dispatched agents on one item.
+- **[F95](TODO.md#f95)** applies `SymbolField` (via existing `Annotated[str, BeforeValidator(normalize_symbol)]` from models.py) to 4 remaining sites: `StrategyRequest.ticker`, `BotConfig.symbol`, `ScanRequest.symbols: list[SymbolField]`, `PerformanceRequest.symbol`. ScanRequest also got F93's dedup pattern via a new `@field_validator`.
+- **[F100](TODO.md#f100)** adds `normalize_symbol(raw_symbol)` pre-pass + a named-control-flow try-split in `BotManager.load()`: one try for symbol normalize + migrate_rule (catches `ValueError`); separate try for `BotConfig(**cfg_dict)` (catches `pydantic.ValidationError`); broad `except Exception` fallback. Each emits a distinct WARNING with `%r` for bot_id (newline-safe).
+- **[F43](TODO.md#f43) and [F82](TODO.md#f82) closed** as side-effects. F43's log-injection vector audit confirms every `_log_trade()` call site now reads SymbolField-validated input. F82's `ScanRequest.symbols` cap is satisfied by SymbolField's 20-char per-element regex + the new dedup validator.
+- **6-persona review delivered substantial cross-converged signal that the orchestrator alone would have missed:**
+  - **COR-001 P1 (0.92):** `migrate_rule` loop was OUTSIDE the inner try block. A malformed `Rule` entry would have aborted ALL remaining bots — exactly the silent-data-loss class F100 was filed to prevent. Caught only by reading the per-bot loop carefully.
+  - **K1 + COR-002 P1/P2 (0.90):** The original `except ValueError` mislabeled BotConfig construction failures as "invalid symbol". Fix: split into normalize-then-construct named-control-flow with explicit `ValidationError` import.
+  - **SEC-01 P2 (0.82):** bot_id was logged via `%s`. Crafted `bots.json` entry with newline in bot_id would have injected fake log lines.
+  - **COR-003 P2 (0.95):** ScanRequest had no dedup — `["AAPL", "aapl", "  aapl  "]` would have triggered 3 scans on the same symbol.
+  - **M2 P2 (0.90):** 4 dead `.upper()` calls on SymbolField-typed values (`config.symbol.upper()`, `req.symbol.upper()`) — removed for contract clarity.
+  - **PS-01/02/05 P2:** Banner / inline `# F100:` comments violated CLAUDE.md no-comments rule. Removed.
+- **Verification:** 363/364 pass (F139 still the lone pre-existing). 13 new tests added across `test_models.py`, `test_trading.py`, `test_bot_state.py` (including missing-symbol-key, dedup, HTTP-level normalization, broad-except path).
+- **Tier C validation:** the 6-persona panel caught a real P1 (COR-001) that pytest didn't catch because the test suite happens not to construct a bots.json entry with malformed rules. Orchestrator-only verification would have shipped this. Validates the contract-surface-override rule.
+- **Follow-ups surfaced:**
+  - **[F145](TODO.md#f145)** Extract `SymbolList = list[SymbolField]` alias and apply across ScanRequest / BatchQuickBacktestRequest / WatchlistRequest. Mirrors F128's BoundedRuleList pattern. (PS-04 + RR-01)
+  - **[F146](TODO.md#f146)** Residual `BotManager.load()` test coverage: empty bots list, nonexistent file, broad-except path, 20-char + dot + digit-leading boundary tests at F95 sites. (COR-004 + T3+T4+T5)
+
 ### F143 — `routes/bots.py` PATCH HTTP-level smoke tests (Tier B, orchestrator)
 
 - Test-only Tier B item. Extended `tests/test_routes_bots.py` with FastAPI-level integration coverage for the PATCH validator. Single sonnet implementer + one correctness review pass (clean, only flagged a minor `_RULE_FIELDS` duplication that was applied directly).

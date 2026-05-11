@@ -84,7 +84,7 @@ def test_bot_config_direction_accepts_short():
 
 
 # ---------------------------------------------------------------------------
-# F128: StrategyRequest + RegimeConfig rule-list caps
+# StrategyRequest + RegimeConfig rule-list caps
 # ---------------------------------------------------------------------------
 
 _STUB_RULE = {"indicator": "price", "condition": "above", "value": 1}
@@ -156,3 +156,31 @@ def test_regime_config_accepts_exactly_50_rules():
     assert len(cfg.rules) == 50
     assert cfg.rules[0].indicator == "price"
     assert cfg.rules[-1].value == 1
+
+
+# ---------------------------------------------------------------------------
+# SymbolField on StrategyRequest.ticker and BotConfig.symbol
+# ---------------------------------------------------------------------------
+
+def test_strategy_request_normalizes_ticker():
+    """F95: lowercase + whitespace ticker is normalized to uppercase."""
+    req = make_req(ticker="  aapl  ")
+    assert req.ticker == "AAPL"
+
+
+def test_strategy_request_rejects_invalid_ticker():
+    """F95: ticker with disallowed characters raises ValidationError."""
+    with pytest.raises(ValidationError):
+        make_req(ticker="AA@PL")
+
+
+def test_bot_config_normalizes_symbol():
+    """F95: lowercase + whitespace symbol is normalized to uppercase."""
+    cfg = make_bot_config(symbol="  msft  ")
+    assert cfg.symbol == "MSFT"
+
+
+def test_bot_config_rejects_invalid_symbol():
+    """F95: symbol with disallowed characters raises ValidationError."""
+    with pytest.raises(ValidationError):
+        make_bot_config(symbol="AA@PL")

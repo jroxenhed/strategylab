@@ -203,3 +203,136 @@ class TestBotConfigRuleCaps:
     def test_short_sell_rules_rejects_101(self):
         with pytest.raises(ValidationError, match="too_long"):
             BotConfig(**{**_BASE_CONFIG, "short_sell_rules": [_STUB_RULE] * 101})
+
+
+# ---------------------------------------------------------------------------
+# BotManager.load() migration: normalize + granular error handling
+# ---------------------------------------------------------------------------
+
+import json as _json
+import logging as _logging
+import bot_manager as _bot_manager_mod
+from bot_manager import BotManager
+
+
+def _make_bot_entry(bot_id: str, symbol: str) -> dict:
+    """Minimal bots.json entry with only required BotConfig fields."""
+    return {
+        "config": {
+            "bot_id": bot_id,
+            "strategy_name": "Test",
+            "symbol": symbol,
+            "interval": "5m",
+            "buy_rules": [],
+            "sell_rules": [],
+            "allocated_capital": 100.0,
+        },
+        "state": {},
+    }
+
+
+class TestBotManagerLoadMigration:
+    """F100: BotManager.load() normalizes symbols and skips-with-warning on invalid ones."""
+
+    def _write_bots_json(self, path, entries: list[dict], bot_fund: float = 0.0):
+        path.write_text(_json.dumps({"bot_fund": bot_fund, "bots": entries}))
+
+    def test_load_normalizes_lowercase_symbol(self, tmp_path, monkeypatch):
+        """A lowercase symbol in bots.json is auto-normalized to uppercase on load."""
+        bots_file = tmp_path / "bots.json"
+        self._write_bots_json(bots_file, [_make_bot_entry("bot-1", "aapl")])
+        monkeypatch.setattr(_bot_manager_mod, "DATA_PATH", str(bots_file))
+
+        mgr = BotManager()
+        mgr.load()
+
+        assert "bot-1" in mgr.bots
+        config, _ = mgr.bots["bot-1"]
+        assert config.symbol == "AAPL"
+
+    def test_load_normalizes_whitespace_symbol(self, tmp_path, monkeypatch):
+        """Whitespace-padded symbol is stripped and uppercased."""
+        bots_file = tmp_path / "bots.json"
+        self._write_bots_json(bots_file, [_make_bot_entry("bot-2", "  msft  ")])
+        monkeypatch.setattr(_bot_manager_mod, "DATA_PATH", str(bots_file))
+
+        mgr = BotManager()
+        mgr.load()
+
+        assert "bot-2" in mgr.bots
+        config, _ = mgr.bots["bot-2"]
+        assert config.symbol == "MSFT"
+
+    def test_load_skips_invalid_symbol_with_warning(self, tmp_path, monkeypatch, caplog):
+        """An invalid symbol (disallowed chars) is skipped and logged at WARNING level."""
+        bots_file = tmp_path / "bots.json"
+        self._write_bots_json(bots_file, [_make_bot_entry("bad-bot", "AA@PL")])
+        monkeypatch.setattr(_bot_manager_mod, "DATA_PATH", str(bots_file))
+
+        mgr = BotManager()
+        with caplog.at_level(_logging.WARNING, logger="bot_manager"):
+            mgr.load()
+
+        assert "bad-bot" not in mgr.bots
+        assert len(mgr.bots) == 0
+        assert "bad-bot" in caplog.text
+
+    def test_load_mixed_entries_normalizes_and_skips(self, tmp_path, monkeypatch, caplog):
+        """Valid uppercase, lowercase-fixable, and invalid symbol are processed correctly:
+        2 bots loaded (both valid after normalization), 1 skipped."""
+        bots_file = tmp_path / "bots.json"
+        entries = [
+            _make_bot_entry("bot-ok", "SPY"),
+            _make_bot_entry("bot-lower", "qqq"),
+            _make_bot_entry("bot-bad", "AA@PL"),
+        ]
+        self._write_bots_json(bots_file, entries)
+        monkeypatch.setattr(_bot_manager_mod, "DATA_PATH", str(bots_file))
+
+        mgr = BotManager()
+        with caplog.at_level(_logging.WARNING, logger="bot_manager"):
+            mgr.load()
+
+        assert len(mgr.bots) == 2
+        assert "bot-ok" in mgr.bots
+        assert "bot-lower" in mgr.bots
+        assert "bot-bad" not in mgr.bots
+
+        config_lower, _ = mgr.bots["bot-lower"]
+        assert config_lower.symbol == "QQQ"
+
+        # Warning must mention the skipped bot ID
+        assert "bot-bad" in caplog.text
+
+    def test_load_skips_bot_with_none_symbol(self, tmp_path, monkeypatch, caplog):
+        """A bots.json entry with symbol: null is skipped; remaining bots still load."""
+        bots_file = tmp_path / "bots.json"
+        null_entry = _make_bot_entry("null-sym-bot", "SPY")
+        null_entry["config"]["symbol"] = None
+        good_entry = _make_bot_entry("good-bot", "AAPL")
+        self._write_bots_json(bots_file, [null_entry, good_entry])
+        monkeypatch.setattr(_bot_manager_mod, "DATA_PATH", str(bots_file))
+
+        mgr = BotManager()
+        with caplog.at_level(_logging.WARNING, logger="bot_manager"):
+            mgr.load()
+
+        assert "null-sym-bot" not in mgr.bots
+        assert "good-bot" in mgr.bots
+        assert "null-sym-bot" in caplog.text
+
+    def test_load_skips_bot_with_missing_symbol_key(self, tmp_path, monkeypatch, caplog):
+        """A bots.json entry with no 'symbol' key at all is skipped with a warning."""
+        bots_file = tmp_path / "bots.json"
+        missing_entry = _make_bot_entry("missing-sym-bot", "SPY")
+        del missing_entry["config"]["symbol"]
+        good_entry = _make_bot_entry("good-bot2", "MSFT")
+        self._write_bots_json(bots_file, [missing_entry, good_entry])
+        monkeypatch.setattr(_bot_manager_mod, "DATA_PATH", str(bots_file))
+
+        mgr = BotManager()
+        with caplog.at_level(_logging.WARNING, logger="bot_manager"):
+            mgr.load()
+
+        assert "missing-sym-bot" not in mgr.bots
+        assert "good-bot2" in mgr.bots

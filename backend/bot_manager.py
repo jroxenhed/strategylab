@@ -20,11 +20,11 @@ logger = logging.getLogger(__name__)
 from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from slippage import slippage_cost_bps, fill_bias_bps
 
-from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest, RegimeConfig, LogicField, DirectionField, BoundedRuleList, OptionalBoundedRuleList
+from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest, RegimeConfig, LogicField, DirectionField, BoundedRuleList, OptionalBoundedRuleList, SymbolField, normalize_symbol
 from routes.backtest import run_backtest
 from signal_engine import migrate_rule, Rule
 from shared import _fetch
@@ -44,7 +44,7 @@ DATA_PATH = str(DATA_DIR / "bots.json")
 class BotConfig(BaseModel):
     bot_id: str = ""
     strategy_name: str
-    symbol: str
+    symbol: SymbolField
     interval: str
     # F128: bound O(n_rules × n_bars) per tick — same cap as backtest (F102).
     buy_rules: BoundedRuleList
@@ -322,7 +322,7 @@ class BotManager:
         if close_position:
             try:
                 provider = get_trading_provider(config.broker)
-                provider.close_position(config.symbol.upper())
+                provider.close_position(config.symbol)
             except Exception:
                 pass
 
@@ -440,7 +440,7 @@ class BotManager:
         # Submit order
         is_short = config.direction == "short"
         result = provider.submit_order(BrokerOrderRequest(
-            symbol=config.symbol.upper(),
+            symbol=config.symbol,
             qty=qty,
             side="sell" if is_short else "buy",
         ))
@@ -609,10 +609,38 @@ class BotManager:
                 if "slippage_pct" in cfg_dict and "slippage_bps" not in cfg_dict:
                     cfg_dict = {**cfg_dict, "slippage_bps": max(0.0, cfg_dict["slippage_pct"]) * 100}
                     cfg_dict.pop("slippage_pct", None)
-                for key in ("buy_rules", "sell_rules"):
-                    if key in cfg_dict and cfg_dict[key]:
-                        cfg_dict[key] = [migrate_rule(Rule(**r)).model_dump() for r in cfg_dict[key]]
-                config = BotConfig(**cfg_dict)
+                raw_symbol = cfg_dict.get("symbol")
+                bot_id = cfg_dict.get("bot_id", "unknown")
+                try:
+                    if raw_symbol is not None:
+                        cfg_dict["symbol"] = normalize_symbol(raw_symbol)
+                    for key in ("buy_rules", "sell_rules"):
+                        if key in cfg_dict and cfg_dict[key]:
+                            cfg_dict[key] = [migrate_rule(Rule(**r)).model_dump() for r in cfg_dict[key]]
+                except ValueError as e:
+                    logger.warning(
+                        "skipped bot %r: invalid symbol %r (%s)",
+                        bot_id,
+                        raw_symbol,
+                        e,
+                    )
+                    continue
+
+                try:
+                    config = BotConfig(**cfg_dict)
+                except ValidationError as e:
+                    logger.warning(
+                        "skipped bot %r: invalid config (%s)",
+                        bot_id,
+                        e,
+                    )
+                    continue
+                except Exception:
+                    logger.exception(
+                        "skipped bot %r: unexpected error constructing BotConfig",
+                        bot_id,
+                    )
+                    continue
                 state = BotState.from_dict(entry.get("state", {}))
                 state.was_running = state.status == "running"
                 state.status = "stopped"  # always start stopped after server restart
