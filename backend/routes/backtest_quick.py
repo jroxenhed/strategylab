@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from typing import Optional
 import numpy as np
 import pandas as pd
@@ -210,7 +210,10 @@ def _run_quick(req: QuickBacktestRequest) -> QuickBacktestResult:
 @router.post("/api/backtest/quick", response_model=QuickBacktestResult)
 def quick_backtest(req: QuickBacktestRequest):
     """Fast per-ticker backtest — summary stats only, no equity curve or trade list."""
-    return _run_quick(req)
+    try:
+        return _run_quick(req)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/api/backtest/quick/batch")
@@ -233,6 +236,8 @@ def quick_backtest_batch(req: BatchQuickBacktestRequest):
         )
         try:
             result = _run_quick(single_req)
+        except ValueError as e:
+            result = QuickBacktestResult(ticker=symbol.upper(), error=str(e))
         except Exception:
             logger.exception("batch quick-backtest failed for %s", symbol)
             result = QuickBacktestResult(ticker=symbol.upper(), error="quick-backtest failed")

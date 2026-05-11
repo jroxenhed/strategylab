@@ -941,6 +941,8 @@ def run_backtest(req: StrategyRequest):
         return result
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception:
         logger.exception("/api/backtest failed")
         raise HTTPException(status_code=500, detail="backtest failed")

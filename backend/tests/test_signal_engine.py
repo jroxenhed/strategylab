@@ -1,6 +1,6 @@
 import pytest
 import pandas as pd
-from signal_engine import Rule, migrate_rule, compute_indicators, resolve_series, resolve_ref
+from signal_engine import Rule, migrate_rule, compute_indicators, resolve_series, resolve_ref, _clamp_lookback, eval_rule, _INDICATOR_FAMILY_CAP
 
 
 def test_rule_params_field_default_none():
@@ -205,3 +205,152 @@ def test_migrate_rules_in_bot_config_dict():
     assert migrated[1].indicator == "ma"
     assert migrated[1].params == {"period": 8, "type": "sma"}
     assert migrated[1].param == "ma:21:sma"
+
+
+# ---------------------------------------------------------------------------
+# F129 — _clamp_lookback helper
+# ---------------------------------------------------------------------------
+
+def test_clamp_lookback_caps_at_500():
+    assert _clamp_lookback(1000, 10) == 500
+
+
+def test_clamp_lookback_passes_through_small_value():
+    assert _clamp_lookback(50, 10) == 50
+
+
+def test_clamp_lookback_returns_default_for_none():
+    assert _clamp_lookback(None, 10) == 10
+
+
+def test_clamp_lookback_exact_boundary():
+    assert _clamp_lookback(500, 10) == 500
+    assert _clamp_lookback(501, 10) == 500
+
+
+def test_eval_rule_rising_over_oversized_lookback_no_oob():
+    """F129: value=1000 on a 50-bar series must not raise IndexError."""
+    close = pd.Series(range(50), dtype=float)
+    indicators = compute_indicators(close, rules=[])
+    rule = Rule(indicator="price", condition="rising_over", value=1000)
+    # i=49 (last bar): clamped lookback=500 > i=49, so guard triggers → False
+    result = eval_rule(rule, indicators, 49)
+    assert isinstance(result, bool)
+    assert result is False
+
+
+def test_eval_rule_turns_up_oversized_lookback_no_oob():
+    """F129: turns_up with value=1000 on a 50-bar series must not raise."""
+    close = pd.Series(list(range(25)) + list(range(25, 0, -1)), dtype=float)
+    indicators = compute_indicators(close, rules=[])
+    rule = Rule(indicator="price", condition="turns_up", value=1000)
+    result = eval_rule(rule, indicators, 49)
+    assert isinstance(result, bool)
+
+
+# ---------------------------------------------------------------------------
+# F130 — per-family indicator cap in compute_indicators
+# ---------------------------------------------------------------------------
+
+def _make_close(n: int = 100) -> pd.Series:
+    return pd.Series(range(1, n + 1), dtype=float)
+
+
+def test_compute_indicators_rejects_21_distinct_ma_specs():
+    close = _make_close()
+    rules = [
+        Rule(indicator="ma", condition="above", value=1, params={"period": p, "type": "ema"})
+        for p in range(1, 22)  # 21 distinct periods
+    ]
+    with pytest.raises(ValueError, match="Too many distinct MA"):
+        compute_indicators(close, rules=rules)
+
+
+def test_compute_indicators_accepts_exactly_20_distinct_ma_specs():
+    close = _make_close()
+    rules = [
+        Rule(indicator="ma", condition="above", value=1, params={"period": p, "type": "ema"})
+        for p in range(2, 22)  # exactly 20 (periods 2..21; period 1 is below indicators.py min)
+    ]
+    result = compute_indicators(close, rules=rules)
+    ma_keys = [k for k in result if k.startswith("ma_")]
+    assert len(ma_keys) == 20
+
+
+def test_compute_indicators_rejects_21_distinct_rsi_specs():
+    close = _make_close()
+    rules = [
+        Rule(indicator="rsi", condition="above", value=50, params={"period": p, "type": "sma"})
+        for p in range(2, 23)  # 21 distinct periods
+    ]
+    with pytest.raises(ValueError, match="Too many distinct RSI"):
+        compute_indicators(close, rules=rules)
+
+
+def test_compute_indicators_rejects_21_distinct_bb_specs():
+    close = _make_close()
+    rules = [
+        Rule(indicator="bb", condition="above", value=1, params={"period": p, "std": 2})
+        for p in range(5, 26)  # 21 distinct periods
+    ]
+    with pytest.raises(ValueError, match="Too many distinct BB"):
+        compute_indicators(close, rules=rules)
+
+
+def test_clamp_lookback_floors_at_zero():
+    """Fix 2 (F129 review): negative value must clamp to 0, not pass through."""
+    assert _clamp_lookback(-5, 10) == 0
+    assert _clamp_lookback(-1, 10) == 0
+
+
+# ---------------------------------------------------------------------------
+# F130 — missing family coverage: ATR, stochastic, ADX, volume SMA
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("indicator,build_rule", [
+    (
+        "atr",
+        lambda p: Rule(indicator="atr", condition="above", value=1, params={"period": p}),
+    ),
+    (
+        "adx",
+        lambda p: Rule(indicator="adx", condition="above", value=25, params={"period": p}),
+    ),
+])
+def test_compute_indicators_rejects_21_distinct_specs_parametrized(indicator, build_rule):
+    """ATR and ADX families: 21 distinct periods must raise ValueError."""
+    close = _make_close(n=300)
+    high = close + 1
+    low = close - 1
+    rules = [build_rule(p) for p in range(2, 23)]  # 21 distinct periods
+    with pytest.raises(ValueError, match="Too many distinct"):
+        compute_indicators(close, high=high, low=low, rules=rules)
+
+
+def test_compute_indicators_rejects_21_distinct_stochastic_specs():
+    """21 distinct (k_period, d_period, smooth_k) tuples must raise ValueError."""
+    close = _make_close(n=300)
+    high = close + 1
+    low = close - 1
+    # vary k_period to produce 21 unique tuples
+    rules = [
+        Rule(indicator="stochastic", condition="above", value=50,
+             params={"k_period": p, "d_period": 3, "smooth_k": 3})
+        for p in range(2, 23)
+    ]
+    with pytest.raises(ValueError, match="Too many distinct stochastic"):
+        compute_indicators(close, high=high, low=low, rules=rules)
+
+
+def test_compute_indicators_rejects_21_distinct_volume_sma_specs():
+    """21 distinct volume SMA periods must raise ValueError."""
+    close = _make_close(n=300)
+    volume = pd.Series([1_000_000.0] * 300)
+    # param="sma" triggers vol_sma_periods accumulation
+    rules = [
+        Rule(indicator="volume", condition="above", value=1,
+             param="sma", params={"period": p})
+        for p in range(5, 26)
+    ]
+    with pytest.raises(ValueError, match="Too many distinct volume SMA"):
+        compute_indicators(close, volume=volume, rules=rules)

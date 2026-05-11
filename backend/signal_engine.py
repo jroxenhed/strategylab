@@ -31,6 +31,26 @@ _PARAM_MIGRATION: dict[str, str] = {
     "ma21":   "ma:21:sma",
 }
 
+# F130: per-request cap on distinct indicator specs per family.
+_INDICATOR_FAMILY_CAP = 20
+
+
+def _assert_family_cap(name: str, specs) -> None:
+    """F130: raise ValueError if a family exceeds the per-request indicator cap."""
+    if len(specs) > _INDICATOR_FAMILY_CAP:
+        raise ValueError(
+            f"Too many distinct {name} specs ({len(specs)}); max {_INDICATOR_FAMILY_CAP} per request"
+        )
+
+
+def _clamp_lookback(value: float | int | None, default: int) -> int:
+    """F129: cap lookbacks at 500 and floor at 0. Rule.value can also be a
+    threshold (e.g., price > 100000), so clamping only happens at consumer
+    sites that use value as a bar count."""
+    if value is None:
+        return default
+    return max(0, min(int(value), 500))
+
 
 def migrate_rule(rule: Rule) -> Rule:
     """Convert legacy hardcoded MA indicators to generic ma(period, type). Idempotent."""
@@ -76,6 +96,7 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
 
     if not rsi_specs:
         rsi_specs.add((14, "sma"))
+    _assert_family_cap("RSI", rsi_specs)
 
     for period, rsi_type in rsi_specs:
         rsi_result = compute_instance("rsi", {"period": period, "type": rsi_type}, ohlcv)
@@ -95,6 +116,7 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
                 continue
             _, period, ma_type = parts
             ma_specs.add((int(period), ma_type))
+    _assert_family_cap("MA", ma_specs)
 
     for period, ma_type in ma_specs:
         key = f"ma_{period}_{ma_type}"
@@ -116,6 +138,7 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
                     bb_specs.add((int(parts[1]), float(parts[2])))
                 except ValueError:
                     pass
+    _assert_family_cap("BB", bb_specs)
 
     for bb_period, bb_std in bb_specs:
         bb_result = compute_instance("bb", {"period": bb_period, "stddev": bb_std}, ohlcv)
@@ -142,6 +165,7 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
                     atr_specs.add(int(parts[1]))
                 except ValueError:
                     pass
+    _assert_family_cap("ATR", atr_specs)
 
     for atr_period in atr_specs:
         key = f"atr_{atr_period}"
@@ -174,6 +198,7 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
                         vol_sma_periods.add(int(parts[1]))
                     except ValueError:
                         pass
+        _assert_family_cap("volume SMA", vol_sma_periods)
         for vp in vol_sma_periods:
             result[f"volume_sma_{vp}"] = ohlcv.volume.rolling(vp).mean()
 
@@ -192,6 +217,7 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
                     stoch_specs.add((int(parts[1]), int(parts[2]), int(parts[3])))
                 except ValueError:
                     pass
+    _assert_family_cap("stochastic", stoch_specs)
 
     for kp, dp, sk in stoch_specs:
         stoch_result = compute_instance("stochastic", {"k_period": kp, "d_period": dp, "smooth_k": sk}, ohlcv)
@@ -212,6 +238,7 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
                     adx_specs.add(int(parts[1]))
                 except ValueError:
                     pass
+    _assert_family_cap("ADX", adx_specs)
 
     for adx_period in adx_specs:
         adx_result = compute_instance("adx", {"period": adx_period}, ohlcv)
@@ -378,12 +405,12 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
     elif cond == "falling":
         return v_now < v_prev
     elif cond == "rising_over":
-        lookback = int(rule.value) if rule.value is not None else 10
+        lookback = _clamp_lookback(rule.value, 10)
         if i < lookback:
             return False
         return v_now > s.iloc[i - lookback]
     elif cond == "falling_over":
-        lookback = int(rule.value) if rule.value is not None else 10
+        lookback = _clamp_lookback(rule.value, 10)
         if i < lookback:
             return False
         return v_now < s.iloc[i - lookback]
@@ -394,7 +421,7 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
         if rule.value is not None:
             return v_prev > rule.value and v_now < v_prev
     elif cond in ("turns_up", "turns_down"):
-        lookback = max(1, int(rule.value)) if rule.value is not None else 1
+        lookback = max(1, _clamp_lookback(rule.value, 1))
         if i < lookback + 1:
             return False
         if cond == "turns_up":

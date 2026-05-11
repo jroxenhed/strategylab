@@ -6,6 +6,18 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-11
 
+### F129 + F130 — signal_engine DoS hardening (Tier B, full orchestrator)
+
+- Second Tier B item of the day. Combined two related signal-engine DoS items into one orchestrator cycle (same file, related theme). Full pipeline: haiku explore → sonnet implementer → 2 parallel sonnet reviewers (correctness + kieran-python) → 1 sonnet fixer → Opus orchestrator.
+- **Explore phase (haiku):** identified that `Rule.value` is used as BOTH a lookback bars count AND a comparison threshold (e.g., `price > 100000`). This ruled out F129's Option A (`Field(le=500)` on Rule.value), which would break price thresholds on high-priced assets like BRK.A (~$750k). Recommended Option B: clamp at the 3 lookback consumer sites only. For F130, identified all 7 indicator families and recommended a single shared cap (20) for simplicity over the per-family-tuned values originally suggested.
+- **Implement phase (sonnet):** extracted `_clamp_lookback(value, default)` and `_INDICATOR_FAMILY_CAP = 20` constant, applied to the 3 lookback consumers + 7 family guards. 10 new tests in `test_signal_engine.py`.
+- **Tier B review (correctness + kieran-python in parallel):** cross-converged on a high-confidence P1 — `compute_indicators` raises `ValueError` for cap violations, but `routes/backtest.py` and `routes/backtest_quick.py` outer `except Exception` blocks were converting these into HTTP 500 "backtest failed" with no actionable detail. Correctness P1 (0.95) + kieran K2 (0.85). Additional findings: P2 from correctness on negative `rule.value` propagating to `_clamp_lookback(-5, 10) = -5` (silent pandas OOB); P2 on missing test coverage for 4 of 7 families; kieran K1 (0.90) on quoted forward-ref type annotation; kieran K3 (0.82) recommending `_assert_family_cap(name, specs)` helper extraction over the 7 copy-paste blocks.
+- **Fixer phase (sonnet, holistic):** added `except ValueError → 400` handlers in both backtest routes (3 sites total — single-ticker + batch in backtest_quick); floored `_clamp_lookback` to `max(0, min(...))`; unquoted the type annotation (Python 3.14, no `from __future__`); extracted `_assert_family_cap` helper; replaced all 7 inline guards with one-liner calls; added 4 new tests (negative-floor + ATR + ADX + stochastic + volume SMA).
+- **[F129](TODO.md#f129)** Final shape: 3 call sites use `_clamp_lookback`, threshold sites stay unclamped. `max(0, ...)` floors negative input. Tests cover {500, 501, 50, None, -5, exact-boundary}.
+- **[F130](TODO.md#f130)** Final shape: 7 `_assert_family_cap("NAME", specs)` calls in `compute_indicators`. ValueError now surfaces as 400 in both backtest routes. 11 tests in `test_signal_engine.py` cover the helper + all 7 families + boundary.
+- **Verification:** 331/332 pass (F139 still the only pre-existing failure). 37/37 in `test_signal_engine.py`.
+- **Tier B validation again:** cross-reviewer convergence caught a real cross-file issue (ValueError → 500) that the implementer didn't see because they only ran `test_signal_engine.py`. Correctness reviewer found it by following the `compute_indicators` import graph into the routes. Validates the persona role at the medium tier.
+
 ### F141 — `UpdateBotRequest` PATCH cap closed via F128 alias reuse (Tier A)
 
 - Mechanical follow-up to F128's correctness review P2. `routes/bots.py` previously typed `UpdateBotRequest`'s 6 rule fields as bare `Optional[list]` (no `max_length`, no inner Rule type). Replaced with `OptionalBoundedRuleList` — the alias landed in F128 specifically to make this reuse trivial.
