@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 
 from bot_manager import BotConfig, BotManager
-from models import RegimeConfig, LogicField, DirectionField
+from models import RegimeConfig, LogicField, DirectionField, OptionalBoundedRuleList
 
 router = APIRouter(prefix="/api/bots")
 
@@ -46,16 +46,16 @@ class SetFundRequest(BaseModel):
 class UpdateBotRequest(BaseModel):
     allocated_capital: Optional[float] = Field(default=None, gt=0)
     strategy_name: Optional[str] = None
-    buy_rules: Optional[list] = None
-    sell_rules: Optional[list] = None
+    buy_rules: OptionalBoundedRuleList
+    sell_rules: OptionalBoundedRuleList
     buy_logic: Optional[LogicField] = None
     sell_logic: Optional[LogicField] = None
-    long_buy_rules: Optional[list] = None
-    long_sell_rules: Optional[list] = None
+    long_buy_rules: OptionalBoundedRuleList
+    long_sell_rules: OptionalBoundedRuleList
     long_buy_logic: Optional[LogicField] = None
     long_sell_logic: Optional[LogicField] = None
-    short_buy_rules: Optional[list] = None
-    short_sell_rules: Optional[list] = None
+    short_buy_rules: OptionalBoundedRuleList
+    short_sell_rules: OptionalBoundedRuleList
     short_buy_logic: Optional[LogicField] = None
     short_sell_logic: Optional[LogicField] = None
     max_spread_bps: Optional[float] = Field(default=None, ge=0)

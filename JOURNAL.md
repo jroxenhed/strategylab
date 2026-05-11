@@ -6,6 +6,16 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-11
 
+### F141 — `UpdateBotRequest` PATCH cap closed via F128 alias reuse (Tier A)
+
+- Mechanical follow-up to F128's correctness review P2. `routes/bots.py` previously typed `UpdateBotRequest`'s 6 rule fields as bare `Optional[list]` (no `max_length`, no inner Rule type). Replaced with `OptionalBoundedRuleList` — the alias landed in F128 specifically to make this reuse trivial.
+- **[F141](TODO.md#f141)** Cap now fires at request-validation time (Pydantic field-level, before `model_dump(exclude_none=True)`) rather than after the BotConfig reconstruct. Also tightens the inner type from `list` to `list[Rule]` for consistency with BotConfig.
+- **New `tests/test_routes_bots.py`** (14 tests, all parametrized over the 6 rule fields): per-field reject-101 with `match="too_long"`, per-field accept-exactly-100 (asserts `len == 100` AND `parsed[0].value == 0` AND `parsed[99].value == 99` — catches silent-slice regression), None-default preservation, empty-list passthrough.
+- **Verification:** 316/317 pass (F139 still the lone pre-existing failure). 93 targeted tests (F128 + F141 combined) pass in 0.72s.
+- **Tier A justification:** `[easy]`, single-file source change (3 added/removed lines in `routes/bots.py`), no contract surface change beyond exposing F128's existing `max_length=100` envelope on this route's OpenAPI schema. Mechanical alias swap per CLAUDE.md "Apply directly when fixes are mechanical (rename, regex tighten, single-line guard) and match the reviewer's suggested_fix text verbatim." Source change applied directly; test file is net-new but follows the F128 test pattern verbatim.
+- **Follow-up surfaced:**
+  - **[F143](TODO.md#f143)** `routes/bots.py` has 14 endpoints + 3 request models, but `test_routes_bots.py` (new this commit) only covers UpdateBotRequest's Pydantic layer. No FastAPI integration-level smoke tests exist for ANY bots route. The PATCH validator's HTTP path (POST /api/bots/{id} with 101 rules → 422 with F141 envelope) isn't covered — only the Pydantic class. Filed `[medium]` because building this requires a `bot_manager` monkeypatch fixture pattern similar to `test_trading.py`. Out of scope for F141 itself.
+
 ### F128 [medium] rule-list caps via type alias — 17 fields, 46 tests, 2 follow-ups (full orchestrator workflow)
 
 - First Tier B item of the day. Full orchestrator cycle: explore (haiku) → 3 parallel sonnet implementers → orchestrator verify → 2 parallel sonnet reviewers (correctness + kieran-python) → 1 sonnet fixer → orchestrator commit. Five Sonnet agents + one Haiku agent + Opus orchestrator across one item.
