@@ -51,7 +51,16 @@ class ScanRequest(BaseModel):
 
 
 class WatchlistRequest(BaseModel):
-    symbols: list[str]
+    # F104 follow-up (build 25 morning calibration agent-native-001):
+    # min_length=1 surfaces the "non-empty" constraint in the OpenAPI schema
+    # so agent clients reading /openapi.json see minItems:1 without probing.
+    # Mirrors the F91 pattern on BatchQuickBacktestRequest.symbols. The
+    # @field_validator below still raises the same custom ValueError after
+    # the strip+normalize pass, so a request that POSTs [''] (one whitespace
+    # entry) still hits the explicit "must contain at least one non-empty
+    # entry" message — Field(min_length=1) catches the literal-empty case
+    # earlier in the OpenAPI surface.
+    symbols: list[str] = Field(min_length=1)
 
     @field_validator('symbols')
     @classmethod
