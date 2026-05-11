@@ -6,6 +6,20 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-11
 
+### Easy-F backend hardening bundle — 5 items, 1 commit, 2 follow-ups
+
+- Interactive Tier A bundle (`[easy]` items, mechanical, no contract surface, no browser verification). Five backend hardening items shipped together — all from the F125 audit and build 25 review backlog. Total diff < 40 lines across `shared.py`, `routes/trading.py`, `bot_manager.py`, `bot_runner.py`.
+  - **[F124](TODO.md#f124)** `_evict_cache` now also prunes `_fetch_dedup_locks` entries whose `(ticker, interval, source, extended_hours)` key has no remaining cache entry. Cleanup runs under `_fetch_dedup_locks_meta` after cache mutations; bounds growth without a periodic timer.
+  - **[F126](TODO.md#f126)** `GET /api/trading/account` exception-detail leak closed — `detail=f"Broker API error: {e}"` → `detail="Broker API unavailable"`; upgraded `logger.error` to `logger.exception("get_account failed")`. Parity with F115's sweep across the other routes.
+  - **[F131](TODO.md#f131)** Single-coroutine-per-bot invariant documented on `BotState.append_slippage_bps` / `append_equity_snapshot` / `append_activity_log` — 1-line comment on each: `# single-coroutine-per-bot: do not insert await between append and slice-cap.`
+  - **[F132](TODO.md#f132)** `BotState.append_activity_log(entry)` extracted from `bot_runner._log` (insert(0)+cap(200)). Closes the last unbounded-growth gap on `BotState`; mirrors F121/F123 helper pattern.
+  - **[F133](TODO.md#f133)** `scan_signals` per-symbol error row now reports `"error": "scan failed"` instead of `str(e)`. Final piece of the F115/F126 sanitization sweep — `grep -rn 'detail=f".*{e}"' backend/` confirmed only one remaining user-facing leak surface (filed as F137).
+- **Verification:** `python -m py_compile` clean on all four files; targeted tests (`test_bot_runner.py`, `test_bot_state.py`, `test_trading.py`) 27/27 pass. Full suite shows 3 pre-existing failures (`test_ohlcv_rejects_unknown_source`, `test_empty_journal_returns_default` — both F120, plus order-dependent IBKR test that passes in isolation). None touch the changed files.
+- **Tier A justification (F136 rule):** all 5 items tagged `[easy]`, aggregate diff under 40 lines, no contract surface — error wording changes here remove leakage rather than alter the documented contract (no `response_model` change, no public API shape change). No persona review needed; orchestrator verification only.
+- **Follow-ups surfaced:**
+  - **[F137](TODO.md#f137)** Last `detail=f"...: {e}"` leak — `shared.py:245` (`IBKR fetch failed`). Confirmed via repo-wide grep; only remaining site.
+  - **[F138](TODO.md#f138)** F124 prunes only when `_evict_cache` fires, which only triggers when `_fetch_cache` reaches `_CACHE_MAX`. Low-throughput long uptime can still accumulate dedup locks. Options noted: unconditional `_evict_cache` at end of `_fetch`, or secondary-threshold trigger.
+
 ### Build 25 morning calibration — PR #33 merged + F127 collision resolved
 
 - Ran the 2-persona morning calibration roster (agent-native + reliability) on PR #33 via `ce:review` skill with explicit roster override. Builder already ran 4-6 personas overnight; this pass adds only the deltas — novel-signal lanes the builder doesn't cover (agent-native) and severity calibration sweep (reliability). ~3 min wall-clock, 2 in-PR changes, 1 deferral.

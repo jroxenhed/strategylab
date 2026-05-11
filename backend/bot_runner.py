@@ -55,9 +55,7 @@ class BotRunner(RegimeMixin, ExitsMixin):
 
     def _log(self, level: str, msg: str):
         entry = {"time": datetime.now(timezone.utc).isoformat(), "msg": msg, "level": level}
-        self.state.activity_log.insert(0, entry)
-        if len(self.state.activity_log) > 200:
-            self.state.activity_log.pop()
+        self.state.append_activity_log(entry)
 
     def _now_et_hhmm(self) -> str:
         """Return current ET wall-clock time as HH:MM string."""

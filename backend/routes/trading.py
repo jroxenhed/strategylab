@@ -96,9 +96,9 @@ def get_account():
     try:
         provider = get_trading_provider()
         return provider.get_account()
-    except Exception as e:
-        logger.error("get_account failed: %s: %s", type(e).__name__, e)
-        raise _HTTPException(status_code=502, detail=f"Broker API error: {e}")
+    except Exception:
+        logger.exception("get_account failed")
+        raise _HTTPException(status_code=502, detail="Broker API unavailable")
 
 
 @router.get("/positions")
@@ -342,7 +342,7 @@ def scan_signals(req: ScanRequest):
             results.append(result)
         except Exception as e:
             logger.exception("scan failed for %s", symbol)
-            results.append({"symbol": symbol, "signal": "ERROR", "error": str(e)})
+            results.append({"symbol": symbol, "signal": "ERROR", "error": "scan failed"})
 
     response = {"signals": results, "scanned_at": str(pd.Timestamp.now(tz='UTC'))}
     if req.auto_execute:

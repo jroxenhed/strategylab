@@ -151,18 +151,27 @@ class BotState:
 
     def append_slippage_bps(self, bps: float) -> None:
         """Append a slippage sample and cap the list at 1000 to prevent unbounded growth."""
+        # single-coroutine-per-bot: do not insert await between append and slice-cap.
         self.slippage_bps.append(round(bps, 2))
         if len(self.slippage_bps) > 1000:
             self.slippage_bps = self.slippage_bps[-1000:]
 
     def append_equity_snapshot(self, value: float) -> None:
         """Append a {time, value} snapshot and cap at 500 entries."""
+        # single-coroutine-per-bot: do not insert await between append and slice-cap.
         self.equity_snapshots.append({
             "time": datetime.now(timezone.utc).isoformat(),
             "value": round(value, 2),
         })
         if len(self.equity_snapshots) > 500:
             self.equity_snapshots = self.equity_snapshots[-500:]
+
+    def append_activity_log(self, entry: dict) -> None:
+        """Insert at head (newest-first) and cap the list at 200 entries."""
+        # single-coroutine-per-bot: do not insert await between insert and pop.
+        self.activity_log.insert(0, entry)
+        if len(self.activity_log) > 200:
+            self.activity_log.pop()
 
     def to_dict(self) -> dict:
         return {

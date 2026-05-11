@@ -421,7 +421,12 @@ def _fetch_ttl(end: str, interval: str) -> float:
 
 
 def _evict_cache() -> None:
-    """Remove expired entries; if still over limit, drop the oldest."""
+    """Remove expired entries; if still over limit, drop the oldest.
+
+    Also drops dedup locks for (ticker, interval, source, extended_hours) tuples
+    that no longer have any cache entry, bounding _fetch_dedup_locks growth
+    over long uptime with many tickers.
+    """
     now = time.monotonic()
     expired = [k for k, (ts, _) in _fetch_cache.items() if now - ts > _fetch_ttl(k[2], k[3])]
     for k in expired:
@@ -429,6 +434,11 @@ def _evict_cache() -> None:
     while len(_fetch_cache) >= _CACHE_MAX:
         oldest = min(_fetch_cache, key=lambda k: _fetch_cache[k][0])
         del _fetch_cache[oldest]
+    in_use = {(k[0], k[3], k[4], k[5]) for k in _fetch_cache}
+    with _fetch_dedup_locks_meta:
+        stale = [k for k in _fetch_dedup_locks if k not in in_use]
+        for k in stale:
+            del _fetch_dedup_locks[k]
 
 
 def _fetch(ticker: str, start: str, end: str, interval: str, source: str = "yahoo", extended_hours: bool = False) -> pd.DataFrame:
