@@ -299,7 +299,7 @@ export default function Sidebar({
                 transition: 'all 0.15s',
               }}
             >
-              {p === 'custom' ? '⚙' : p}
+              {p === 'custom' ? '…' : p}
             </button>
           ))}
         </div>

@@ -35,6 +35,7 @@ export default function SignalScanner({ onSpawnBot }: { onSpawnBot?: (symbol: st
   const [sortKey, setSortKey] = useState<SortKey>('return_pct')
   const [sortAsc, setSortAsc] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   useEffect(() => {
     fetchWatchlist().then(list => {
@@ -49,8 +50,13 @@ export default function SignalScanner({ onSpawnBot }: { onSpawnBot?: (symbol: st
 
   const handleSave = async () => {
     setSaving(true)
+    setSaveError(null)
     const list = symbols.split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
-    await saveWatchlist(list).catch(() => {})
+    try {
+      await saveWatchlist(list)
+    } catch (e) {
+      setSaveError(apiErrorDetail(e, 'Failed to save watchlist'))
+    }
     setSaving(false)
   }
 
@@ -161,9 +167,12 @@ export default function SignalScanner({ onSpawnBot }: { onSpawnBot?: (symbol: st
           </select>
         </div>
 
-        <button style={styles.saveBtn} onClick={handleSave} disabled={saving || !loaded}>
-          {saving ? '...' : 'Save Watchlist'}
-        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <button style={styles.saveBtn} onClick={handleSave} disabled={saving || !loaded}>
+            {saving ? '...' : 'Save Watchlist'}
+          </button>
+          {saveError && <span style={{ color: '#f85149', fontSize: 11 }}>{saveError}</span>}
+        </div>
 
         <button
           style={{ ...styles.scanBtn, opacity: !loaded || scanning ? 0.6 : 1 }}

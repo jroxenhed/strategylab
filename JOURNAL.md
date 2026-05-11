@@ -6,6 +6,22 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-11
 
+### Easy-F frontend polish bundle — 5 items, 1 commit, 1 follow-up (orchestrator workflow)
+
+- Third interactive bundle of the day. Orchestrator workflow per CLAUDE.md: Opus orchestrator dispatched **4 parallel Sonnet agents** for the implementation phase (F36 / F47+F48 / F78 / F135 — file-overlap analysis grouped F47's OptimizerPanel portion with F48 to avoid sequential conflict; SubPane's F47 portion was done synchronously in the main session before dispatch). All 4 agents reported success in their first response; orchestrator verified via grep + `npm run build` (clean).
+  - **[F36](TODO.md#f36)** Date preset gear glyph `'⚙'` → `'…'` on `Sidebar.tsx:302`. 1-character text fits the existing 6-button row rhythm without implying "settings".
+  - **[F47](TODO.md#f47)** Banner section-header comments removed from `SubPane.tsx` (Effect 1/2/3) and `OptimizerPanel.tsx` (Types/Constants/Component/Styles). CLAUDE.md "no comments unless WHY non-obvious" enforcement; the code structure is self-evident without them.
+  - **[F48](TODO.md#f48)** `OptimizerPanel.tsx` local `steps` → `stepsN` rename in the two scopes (estimatedCombos useMemo + requestParams.map callback) that didn't match the validation block's existing `stepsN` naming. The form-input field `p.steps` on `ParamRow` is preserved — only the local intermediate vars were renamed.
+  - **[F78](TODO.md#f78)** `WatchlistPanel.tsx` now branches the price cell: populated price → unchanged; else `q?.error` set → red bold `!` glyph with the existing tooltip (new `styles.error` block: `color: var(--accent-red)`, `fontWeight: 700`, `fontSize: 11`); else loading `...`. Closes PR #29 reliability gap where permanently-failing symbols looked identical to still-loading ones.
+  - **[F135](TODO.md#f135)** `SignalScanner.tsx` save-watchlist 422 now visible — new `saveError: string | null` state; `handleSave` wraps `saveWatchlist(list)` in try/catch and pipes the error through the already-imported `apiErrorDetail`; Save button wrapped in a column-flex `<div>` rendering the error span below it when set. Closes the silent regression introduced by F104's new 422 path.
+- **Verification:** `npm run build` clean (1884 modules, 786kB main bundle — pre-existing chunk-size warning unchanged). Diff stat 26 inserted / 18 deleted across 5 files. No new tests (visual change items; F140 filed for browser smoke).
+- **Tier A justification (F136 rule):** all 5 items tagged `[easy]`; aggregate diff well under 100 lines; no contract surface (no API shape, no error-envelope, no shared-type changes). No personas. Orchestrator verification only: grep all 4 agents' claimed changes against file state + `npm run build`. Per CLAUDE.md "Trust but verify" — every agent's report was cross-checked, not relied on.
+- **Subagent decisions:**
+  - 4 agents, not 5: F47 spans two files; the SubPane.tsx portion is identical to OptimizerPanel.tsx's portion (delete banner comments) and was done in the main session before dispatch. Bundling F47+F48 into a single agent for OptimizerPanel.tsx prevented file-overlap conflict; per CLAUDE.md "verify file independence: list target files per agent, confirm zero overlap. If files overlap, sequence those agents."
+  - All "Do NOT commit or push" reminders included in agent prompts per CLAUDE.md anti-pattern note.
+- **Follow-up surfaced:**
+  - **[F140](TODO.md#f140)** Visual smoke check for F78 + F135 error states — neither item's error-conditional render path was exercised in-browser when shipped (the orchestrator did not boot `npm run dev`). F78 needs a permanently-failing quote symbol (e.g. `ZZZZZZ`); F135 needs an all-empty-string watchlist POST to trigger 422. Filed `[polish]` because the items themselves are shipped and build clean; the residual risk is layout regression in F135's column-flex wrapper around the Save button.
+
 ### Easy-F test hygiene bundle — 6 items, 1 commit, 1 follow-up
 
 - Interactive Tier A bundle, second of the day. All testing-only changes: zero production runtime impact, full diff confined to `tests/` + one helper extraction (`parse_max_body_env`) in `middleware.py`+`main.py` to make F108 testable.

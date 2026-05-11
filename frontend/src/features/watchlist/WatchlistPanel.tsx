@@ -125,8 +125,10 @@ export default function WatchlistPanel({
                       {changePrefix}{changePct.toFixed(2)}%
                     </span>
                   </>
+                ) : q?.error ? (
+                  <span style={styles.error} title={q.error}>!</span>
                 ) : (
-                  <span style={styles.loading} title={q?.error ?? undefined}>...</span>
+                  <span style={styles.loading}>...</span>
                 )}
               </span>
               {isHovered && (
@@ -227,6 +229,11 @@ const styles: Record<string, React.CSSProperties> = {
   loading: {
     fontSize: 11,
     color: 'var(--text-muted)',
+  },
+  error: {
+    fontSize: 11,
+    color: 'var(--accent-red)',
+    fontWeight: 700,
   },
   removeBtn: {
     position: 'absolute' as const,

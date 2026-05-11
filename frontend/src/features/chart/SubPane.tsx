@@ -72,7 +72,6 @@ export default function SubPane({
     return result
   }, [instances, instanceData])
 
-  // Effect 1: Chart lifecycle
   useEffect(() => {
     if (!containerRef.current || instances.length === 0) return
 
@@ -190,7 +189,6 @@ export default function SubPane({
   }, [paneKey, instancesKey, indicatorType, toET])
   // mainChartRef, mainSeriesRef, paneRegistryRef, syncWidthsRef are stable refs — excluded from deps
 
-  // Effect 2: Data application
   useEffect(() => {
     const sMap = seriesMapRef.current
     if (!sMap || !chartRef.current) return
@@ -266,7 +264,6 @@ export default function SubPane({
     syncWidthsRef.current()
   }, [subData, instances, indicatorType, toET, tzMode])
 
-  // Effect 3: Markers
   useEffect(() => {
     const series = primarySeriesRef.current
     if (!series) return

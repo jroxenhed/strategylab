@@ -5,8 +5,6 @@ import { apiErrorDetail } from '../../shared/utils/errors'
 import { buildParamOptions, linspace } from './paramOptions'
 import type { ParamOption } from './paramOptions'
 
-// --- Types ---
-
 interface OptimizerCombo {
   param_values: Record<string, number>
   num_trades: number
@@ -34,7 +32,6 @@ interface ParamRow {
 
 type MetricKey = 'total_return_pct' | 'sharpe_ratio' | 'win_rate_pct' | 'max_drawdown_pct'
 
-// --- Constants ---
 
 const METRICS = [
   { value: 'sharpe_ratio', label: 'Sharpe Ratio' },
@@ -44,7 +41,6 @@ const METRICS = [
 
 const NONE_PATH = ''
 
-// --- Component ---
 
 interface Props {
   lastRequest: StrategyRequest
@@ -77,8 +73,8 @@ export default function OptimizerPanel({ lastRequest }: Props) {
   const estimatedCombos = useMemo(() => {
     let total = 1
     for (const p of activeRows) {
-      const steps = Math.max(1, parseInt(p.steps) || 5)
-      total *= steps
+      const stepsN = Math.max(1, parseInt(p.steps) || 5)
+      total *= stepsN
     }
     return total
   }, [activeRows])
@@ -142,8 +138,8 @@ export default function OptimizerPanel({ lastRequest }: Props) {
         if (!opt) throw new Error(`Unknown param: ${p.path}`)
         const minN = p.min !== '' ? parseFloat(p.min) : opt.defaultMin
         const maxN = p.max !== '' ? parseFloat(p.max) : opt.defaultMax
-        const steps = Math.max(1, parseInt(p.steps) || 5)
-        let values = linspace(minN, maxN, steps)
+        const stepsN = Math.max(1, parseInt(p.steps) || 5)
+        let values = linspace(minN, maxN, stepsN)
         if (opt.isInteger) {
           values = [...new Set(values.map(v => Math.round(v)))]
         }
@@ -388,7 +384,6 @@ export default function OptimizerPanel({ lastRequest }: Props) {
   )
 }
 
-// --- Styles ---
 
 const s: Record<string, React.CSSProperties> = {
   section: {
