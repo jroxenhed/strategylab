@@ -8,6 +8,10 @@ from signal_engine import Rule
 LogicField = Annotated[Literal['AND', 'OR'], BeforeValidator(lambda v: v.upper() if isinstance(v, str) else v)]
 DirectionField = Annotated[Literal['long', 'short'], BeforeValidator(lambda v: v.lower().strip() if isinstance(v, str) else v)]
 
+_RULE_LIST_CAP = 100  # F128: O(n_rules × n_bars) guard — same cap for all primary rule lists
+BoundedRuleList = Annotated[list[Rule], Field(max_length=_RULE_LIST_CAP)]
+OptionalBoundedRuleList = Annotated[Optional[list[Rule]], Field(default=None, max_length=_RULE_LIST_CAP)]
+
 # Allowlist: must start with an alphanumeric, then up to 19 chars from
 # [A-Z0-9.-]. Covers BRK.B, BF-B, AAPL while rejecting '..', '.env', '-A',
 # and anything containing whitespace, control chars, or shell metacharacters
@@ -74,7 +78,8 @@ class RegimeConfig(BaseModel):
     min_bars: int = 3               # consecutive bars required before regime flips
     on_flip: str = "close_only"     # close_only | close_and_reverse | hold
     # B28: full rule set path (when non-empty, overrides single-indicator path above)
-    rules: list[Rule] = Field(default_factory=list)
+    # F128: cap at 50 — regime filter, smaller budget than primary strategy (100)
+    rules: list[Rule] = Field(default_factory=list, max_length=50)
     logic: LogicField = "AND"        # AND | OR
 
 
@@ -83,17 +88,18 @@ class StrategyRequest(BaseModel):
     start: str = "2023-01-01"
     end: str = "2024-01-01"
     interval: str = "1d"
-    buy_rules: list[Rule]
-    sell_rules: list[Rule]
+    # F128: bound O(n_rules × n_bars) per backtest — mirrors QuickBacktestRequest cap (F102)
+    buy_rules: BoundedRuleList
+    sell_rules: BoundedRuleList
     buy_logic: LogicField = "AND"   # AND | OR
     sell_logic: LogicField = "AND"
     # B23: dual rule sets for regime active (long) vs inactive (short)
-    long_buy_rules: Optional[list[Rule]] = None
-    long_sell_rules: Optional[list[Rule]] = None
+    long_buy_rules: OptionalBoundedRuleList
+    long_sell_rules: OptionalBoundedRuleList
     long_buy_logic: LogicField = "AND"
     long_sell_logic: LogicField = "AND"
-    short_buy_rules: Optional[list[Rule]] = None
-    short_sell_rules: Optional[list[Rule]] = None
+    short_buy_rules: OptionalBoundedRuleList
+    short_sell_rules: OptionalBoundedRuleList
     short_buy_logic: LogicField = "AND"
     short_sell_logic: LogicField = "AND"
     initial_capital: float = 10000.0

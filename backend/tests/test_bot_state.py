@@ -11,9 +11,10 @@ from sys import path as sys_path
 from os.path import dirname, abspath
 sys_path.insert(0, dirname(dirname(abspath(__file__))))
 
+import pytest
 from datetime import datetime
-
-from bot_manager import BotState
+from pydantic import ValidationError
+from bot_manager import BotState, BotConfig
 
 
 def test_append_slippage_bps_caps_at_1000():
@@ -78,3 +79,127 @@ def test_append_equity_snapshot_below_cap_preserves_order():
     assert len(state.equity_snapshots) == 250
     assert [s["value"] for s in state.equity_snapshots[:3]] == [0.0, 1.0, 2.0]
     assert state.equity_snapshots[-1]["value"] == 249.0
+
+
+# ---------------------------------------------------------------------------
+# F128: BotConfig buy_rules / sell_rules / long_* / short_* max_length=100
+# ---------------------------------------------------------------------------
+
+_STUB_RULE: dict = {"indicator": "rsi", "condition": "above", "value": 50}
+
+_BASE_CONFIG: dict = {
+    "strategy_name": "test",
+    "symbol": "SPY",
+    "interval": "5m",
+    "buy_rules": [],
+    "sell_rules": [],
+    "allocated_capital": 1000.0,
+}
+
+
+class TestBotConfigRuleCaps:
+    """F128: BotConfig enforces max_length=100 on all six Rule list fields."""
+
+    # -- buy_rules ------------------------------------------------------------
+
+    def test_buy_rules_accepts_exactly_100(self):
+        cfg = BotConfig(**{**_BASE_CONFIG, "buy_rules": [_STUB_RULE] * 100})
+        assert len(cfg.buy_rules) == 100
+        assert cfg.buy_rules[0].indicator == "rsi"
+        assert cfg.buy_rules[-1].indicator == "rsi"
+
+    def test_buy_rules_rejects_101(self):
+        with pytest.raises(ValidationError, match="too_long"):
+            BotConfig(**{**_BASE_CONFIG, "buy_rules": [_STUB_RULE] * 101})
+
+    # -- sell_rules -----------------------------------------------------------
+
+    def test_sell_rules_accepts_exactly_100(self):
+        cfg = BotConfig(**{**_BASE_CONFIG, "sell_rules": [_STUB_RULE] * 100})
+        assert len(cfg.sell_rules) == 100
+        assert cfg.sell_rules[0].indicator == "rsi"
+        assert cfg.sell_rules[-1].indicator == "rsi"
+
+    def test_sell_rules_rejects_101(self):
+        with pytest.raises(ValidationError, match="too_long"):
+            BotConfig(**{**_BASE_CONFIG, "sell_rules": [_STUB_RULE] * 101})
+
+    # -- long_buy_rules -------------------------------------------------------
+
+    def test_long_buy_rules_accepts_none(self):
+        cfg = BotConfig(**_BASE_CONFIG)
+        assert cfg.long_buy_rules is None
+
+    def test_long_buy_rules_accepts_empty(self):
+        cfg = BotConfig(**{**_BASE_CONFIG, "long_buy_rules": []})
+        assert cfg.long_buy_rules == []
+
+    def test_long_buy_rules_accepts_exactly_100(self):
+        cfg = BotConfig(**{**_BASE_CONFIG, "long_buy_rules": [_STUB_RULE] * 100})
+        assert len(cfg.long_buy_rules) == 100
+        assert cfg.long_buy_rules[0].indicator == "rsi"
+        assert cfg.long_buy_rules[-1].indicator == "rsi"
+
+    def test_long_buy_rules_rejects_101(self):
+        with pytest.raises(ValidationError, match="too_long"):
+            BotConfig(**{**_BASE_CONFIG, "long_buy_rules": [_STUB_RULE] * 101})
+
+    # -- long_sell_rules ------------------------------------------------------
+
+    def test_long_sell_rules_accepts_none(self):
+        cfg = BotConfig(**_BASE_CONFIG)
+        assert cfg.long_sell_rules is None
+
+    def test_long_sell_rules_accepts_empty(self):
+        cfg = BotConfig(**{**_BASE_CONFIG, "long_sell_rules": []})
+        assert cfg.long_sell_rules == []
+
+    def test_long_sell_rules_accepts_exactly_100(self):
+        cfg = BotConfig(**{**_BASE_CONFIG, "long_sell_rules": [_STUB_RULE] * 100})
+        assert len(cfg.long_sell_rules) == 100
+        assert cfg.long_sell_rules[0].indicator == "rsi"
+        assert cfg.long_sell_rules[-1].indicator == "rsi"
+
+    def test_long_sell_rules_rejects_101(self):
+        with pytest.raises(ValidationError, match="too_long"):
+            BotConfig(**{**_BASE_CONFIG, "long_sell_rules": [_STUB_RULE] * 101})
+
+    # -- short_buy_rules ------------------------------------------------------
+
+    def test_short_buy_rules_accepts_none(self):
+        cfg = BotConfig(**_BASE_CONFIG)
+        assert cfg.short_buy_rules is None
+
+    def test_short_buy_rules_accepts_empty(self):
+        cfg = BotConfig(**{**_BASE_CONFIG, "short_buy_rules": []})
+        assert cfg.short_buy_rules == []
+
+    def test_short_buy_rules_accepts_exactly_100(self):
+        cfg = BotConfig(**{**_BASE_CONFIG, "short_buy_rules": [_STUB_RULE] * 100})
+        assert len(cfg.short_buy_rules) == 100
+        assert cfg.short_buy_rules[0].indicator == "rsi"
+        assert cfg.short_buy_rules[-1].indicator == "rsi"
+
+    def test_short_buy_rules_rejects_101(self):
+        with pytest.raises(ValidationError, match="too_long"):
+            BotConfig(**{**_BASE_CONFIG, "short_buy_rules": [_STUB_RULE] * 101})
+
+    # -- short_sell_rules -----------------------------------------------------
+
+    def test_short_sell_rules_accepts_none(self):
+        cfg = BotConfig(**_BASE_CONFIG)
+        assert cfg.short_sell_rules is None
+
+    def test_short_sell_rules_accepts_empty(self):
+        cfg = BotConfig(**{**_BASE_CONFIG, "short_sell_rules": []})
+        assert cfg.short_sell_rules == []
+
+    def test_short_sell_rules_accepts_exactly_100(self):
+        cfg = BotConfig(**{**_BASE_CONFIG, "short_sell_rules": [_STUB_RULE] * 100})
+        assert len(cfg.short_sell_rules) == 100
+        assert cfg.short_sell_rules[0].indicator == "rsi"
+        assert cfg.short_sell_rules[-1].indicator == "rsi"
+
+    def test_short_sell_rules_rejects_101(self):
+        with pytest.raises(ValidationError, match="too_long"):
+            BotConfig(**{**_BASE_CONFIG, "short_sell_rules": [_STUB_RULE] * 101})

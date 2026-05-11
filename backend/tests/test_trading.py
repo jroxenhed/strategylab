@@ -4,11 +4,13 @@ from os.path import dirname, abspath
 sys_path.insert(0, dirname(dirname(abspath(__file__))))
 
 import json
+import pydantic
 import pytest
 from fastapi.testclient import TestClient
 
 from main import app
 from routes import trading as trading_mod
+from routes.trading import ScanRequest, PerformanceRequest
 
 
 @pytest.fixture
@@ -165,3 +167,69 @@ def test_watchlist_validation_rejects_invalid_chars(client, tmp_path, monkeypatc
     for bad in ["AAPL;evil", "AAPL\nevil", "AAPL evil", "AA@PL"]:
         resp = client.post("/api/trading/watchlist", json={"symbols": [bad]})
         assert resp.status_code == 422, f"expected 422 for {bad!r}, got {resp.status_code}"
+
+
+# ---------------------------------------------------------------------------
+# F128 — rule-list cap (max_length=100) for ScanRequest + PerformanceRequest
+# ---------------------------------------------------------------------------
+
+_STUB_RULE: dict = {"indicator": "rsi", "condition": "above", "value": 50}
+
+_SCAN_BASE = {"symbols": ["AAPL"], "interval": "15m"}
+_PERF_BASE = {"symbol": "AAPL", "start": "2024-01-01", "interval": "15m"}
+
+
+class TestScanRequestRuleCap:
+    """F128: ScanRequest enforces max 100 rules per side at the Pydantic layer."""
+
+    def test_scan_rejects_101_buy_rules(self):
+        """101 buy_rules → ValidationError (DoS guard, mirrors F102)."""
+        with pytest.raises(pydantic.ValidationError, match="too_long"):
+            ScanRequest(**_SCAN_BASE, buy_rules=[_STUB_RULE] * 101, sell_rules=[])
+
+    def test_scan_rejects_101_sell_rules(self):
+        """101 sell_rules → ValidationError."""
+        with pytest.raises(pydantic.ValidationError, match="too_long"):
+            ScanRequest(**_SCAN_BASE, buy_rules=[], sell_rules=[_STUB_RULE] * 101)
+
+    def test_scan_accepts_exactly_100_buy_rules(self):
+        """100 buy_rules is the inclusive boundary — must be accepted."""
+        req = ScanRequest(**_SCAN_BASE, buy_rules=[_STUB_RULE] * 100, sell_rules=[])
+        assert len(req.buy_rules) == 100
+        assert req.buy_rules[0].indicator == "rsi"
+        assert req.buy_rules[-1].indicator == "rsi"
+
+    def test_scan_accepts_exactly_100_sell_rules(self):
+        """100 sell_rules is the inclusive boundary — must be accepted."""
+        req = ScanRequest(**_SCAN_BASE, buy_rules=[], sell_rules=[_STUB_RULE] * 100)
+        assert len(req.sell_rules) == 100
+        assert req.sell_rules[0].indicator == "rsi"
+        assert req.sell_rules[-1].indicator == "rsi"
+
+
+class TestPerformanceRequestRuleCap:
+    """F128: PerformanceRequest enforces max 100 rules per side at the Pydantic layer."""
+
+    def test_perf_rejects_101_buy_rules(self):
+        """101 buy_rules → ValidationError."""
+        with pytest.raises(pydantic.ValidationError, match="too_long"):
+            PerformanceRequest(**_PERF_BASE, buy_rules=[_STUB_RULE] * 101, sell_rules=[])
+
+    def test_perf_rejects_101_sell_rules(self):
+        """101 sell_rules → ValidationError."""
+        with pytest.raises(pydantic.ValidationError, match="too_long"):
+            PerformanceRequest(**_PERF_BASE, buy_rules=[], sell_rules=[_STUB_RULE] * 101)
+
+    def test_perf_accepts_exactly_100_buy_rules(self):
+        """100 buy_rules is the inclusive boundary — must be accepted."""
+        req = PerformanceRequest(**_PERF_BASE, buy_rules=[_STUB_RULE] * 100, sell_rules=[])
+        assert len(req.buy_rules) == 100
+        assert req.buy_rules[0].indicator == "rsi"
+        assert req.buy_rules[-1].indicator == "rsi"
+
+    def test_perf_accepts_exactly_100_sell_rules(self):
+        """100 sell_rules is the inclusive boundary — must be accepted."""
+        req = PerformanceRequest(**_PERF_BASE, buy_rules=[], sell_rules=[_STUB_RULE] * 100)
+        assert len(req.sell_rules) == 100
+        assert req.sell_rules[0].indicator == "rsi"
+        assert req.sell_rules[-1].indicator == "rsi"

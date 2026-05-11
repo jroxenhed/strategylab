@@ -17,7 +17,7 @@ from broker import get_trading_provider, OrderRequest as BrokerOrderRequest, _tr
 from broker_aggregate import aggregate_from_brokers
 from signal_engine import Rule, compute_indicators, eval_rules, migrate_rule
 from journal import _log_trade, DATA_DIR, JOURNAL_PATH
-from models import StrategyRequest, LogicField, SymbolField, normalize_symbol
+from models import StrategyRequest, LogicField, SymbolField, normalize_symbol, BoundedRuleList
 from routes.backtest import run_backtest
 
 WATCHLIST_PATH = DATA_DIR / "watchlist.json"
@@ -41,8 +41,8 @@ class SellRequest(BaseModel):
 class ScanRequest(BaseModel):
     symbols: list[str]
     interval: str = "15m"
-    buy_rules: list[Rule]
-    sell_rules: list[Rule]
+    buy_rules: BoundedRuleList
+    sell_rules: BoundedRuleList
     buy_logic: LogicField = "AND"
     sell_logic: LogicField = "AND"
     auto_execute: bool = False
@@ -355,8 +355,8 @@ class PerformanceRequest(BaseModel):
     start: str
     end: Optional[str] = None
     interval: str = "15m"
-    buy_rules: list[Rule]
-    sell_rules: list[Rule]
+    buy_rules: BoundedRuleList
+    sell_rules: BoundedRuleList
     buy_logic: LogicField = "AND"
     sell_logic: LogicField = "AND"
 

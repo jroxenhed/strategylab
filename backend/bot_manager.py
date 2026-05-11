@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from slippage import slippage_cost_bps, fill_bias_bps
 
-from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest, RegimeConfig, LogicField, DirectionField
+from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest, RegimeConfig, LogicField, DirectionField, BoundedRuleList, OptionalBoundedRuleList
 from routes.backtest import run_backtest
 from signal_engine import migrate_rule, Rule
 from shared import _fetch
@@ -46,8 +46,9 @@ class BotConfig(BaseModel):
     strategy_name: str
     symbol: str
     interval: str
-    buy_rules: list[Rule]
-    sell_rules: list[Rule]
+    # F128: bound O(n_rules × n_bars) per tick — same cap as backtest (F102).
+    buy_rules: BoundedRuleList
+    sell_rules: BoundedRuleList
     buy_logic: LogicField = "AND"
     sell_logic: LogicField = "AND"
     allocated_capital: float          # dollar slice of the bot fund for this bot
@@ -73,12 +74,12 @@ class BotConfig(BaseModel):
     broker: str = "alpaca"             # "alpaca" | "ibkr" — which broker executes orders
     regime: Optional[RegimeConfig] = None
     # B23/D24: dual rule sets for regime bots (None = use buy_rules/sell_rules)
-    long_buy_rules: Optional[list[Rule]] = None
-    long_sell_rules: Optional[list[Rule]] = None
+    long_buy_rules: OptionalBoundedRuleList
+    long_sell_rules: OptionalBoundedRuleList
     long_buy_logic: LogicField = "AND"
     long_sell_logic: LogicField = "AND"
-    short_buy_rules: Optional[list[Rule]] = None
-    short_sell_rules: Optional[list[Rule]] = None
+    short_buy_rules: OptionalBoundedRuleList
+    short_sell_rules: OptionalBoundedRuleList
     short_buy_logic: LogicField = "AND"
     short_sell_logic: LogicField = "AND"
     # B25: per-direction settings (only used when regime is active)

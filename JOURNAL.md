@@ -6,6 +6,20 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-11
 
+### F128 [medium] rule-list caps via type alias — 17 fields, 46 tests, 2 follow-ups (full orchestrator workflow)
+
+- First Tier B item of the day. Full orchestrator cycle: explore (haiku) → 3 parallel sonnet implementers → orchestrator verify → 2 parallel sonnet reviewers (correctness + kieran-python) → 1 sonnet fixer → orchestrator commit. Five Sonnet agents + one Haiku agent + Opus orchestrator across one item.
+  - **Explore phase (haiku):** returned the 17-field map across 3 files in 27s, including which fields had defaults and whether `Field` was already imported.
+  - **Implement phase (3 parallel sonnet, ~75s wall clock):** each agent owned one file — `models.py` (StrategyRequest 6 + RegimeConfig.rules), `bot_manager.py` (BotConfig 6), `routes/trading.py` (ScanRequest 2 + PerformanceRequest 2). File-independence pre-verified before dispatch. All 3 reported clean with pytest passing locally to their file.
+  - **Verify phase:** full pytest 302 passed / 1 failed (F139, pre-existing). 17 `max_length` caps confirmed via grep.
+  - **Review phase (2 parallel sonnet, Tier B per F136):** correctness + kieran-python both **independently** flagged the same P1: the implementers had added `default_factory=list` to previously-required fields, silently accepting empty-strategy payloads (F102 reference deliberately did NOT add a default). Kieran additionally proposed extracting a `BoundedRuleList` / `OptionalBoundedRuleList` type alias (mirrors the existing `LogicField` / `DirectionField` / `SymbolField` pattern) — fixing both issues in one move. Cross-reviewer convergence at 0.75–0.88.
+  - **Fix phase (1 sonnet fixer, holistic):** extracted `_RULE_LIST_CAP = 100` constant + the two `Annotated` aliases in `models.py`; replaced all 17 field declarations to use the alias; tightened test assertions from bare `pytest.raises(ValidationError)` to `pytest.raises(ValidationError, match="too_long")` to match `test_models.py` style; hoisted mid-file `import pytest` / `import pydantic` to the top of each test file (kieran P3, PEP 8 / E402). 79 targeted tests + 302 full-suite tests pass.
+- **[F128](TODO.md#f128)** Final shape: `BoundedRuleList` / `OptionalBoundedRuleList` in `models.py` (single source of truth via `_RULE_LIST_CAP = 100`); `RegimeConfig.rules` kept at cap=50 with inline declaration (intentionally not aliased — different cap, different rationale). 46 new boundary tests.
+- **Tier B validation:** F136's review rule called for "correctness always + conditional file-type reviewer (kieran-python for .py changes). 2 max." That's exactly what fired. The P1 caught was **not** something the orchestrator would have caught via grep + pytest — the tests all passed because the agents added defaults consistently with their new test fixtures. The reviewers caught the semantic regression by **comparing against the F102 reference**. Validates the persona role at the medium tier.
+- **Follow-ups surfaced:**
+  - **[F141](TODO.md#f141)** `UpdateBotRequest` (`routes/bots.py`) has 6 rule fields typed `Optional[list]` with no `max_length` — uncapped bypass before the BotConfig reconstruct fires. Pre-existing per correctness review (P2 0.85); not a regression but worth closing with the new alias.
+  - **[F142](TODO.md#f142)** `_STUB_RULE` divergence across test files (`indicator: 'price'` in test_models.py vs `'rsi'` elsewhere). If F106 lands the indicator allowlist, the `'price'` stub regresses silently in one file. Extract to `conftest.py` or harmonize.
+
 ### Easy-F frontend polish bundle — 5 items, 1 commit, 1 follow-up (orchestrator workflow)
 
 - Third interactive bundle of the day. Orchestrator workflow per CLAUDE.md: Opus orchestrator dispatched **4 parallel Sonnet agents** for the implementation phase (F36 / F47+F48 / F78 / F135 — file-overlap analysis grouped F47's OptimizerPanel portion with F48 to avoid sequential conflict; SubPane's F47 portion was done synchronously in the main session before dispatch). All 4 agents reported success in their first response; orchestrator verified via grep + `npm run build` (clean).
