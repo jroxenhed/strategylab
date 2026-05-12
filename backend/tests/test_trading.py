@@ -299,6 +299,30 @@ def test_scan_request_dedup_preserves_first_occurrence_order():
 
 
 # ---------------------------------------------------------------------------
+# F149 — ScanRequest list-level cap parity with WatchlistRequest + BatchQuickBacktestRequest
+# ---------------------------------------------------------------------------
+
+def test_scan_request_caps_at_500_symbols():
+    """501 symbols → ValidationError (parity with Watchlist + Batch caps; closes /scan amplification vector)."""
+    symbols = [f"S{i}" for i in range(501)]
+    with pytest.raises(pydantic.ValidationError, match="too_long"):
+        ScanRequest(symbols=symbols, buy_rules=[], sell_rules=[])
+
+
+def test_scan_request_accepts_exactly_500_symbols():
+    """Boundary: 500 symbols (at the cap) accepted."""
+    symbols = [f"S{i}" for i in range(500)]
+    req = ScanRequest(symbols=symbols, buy_rules=[], sell_rules=[])
+    assert len(req.symbols) == 500
+
+
+def test_scan_request_rejects_empty_symbol_list():
+    """Empty symbol list → ValidationError (min_length=1, parity with Watchlist + Batch)."""
+    with pytest.raises(pydantic.ValidationError, match="too_short"):
+        ScanRequest(symbols=[], buy_rules=[], sell_rules=[])
+
+
+# ---------------------------------------------------------------------------
 # HTTP-level normalization tests (Fix 9)
 # ---------------------------------------------------------------------------
 

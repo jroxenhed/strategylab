@@ -39,7 +39,14 @@ class SellRequest(BaseModel):
 
 
 class ScanRequest(BaseModel):
-    symbols: SymbolList
+    # F149: list-level cap parity with WatchlistRequest (500) and
+    # BatchQuickBacktestRequest (500). Closes the residual amplification
+    # vector — a 5000-symbol POST to /scan would otherwise fan out
+    # synchronously through _fetch per symbol. Declarative Field cap
+    # matches the BatchQuickBacktestRequest pattern; the Watchlist
+    # inline-validator pattern is preserved separately for its custom
+    # error-message contract (test_watchlist_validation_caps_length).
+    symbols: SymbolList = Field(min_length=1, max_length=500)
     interval: str = "15m"
     buy_rules: BoundedRuleList
     sell_rules: BoundedRuleList

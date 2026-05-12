@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*219 / 263 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*220 / 263 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -11,9 +11,8 @@ _(none open)_
 ## Up Next
 
 - [F127](#f127) — [next] [medium] Batch quick-backtest endpoint has no request-level deadline [medium]
-- [F149](#f149) — [next] [easy] `ScanRequest.symbols` list-level cap parity [easy]
 
-## Open Work — 67 items
+## Open Work — 66 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -23,7 +22,7 @@ _(none open)_
 | [D](#d-bots-live-trading) | Bots (live trading) | 5 | [D24b](#d24b), [D27a](#d27a), [D28](#d28)–[D30](#d30) |
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 13 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F71](#f71), [F96](#f96), [F98](#f98)–[F99](#f99), [F113](#f113), [F117](#f117) |
-| [F · Hardening](#f-hardening) | Security, reliability, validation | 11 | [F49](#f49), [F55](#f55), [F59](#f59), [F62](#f62), [F74](#f74), [F83](#f83), [F105](#f105)–[F106](#f106), [F127](#f127), [F147](#f147), [F149](#f149) |
+| [F · Hardening](#f-hardening) | Security, reliability, validation | 10 | [F49](#f49), [F55](#f55), [F59](#f59), [F62](#f62), [F74](#f74), [F83](#f83), [F105](#f105)–[F106](#f106), [F127](#f127), [F147](#f147) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 4 | [F34](#f34)–[F35](#f35), [F44](#f44), [F140](#f140) |
 | [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 12 | [F50](#f50)–[F51](#f51), [F61](#f61), [F79](#f79), [F84](#f84), [F89](#f89), [F97](#f97), [F139](#f139), [F142](#f142), [F144](#f144), [F146](#f146), [F148](#f148) |
 
@@ -193,7 +192,7 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f141"></a> **F141** `UpdateBotRequest` PATCH cap closed — `routes/bots.py:49-58` 6 rule fields swapped from bare `Optional[list]` to F128's `OptionalBoundedRuleList`. Cap now fires at request-validation time (Pydantic field-level, before `model_dump`), not after the BotConfig reconstruct. Also tightens the inner type from `list` to `list[Rule]` for consistency with BotConfig. New `tests/test_routes_bots.py` (14 tests): per-field reject-101 with `match="too_long"`, per-field accept-exactly-100 (asserts len + first/last element survives), None-default preservation, empty-list passthrough. [easy] [hardening]
 - [x] <a id="f145"></a> **F145** `SymbolList = list[SymbolField]` extracted in `models.py` and applied to all three sites: `ScanRequest.symbols` (`routes/trading.py`, was `list[SymbolField]`), `WatchlistRequest.symbols` (`routes/trading.py`, was `list[str]` + custom validator), `BatchQuickBacktestRequest.symbols` (`routes/backtest_quick.py`, was `list[str]` + custom validator). Watchlist + batch validators refactored: mode='before' now only drops empty/whitespace entries + holds the custom "too many symbols (max 500, got N)" message; per-element normalize+regex moves to `SymbolField`'s `BeforeValidator(normalize_symbol)`; watchlist dedup hoisted to a `mode='after'` validator since SymbolField runs between mode='before' and mode='after'. `normalize_symbol` import removed from `routes/backtest_quick.py` (no longer used after the refactor). 49/49 tests in `test_trading.py` + `test_backtest_quick.py` pass against the new flow. (build 27) [easy] [hardening]
 - [ ] <a id="f147"></a> **F147** [easy] `PUT /api/bots/reorder` server-side error visibility — F64 surfaced reorder failures in the UI but the backend route still logs nothing on failure: a 5xx leaves the user with "Failed to reorder bots" and an opaque server trace at best. Add `logger.exception("reorder failed")` (or finer-grained around the persist call) in `routes/bots.py:reorder_bots` and ensure the 5xx detail is sanitized (no raw `str(e)` leak — mirrors F115/F126/F133 contract). Also relevant: confirm the route accepts a strict `ReorderBotsRequest` (already typed) and returns a structured error envelope rather than a bare 500. (from F64 build 27) [hardening]
-- [ ] <a id="f149"></a> **F149** [next] [easy] `ScanRequest.symbols` list-level cap parity — F145 wired `SymbolList = list[SymbolField]` everywhere, but `ScanRequest` is still uncapped (no `Field(min_length=..., max_length=...)`), while sibling `WatchlistRequest` (500) and `BatchQuickBacktestRequest` (500) both cap. A 5000-symbol POST to `/scan` would amplify scanner+backtest pipelines synchronously per symbol. Add `Field(min_length=1, max_length=500)` on `ScanRequest.symbols` to close the residual amplification vector left open after F82 / F128. (from F145 build 27 observation) [hardening] (PR #34 morning calibration: both reviewers flagged ScanRequest as the parity-debt site to close next.)
+- [x] <a id="f149"></a> **F149** `ScanRequest.symbols = SymbolList = Field(min_length=1, max_length=500)` applied in `routes/trading.py` — closes the residual amplification vector after F82 / F128 by capping `/scan` at 500 symbols (parity with WatchlistRequest + BatchQuickBacktestRequest, both 500). Declarative Field cap mirrors the BatchQuickBacktestRequest pattern; the Watchlist inline-validator pattern is preserved separately for its custom error-message contract. 3 new tests in `test_trading.py` cover the 501-symbol rejection (`too_long`), 500-boundary acceptance, and empty-list rejection (`too_short`). Full `test_trading.py` 36/36 pass; full backend pytest 362/363 (only F139 pre-existing failure remains). [easy] [hardening]
 
 ### F · Polish
 - [ ] <a id="f34"></a> **F34** 118+ hardcoded hex colors while CSS variables exist — theme change requires touching dozens of files. Migrate Results.tsx and BotCard.tsx to use --bg-*, --accent-*, --text-* variables. [medium] [polish]

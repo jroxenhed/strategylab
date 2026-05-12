@@ -26,6 +26,12 @@ What we've actually shipped. Reverse-chronological, one section per working day.
   - **[F148](TODO.md#f148)** `test_short_backtest_api_endpoint` makes a live yfinance network call — fails in sandboxed CI. Mock `_fetch` at test layer or mark `@pytest.mark.network` and skip by default.
   - **[F149](TODO.md#f149)** `ScanRequest.symbols` list-level cap parity — F145 wired SymbolList across all three sites but ScanRequest is still uncapped while Watchlist+Batch both cap at 500. Closes the residual amplification vector left after F82/F128.
 
+### PR #34 morning calibration + F149 ship
+
+- 2-persona calibration (agent-native + reliability) on the build 27 Tier A bundle landed clean — 0 P0/P1 findings, deferrals correctly tiered. Single convergent calibration signal: F149 (ScanRequest cap parity) was both reviewers' top defer-to-`[next]` recommendation. Tagged `[next]` and merged PR #34.
+- **[F149](TODO.md#f149)** shipped right after the merge. `ScanRequest.symbols: SymbolList = Field(min_length=1, max_length=500)` applied in `routes/trading.py` (declarative cap mirroring `BatchQuickBacktestRequest`). 3 parity tests added to `test_trading.py` (501-symbol `too_long` rejection, 500-boundary acceptance, empty-list `too_short` rejection). The Watchlist inline-validator pattern is preserved separately — its `test_watchlist_validation_caps_length` test asserts on a custom error string that `Field(max_length=500)` would clobber, so that contract stays where it is.
+- **Verification:** `pytest tests/test_trading.py -q` → 36/36 pass (33 prior + 3 new). Full backend pytest → 362/363 (only pre-existing F139 ib_insync event-loop contamination fails; F148 network-dependent test excluded as planned). No frontend touched.
+
 ## 2026-05-11
 
 ### F95 + F100 — SymbolField rollout + BotManager.load() migration (Tier C, full 6-persona panel)
