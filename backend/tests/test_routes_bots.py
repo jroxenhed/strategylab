@@ -135,3 +135,36 @@ def test_patch_bot_503_when_bot_manager_unset(client, monkeypatch):
     response = client.patch(f"/api/bots/{_BOT_ID}", json=body)
     assert response.status_code == 503
     assert "Bot manager not initialized" in response.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# F147: PUT /api/bots/reorder — server-side error visibility
+# ---------------------------------------------------------------------------
+
+
+def test_reorder_success(client_with_stub_manager):
+    """F147: valid order → 200 OK with {"ok": True}."""
+    client, mock_mgr = client_with_stub_manager
+    response = client.put("/api/bots/reorder", json={"order": ["a", "b", "c"]})
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    mock_mgr.reorder.assert_called_once_with(["a", "b", "c"])
+
+
+def test_reorder_logs_exception_and_returns_sanitized_500(
+    client_with_stub_manager, caplog
+):
+    """F147: BotManager.reorder raises → 500 with fixed detail (no str(e) leak),
+    and logger.exception is captured in caplog.
+    """
+    import logging
+
+    client, mock_mgr = client_with_stub_manager
+    mock_mgr.reorder.side_effect = Exception("oops")
+    with caplog.at_level(logging.ERROR, logger="routes.bots"):
+        response = client.put("/api/bots/reorder", json={"order": ["a", "b"]})
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert detail == "reorder failed"
+    assert "oops" not in detail
+    assert any("/api/bots/reorder failed" in r.message for r in caplog.records)

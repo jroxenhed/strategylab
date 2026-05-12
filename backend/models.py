@@ -38,7 +38,16 @@ def normalize_symbol(v: object) -> str:
     return s
 
 
-SymbolField = Annotated[str, BeforeValidator(normalize_symbol)]
+SymbolField = Annotated[
+    str,
+    BeforeValidator(normalize_symbol),
+    Field(
+        min_length=1,
+        max_length=20,
+        examples=["AAPL", "BRK.B", "SPY"],
+        json_schema_extra={"pattern": r"^[A-Z0-9][A-Z0-9.\-]{0,19}$"},
+    ),
+]
 
 # F145: shared alias for `list[SymbolField]`. Callers add list-level caps via
 # `Field(min_length=..., max_length=...)` (ScanRequest is uncapped; Watchlist

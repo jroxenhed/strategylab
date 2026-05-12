@@ -126,8 +126,23 @@ from fastapi.testclient import TestClient
 from main import app
 
 
-def test_short_backtest_api_endpoint():
-    """Test the /api/backtest endpoint with direction=short."""
+@patch("routes.backtest._fetch")
+def test_short_backtest_api_endpoint(mock_fetch):
+    """Test the /api/backtest endpoint with direction=short.
+
+    Price series engineered to trigger RSI-based short/cover trades:
+    - 15-bar warmup (alternating 100/10x) gives RSI = 50 at bar 14
+    - Three rising bars (108, 116, 124) push RSI to ~62
+    - Big jump to 150 forces RSI > 70 at bar 18 (crosses_above 70 → short entry)
+    - Kept at 148 (bar 19) so position is open
+    - Four falling bars (130, 110, 90, 70) pull RSI < 50 at bar 22
+      (crosses_below 50 → cover exit)
+    """
+    mock_fetch.return_value = _make_df([
+        100, 102, 100, 103, 100, 104, 100, 105, 100, 106, 100, 107, 100, 108, 100,
+        108, 116, 124, 150, 148,
+        130, 110, 90, 70,
+    ])
     client = TestClient(app)
     resp = client.post("/api/backtest", json={
         "ticker": "AAPL",
@@ -145,6 +160,12 @@ def test_short_backtest_api_endpoint():
     data = resp.json()
     assert "summary" in data
     assert "trades" in data
+    # F148 morning review: also assert trades actually fired so a future
+    # RSI implementation change that produces zero trades fails loudly
+    # instead of trivially passing the type-membership loop below.
+    trade_types = [t["type"] for t in data["trades"]]
+    assert "short" in trade_types, f"Expected at least one short entry, got {trade_types}"
+    assert "cover" in trade_types, f"Expected at least one cover exit, got {trade_types}"
     # All trades should be short/cover type
     for t in data["trades"]:
         assert t["type"] in ("short", "cover"), f"Unexpected trade type: {t['type']}"

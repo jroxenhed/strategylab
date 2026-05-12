@@ -16,6 +16,7 @@ NOTE: /api/bots/fund is registered before /{id} routes to prevent
 FastAPI treating "fund" as a bot_id.
 """
 
+import logging
 from typing import Optional
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
@@ -24,6 +25,7 @@ from bot_manager import BotConfig, BotManager
 from models import RegimeConfig, LogicField, DirectionField, OptionalBoundedRuleList
 
 router = APIRouter(prefix="/api/bots")
+logger = logging.getLogger(__name__)
 
 # Module-level reference set by main.py lifespan handler
 bot_manager: Optional[BotManager] = None
@@ -134,9 +136,13 @@ def stop_all_bots():
 @router.put("/reorder")
 def reorder_bots(req: ReorderBotsRequest):
     """Persist a new display order for the bot list."""
-    mgr = _get_manager()
-    mgr.reorder(req.order)
-    return {"ok": True}
+    try:
+        mgr = _get_manager()
+        mgr.reorder(req.order)
+        return {"ok": True}
+    except Exception:
+        logger.exception("/api/bots/reorder failed")
+        raise HTTPException(status_code=500, detail="reorder failed")
 
 
 @router.post("/stop-and-close-all")
