@@ -6,6 +6,14 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-13
 
+### B35 stale-closure — real-browser verification + ref-mirror fix (interactive)
+
+- Live-Chrome regression test of the 20-item bundle's B35 caught that the holistic fixer's "close over `updated`" patch did NOT actually fix the bug — the snapshot is captured at delete time, so a concurrent save during the 5s undo window is still silently overwritten when the timer expires.
+- Browser flow: chrome-devtools-mcp + seeded localStorage (`strategylab-saved-strategies` ← [StratA, StratB, StratC]) → select StratA via native `change` event → click Delete → assert localStorage stays `[A, B, C]` for the full 5s window → at t≈6s localStorage = `[B, C]` confirming the timer's persist call fires.
+- Fix: `savedStrategiesRef` mirrors `savedStrategies` via `useEffect`; the `setInterval` finalize step now calls `persistSavedStrategies(savedStrategiesRef.current)` instead of the stale `updated` array, so any concurrent save/rename/pin during the undo window survives the timer expiry. Removed the stale `updated` closure capture; kept `name` and the deps array (`[savedStrategies, activeStrategyName]`).
+- Side-find filed as **[F185]**: `loadSavedStrategy(s)` blanks the page with `Cannot read properties of undefined (reading 'enabled')` if a saved strategy lacks `tradingHours` — `setTradingHours(s.tradingHours)` has no fallback. Caught while seeding browser-test fixtures; the same shape risk applies to `dynamicSizing`/`skipAfterStop` for legacy localStorage rows.
+- Process note: the holistic fixer's "snapshot-the-array" fix was technically minimal but assumed the snapshot would still be representative of latest state at timer expiry — which is exactly the property the bug was about. Static reasoning had marked it OK; the live-browser test surfaced the residual hole in <2 minutes. Cementing real-loop verification as the right tool for setInterval-style state-divergence bugs (the JSDOM/RTL fake-timers path would have passed this).
+
 ### 20-item Tier B bundle — A14b, B34, B35, D27a, F59, F61, F62, F71, F74, F83, F84, F89, F105, F146, F154, F160, F164, F167, F168, F174 (interactive, full orchestrator workflow)
 
 - User requested 20 picks with full orchestrator workflow. Routing: 5 parallel Sonnet implementers (frontend UX, frontend hardening, backend atomic-writes, backend mixed, backend tests). Total bundle ~510 insertions / 262 deletions across 25+ files.

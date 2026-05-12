@@ -114,6 +114,10 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [renameValue, setRenameValue] = useState('')
   const [pendingDelete, setPendingDelete] = useState<{ name: string; snapshot: SavedStrategy[] } | null>(null)
   const pendingDeleteTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // B35: ref mirrors savedStrategies so the delete-finalize timer reads the latest array
+  // (not a stale closure snapshot) — otherwise a concurrent save during the 5s undo window
+  // is silently overwritten when the timer persists.
+  const savedStrategiesRef = useRef<SavedStrategy[]>(savedStrategies)
   // P1b: clear interval on unmount to prevent state updates on unmounted component
   useEffect(() => () => {
     if (pendingDeleteTimerRef.current !== null) clearInterval(pendingDeleteTimerRef.current)
@@ -140,6 +144,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
       setSlippageSource(slipInfo.source)
     }
   }, [slipInfo?.modeled_bps, slipInfo?.source, slippageSource])
+
+  useEffect(() => { savedStrategiesRef.current = savedStrategies }, [savedStrategies])
 
   function currentSnapshot(name: string): SavedStrategy {
     const strategyType: SavedStrategy['strategyType'] =
@@ -234,7 +240,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     setPendingDelete({ name, snapshot })
     setDeleteCountdown(5)
 
-    // Tick countdown each second; at 0 finalize (persist to localStorage)
+    // Tick countdown each second; at 0 finalize (persist to localStorage).
+    // Read latest array from ref so concurrent saves during the 5s window survive.
     let remaining = 5
     pendingDeleteTimerRef.current = setInterval(() => {
       remaining -= 1
@@ -243,7 +250,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         clearInterval(pendingDeleteTimerRef.current!)
         pendingDeleteTimerRef.current = null
         setPendingDelete(null)
-        persistSavedStrategies(updated)
+        persistSavedStrategies(savedStrategiesRef.current)
       }
     }, 1000)
   }, [savedStrategies, activeStrategyName])

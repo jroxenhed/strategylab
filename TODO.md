@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*170 / 191 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*170 / 192 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 - [F127](#f127) — [next] [medium] Batch quick-backtest endpoint has no request-level deadline [medium]
 
-## Open Work — 44 items
+## Open Work — 45 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -22,7 +22,7 @@ _(none open)_
 | [D](#d-bots-live-trading) | Bots (live trading) | 1 | [D24b](#d24b) |
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 14 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F96](#f96), [F98](#f98), [F117](#f117), [F153](#f153), [F158](#f158), [F170](#f170), [F173](#f173) |
-| [F · Hardening](#f-hardening) | Security, reliability, validation | 6 | [F49](#f49), [F106](#f106), [F127](#f127), [F181](#f181)–[F182](#f182), [F184](#f184) |
+| [F · Hardening](#f-hardening) | Security, reliability, validation | 7 | [F49](#f49), [F106](#f106), [F127](#f127), [F181](#f181)–[F182](#f182), [F184](#f184)–[F185](#f185) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 5 | [F34](#f34)–[F35](#f35), [F44](#f44), [F140](#f140), [F183](#f183) |
 | [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 6 | [F50](#f50)–[F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F172](#f172) |
 
@@ -50,7 +50,7 @@ _(none open)_
 - [x] <a id="b32"></a> **B32** Cmd/Ctrl+Enter runs the backtest — `StrategyBuilder.tsx:346-362` adds a window `keydown` listener. Guards: skips when `activeElement` is a `<textarea>` or `contentEditable`. `preventDefault()` for the chord. Uses a `runBacktestRef` updated on every render so the listener (registered once at mount with empty deps) always invokes the LATEST closure — naïve empty-deps would have pinned the mount-time `runBacktest` and read stale state. (orchestrator fixed the stale-closure bug post-implementer.) [easy] (resolved 2026-05-12)
 - [x] <a id="b33"></a> **B33** Run button spinner/cursor feedback — `StrategyBuilder.tsx`: a 13px white border-spinner (CSS `@keyframes sb-spin`, no external lib) replaces the Play icon while `loading`; button spreads `opacity: 0.6` + `cursor: 'not-allowed'` over its base style. Inline `<style>` block injected once at the top of the return. [easy] (resolved 2026-05-12)
 - [x] <a id="b34"></a> **B34** Strategy bar Delete de-emphasis — small spacer + muted color on Delete button so it reads as secondary. Full visual de-emphasis became unnecessary after B35 made deletion reversible. [medium] (resolved 2026-05-13)
-- [x] <a id="b35"></a> **B35** Strategy deletion 5s undo toast — optimistic UI remove + portaled toast with countdown + Undo. Persists to localStorage only after countdown expires. Holistic fixer caught a P1 stale-closure bug (re-filtering `savedStrategies` from outer closure would have silently erased strategies saved during the undo window) — fixed by closing over the pre-computed `updated` snapshot. Timer typed `setInterval` with unmount cleanup added. [medium] (resolved 2026-05-13)
+- [x] <a id="b35"></a> **B35** Strategy deletion 5s undo toast — optimistic UI remove + portaled toast with countdown + Undo. Persists to localStorage only after countdown expires. Holistic fixer originally closed over a pre-computed `updated` snapshot, but the stale-closure remained: a concurrent save during the 5s window was still silently overwritten at timer expiry. Browser-verified fix: `savedStrategiesRef` mirrors latest state via effect; timer reads `savedStrategiesRef.current` so concurrent saves survive. Timer typed `setInterval` with unmount cleanup added. [medium] (resolved 2026-05-13)
 - [x] <a id="b36"></a> **B36** Results tab bar overflow — `Results.tsx:391` outer tabBar wrapper switched from `flexWrap: 'wrap'` to `flexWrap: 'nowrap', overflowX: 'auto'`. Inner flex row pinned to `flexWrap: 'nowrap'`. Individual tab buttons get `whiteSpace: 'nowrap'` + `flexShrink: 0` so labels never wrap and buttons stay at natural width — narrow panes now scroll horizontally instead of stacking. [easy] (resolved 2026-05-12)
 ## C — Strategy Summary & Analytics
 
@@ -128,6 +128,7 @@ Own multi-session research project. Needs its own design work before implementat
 - [ ] <a id="f181"></a> **F181** `BotCard.tsx:595` — `as any` cast on `summary.backtest_summary` is preexisting; replace with typed narrowing (`Record<string, number>` is what the field's already typed as). One-line type fix. (from 20-item bundle kieran-typescript KT-3) [easy] [hardening] (added 2026-05-13)
 - [ ] <a id="f182"></a> **F182** `exits.py` `_compute_borrow_cost` + `ExitsMixin._detect_external_close` / `_evaluate_exit_reason` / `_execute_exit` — public-surface methods are unannotated (bare `cfg`, `state`, `price`, `df`, `i`, etc.). Add `BotConfig` / `BotState` / `pd.DataFrame` / `int` / `float` annotations to make the mixin's protocol boundary visible. (from 20-item bundle kieran-python KP-3 + KP-4) [easy] [hardening] (added 2026-05-13)
 - [ ] <a id="f184"></a> **F184** F105 `Interval` Literal accepts `"60m"` but IBKR provider rejects it (only `"1h"` works). Either remove `"60m"` from the Literal (breaks Yahoo/Alpaca callers that use it) or add a Pydantic `BeforeValidator` that normalises `"60m"` → `"1h"` since they're semantically equivalent. Needs design decision. (from 20-item bundle correctness C-05) [medium] [hardening] (added 2026-05-13)
+- [ ] <a id="f185"></a> **F185** `loadSavedStrategy` crashes on partial/legacy strategy objects — `setTradingHours(s.tradingHours)` (StrategyBuilder.tsx:187) has no fallback, so any saved strategy missing `tradingHours` blanks the page with `Cannot read properties of undefined (reading 'enabled')`. Same shape risk for `dynamicSizing`/`skipAfterStop` when callers seed legacy data (caught while seeding browser-test fixtures for B35). Add `?? { enabled: false, … }` defaults to each `s.X` getter; consider folding into `migrateRule`-style normalisation in `savedStrategies.ts`. [easy] [hardening] (added 2026-05-13)
 
 ### F · Polish
 - [ ] <a id="f34"></a> **F34** 118+ hardcoded hex colors while CSS variables exist — theme change requires touching dozens of files. Migrate Results.tsx and BotCard.tsx to use --bg-*, --accent-*, --text-* variables. [medium] [polish]
