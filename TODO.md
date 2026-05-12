@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*238 / 298 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*239 / 298 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 - [F127](#f127) — [next] [medium] Batch quick-backtest endpoint has no request-level deadline [medium]
 
-## Open Work — 83 items
+## Open Work — 82 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -24,7 +24,7 @@ _(none open)_
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 16 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F71](#f71), [F96](#f96), [F98](#f98), [F113](#f113), [F117](#f117), [F153](#f153), [F158](#f158), [F170](#f170), [F173](#f173) |
 | [F · Hardening](#f-hardening) | Security, reliability, validation | 14 | [F49](#f49), [F55](#f55), [F59](#f59), [F62](#f62), [F74](#f74), [F83](#f83), [F105](#f105)–[F106](#f106), [F127](#f127), [F154](#f154), [F159](#f159)–[F160](#f160), [F165](#f165), [F174](#f174) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 5 | [F34](#f34)–[F35](#f35), [F44](#f44), [F140](#f140), [F157](#f157) |
-| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 18 | [F50](#f50)–[F51](#f51), [F61](#f61), [F79](#f79), [F84](#f84), [F89](#f89), [F97](#f97), [F142](#f142), [F144](#f144), [F146](#f146), [F150](#f150), [F156](#f156), [F161](#f161), [F164](#f164), [F167](#f167)–[F168](#f168), [F172](#f172), [F180](#f180) |
+| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 17 | [F50](#f50)–[F51](#f51), [F61](#f61), [F79](#f79), [F84](#f84), [F89](#f89), [F97](#f97), [F142](#f142), [F144](#f144), [F146](#f146), [F150](#f150), [F156](#f156), [F161](#f161), [F164](#f164), [F167](#f167)–[F168](#f168), [F172](#f172) |
 
 ## A — Charts & Indicators
 
@@ -267,4 +267,4 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f177"></a> **F177** Cancel-signal integration test — shipped as `test_walk_forward.py::TestStreamEndpoint::test_cancel_signal_sets_event_on_early_close`. Subclasses `threading.Event` into `_RecordingEvent` that captures every constructed instance + tracks `set()` calls; monkeypatches `wf_mod.threading.Event` to the subclass. Test opens `client.stream()`, breaks after the first `progress` event, asserts on with-block exit that `instances[-1].is_set() == True` — the LAST-constructed Event (the cancel_event inside `event_stream()`) was specifically set, not just any Event in the process. Tier B correctness review caught the broad-assertion P0 (`len(set_calls) >= 1` would pass if any unrelated Event fired); fix tightened to instance-identity check. Mock signature also tightened: `_stub_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None)` rejects unknown kwargs so new production kwargs surface as TypeErrors. [easy] [testing] (resolved 2026-05-12)
 - [x] <a id="f178"></a> **F178** NaN-in-metrics serialisation test — shipped as `test_walk_forward.py::TestStreamEndpoint::test_nan_in_metrics_emits_error_event`. Monkeypatches `wf_mod._assemble_walk_forward_response` to inject `wfe=float('nan')` into the otherwise-valid response, then asserts the stream emits `started` → `error` (status=500, detail mentions "serialis") with no subsequent `result` event. Verifies the `json.dumps(allow_nan=False)` ValueError → error-event path added by F175. Mock signature tightened alongside F177. [easy] [testing] (resolved 2026-05-12)
 - [x] <a id="f179"></a> **F179** Frontend SSE malformed-event handling test — shipped as `frontend/src/features/strategy/sseParser.test.ts` (7 tests, co-located with source per project convention). Required extracting the inline `JSON.parse + try/catch` from `WalkForwardPanel.tsx` into `sseParser.ts` (24 lines: `parseSseFrame(dataLines, label='SSE event'): unknown | null`). Behavior preserved exactly at both call sites (main read loop + after-loop flush); flush site passes `label='SSE event in flush'` to keep the diagnostic distinction from the pre-F179 inline code. Tests cover: valid event, multi-line event, empty input (silent null), malformed JSON (warn + null), truncated JSON (warn + null), JSON `null` literal (silent null — not malformed), whitespace-only line (warn + null). Tier B kieran-typescript review caught the unsafe `as SseEvent | null` cast at both call sites — added runtime `typeof evt.type !== 'string'` discriminant guard so non-conforming JSON objects log+skip instead of silently falling through every type branch. `npm run build` clean. [easy] [testing] (resolved 2026-05-12)
-- [ ] <a id="f180"></a> **F180** Register `@pytest.mark.slow` marker in `backend/pytest.ini` and convert `test_wfa_pool.py`'s `@pytest.mark.skipif(SKIP_SLOW_TESTS=="1")` to `@pytest.mark.slow`. Standard pytest idiom: CI deselects with `-m 'not slow'`, runs slow tests with `-m slow` (or by default). One-off env var name (`SKIP_SLOW_TESTS`) is invisible at the project-config level. (from F176 kieran-python review K1 — defer; works correctly today, this is convention cleanup.) [easy] [testing] (added 2026-05-12)
+- [x] <a id="f180"></a> **F180** Registered `slow` marker in `backend/pytest.ini` with a one-line description (deselect with `-m 'not slow'`). Replaced `test_wfa_pool.py`'s `@pytest.mark.skipif(os.environ.get("SKIP_SLOW_TESTS") == "1", ...)` with `@pytest.mark.slow`. Dropped now-unused `import os`. Default `pytest` still runs 431/431 (slow tests included by default — single tier, no need to opt out unless something is wrong); `pytest -m 'not slow'` now correctly deselects the one ProcessPool test (430 passed, 1 deselected). Convention now visible in `pytest.ini` instead of buried in an env-var check. [easy] [testing] (resolved 2026-05-12)

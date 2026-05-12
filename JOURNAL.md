@@ -6,6 +6,11 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-12
 
+### F180 — Register `slow` pytest marker (interactive, polish)
+
+- F176 left behind a `@pytest.mark.skipif(os.environ.get("SKIP_SLOW_TESTS") == "1", ...)` escape hatch on the ProcessPool test. kieran-python's K1 from F176-F179 review flagged the one-off env-var name as invisible at the project-config level — anyone scanning `pytest.ini` wouldn't discover it.
+- **[F180](TODO.md#f180)** Added a `markers = slow: ...` section to `backend/pytest.ini`, replaced the skipif decorator with `@pytest.mark.slow`, dropped the now-unused `import os` from `test_wfa_pool.py`. Default behavior unchanged (slow tests included). `pytest -m 'not slow'` now correctly deselects the one slow test (430 passed, 1 deselected, 2.5s → 1.7s). Trivial — done directly in the main session, no subagent dispatch (same-tier serial work, would be pure overhead).
+
 ### F176 + F177 + F178 + F179 — F175 test follow-ups (interactive, Tier B)
 
 - Four testing gaps logged during F175's review pass, all cleared in one bundle. User asked for "full orchestration workflow" — Opus orchestrator + haiku explore + 2 parallel Sonnet implementers (backend bundle + frontend extract+test) + 3-persona parallel review + Opus synthesis + 1 holistic Sonnet fixer pass.

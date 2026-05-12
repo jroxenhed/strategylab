@@ -6,9 +6,8 @@ for its mocked run_backtest calls. Tests here need the real ProcessPool path
 (_FORCE_SERIAL=False, the default), so they must not share that fixture.
 
 Wall-clock cost: ~2-5s on macOS (spawn context overhead ~100ms/worker +
-4 trivial backtests). Mark SKIP_SLOW_TESTS=1 to skip if CI is too slow.
+4 trivial backtests). Marked @pytest.mark.slow — deselect with -m 'not slow'.
 """
-import os
 import sys
 from os.path import dirname, abspath
 
@@ -78,10 +77,7 @@ def _build_windows(n_windows: int, is_bars: int, oos_bars: int) -> list[tuple[in
     return windows
 
 
-@pytest.mark.skipif(
-    os.environ.get("SKIP_SLOW_TESTS") == "1",
-    reason="SKIP_SLOW_TESTS=1 set — skipping process-pool spawn test",
-)
+@pytest.mark.slow
 class TestRunWindowsParallel:
     """F176 — exercises the real ProcessPool dispatch path in run_windows_parallel.
 
