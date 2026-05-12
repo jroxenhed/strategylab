@@ -313,16 +313,17 @@ def run_backtest(req: StrategyRequest):
         sell_rules = [migrate_rule(r) for r in req.sell_rules]
         all_rules = buy_rules + sell_rules
 
-        # B23: dual rule sets when long_buy_rules + short_buy_rules both provided with regime enabled
-        b23_mode = (
-            req.regime and req.regime.enabled
-            and req.long_buy_rules is not None and len(req.long_buy_rules) > 0
-            and req.short_buy_rules is not None and len(req.short_buy_rules) > 0
-        )
+        # B23: dual rule sets when regime is enabled.
+        # Previously required both long_buy_rules and short_buy_rules to be non-empty,
+        # which silently fell back to the unified buy_rules when only one tab was filled.
+        # Fix: activate b23_mode on regime.enabled alone — empty rule lists produce no
+        # entries for that direction (eval_rules([]) returns False), which is the correct
+        # behavior for "user only configured one side of the regime strategy."
+        b23_mode = bool(req.regime and req.regime.enabled)
         if b23_mode:
-            long_buy_rules = [migrate_rule(r) for r in req.long_buy_rules]
+            long_buy_rules = [migrate_rule(r) for r in (req.long_buy_rules or [])]
             long_sell_rules = [migrate_rule(r) for r in (req.long_sell_rules or [])]
-            short_buy_rules = [migrate_rule(r) for r in req.short_buy_rules]
+            short_buy_rules = [migrate_rule(r) for r in (req.short_buy_rules or [])]
             short_sell_rules = [migrate_rule(r) for r in (req.short_sell_rules or [])]
             # Combine all rules so indicators are computed for every rule across both sets
             all_rules = all_rules + long_buy_rules + long_sell_rules + short_buy_rules + short_sell_rules
@@ -618,19 +619,23 @@ def run_backtest(req: StrategyRequest):
                 trail_stop_price = None
                 entry_slippage = abs(shares * (fill_price - price))
                 entry_type = "short" if position_direction == "short" else "buy"
+                # In b23_mode, active_buy holds the direction-specific rule list bound
+                # above; using buy_rules here would show the hidden unified rules in
+                # trade tooltips even though they never drove the entry signal.
+                display_buy_rules = active_buy if b23_mode else buy_rules
                 trades.append({
                     "type": entry_type, "date": date, "price": round(fill_price, 4),
                     "shares": round(shares, 4),
                     "direction": position_direction,
                     "slippage": round(entry_slippage, 2),
                     "commission": round(commission, 2),
-                    "rules": _fired_rules(buy_rules, indicators, i),
+                    "rules": _fired_rules(display_buy_rules, indicators, i),
                 })
                 if signal_trace is not None:
                     signal_trace.append({
                         "date": date, "price": round(price, 4), "position": "entered",
                         "action": "SHORT" if position_direction == "short" else "BUY",
-                        "buy_rules": _trace_rules(buy_rules, indicators, i, "buy"),
+                        "buy_rules": _trace_rules(display_buy_rules, indicators, i, "buy"),
                     })
 
             elif position > 0:
@@ -699,6 +704,7 @@ def run_backtest(req: StrategyRequest):
                     sell_fired = eval_rules(active_sell, active_sell_logic, indicators, i) if active_sell else False
                 else:
                     sell_fired = eval_rules(sell_rules, req.sell_logic, indicators, i)
+                display_sell_rules = active_sell if b23_mode and position_direction is not None else sell_rules
                 if stop_hit or trail_hit or time_stop_hit or sell_fired:
                     exit_slippage = abs(position * (raw_exit - exit_price))
                     commission = per_leg_commission(position, req)
@@ -720,7 +726,7 @@ def run_backtest(req: StrategyRequest):
                     elif time_stop_hit:
                         exit_rules = ["time stop"]
                     else:
-                        exit_rules = _fired_rules(sell_rules, indicators, i)
+                        exit_rules = _fired_rules(display_sell_rules, indicators, i)
                     trades.append({
                         "type": exit_type,
                         "date": date,
@@ -764,11 +770,11 @@ def run_backtest(req: StrategyRequest):
                         signal_trace.append({
                             "date": date, "price": round(price, 4), "position": "exited",
                             "action": action,
-                            "sell_rules": _trace_rules(sell_rules, indicators, i, "sell"),
+                            "sell_rules": _trace_rules(display_sell_rules, indicators, i, "sell"),
                         })
                 elif signal_trace is not None:
                     # In position but no sell — trace any bar where at least one sell rule fires
-                    sell_details = _trace_rules(sell_rules, indicators, i, "sell")
+                    sell_details = _trace_rules(display_sell_rules, indicators, i, "sell")
                     if any(d["result"] for d in sell_details if not d.get("muted")):
                         signal_trace.append({
                             "date": date, "price": round(price, 4), "position": "holding",
@@ -776,8 +782,10 @@ def run_backtest(req: StrategyRequest):
                             "sell_rules": sell_details,
                         })
 
-            elif signal_trace is not None and position == 0:
-                # Not in position — trace if sell rules WOULD have fired
+            elif signal_trace is not None and position == 0 and not b23_mode:
+                # Not in position — trace if sell rules WOULD have fired.
+                # Suppressed in b23_mode: unified sell_rules are hidden from the user;
+                # showing them in a flat-position trace would leak the hidden rule set.
                 active_sell = [r for r in sell_rules if not r.muted]
                 if active_sell and i > 0:
                     sell_details = _trace_rules(sell_rules, indicators, i, "sell")

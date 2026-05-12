@@ -368,7 +368,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         source: dataSource, debug, direction,
         extended_hours: extendedHours,
         regime: regimeEnabled ? { ...regimeConfig, rules: regimeBuyRules, logic: regimeLogic, enabled: true } : undefined,
-        ...(regimeEnabled && longBuyRules.some(r => r.indicator) && shortBuyRules.some(r => r.indicator) ? {
+        ...(regimeEnabled ? {
           long_buy_rules: longBuyRules,
           long_sell_rules: longSellRules,
           long_buy_logic: longBuyLogic,
@@ -1038,6 +1038,11 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
                 onChange={nr => setLongBuyRules(rules => rules.map((x, j) => j === i ? nr : x))}
                 onDelete={() => setLongBuyRules(rules => rules.filter((_, j) => j !== i))} />
             ))}
+            {(longBuyRules.length === 0 || longBuyRules.every(r => !r.indicator)) && (
+              <div style={{ padding: '6px 12px 8px', fontSize: 11, color: '#8b949e', fontStyle: 'italic' }}>
+                No long entry rules — no long positions will open. Exits/stops still run on existing positions.
+              </div>
+            )}
           </div>
           <div style={styles.panel}>
             <div style={styles.panelHeader}>
@@ -1086,6 +1091,11 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
                 onChange={nr => setShortBuyRules(rules => rules.map((x, j) => j === i ? nr : x))}
                 onDelete={() => setShortBuyRules(rules => rules.filter((_, j) => j !== i))} />
             ))}
+            {(shortBuyRules.length === 0 || shortBuyRules.every(r => !r.indicator)) && (
+              <div style={{ padding: '6px 12px 8px', fontSize: 11, color: '#8b949e', fontStyle: 'italic' }}>
+                No short entry rules — no short positions will open. Exits/stops still run on existing positions.
+              </div>
+            )}
           </div>
           <div style={styles.panel}>
             <div style={styles.panelHeader}>

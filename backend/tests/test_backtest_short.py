@@ -169,3 +169,288 @@ def test_short_backtest_api_endpoint(mock_fetch):
     # All trades should be short/cover type
     for t in data["trades"]:
         assert t["type"] in ("short", "cover"), f"Unexpected trade type: {t['type']}"
+
+
+# ---------------------------------------------------------------------------
+# Regime / b23_mode tests (silent-fallback bug fix)
+#
+# Bug: when regime.enabled=True but only one direction's rule list was filled,
+# b23_mode was False, so the hidden unified buy_rules silently drove entries.
+# Fix: b23_mode activates on regime.enabled alone; empty list = no entries.
+# ---------------------------------------------------------------------------
+
+from models import RegimeConfig
+
+
+def _make_df_long(n: int = 10, base: float = 100.0) -> pd.DataFrame:
+    """Synthetic daily OHLCV, constant price — simple baseline for regime tests."""
+    prices = [base] * n
+    dates = pd.date_range("2024-01-01", periods=n, freq="D")
+    return pd.DataFrame({
+        "Open": prices,
+        "High": [p * 1.005 for p in prices],
+        "Low": [p * 0.995 for p in prices],
+        "Close": prices,
+        "Volume": [1_000_000] * n,
+    }, index=dates)
+
+
+def _regime_always_long() -> RegimeConfig:
+    """Regime rule that is always True (price > 0) — all bars long-active."""
+    return RegimeConfig(
+        enabled=True,
+        min_bars=1,
+        rules=[Rule(indicator="price", condition="above", value=0)],
+        logic="AND",
+    )
+
+
+def _regime_always_short() -> RegimeConfig:
+    """Regime rule that is always False (price > 999999) — all bars short-active."""
+    return RegimeConfig(
+        enabled=True,
+        min_bars=1,
+        rules=[Rule(indicator="price", condition="above", value=999999)],
+        logic="AND",
+    )
+
+
+@patch("routes.backtest.fetch_higher_tf")
+@patch("routes.backtest._fetch")
+def test_regime_long_rules_only_fires_long_not_unified(mock_fetch, mock_htf):
+    """Regime enabled + long rules filled + short rules empty → only long entries fire.
+
+    The unified buy_rules contain a rule (price > 0) that would always fire if
+    the old silent-fallback bug were still present.  The long_buy_rules contain
+    a rule that fires when price is below 101 (always on our flat-100 series).
+    The long_buy_rules label must appear in trade["rules"], not the unified label.
+    Zero short entries should be produced.
+    """
+    df = _make_df_long(n=12)
+    mock_fetch.return_value = df
+    mock_htf.return_value = df
+
+    # unified buy_rules: always fires — would be used by the old bug
+    unified_always_fires = Rule(indicator="price", condition="above", value=0)
+    # long-tab rule: fires on our flat-100 series (price below 101)
+    long_entry_rule = Rule(indicator="price", condition="below", value=101)
+    # sell rule: fires after a few bars (price below 105, always true → sells on next open bar)
+    sell_rule = Rule(indicator="price", condition="below", value=105)
+
+    req = StrategyRequest(
+        ticker="TEST",
+        start="2024-01-01",
+        end="2024-12-31",
+        interval="1d",
+        # unified rules — must NOT drive entries when regime is enabled
+        buy_rules=[unified_always_fires],
+        sell_rules=[sell_rule],
+        long_buy_rules=[long_entry_rule],
+        long_sell_rules=[sell_rule],
+        short_buy_rules=[],   # intentionally empty — the trigger for the old bug
+        short_sell_rules=[],
+        regime=_regime_always_long(),
+        initial_capital=10000.0,
+        position_size=1.0,
+    )
+
+    result = run_backtest(req)
+    trades = result["trades"]
+
+    # Must have at least one entry
+    entry_trades = [t for t in trades if t["type"] == "buy"]
+    assert len(entry_trades) >= 1, f"Expected long entries, got {trades}"
+
+    # No short entries should fire (short_buy_rules=[])
+    short_entries = [t for t in trades if t["type"] == "short"]
+    assert len(short_entries) == 0, f"Unexpected short entries: {short_entries}"
+
+    # Direction of all entries must be 'long'
+    for t in entry_trades:
+        assert t["direction"] == "long", f"Expected direction=long, got {t['direction']}"
+
+    # Tight rules-display assertion: the unified rule uses condition="above" and the
+    # long-specific rule uses condition="below", so _rule_desc produces "price above 0"
+    # vs "price below 101" — unambiguous substrings.  If display_buy_rules were
+    # reverted to buy_rules (the unfixed bug), the unified "above" label would appear
+    # instead of the direction-specific "below" label.
+    for t in entry_trades:
+        rules_str = " ".join(t["rules"])
+        assert "below" in rules_str, (
+            f"Expected direction-specific rule label ('below') in trade rules, got {t['rules']}"
+        )
+        assert "above" not in rules_str, (
+            f"Unified rule label ('above') leaked into trade rules: {t['rules']}"
+        )
+
+
+@patch("routes.backtest.fetch_higher_tf")
+@patch("routes.backtest._fetch")
+def test_regime_short_rules_only_fires_short_not_unified(mock_fetch, mock_htf):
+    """Regime enabled + short rules filled + long rules empty → only short entries fire,
+    and trade['rules'] reflects short_buy_rules label, not unified buy_rules label."""
+    df = _make_df_long(n=12)
+    mock_fetch.return_value = df
+    mock_htf.return_value = df
+
+    # unified buy_rules: always fires — condition="above" produces "price above 0"
+    unified_always_fires = Rule(indicator="price", condition="above", value=0)
+    # short-specific entry rule: also always fires — condition="below" produces "price below 10000"
+    short_entry_rule = Rule(indicator="price", condition="below", value=10000)
+    sell_rule = Rule(indicator="price", condition="below", value=105)
+
+    req = StrategyRequest(
+        ticker="TEST",
+        start="2024-01-01",
+        end="2024-12-31",
+        interval="1d",
+        buy_rules=[unified_always_fires],
+        sell_rules=[sell_rule],
+        long_buy_rules=[],     # intentionally empty
+        long_sell_rules=[],
+        short_buy_rules=[short_entry_rule],
+        short_sell_rules=[sell_rule],
+        regime=_regime_always_short(),  # regime always inactive → short path
+        initial_capital=10000.0,
+        position_size=1.0,
+    )
+
+    result = run_backtest(req)
+    trades = result["trades"]
+
+    short_entries = [t for t in trades if t["type"] == "short"]
+    assert len(short_entries) >= 1, f"Expected short entries, got {trades}"
+
+    long_entries = [t for t in trades if t["type"] == "buy"]
+    assert len(long_entries) == 0, f"Unexpected long entries: {long_entries}"
+
+    for t in short_entries:
+        assert t["direction"] == "short", f"Expected direction=short, got {t['direction']}"
+
+    # Tight rules-display assertion: unified uses "above", direction-specific uses "below".
+    # If display_buy_rules were reverted to buy_rules, "above" would appear instead.
+    for t in short_entries:
+        rules_str = " ".join(t["rules"])
+        assert "below" in rules_str, (
+            f"Expected direction-specific rule label ('below') in trade rules, got {t['rules']}"
+        )
+        assert "above" not in rules_str, (
+            f"Unified rule label ('above') leaked into trade rules: {t['rules']}"
+        )
+
+
+@patch("routes.backtest.fetch_higher_tf")
+@patch("routes.backtest._fetch")
+def test_regime_both_empty_produces_no_trades(mock_fetch, mock_htf):
+    """Regime enabled + both long_buy_rules and short_buy_rules empty → zero trades."""
+    df = _make_df_long(n=12)
+    mock_fetch.return_value = df
+    mock_htf.return_value = df
+
+    req = StrategyRequest(
+        ticker="TEST",
+        start="2024-01-01",
+        end="2024-12-31",
+        interval="1d",
+        # unified buy_rules always fires — must NOT be used when regime enabled
+        buy_rules=[Rule(indicator="price", condition="above", value=0)],
+        sell_rules=[Rule(indicator="price", condition="below", value=105)],
+        long_buy_rules=[],
+        long_sell_rules=[],
+        short_buy_rules=[],
+        short_sell_rules=[],
+        regime=_regime_always_long(),
+        initial_capital=10000.0,
+        position_size=1.0,
+    )
+
+    result = run_backtest(req)
+    entry_trades = [t for t in result["trades"] if t["type"] in ("buy", "short")]
+    assert len(entry_trades) == 0, (
+        f"Expected zero entries when both regime rule lists are empty, got {entry_trades}"
+    )
+
+
+@patch("routes.backtest._fetch")
+def test_regime_off_unified_buy_rules_still_drive_entries(mock_fetch):
+    """Regression: when regime is disabled, unified buy_rules still drive entries normally."""
+    df = _make_df_long(n=6)
+    mock_fetch.return_value = df
+
+    req = StrategyRequest(
+        ticker="TEST",
+        start="2024-01-01",
+        end="2024-12-31",
+        interval="1d",
+        buy_rules=[Rule(indicator="price", condition="below", value=101)],
+        sell_rules=[Rule(indicator="price", condition="above", value=200)],  # never fires
+        long_buy_rules=[],
+        long_sell_rules=[],
+        short_buy_rules=[],
+        short_sell_rules=[],
+        regime=None,
+        initial_capital=10000.0,
+        position_size=1.0,
+    )
+
+    result = run_backtest(req)
+    entry_trades = [t for t in result["trades"] if t["type"] in ("buy", "short")]
+    assert len(entry_trades) >= 1, (
+        f"Expected entries driven by unified buy_rules when regime is off, got {result['trades']}"
+    )
+
+
+@patch("routes.backtest.fetch_higher_tf")
+@patch("routes.backtest._fetch")
+def test_regime_exit_uses_direction_specific_sell_rules(mock_fetch, mock_htf):
+    """Regime enabled: exit trade['rules'] must reflect long_sell_rules, not unified sell_rules.
+
+    Entry fires via long_buy_rules.  Exit fires because long_sell_rules fires (price above 0,
+    always true).  Unified sell_rules uses condition='below' value=10000 — also always fires —
+    but must NOT appear in the exit trade record's rules field when b23_mode is active.
+    Verifies the display_sell_rules fix on the exit side (C1 in the review).
+    """
+    df = _make_df_long(n=6)
+    mock_fetch.return_value = df
+    mock_htf.return_value = df
+
+    # Entry: long_buy_rules fires first bar (price < 10000 is always true on flat-100)
+    long_entry_rule = Rule(indicator="price", condition="below", value=10000)
+    # Exit: long_sell_rules fires every bar (price > 0) — "price above 0"
+    long_exit_rule = Rule(indicator="price", condition="above", value=0)
+    # Unified sell_rules: also fires every bar — "price below 10000" (distinguishable label)
+    unified_sell_rule = Rule(indicator="price", condition="below", value=10000)
+
+    req = StrategyRequest(
+        ticker="TEST",
+        start="2024-01-01",
+        end="2024-12-31",
+        interval="1d",
+        buy_rules=[long_entry_rule],
+        sell_rules=[unified_sell_rule],
+        long_buy_rules=[long_entry_rule],
+        long_sell_rules=[long_exit_rule],
+        short_buy_rules=[],
+        short_sell_rules=[],
+        regime=_regime_always_long(),
+        initial_capital=10000.0,
+        position_size=1.0,
+    )
+
+    result = run_backtest(req)
+    trades = result["trades"]
+
+    exit_trades = [t for t in trades if t["type"] == "sell"]
+    assert len(exit_trades) >= 1, f"Expected at least one sell exit, got {trades}"
+
+    # Tight label assertion: long_sell_rules produces "price above 0" ("above"),
+    # unified sell_rules would produce "price below 10000" ("below").
+    # If display_sell_rules were reverted to sell_rules, "below" would appear instead.
+    for t in exit_trades:
+        rules_str = " ".join(t["rules"])
+        assert "above" in rules_str, (
+            f"Expected direction-specific sell label ('above') in exit rules, got {t['rules']}"
+        )
+        assert "below" not in rules_str, (
+            f"Unified sell label ('below') leaked into exit trade rules: {t['rules']}"
+        )
