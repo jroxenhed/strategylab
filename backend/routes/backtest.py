@@ -304,14 +304,36 @@ def backtest_endpoint(req: StrategyRequest):
     return run_backtest(req)
 
 
-def run_backtest(req: StrategyRequest, *, include_spy_correlation: bool = True, indicator_cache: dict | None = None):
+def run_backtest(
+    req: StrategyRequest,
+    *,
+    include_spy_correlation: bool = True,
+    indicator_cache: dict | None = None,
+    df: pd.DataFrame | None = None,
+):
+    """Run a single backtest.
+
+    Args:
+        req: StrategyRequest describing the backtest parameters.
+        include_spy_correlation: Whether to compute SPY correlation in the summary.
+        indicator_cache: Optional shared cache for indicator series across combos.
+        df: Optional pre-fetched DataFrame to use instead of calling _fetch().
+            When provided, bypasses _fetch() entirely — caller is responsible
+            for ensuring the df matches req.ticker / req.start / req.end /
+            req.interval. df must have Open, High, Low, Close columns and a
+            DatetimeIndex. Do NOT pass bars outside req.start/req.end, since
+            downstream code uses df.index[0] / df.index[-1] for trade date
+            stamping. When None (default), _fetch() is called as normal.
+    """
     # F94: shared allowlist + case-normalize at the route boundary. The
     # regime path below also calls fetch_higher_tf(source=req.source) and
     # ad-hoc _fetch calls; bouncing unknown providers up front keeps the
     # failure mode uniform (400 Invalid source) rather than per-helper.
     req.source = require_valid_source(req.source)
     try:
-        df = _fetch(req.ticker, req.start, req.end, req.interval, source=req.source, extended_hours=req.extended_hours)
+        # Use pre-fetched slice when provided (WFA window path); otherwise fetch.
+        if df is None:
+            df = _fetch(req.ticker, req.start, req.end, req.interval, source=req.source, extended_hours=req.extended_hours)
 
         close = df["Close"]
         high = df["High"]

@@ -17,8 +17,10 @@ plus window-level parallelism for WFA is the design that would actually win;
 deferred to F166 if a real large-grid workload appears.
 
 Public contract:
-  run_grid(base, params, timeout_secs)
+  run_grid(base, params, timeout_secs, df=None)
     -> tuple[list[tuple[dict, dict]], bool, int]
+  When df is provided, the same df is passed to every combo — caller is
+  responsible for ensuring it matches base.ticker / start / end / interval.
   Returns (results, timed_out, skipped):
     - results: list of (combo_dict, summary_dict) for successful runs only.
       Order matches `itertools.product(*[p.values for p in params])`.
@@ -37,6 +39,8 @@ import logging
 from itertools import product
 from time import monotonic
 from typing import Protocol
+
+import pandas as pd
 
 from fastapi import HTTPException
 
@@ -58,6 +62,8 @@ def run_grid(
     base: StrategyRequest,
     params: list[_GridParam],
     timeout_secs: float,
+    *,
+    df: pd.DataFrame | None = None,
 ) -> tuple[list[tuple[dict, dict]], bool, int]:
     """Run run_backtest over the Cartesian product of params.values.
 
@@ -70,6 +76,10 @@ def run_grid(
         params: list of objects with .path and .values attributes.
         timeout_secs: Wall-clock budget. If exceeded, the loop breaks and
             timed_out=True; combos that finished before the break are kept.
+        df: Optional pre-fetched DataFrame passed through to every run_backtest
+            call. When provided, bypasses _fetch() for all combos — caller is
+            responsible for ensuring it matches base.ticker / start / end /
+            interval. When None (default), each run_backtest calls _fetch().
 
     Returns:
         (results, timed_out, skipped). See module docstring.
@@ -113,6 +123,7 @@ def run_grid(
                 req,
                 include_spy_correlation=False,
                 indicator_cache=indicator_cache,
+                df=df,
             )
             results.append((combo, r["summary"]))
         except HTTPException as exc:

@@ -479,6 +479,45 @@ class TestValidation:
 class TestWindowLogic:
     """Window computation and WFA loop behavior."""
 
+    def test_f169_df_slice_size_matches_window_config(self, monkeypatch):
+        """F169 fence: every df= kwarg passed to run_backtest from the WFA loop
+        must contain exactly `is_bars` rows (for IS combos) or `oos_bars` rows
+        (for OOS). Catches future regressions to the pre-F169 off-by-one where
+        provider exclusive-end semantics shaved one bar per window."""
+        import routes.walk_forward as wf_mod
+        import routes.grid_runner as grid_runner_mod
+
+        n = 400
+        is_bars, oos_bars = 100, 50
+        mock_df = _make_mock_df(n=n, start="2020-01-01")
+        monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
+
+        captured_lens = []
+
+        def mock_run_backtest(req, **kwargs):
+            df = kwargs.get("df")
+            captured_lens.append(len(df) if df is not None else None)
+            return _minimal_backtest_result()
+
+        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
+        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+
+        resp = client.post(
+            "/api/backtest/walk_forward",
+            json=_wf_payload(is_bars=is_bars, oos_bars=oos_bars),
+        )
+        assert resp.status_code == 200, resp.text
+
+        assert captured_lens, "expected run_backtest to be called at least once"
+        assert all(
+            n is not None for n in captured_lens
+        ), f"every WFA call must pass df=; got {captured_lens.count(None)} None entries"
+        # Every IS combo passes is_bars-long slice; every OOS passes oos_bars-long.
+        # Any other size means an off-by-one slice — the bug F169 fixed.
+        assert all(
+            n in (is_bars, oos_bars) for n in captured_lens
+        ), f"unexpected df lengths {set(captured_lens)} — expected only {{{is_bars}, {oos_bars}}}"
+
     def test_single_param_two_windows(self, monkeypatch):
         """Small synthetic dataset, 1 param, rolling. Assert 2 windows, non-empty stitched equity,
         time-sorted, no duplicate timestamps at seam."""

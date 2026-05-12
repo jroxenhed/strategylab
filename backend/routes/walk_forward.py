@@ -310,10 +310,12 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
             break
 
         is_req_template = base.model_copy(update={"start": is_start_date, "end": is_end_date})
+        is_df = df.iloc[is_s : is_e + 1]
         is_combos, is_timed_out, _is_skipped = run_grid(
             is_req_template,
             req.params,
             timeout_secs=remaining_budget,
+            df=is_df,
         )
 
         if is_timed_out:
@@ -374,8 +376,9 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
         oos_req = base.model_copy(update={"start": oos_start_date, "end": oos_end_date})
         for path, value in best_combo.items():
             oos_req = _apply_param(oos_req, path, value)
+        oos_df = df.iloc[oos_s : oos_e + 1]
         try:
-            oos_result = run_backtest(oos_req)
+            oos_result = run_backtest(oos_req, df=oos_df, include_spy_correlation=False)
         except HTTPException as exc:
             if exc.status_code >= 500:
                 raise
