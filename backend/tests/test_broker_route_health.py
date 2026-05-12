@@ -23,15 +23,17 @@ class StubIBKR:
 
 @pytest.mark.asyncio
 async def test_broker_route_exposes_health():
-    _trading_providers.clear()
-    register_trading_provider("ibkr", StubIBKR())
-    mon = HeartbeatMonitor(registry=_trading_providers, warmup=0.0)
-    await mon._tick()
-    broker_health_singleton.set_monitor(mon)
-
     from main import app
-    client = TestClient(app)
-    r = client.get("/api/broker")
+    with TestClient(app) as client:
+        # Set up the stub provider after lifespan startup so init_ibkr() doesn't
+        # overwrite _trading_providers before our StubIBKR is registered.
+        _trading_providers.clear()
+        register_trading_provider("ibkr", StubIBKR())
+        mon = HeartbeatMonitor(registry=_trading_providers, warmup=0.0)
+        await mon._tick()
+        broker_health_singleton.set_monitor(mon)
+
+        r = client.get("/api/broker")
     assert r.status_code == 200
     body = r.json()
     assert "health" in body

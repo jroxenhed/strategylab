@@ -2,10 +2,11 @@
 
 import json
 import os
-import tempfile
 import threading
 import uuid
 from datetime import datetime, timezone
+
+from fileutil import atomic_write_text
 from pathlib import Path
 
 _default_data = Path(__file__).resolve().parent / "data"
@@ -14,14 +15,37 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 JOURNAL_PATH = DATA_DIR / "trade_journal.json"
 _journal_lock = threading.Lock()
 
+# F62: mtime-based read cache — avoids re-parsing the JSON file on every
+# _load_trades() call. _log_trade() holds _journal_lock while writing and
+# nulls the cache BEFORE the write, so the next reader re-parses.
+# All access to the two cache variables is gated by _journal_lock so there
+# is no window where a reader sees a stale cache after a write.
+# P1d: cache key is (mtime, size) tuple — guards against 1-second filesystem
+# granularity where two writes in the same second share the same mtime.
+# P1c: callers receive a shallow copy so sorting/filtering never mutates cache.
+_journal_cache: list[dict] | None = None
+_journal_cache_key: tuple[float, int] | None = None
+
 
 def _load_trades() -> list[dict]:
-    if not JOURNAL_PATH.exists():
-        return []
-    try:
-        return json.loads(JOURNAL_PATH.read_text()).get("trades", [])
-    except (json.JSONDecodeError, OSError):
-        return []
+    global _journal_cache, _journal_cache_key
+    with _journal_lock:
+        if not JOURNAL_PATH.exists():
+            return []
+        try:
+            stat = JOURNAL_PATH.stat()
+            cache_key = (stat.st_mtime, stat.st_size)
+        except OSError:
+            return []
+        if _journal_cache is not None and _journal_cache_key == cache_key:
+            return list(_journal_cache)
+        try:
+            data = json.loads(JOURNAL_PATH.read_text()).get("trades", [])
+        except (json.JSONDecodeError, OSError):
+            return []
+        _journal_cache = data
+        _journal_cache_key = cache_key
+        return list(_journal_cache)
 
 
 def compute_realized_pnl(symbol: str, direction: str = "long", bot_id: str | None = None,
@@ -170,6 +194,13 @@ def _log_trade(symbol: str, side: str, qty: float, price: float | None,
         cost_bps = round(slippage_cost_bps(side, expected_price, price), 2)
 
     with _journal_lock:
+        # P1e: null cache BEFORE the write so that if atomic_write_text raises,
+        # the next reader re-parses from disk (consistent with on-disk state)
+        # rather than seeing a stale in-memory cache.
+        global _journal_cache, _journal_cache_key
+        _journal_cache = None
+        _journal_cache_key = None
+
         if JOURNAL_PATH.exists():
             journal = json.loads(JOURNAL_PATH.read_text())
         else:
@@ -192,14 +223,4 @@ def _log_trade(symbol: str, side: str, qty: float, price: float | None,
             "broker": broker,
             "borrow_cost": borrow_cost,
         })
-        fd = tempfile.NamedTemporaryFile(
-            mode='w', dir=str(JOURNAL_PATH.parent), suffix='.tmp', delete=False
-        )
-        try:
-            fd.write(json.dumps(journal, indent=2))
-            fd.close()
-            os.replace(fd.name, str(JOURNAL_PATH))
-        except Exception:
-            fd.close()
-            os.unlink(fd.name)
-            raise
+        atomic_write_text(JOURNAL_PATH, json.dumps(journal, indent=2))

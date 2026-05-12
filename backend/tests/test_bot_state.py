@@ -335,3 +335,77 @@ class TestBotManagerLoadMigration:
 
         assert "missing-sym-bot" not in mgr.bots
         assert "good-bot2" in mgr.bots
+
+
+# ---------------------------------------------------------------------------
+# F146 — BotManager.load() residual coverage
+# ---------------------------------------------------------------------------
+
+class TestBotManagerLoadResidual:
+    """F146: Additional load() edge-case coverage."""
+
+    def _write_bots_json(self, path, entries: list, bot_fund: float = 0.0):
+        path.write_text(_json.dumps({"bot_fund": bot_fund, "bots": entries}))
+
+    def test_bot_manager_load_handles_empty_bots_list(self, tmp_path, monkeypatch):
+        """bots.json with {"bots": []} loads cleanly — zero bots, no errors."""
+        bots_file = tmp_path / "bots.json"
+        self._write_bots_json(bots_file, [], bot_fund=5000.0)
+        monkeypatch.setattr(_bot_manager_mod, "DATA_PATH", str(bots_file))
+
+        mgr = BotManager()
+        mgr.load()
+
+        assert len(mgr.bots) == 0
+        assert mgr.bot_fund == 5000.0
+
+    def test_bot_manager_load_handles_missing_file(self, tmp_path, monkeypatch):
+        """When the bots.json file doesn't exist, load() returns early without raising."""
+        nonexistent = tmp_path / "does_not_exist.json"
+        monkeypatch.setattr(_bot_manager_mod, "DATA_PATH", str(nonexistent))
+
+        mgr = BotManager()
+        mgr.load()  # must not raise
+
+        assert len(mgr.bots) == 0
+
+    def test_bot_manager_load_handles_malformed_dict_keyerror(self, tmp_path, monkeypatch, caplog):
+        """A bot entry missing the required 'config' key triggers a KeyError.
+
+        The outer except-Exception in load() catches it, logs 'Failed to load bots.json',
+        and load() returns without raising — but since the exception aborts the whole for
+        loop, no bots are loaded (expected behavior per the production code structure).
+        """
+        bots_file = tmp_path / "bots.json"
+        # Entry with no 'config' key — will raise KeyError on entry["config"]
+        malformed = {"state": {}}
+        bots_file.write_text(_json.dumps({"bot_fund": 0.0, "bots": [malformed]}))
+        monkeypatch.setattr(_bot_manager_mod, "DATA_PATH", str(bots_file))
+
+        mgr = BotManager()
+        with caplog.at_level(_logging.ERROR, logger="bot_manager"):
+            mgr.load()  # must not raise
+
+        # Outer catch logs "Failed to load bots.json" at ERROR level
+        assert any("Failed to load" in r.message for r in caplog.records)
+
+    def test_normalize_symbol_handles_dot_symbols(self):
+        """normalize_symbol('brk.b') returns 'BRK.B' — dot is preserved."""
+        from models import normalize_symbol
+        assert normalize_symbol("brk.b") == "BRK.B"
+
+    def test_normalize_symbol_handles_digit_leading(self):
+        """normalize_symbol('1inch') — starts with digit, uppercased to '1INCH'."""
+        from models import normalize_symbol
+        # _SYMBOL_RE allows digits as the first character
+        assert normalize_symbol("1inch") == "1INCH"
+
+    def test_normalize_symbol_20_char_boundary(self):
+        """Exactly 20 chars passes; 21 chars raises ValueError."""
+        from models import normalize_symbol
+        valid = "A" * 20
+        assert normalize_symbol(valid) == valid
+
+        invalid = "A" * 21
+        with pytest.raises(ValueError, match="too long"):
+            normalize_symbol(invalid)

@@ -12,7 +12,6 @@ import json
 import logging
 import math
 import os
-import tempfile
 import uuid
 from dataclasses import dataclass, field
 
@@ -22,9 +21,10 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from fileutil import atomic_write_text
 from slippage import slippage_cost_bps, fill_bias_bps
 
-from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest, RegimeConfig, LogicField, DirectionField, BoundedRuleList, OptionalBoundedRuleList, SymbolField, normalize_symbol
+from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest, RegimeConfig, LogicField, DirectionField, BoundedRuleList, OptionalBoundedRuleList, SymbolField, normalize_symbol, Interval
 from routes.backtest import run_backtest
 from signal_engine import migrate_rule, Rule
 from shared import _fetch
@@ -45,7 +45,7 @@ class BotConfig(BaseModel):
     bot_id: str = ""
     strategy_name: str
     symbol: SymbolField
-    interval: str
+    interval: Interval
     # F128: bound O(n_rules × n_bars) per tick — same cap as backtest (F102).
     buy_rules: BoundedRuleList
     sell_rules: BoundedRuleList
@@ -583,17 +583,7 @@ class BotManager:
                 for config, state in self.bots.values()
             ],
         }
-        fd = tempfile.NamedTemporaryFile(
-            mode='w', dir=os.path.dirname(DATA_PATH), suffix='.tmp', delete=False
-        )
-        try:
-            json.dump(data, fd, indent=2, default=str)
-            fd.close()
-            os.replace(fd.name, DATA_PATH)
-        except Exception:
-            fd.close()
-            os.unlink(fd.name)
-            raise
+        atomic_write_text(DATA_PATH, json.dumps(data, indent=2, default=str))
 
     def load(self):
         if not os.path.exists(DATA_PATH):

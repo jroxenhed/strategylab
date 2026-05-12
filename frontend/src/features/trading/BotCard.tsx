@@ -52,6 +52,55 @@ function heartbeatColor(summary: BotSummary, detail: BotDetail | null): string {
 }
 
 // ---------------------------------------------------------------------------
+// StatusBadge — custom popover replacing native title= tooltip
+// ---------------------------------------------------------------------------
+
+function StatusBadge({ status, tooltip, style }: { status: string; tooltip: string; style?: React.CSSProperties }) {
+  const [hovered, setHovered] = useState(false)
+  const ref = useRef<HTMLSpanElement>(null)
+  const [popPos, setPopPos] = useState<{ left: number; bottom: number } | null>(null)
+
+  function handleMouseEnter() {
+    if (ref.current) {
+      const r = ref.current.getBoundingClientRect()
+      setPopPos({ left: r.left + r.width / 2, bottom: window.innerHeight - r.top + 6 })
+    }
+    setHovered(true)
+  }
+
+  return (
+    <span
+      ref={ref}
+      style={{ position: 'relative', cursor: 'default', ...style }}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {status}
+      {hovered && popPos && (
+        <div style={{
+          position: 'fixed',
+          left: popPos.left,
+          bottom: popPos.bottom,
+          transform: 'translateX(-50%)',
+          background: '#1c2128',
+          border: '1px solid #30363d',
+          borderRadius: 6,
+          padding: '6px 10px',
+          fontSize: 11,
+          color: '#e6edf3',
+          whiteSpace: 'pre',
+          zIndex: 9999,
+          pointerEvents: 'none',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+        }}>
+          {tooltip}
+        </div>
+      )}
+    </span>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // BotCard
 // ---------------------------------------------------------------------------
 
@@ -200,12 +249,11 @@ export default function BotCard({
             </span>
 
             {/* Status badge */}
-            <span
-              style={{ fontSize: 10, color: statusColor(summary.status), textTransform: 'capitalize', flexShrink: 0, cursor: 'default' }}
-              title={statusTooltip}
-            >
-              {summary.status}
-            </span>
+            <StatusBadge
+              status={summary.status}
+              tooltip={statusTooltip}
+              style={{ fontSize: 10, color: statusColor(summary.status), textTransform: 'capitalize', flexShrink: 0 }}
+            />
             {stopped && summary.was_running && (
               <span style={{ fontSize: 10, color: '#f0b74e', flexShrink: 0 }} title="Was running before restart">
                 ⚡ Was running
@@ -440,7 +488,7 @@ export default function BotCard({
             />
             <StatCell
               label="Status"
-              value={<span style={{ color: statusColor(summary.status), textTransform: 'capitalize', cursor: 'default' }} title={statusTooltip}>{summary.status}</span>}
+              value={<StatusBadge status={summary.status} tooltip={statusTooltip} style={{ color: statusColor(summary.status), textTransform: 'capitalize' }} />}
             />
             {stopped && summary.was_running && (
               <StatCell

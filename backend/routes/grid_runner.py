@@ -48,6 +48,7 @@ from models import StrategyRequest
 from routes.backtest import run_backtest  # module-level so tests can patch
 from routes.backtest_sweep import _apply_param
 
+# F174: WORKER-SAFE — logging.getLogger() is a pure registry lookup; no I/O.
 logger = logging.getLogger(__name__)
 
 

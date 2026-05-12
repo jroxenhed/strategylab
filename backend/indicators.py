@@ -139,6 +139,9 @@ def compute_adx(ohlcv: OHLCVSeries, params: dict) -> dict[str, pd.Series]:
     return {"adx": adx, "plus_di": plus_di, "minus_di": minus_di}
 
 
+# F174: WORKER-SAFE — dict mapping str → function references; no I/O or
+# network calls. Functions are defined in this module, so they are naturally
+# available in any subprocess that imports indicators.py.
 INDICATOR_REGISTRY: dict[str, Callable[[OHLCVSeries, dict], dict[str, pd.Series]]] = {
     "rsi": compute_rsi,
     "macd": compute_macd,
@@ -153,6 +156,7 @@ INDICATOR_REGISTRY: dict[str, Callable[[OHLCVSeries, dict], dict[str, pd.Series]
 }
 
 
+# F174: WORKER-SAFE — pure dict literal constant; no I/O or external state.
 PARAM_CONSTRAINTS: dict[str, dict[str, tuple[float, float]]] = {
     "rsi":   {"period": (2, 500)},
     "macd":  {"fast": (2, 500), "slow": (2, 500), "signal": (2, 500)},

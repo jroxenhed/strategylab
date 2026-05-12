@@ -2,13 +2,14 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 from shared import _fetch, _format_time, require_valid_source
+from models import Interval
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 @router.get("/api/ohlcv/{ticker}")
-def get_ohlcv(ticker: str, start: str = "2023-01-01", end: str = "2024-01-01", interval: str = "1d", source: str = "yahoo", extended_hours: bool = False):
+def get_ohlcv(ticker: str, start: str = "2023-01-01", end: str = "2024-01-01", interval: Interval = "1d", source: str = "yahoo", extended_hours: bool = False):
     # F94: shared allowlist + case-normalize. Mirrors F37 (quote routes).
     source = require_valid_source(source)
     try:

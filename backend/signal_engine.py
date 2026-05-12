@@ -15,6 +15,7 @@ class Rule(BaseModel):
     params: Optional[dict] = None
 
 
+# F174: WORKER-SAFE — pure dict literal constants; no I/O or external state.
 _MA_MIGRATION: dict[str, dict] = {
     "ema20":  {"period": 20,  "type": "ema"},
     "ema50":  {"period": 50,  "type": "ema"},
@@ -23,6 +24,7 @@ _MA_MIGRATION: dict[str, dict] = {
     "ma21":   {"period": 21,  "type": "sma"},
 }
 
+# F174: WORKER-SAFE — pure dict literal constant; no I/O or external state.
 _PARAM_MIGRATION: dict[str, str] = {
     "ema20":  "ma:20:ema",
     "ema50":  "ma:50:ema",
@@ -32,6 +34,7 @@ _PARAM_MIGRATION: dict[str, str] = {
 }
 
 # F130: per-request cap on distinct indicator specs per family.
+# F174: WORKER-SAFE — plain int constant; no I/O or external state.
 _INDICATOR_FAMILY_CAP = 20
 
 

@@ -34,6 +34,8 @@ router = APIRouter()
 
 # Single-entry cache for macro endpoint re-aggregation.
 # Stores the most recent backtest's raw equity + trades, keyed by request hash.
+# F174: WORKER-SAFE — starts empty in every worker; writes are local to that
+# subprocess and never shared back to the parent. No cross-process state leakage.
 _backtest_cache: dict = {}
 
 
@@ -78,7 +80,10 @@ def _edge_stats(gains: list[float], losses: list[float], num_sells: int) -> dict
     }
 
 
+# F174: WORKER-SAFE — frozenset constant; no I/O.
 _DAILY_INTERVALS = {'1d', '1wk', '1mo'}
+# F174: WORKER-SAFE — ZoneInfo() reads from the system tz database (read-only
+# file I/O), which is safe in any subprocess context.
 _ET = ZoneInfo('America/New_York')
 _SESSION_BUCKETS = [
     "09:30", "10:00", "10:30", "11:00", "11:30",

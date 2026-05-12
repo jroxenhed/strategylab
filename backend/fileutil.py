@@ -1,11 +1,64 @@
-"""File utilities — orphan .tmp cleanup for atomic-write callers."""
+"""File utilities — atomic writes and orphan .tmp cleanup."""
 
 import logging
 import os
+import tempfile
 import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def atomic_write_text(
+    path: "str | os.PathLike[str]",
+    content: str,
+    *,
+    encoding: str = "utf-8",
+) -> None:
+    """Atomically replace *path* with *content*.
+
+    Writes via NamedTemporaryFile in the SAME directory as the target so
+    os.replace is rename-on-same-filesystem (atomic on POSIX).  Flushes Python
+    buffers, calls os.fsync() before close so the data is durable across power
+    loss between rename and writeback.  Best-effort cleanup of the temp file if
+    rename never happens.  Never raises from cleanup paths.
+
+    Durability invariant: if this function returns without raising, the content
+    has been fsync'd to the target path.
+
+    Cleanup invariant: if any step before os.replace raises, the temp file is
+    unlinked (best-effort; OSError during unlink is silently ignored).
+    """
+    path = str(path)
+    dir_ = os.path.dirname(path) or "."
+    fd = tempfile.NamedTemporaryFile(
+        mode="w", delete=False, dir=dir_, suffix=".tmp", encoding=encoding
+    )
+    try:
+        fd.write(content)
+        fd.flush()
+        os.fsync(fd.fileno())
+        # F83: fd.close() can itself raise (e.g. on a full disk during flush
+        # finalisation).  Swallow the exception — the fsync above already made
+        # the data durable, and os.replace still works on an open fd on POSIX.
+        try:
+            fd.close()
+        except Exception:
+            pass
+        os.replace(fd.name, path)
+    except Exception:
+        # Best-effort cleanup: close then unlink.  Neither step should raise,
+        # but guard anyway so the original exception is never masked.
+        try:
+            fd.close()
+        except Exception:
+            pass
+        try:
+            os.unlink(fd.name)
+        except OSError:
+            pass
+        raise
+
 
 _TMP_MAX_AGE_SECS = 3600  # 1 hour
 

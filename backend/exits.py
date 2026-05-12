@@ -117,6 +117,12 @@ class ExitsMixin:
                           borrow_cost=borrow_cost if pos_is_short else None)
         except Exception as e:
             self._log("ERROR", f"Journal write failed: {e}")
+            state.error_message = f"Journal write failed: {e}"
+            asyncio.create_task(br.notify_error(
+                symbol=cfg.symbol,
+                error_msg=f"Journal write failed: {e}",
+                bot_id=cfg.bot_id,
+            ))
 
         asyncio.create_task(br.notify_exit(
             symbol=cfg.symbol,
@@ -389,6 +395,12 @@ class ExitsMixin:
                           borrow_cost=borrow_cost if pos_is_short else None)
         except Exception as e:
             self._log("ERROR", f"Journal write failed: {e}")
+            state.error_message = f"Journal write failed: {e}"
+            asyncio.create_task(br.notify_error(
+                symbol=cfg.symbol,
+                error_msg=f"Journal write failed: {e}",
+                bot_id=cfg.bot_id,
+            ))
 
         asyncio.create_task(br.notify_exit(
             symbol=cfg.symbol,

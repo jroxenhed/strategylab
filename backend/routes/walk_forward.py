@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Module-level constants (per plan)
+# F174: WORKER-SAFE — all plain numeric/Literal constants below; no I/O.
 # ---------------------------------------------------------------------------
 _WFA_TIMEOUT_SECS = 600  # raised from 120s after F162/F166 backend speedup + F175 stream
                           # progress (user can see runs in flight and abort if needed).

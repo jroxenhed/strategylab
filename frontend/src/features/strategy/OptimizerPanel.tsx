@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import type { StrategyRequest } from '../../shared/types'
 import { api } from '../../api/client'
 import { useRequestTimer } from '../../shared/hooks/useRequestTimer'
@@ -59,6 +59,7 @@ export default function OptimizerPanel({ lastRequest }: Props) {
   const { elapsed: elapsedSec, final: finalSec } = useRequestTimer(loading)
   const [error, setError] = useState('')
   const [result, setResult] = useState<OptimizeResponse | null>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   // Persist input config per (ticker, interval, source). Survives tab switches
   // and page reloads. Result is NOT persisted (could be MB-scale).
@@ -98,6 +99,13 @@ export default function OptimizerPanel({ lastRequest }: Props) {
       localStorage.setItem(storageKey, JSON.stringify({ metric, topN, paramRows }))
     } catch { /* quota exceeded */ }
   }, [storageKey, metric, topN, paramRows])
+
+  // Abort in-flight request on unmount (stale strategy context).
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort()
+    }
+  }, [])
 
   const activeRows = paramRows.filter((p): p is ParamRow => p !== null && p.path !== NONE_PATH)
 
@@ -160,6 +168,11 @@ export default function OptimizerPanel({ lastRequest }: Props) {
         return
       }
     }
+    // Abort any in-flight request before starting a new one.
+    abortControllerRef.current?.abort()
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
     setLoading(true)
     setError('')
     setResult(null)
@@ -181,12 +194,16 @@ export default function OptimizerPanel({ lastRequest }: Props) {
         params: requestParams,
         metric,
         top_n: Math.max(1, parseInt(topN) || 10),
-      })
+      }, { signal: controller.signal })
       setResult(data)
-    } catch (e) {
+    } catch (e: unknown) {
+      // Ignore abort errors from strategy-context change or unmount.
+      const err = e as { name?: string; code?: string }
+      if (err?.name === 'AbortError' || err?.code === 'ERR_CANCELED') return
       setError(apiErrorDetail(e, 'Optimizer failed'))
     } finally {
       setLoading(false)
+      abortControllerRef.current = null
     }
   }
 

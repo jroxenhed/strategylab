@@ -38,6 +38,14 @@ def _force_serial_wfa(monkeypatch):
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _patch_run_backtest(monkeypatch, mock_fn):
+    """Patch run_backtest at both call sites (grid_runner + walk_forward)."""
+    import routes.grid_runner as grid_runner_mod
+    import routes.walk_forward as wf_mod
+    monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_fn)
+    monkeypatch.setattr(wf_mod, "run_backtest", mock_fn)
+
+
 def _base_request(interval="1d") -> dict:
     """Minimal valid StrategyRequest payload — daily interval by default."""
     return {
@@ -124,8 +132,6 @@ class TestRescalingMath:
         """
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
-
         mock_df = _make_mock_df(n=400, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
@@ -136,7 +142,7 @@ class TestRescalingMath:
         # Call order: IS combo 1, IS combo 2, OOS → IS combo 1, IS combo 2, OOS
         # We track OOS calls by count.
 
-        def mock_run_backtest(req, **kwargs):
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             # IS window dates will have start <= bar 100 approximately
             # Simplest: track whether we've produced enough IS results yet
             # OOS window start is always later than IS end
@@ -166,10 +172,7 @@ class TestRescalingMath:
             else:
                 return _minimal_backtest_result(num_trades=5, sharpe=1.0, equity_end=11000.0)
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-
-
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         resp = client.post("/api/backtest/walk_forward", json=_wf_payload(is_bars=100, oos_bars=100))
         assert resp.status_code == 200
@@ -198,22 +201,17 @@ class TestRescalingMath:
         """
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
-
         mock_df = _make_mock_df(n=400, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
         # Use a rising equity curve for OOS: ends at 1.2x initial each time
-        def mock_run_backtest(req, **kwargs):
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             return _minimal_backtest_result(
                 num_trades=5, sharpe=1.2,
                 equity_start=10000.0, equity_end=12000.0,
             )
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-
-
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         resp = client.post("/api/backtest/walk_forward", json=_wf_payload(is_bars=100, oos_bars=100))
         assert resp.status_code == 200
@@ -247,22 +245,17 @@ class TestNeighborhoodStabilityTag:
         """
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
-
         mock_df = _make_mock_df(n=400, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
         sharpes = {3.0: 0.1, 5.0: 5.0, 7.0: 0.1}
 
-        def mock_run_backtest(req, **kwargs):
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             slp = req.stop_loss_pct
             s = sharpes.get(round(slp, 1), 1.0)
             return _minimal_backtest_result(num_trades=10, sharpe=s)
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-
-
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         payload = _wf_payload(is_bars=100, oos_bars=100)
         payload["params"] = [{"path": "stop_loss_pct", "values": [3.0, 5.0, 7.0]}]
@@ -289,19 +282,14 @@ class TestNeighborhoodStabilityTag:
         """
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
-
         mock_df = _make_mock_df(n=400, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req, **kwargs):
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             # All combos return high sharpe — plateau
             return _minimal_backtest_result(num_trades=10, sharpe=1.8)
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-
-
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         payload = _wf_payload(is_bars=100, oos_bars=100)
         payload["params"] = [{"path": "stop_loss_pct", "values": [3.0, 5.0, 7.0]}]
@@ -356,13 +344,10 @@ class TestValidation:
         """
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
         # 1500 bars of 5m = ~2 trading days worth of bars
         mock_df = _make_mock_df(n=1500, start="2024-03-01 09:30:00", freq="5min")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
-        monkeypatch.setattr(
-            wf_mod, "run_backtest", lambda req, **kwargs: _minimal_backtest_result()
-        )
+        _patch_run_backtest(monkeypatch, lambda req, **kwargs: _minimal_backtest_result())
 
         payload = _wf_payload(is_bars=500, oos_bars=200, min_trades_is=1)
         payload["base"]["interval"] = "5m"
@@ -386,7 +371,6 @@ class TestValidation:
         """
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
         # 5m provider limit is 60 days; mock only 100 bars available (provider clamp)
         mock_df = _make_mock_df(n=100, start="2024-03-01 09:30:00", freq="5min")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
@@ -513,7 +497,6 @@ class TestWindowLogic:
         (for OOS). Catches future regressions to the pre-F169 off-by-one where
         provider exclusive-end semantics shaved one bar per window."""
         import routes.walk_forward as wf_mod
-        import routes.grid_runner as grid_runner_mod
 
         n = 400
         is_bars, oos_bars = 100, 50
@@ -522,13 +505,11 @@ class TestWindowLogic:
 
         captured_lens = []
 
-        def mock_run_backtest(req, **kwargs):
-            df = kwargs.get("df")
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             captured_lens.append(len(df) if df is not None else None)
             return _minimal_backtest_result()
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         resp = client.post(
             "/api/backtest/walk_forward",
@@ -551,19 +532,14 @@ class TestWindowLogic:
         time-sorted, no duplicate timestamps at seam."""
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
-
         n = 300
         mock_df = _make_mock_df(n=n, start="2020-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req, **kwargs):
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             return _minimal_backtest_result(num_trades=5, sharpe=1.0)
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-
-
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         payload = _wf_payload(is_bars=100, oos_bars=100)
         resp = client.post("/api/backtest/walk_forward", json=payload)
@@ -584,19 +560,14 @@ class TestWindowLogic:
         anchored windows have constant is_start, growing is_end, and distinct oos_start."""
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
-
         n = 500
         mock_df = _make_mock_df(n=n, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req, **kwargs):
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             return _minimal_backtest_result(num_trades=5, sharpe=1.0)
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-
-
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         payload_rolling = _wf_payload(is_bars=100, oos_bars=100, expand_train=False)
         payload_anchored = _wf_payload(is_bars=100, oos_bars=100, expand_train=True)
@@ -650,21 +621,16 @@ class TestWindowLogic:
         window still appears in response.windows."""
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
-
         mock_df = _make_mock_df(n=400, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req, **kwargs):
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             # IS windows (start before OOS threshold) return trades
             if req.start >= "2019-05-20":
                 return _minimal_backtest_result(num_trades=0, sharpe=0.0)
             return _minimal_backtest_result(num_trades=10, sharpe=1.2)
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-
-
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         payload = _wf_payload(is_bars=100, oos_bars=100, min_trades_is=1)
         resp = client.post("/api/backtest/walk_forward", json=payload)
@@ -689,19 +655,14 @@ class TestWindowLogic:
         """
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
-
         n = 600
         mock_df = _make_mock_df(n=n, start="2018-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req, **kwargs):
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             return _minimal_backtest_result(num_trades=5, sharpe=1.0)
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-
-
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         # Mock monotonic: call 1 = start_time (0.0), call 2 = outer loop check (9999.0)
         # This triggers outer loop timeout before any IS work.
@@ -736,8 +697,6 @@ class TestWindowLogic:
         """
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
-
         # 300 bars → exactly 2 windows with is=100, oos=100, step=100
         mock_df = _make_mock_df(n=300, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
@@ -746,7 +705,7 @@ class TestWindowLogic:
 
         # Window 0: IS combo(3.0)=call1, IS combo(5.0)=call2, OOS=call3
         # Window 1: IS combo(3.0)=call4, IS combo(5.0)=call5 → both error → no_is_trades
-        def mock_run_backtest(req, **kwargs):
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             call_counter["n"] += 1
             n = call_counter["n"]
             if n in (4, 5):  # Window 1 IS combos — all error
@@ -756,10 +715,7 @@ class TestWindowLogic:
             # Window 0 IS combos — sharpe=2.0
             return _minimal_backtest_result(num_trades=10, sharpe=2.0)
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-
-
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         payload = _wf_payload(is_bars=100, oos_bars=100, min_trades_is=1)
         resp = client.post("/api/backtest/walk_forward", json=payload)
@@ -787,19 +743,14 @@ class TestWindowLogic:
         """When 2 ≤ windows < 6, low_windows_warn=True in response."""
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
-
         n = 300
         mock_df = _make_mock_df(n=n, start="2020-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req, **kwargs):
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             return _minimal_backtest_result(num_trades=5, sharpe=1.0)
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-
-
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         payload = _wf_payload(is_bars=100, oos_bars=100)
         resp = client.post("/api/backtest/walk_forward", json=payload)
@@ -815,18 +766,13 @@ class TestWindowLogic:
         low_trades_is_count >= 1, windows still appear in response."""
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
-
         mock_df = _make_mock_df(n=400, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req, **kwargs):
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             return _minimal_backtest_result(num_trades=5, sharpe=1.0)
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-
-
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         payload = _wf_payload(is_bars=100, oos_bars=100, min_trades_is=100)
         resp = client.post("/api/backtest/walk_forward", json=payload)
@@ -843,18 +789,13 @@ class TestWindowLogic:
         """params=[{values:[5.0]}] — single value, no neighbors → all windows spike."""
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
-
         mock_df = _make_mock_df(n=400, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req, **kwargs):
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             return _minimal_backtest_result(num_trades=10, sharpe=1.0)
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-
-
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         payload = _wf_payload(is_bars=100, oos_bars=100, min_trades_is=1)
         payload["params"] = [{"path": "stop_loss_pct", "values": [5.0]}]
@@ -875,8 +816,6 @@ class TestWindowLogic:
         """
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
-
         # 300 bars → exactly 2 windows
         mock_df = _make_mock_df(n=300, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
@@ -884,17 +823,14 @@ class TestWindowLogic:
         call_counter = {"n": 0}
 
         # 2 combos per IS → calls 1-2 IS w0, call 3 OOS w0, calls 4-5 IS w1, call 6 OOS w1
-        def mock_run_backtest(req, **kwargs):
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             call_counter["n"] += 1
             n = call_counter["n"]
             if n in (3, 6):  # Both OOS calls → 0 trades
                 return _minimal_backtest_result(num_trades=0, sharpe=0.0)
             return _minimal_backtest_result(num_trades=10, sharpe=1.0)
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-
-
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         payload = _wf_payload(is_bars=100, oos_bars=100, min_trades_is=1)
         resp = client.post("/api/backtest/walk_forward", json=payload)
@@ -909,18 +845,13 @@ class TestWindowLogic:
         """All IS sharpe=0.0 → denominator is zero → wfe=None."""
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
-
         mock_df = _make_mock_df(n=400, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req, **kwargs):
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             return _minimal_backtest_result(num_trades=10, sharpe=0.0)
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-
-
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         # min_trades_is=0 so low_trades_is path doesn't fire
         payload = _wf_payload(is_bars=100, oos_bars=100, min_trades_is=0)
@@ -941,8 +872,6 @@ class TestWindowLogic:
         """
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
-
         # Need enough bars for 3 windows: is=100, oos=100 → need 500 bars
         mock_df = _make_mock_df(n=600, start="2018-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
@@ -953,7 +882,7 @@ class TestWindowLogic:
         # calls 4-5 IS w1, call 6 OOS w1 (→ 0 trades)
         # calls 7-8 IS w2, call 9 OOS w2 (→ normal)
 
-        def mock_run_backtest(req, **kwargs):
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             call_counter["n"] += 1
             n = call_counter["n"]
             if n == 3:  # First OOS — ends at $12k
@@ -975,10 +904,7 @@ class TestWindowLogic:
             else:
                 return _minimal_backtest_result(num_trades=5, sharpe=1.0)
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-
-
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         payload = _wf_payload(is_bars=100, oos_bars=100, min_trades_is=1)
         resp = client.post("/api/backtest/walk_forward", json=payload)
@@ -997,19 +923,14 @@ class TestWindowLogic:
         """gap_bars=5 → OOS start index is 5 bars after IS end index."""
         import routes.walk_forward as wf_mod
 
-        import routes.grid_runner as grid_runner_mod
-
         n = 400
         mock_df = _make_mock_df(n=n, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req, **kwargs):
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             return _minimal_backtest_result(num_trades=5, sharpe=1.0)
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-
-
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         payload = _wf_payload(is_bars=100, oos_bars=100, gap_bars=5)
         resp = client.post("/api/backtest/walk_forward", json=payload)
@@ -1061,11 +982,10 @@ class TestWindowLogic:
         mock_df = _make_mock_df(n=n, start="2018-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req, **kwargs):
+        def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             return _minimal_backtest_result(num_trades=5, sharpe=1.0)
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
-        monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
+        _patch_run_backtest(monkeypatch, mock_run_backtest)
 
         # Keep wf_mod.monotonic frozen at 0.0: both calls (for _wfa_start and
         # remaining_budget) return 0, so remaining_budget = 120s (full budget).
@@ -1216,12 +1136,10 @@ class TestStreamEndpoint:
         """Streaming endpoint: started → N progress events → result, in order."""
         import json
         import routes.walk_forward as wf_mod
-        import routes.grid_runner as grid_runner_mod
 
         mock_df = _make_mock_df(n=400, start="2020-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", lambda req, **kw: _minimal_backtest_result())
-        monkeypatch.setattr(wf_mod, "run_backtest", lambda req, **kw: _minimal_backtest_result())
+        _patch_run_backtest(monkeypatch, lambda req, **kw: _minimal_backtest_result())
 
         with client.stream("POST", "/api/backtest/walk_forward/stream",
                            json=_wf_payload(is_bars=100, oos_bars=100)) as resp:
@@ -1279,12 +1197,10 @@ class TestStreamEndpoint:
         windows count and wfe as the sync endpoint on identical inputs."""
         import json
         import routes.walk_forward as wf_mod
-        import routes.grid_runner as grid_runner_mod
 
         mock_df = _make_mock_df(n=400, start="2020-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", lambda req, **kw: _minimal_backtest_result())
-        monkeypatch.setattr(wf_mod, "run_backtest", lambda req, **kw: _minimal_backtest_result())
+        _patch_run_backtest(monkeypatch, lambda req, **kw: _minimal_backtest_result())
 
         payload = _wf_payload(is_bars=100, oos_bars=100)
 
@@ -1321,7 +1237,6 @@ class TestStreamEndpoint:
         import json
         import threading
         import routes.walk_forward as wf_mod
-        import routes.grid_runner as grid_runner_mod
 
         # Track every Event instance created + how many times set() fires.
         instances: list["_RecordingEvent"] = []
@@ -1347,8 +1262,7 @@ class TestStreamEndpoint:
         def _stub_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             return _minimal_backtest_result()
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", _stub_run_backtest)
-        monkeypatch.setattr(wf_mod, "run_backtest", _stub_run_backtest)
+        _patch_run_backtest(monkeypatch, _stub_run_backtest)
 
         with client.stream(
             "POST",
@@ -1382,7 +1296,6 @@ class TestStreamEndpoint:
         """
         import json
         import routes.walk_forward as wf_mod
-        import routes.grid_runner as grid_runner_mod
 
         mock_df = _make_mock_df(n=400, start="2020-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
@@ -1390,8 +1303,7 @@ class TestStreamEndpoint:
         def _stub_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
             return _minimal_backtest_result()
 
-        monkeypatch.setattr(grid_runner_mod, "run_backtest", _stub_run_backtest)
-        monkeypatch.setattr(wf_mod, "run_backtest", _stub_run_backtest)
+        _patch_run_backtest(monkeypatch, _stub_run_backtest)
 
         # Inject NaN into the assembled response by patching _assemble_walk_forward_response.
         _real_assemble = wf_mod._assemble_walk_forward_response

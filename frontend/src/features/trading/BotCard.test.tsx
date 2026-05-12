@@ -11,7 +11,7 @@ import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createElement } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { BotSummary } from '../../shared/types'
+import type { BotSummary, BotConfig } from '../../shared/types'
 
 // ---------------------------------------------------------------------------
 // Mock: lightweight-charts (used by MiniSparkline)
@@ -530,5 +530,63 @@ describe('BotCard compact layout', () => {
     // Re-open menu
     await userEvent.click(screen.getByTitle('Actions'))
     expect(screen.getByRole('button', { name: /hide log/i })).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// F84 — BotCard defensive path: state: undefined in fetchBotDetail response
+// ---------------------------------------------------------------------------
+
+describe('BotCard state: undefined defensive path', () => {
+  afterEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+  })
+
+  it('renders without crashing when fetchBotDetail resolves with state: undefined', async () => {
+    // Override the module-level mock for this test only: state is undefined.
+    // BotCard must fall back to summary.equity_snapshots, summary.activity_log, summary.last_tick.
+    const minimalConfig: BotConfig = {
+      bot_id: 'test-bot',
+      strategy_name: 'test',
+      symbol: 'SPY',
+      interval: '1d',
+      buy_rules: [],
+      sell_rules: [],
+      buy_logic: 'AND',
+      sell_logic: 'AND',
+      allocated_capital: 10000,
+      position_size: 100,
+    }
+    const { fetchBotDetail } = await import('../../api/bots')
+    vi.mocked(fetchBotDetail).mockResolvedValueOnce({
+      config: minimalConfig,
+      state: undefined,
+    })
+
+    const summary = makeSummary({
+      equity_snapshots: [],
+      last_tick: undefined,
+    })
+
+    expect(() =>
+      render(
+        createElement(BotCard, {
+          summary,
+          onStart: NO_OP,
+          onStop: NO_OP,
+          onBacktest: NO_OP,
+          onDelete: NO_OP,
+          onManualBuy: NO_OP,
+          onUpdate: NO_OP,
+          onResetPnl: NO_OP,
+          compact: false,
+        }),
+        { wrapper },
+      )
+    ).not.toThrow()
+
+    // Verify the component mounts and shows the symbol (basic smoke check)
+    expect(screen.getByText('AAPL', { exact: false })).toBeInTheDocument()
   })
 })

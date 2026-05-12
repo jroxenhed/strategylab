@@ -2,10 +2,10 @@ import json
 import logging
 import math
 import os
-import shutil
-import tempfile
 import time
 from datetime import datetime, timezone
+
+from fileutil import atomic_write_text
 from fastapi import APIRouter
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
@@ -485,25 +485,5 @@ def get_watchlist():
 @router.post("/watchlist")
 def save_watchlist(req: WatchlistRequest):
     content = json.dumps({"symbols": req.symbols}, indent=2)
-    fd = tempfile.NamedTemporaryFile(
-        mode='w', dir=str(WATCHLIST_PATH.parent), suffix='.tmp', delete=False
-    )
-    try:
-        fd.write(content)
-        fd.flush()
-        os.fsync(fd.fileno())
-        fd.close()
-        if WATCHLIST_PATH.exists():
-            shutil.copymode(str(WATCHLIST_PATH), fd.name)
-        os.replace(fd.name, str(WATCHLIST_PATH))
-    except Exception:
-        try:
-            fd.close()
-        except Exception:
-            pass
-        try:
-            os.unlink(fd.name)
-        except OSError:
-            pass
-        raise
+    atomic_write_text(WATCHLIST_PATH, content)
     return {"symbols": req.symbols}

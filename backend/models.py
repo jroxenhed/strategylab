@@ -8,6 +8,9 @@ from signal_engine import Rule
 LogicField = Annotated[Literal['AND', 'OR'], BeforeValidator(lambda v: v.upper() if isinstance(v, str) else v)]
 DirectionField = Annotated[Literal['long', 'short'], BeforeValidator(lambda v: v.lower().strip() if isinstance(v, str) else v)]
 
+# F105: canonical interval allowlist. Matches yfinance + provider routing in shared.py.
+Interval = Literal["1m", "2m", "5m", "15m", "30m", "60m", "1h", "90m", "1d", "1wk", "1mo"]
+
 _RULE_LIST_CAP = 100  # F128: O(n_rules × n_bars) guard — same cap for all primary rule lists
 BoundedRuleList = Annotated[list[Rule], Field(max_length=_RULE_LIST_CAP)]
 OptionalBoundedRuleList = Annotated[Optional[list[Rule]], Field(default=None, max_length=_RULE_LIST_CAP)]
@@ -102,7 +105,7 @@ class StrategyRequest(BaseModel):
     ticker: SymbolField
     start: str = "2023-01-01"
     end: str = "2024-01-01"
-    interval: str = "1d"
+    interval: Interval = "1d"
     # F128: bound O(n_rules × n_bars) per backtest — mirrors QuickBacktestRequest cap (F102)
     buy_rules: BoundedRuleList
     sell_rules: BoundedRuleList

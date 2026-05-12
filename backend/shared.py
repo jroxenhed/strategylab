@@ -29,6 +29,9 @@ class DataRateCounter:
         return len(self._calls)
 
 
+# F174: WORKER-SAFE — DataRateCounter() allocates a deque; no I/O or external
+# state. Each WFA worker subprocess gets its own independent counter — calls
+# recorded in a worker are not visible to the parent or other workers.
 _data_rate_counter = DataRateCounter()
 
 
@@ -289,12 +292,24 @@ def _create_alpaca_client():
 # Provider registry
 _providers: dict[str, DataProvider] = {"yahoo": YahooProvider()}
 
+# F174: WORKER-SAFE — _create_alpaca_client() reads env vars (os.environ) and
+# conditionally constructs a StockHistoricalDataClient. In WFA workers, the env
+# is inherited from the parent process (fork/spawn copies env), so the same
+# keys are available. StockHistoricalDataClient is a pure HTTP client with no
+# global mutable state; creating one per worker subprocess is safe and cheap
+# (no persistent socket opened at construction time). The result is stored in
+# a module-global (_alpaca_client) which is local to each subprocess.
 _alpaca_client = _create_alpaca_client()
 if _alpaca_client is not None:
     _providers["alpaca"] = AlpacaProvider(_alpaca_client, feed='sip')
     _providers["alpaca-iex"] = AlpacaProvider(_alpaca_client, feed='iex')
 
 
+# F174: WORKER-SAFE — TradingClient construction also reads env vars and is a
+# pure HTTP client. register_trading_provider mutates a module-level dict
+# (_trading_providers in broker.py), but that dict is local to the subprocess
+# and not shared with the parent — writes in workers are invisible to the
+# main process and to each other. No cross-process side-effects.
 # Register Alpaca as a trading provider
 if _alpaca_client is not None:
     _alpaca_api_key = os.environ.get("ALPACA_API_KEY", "").strip()

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import type { StrategyRequest } from '../../shared/types'
 import { api } from '../../api/client'
 import { useRequestTimer } from '../../shared/hooks/useRequestTimer'
@@ -52,6 +52,7 @@ export default function SensitivityPanel({ lastRequest, sweepInit, onSweepConsum
   const [warning, setWarning] = useState('')
   const [results, setResults] = useState<SweepPoint[] | null>(null)
   const [sweptPath, setSweptPath] = useState<string>('')
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   // Reset selectedPath when paramOptions changes and current selection is no longer valid
   useEffect(() => {
@@ -79,6 +80,13 @@ export default function SensitivityPanel({ lastRequest, sweepInit, onSweepConsum
     onSweepConsumed?.()
   }, [sweepInit])
 
+  // Abort in-flight request on unmount (stale strategy context).
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort()
+    }
+  }, [])
+
   // Reset inputs when param selection changes
   function handleParamChange(path: string) {
     setSelectedPath(path)
@@ -104,6 +112,12 @@ export default function SensitivityPanel({ lastRequest, sweepInit, onSweepConsum
     }
     const rawValues = linspace(minN, maxN, stepsN)
     const values = selected.isInteger ? rawValues.map(v => Math.round(v)) : rawValues
+
+    // Abort any in-flight request before starting a new one.
+    abortControllerRef.current?.abort()
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
     setLoading(true)
     setError('')
     setWarning('')
@@ -113,17 +127,21 @@ export default function SensitivityPanel({ lastRequest, sweepInit, onSweepConsum
         base: lastRequest,
         param_path: selected.path,
         values,
-      })
+      }, { signal: controller.signal })
       const data = res.data
       setResults(data.results)
       setSweptPath(selected.path)
       if (data.skipped > 0) {
         setWarning(`${data.completed} of ${data.requested} sweep points completed — ${data.skipped} failed (e.g. invalid parameter value).`)
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
+      // Ignore abort errors from strategy-context change or unmount.
+      const err = e as { name?: string; code?: string }
+      if (err?.name === 'AbortError' || err?.code === 'ERR_CANCELED') return
       setError(apiErrorDetail(e, 'Sweep failed.'))
     } finally {
       setLoading(false)
+      abortControllerRef.current = null
     }
   }
 

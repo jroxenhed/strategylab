@@ -143,7 +143,7 @@ export default function App() {
   }, [backtestResult, lastRequest])
 
   const chartInterval = chartEnabled ? viewInterval : interval
-  const { data: ohlcv = EMPTY_OHLCV, isLoading: ohlcvLoading, isError: ohlcvError, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, chartInterval, dataSource, extendedHours)
+  const { data: ohlcv = EMPTY_OHLCV, isLoading: ohlcvLoading, isFetching: ohlcvFetching, isError: ohlcvError, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, chartInterval, dataSource, extendedHours)
   const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', start, end, chartInterval, dataSource, extendedHours, chartEnabled && showSpy)
   const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', start, end, chartInterval, dataSource, extendedHours, chartEnabled && showQqq)
 
@@ -275,7 +275,7 @@ export default function App() {
                           backtestInterval={interval}
                           onChartReady={setMainChart}
                         />
-                      ) : ohlcvLoading ? (
+                      ) : (ohlcvLoading || ohlcvFetching) ? (
                         <ChartSkeleton ticker={ticker} />
                       ) : ohlcvError ? (
                         <div style={styles.empty}>Failed to load {ticker}</div>

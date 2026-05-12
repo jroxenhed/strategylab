@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { Plus, Play } from 'lucide-react'
 import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, SavedStrategy, RegimeConfig } from '../../shared/types'
@@ -112,6 +112,13 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [saveAsName, setSaveAsName] = useState('')
   const [renamingStrategy, setRenamingStrategy] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [pendingDelete, setPendingDelete] = useState<{ name: string; snapshot: SavedStrategy[] } | null>(null)
+  const pendingDeleteTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // P1b: clear interval on unmount to prevent state updates on unmounted component
+  useEffect(() => () => {
+    if (pendingDeleteTimerRef.current !== null) clearInterval(pendingDeleteTimerRef.current)
+  }, [])
+  const [deleteCountdown, setDeleteCountdown] = useState(5)
   const [importingTab, setImportingTab] = useState<'regime' | 'long' | 'short' | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
   // B25: per-direction settings (regime mode only)
@@ -211,12 +218,46 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     setActiveStrategyName(s.name)
   }
 
-  function deleteStrategy(name: string) {
+  const deleteWithUndo = useCallback((name: string) => {
+    // Cancel any in-progress undo window first
+    if (pendingDeleteTimerRef.current) {
+      clearInterval(pendingDeleteTimerRef.current)
+      pendingDeleteTimerRef.current = null
+    }
+
+    // Optimistically remove from UI; snapshot for potential undo
+    const snapshot = [...savedStrategies]
     const updated = savedStrategies.filter(s => s.name !== name)
     setSavedStrategies(updated)
-    persistSavedStrategies(updated)
     if (activeStrategyName === name) setActiveStrategyName(null)
-  }
+
+    setPendingDelete({ name, snapshot })
+    setDeleteCountdown(5)
+
+    // Tick countdown each second; at 0 finalize (persist to localStorage)
+    let remaining = 5
+    pendingDeleteTimerRef.current = setInterval(() => {
+      remaining -= 1
+      setDeleteCountdown(remaining)
+      if (remaining <= 0) {
+        clearInterval(pendingDeleteTimerRef.current!)
+        pendingDeleteTimerRef.current = null
+        setPendingDelete(null)
+        persistSavedStrategies(updated)
+      }
+    }, 1000)
+  }, [savedStrategies, activeStrategyName])
+
+  const undoDelete = useCallback(() => {
+    if (!pendingDelete) return
+    if (pendingDeleteTimerRef.current) {
+      clearInterval(pendingDeleteTimerRef.current)
+      pendingDeleteTimerRef.current = null
+    }
+    setSavedStrategies(pendingDelete.snapshot)
+    setActiveStrategyName(pendingDelete.name)
+    setPendingDelete(null)
+  }, [pendingDelete])
 
   function renameStrategy(oldName: string, newName: string) {
     const trimmed = newName.trim()
@@ -805,7 +846,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
                 onClick={() => togglePin(activeStrategyName)}
                 style={{ ...styles.strategyBtn, color: savedStrategies.find(s => s.name === activeStrategyName)?.pinned ? 'var(--accent-primary)' : undefined }}
               >{savedStrategies.find(s => s.name === activeStrategyName)?.pinned ? '★ Unpin' : '☆ Pin'}</button>
-              <button onClick={() => { if (confirm(`Delete "${activeStrategyName}"?`)) deleteStrategy(activeStrategyName) }} style={{ ...styles.strategyBtn, color: '#f85149' }}>Delete</button>
+              <span style={{ width: 1, height: 16, background: 'var(--border-light)', display: 'inline-block', marginLeft: 4, marginRight: 4, alignSelf: 'center', flexShrink: 0 }} />
+              <button onClick={() => deleteWithUndo(activeStrategyName)} style={{ ...styles.strategyBtn, color: '#8b949e', fontSize: 10 }} title={`Delete "${activeStrategyName}"`}>Delete</button>
             </>
           )}
           {showSaveAs && (
@@ -837,6 +879,27 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             </div>
           )}
         </div>
+        {pendingDelete && createPortal(
+          <div style={{
+            position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+            background: '#1c2128', border: '1px solid #30363d', borderRadius: 8,
+            padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12,
+            fontSize: 12, color: '#e6edf3', zIndex: 9999, boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+            whiteSpace: 'nowrap',
+          }}>
+            <span>Deleted &ldquo;{pendingDelete.name}&rdquo;</span>
+            <button
+              onClick={undoDelete}
+              style={{
+                fontSize: 11, padding: '3px 10px', background: 'var(--bg-input)',
+                color: 'var(--accent-primary)', border: '1px solid var(--border-light)',
+                borderRadius: 4, cursor: 'pointer', fontWeight: 600,
+              }}
+            >Undo</button>
+            <span style={{ color: '#484f58', fontSize: 11 }}>{deleteCountdown}s</span>
+          </div>,
+          document.body
+        )}
         {!(regimeEnabled && regimeConfig.on_flip && regimeConfig.on_flip !== 'hold') && (
           <div style={{ display: 'flex', gap: 4, marginBottom: 8, paddingLeft: 16 }}>
             {(['long', 'short'] as const).map(d => (

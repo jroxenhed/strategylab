@@ -14,14 +14,18 @@ from routes.trading import ScanRequest, PerformanceRequest
 from tests.conftest import _STUB_RULE  # noqa: F401 — canonical stub (F142)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def client():
-    return TestClient(app)
+    # F89: module scope keeps the FastAPI lifespan startup cost (BotManager.load,
+    # HeartbeatMonitor.start, init_ibkr) to once-per-module instead of per-test.
+    with TestClient(app) as c:
+        yield c
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def tolerant_client():
-    return TestClient(app, raise_server_exceptions=False)
+    with TestClient(app, raise_server_exceptions=False) as c:
+        yield c
 
 
 def test_watchlist_round_trip(client, tmp_path, monkeypatch):

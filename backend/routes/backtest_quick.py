@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from shared import _fetch, _format_time, require_valid_source
 from signal_engine import Rule, compute_indicators, eval_rules, migrate_rule
-from models import LogicField, SymbolField, SymbolList, DirectionField, TrailingStopConfig
+from models import LogicField, SymbolField, SymbolList, DirectionField, TrailingStopConfig, Interval
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -17,7 +17,7 @@ router = APIRouter()
 
 class QuickBacktestRequest(BaseModel):
     ticker: SymbolField
-    interval: str = "1d"
+    interval: Interval = "1d"
     lookback_days: int = Field(default=90, gt=0)
     # F102: bound O(n_rules × n_bars) per backtest — body cap (F86) still
     # admits thousands of small rules.
@@ -52,7 +52,7 @@ class BatchQuickBacktestRequest(BaseModel):
     # the test contract pins. SymbolList = list[SymbolField] does per-element
     # normalize+regex after the validator drops empty entries.
     symbols: SymbolList = Field(min_length=1, max_length=500)
-    interval: str = "1d"
+    interval: Interval = "1d"
     lookback_days: int = Field(default=90, gt=0)
     # F102: same per-list cap as QuickBacktestRequest — bound per-symbol work.
     buy_rules: list[Rule] = Field(max_length=100)

@@ -41,11 +41,13 @@ from fastapi import HTTPException
 
 from models import StrategyRequest
 
+# F174: WORKER-SAFE — logging.getLogger() is a pure registry lookup; no I/O.
 logger = logging.getLogger(__name__)
 
 # Test seam: when True, run_windows_parallel skips the pool and uses an
 # inline serial loop. Required for monkeypatch-based tests that need to
 # intercept run_backtest (subprocesses don't see those patches).
+# F174: WORKER-SAFE — plain bool constant, no side effects.
 _FORCE_SERIAL = False
 
 # Skip ProcessPool overhead for tiny WFAs. Observed spawn cost on macOS
@@ -53,9 +55,13 @@ _FORCE_SERIAL = False
 # fixed dispatch overhead. Below 4 windows the serial-with-cache path
 # (run_windows_serial) is competitive or faster. Tune downward if a
 # smaller workload becomes common.
+# F174: WORKER-SAFE — plain int constant, no side effects.
 _MIN_WINDOWS_FOR_POOL = 4
 
 # Worker process module-globals. Populated once per process by _init_worker.
+# F174: WORKER-SAFE — starts as None in each worker; populated by _init_worker
+# (called once per subprocess by ProcessPoolExecutor's initializer). The df is
+# local to the worker and never written back to the parent.
 _WORKER_DF: Optional[pd.DataFrame] = None
 
 

@@ -1,10 +1,10 @@
 import logging
 import os
 import pathlib
-import shutil
-import tempfile
 import threading
 from typing import Optional
+
+from fileutil import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -110,41 +110,12 @@ def _persist_env(key: str, value: str, env_path: Optional[pathlib.Path] = None):
         if not found:
             lines.append(f"{key}={value}")
         content = "\n".join(lines) + "\n"
-        fd = tempfile.NamedTemporaryFile(
-            mode='w', dir=str(env_path.parent), suffix='.tmp', delete=False
-        )
+        atomic_write_text(env_path, content)
+        # F101: ensure secrets file is never world-readable. The rename above
+        # lands the temp file (umask-default mode) in place; always apply
+        # 0o600 so .env is never world-readable regardless of umask or
+        # whether the file is new vs replaced.
         try:
-            fd.write(content)
-            fd.flush()
-            os.fsync(fd.fileno())
-            fd.close()
-            copy_mode_failed = False
-            # Only copy mode when the source file existed at read time. Avoids
-            # masking a real failure (e.g. chmod on the temp file) under the
-            # same FileNotFoundError as the legitimate "first-time write" case.
-            if existed:
-                try:
-                    shutil.copymode(str(env_path), fd.name)
-                except FileNotFoundError:
-                    # External unlink between read_text and copymode — proceed
-                    # with the temp file's default mode rather than aborting.
-                    copy_mode_failed = True
-            os.replace(fd.name, str(env_path))
-            # F101: ensure secrets file is never world-readable. Act when the
-            # file is new (no prior mode to copy) or copymode failed (mode may
-            # have reverted to umask default after os.replace).
-            if copy_mode_failed or not existed:
-                try:
-                    os.chmod(str(env_path), 0o600)
-                except OSError:
-                    logger.warning("could not chmod 0600 on %s", env_path)
-        except Exception:
-            try:
-                fd.close()
-            except Exception:
-                pass
-            try:
-                os.unlink(fd.name)
-            except OSError:
-                pass
-            raise
+            os.chmod(str(env_path), 0o600)
+        except OSError:
+            logger.warning("could not chmod 0600 on %s", env_path)
