@@ -35,6 +35,42 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
+**Date:** 2026-05-12 (build 27 — overnight)
+**Branch:** `claude/jolly-babbage-8fjwl`
+
+**Shipped (5 items, Tier A bundle):**
+- **F145** [easy] `SymbolList = list[SymbolField]` extracted in `models.py` and applied to ScanRequest / WatchlistRequest / BatchQuickBacktestRequest. Per-element normalize+regex now lives in SymbolField alone — the two custom validators (watchlist + batch) shed their per-element `normalize_symbol(sym)` calls and just hold the list-level cap + drop-empties pre-pass. Watchlist dedup hoisted to mode='after' (SymbolField runs between before/after).
+- **F64** [easy] `BotControlCenter.tsx` reorder catch-all replaced — `setError(apiErrorDetail(e, 'Failed to reorder bots'))` + `invalidateBots()` so the optimistic cache update gets corrected back to the server's order on failure. Surfaces via the existing error banner in the bot-control toolbar.
+- **F65** [easy] Closed as subsumed by F135 (build 26 already shipped the inline save-error contract).
+- **F137** [easy] `shared.py:_fetch` IBKR exception leak closed — `detail=f"IBKR fetch failed: {e}"` → fixed `"IBKR fetch failed"` + `logger.exception(...)`. Last `detail=f".*{e}"` site swept (F115/F126/F133 parity).
+- **F138** [easy] `_DEDUP_LOCKS_HIGH_WATERMARK = 200` secondary trigger for `_evict_cache` so dedup locks don't accumulate unboundedly in rotating-ticker deployments that never trip `_CACHE_MAX`. 3 new tests in `test_shared_eviction.py`.
+
+**Review:** Tier A per F136 — no personas, orchestrator verification gate. AST + import-time + helper-logic smoke (9 F145 assertions + 3 F138 tests) + full pytest + frontend build. Bundle diff well under the 100-line Tier A ceiling.
+
+**Build:** frontend `npm run build` pass. Backend pytest **365 passed / 2 failed**: F139 (pre-existing ib_insync event-loop contamination, 6th build) + `test_short_backtest_api_endpoint` (yfinance live network call fails in sandbox — new failure mode, filed as F148).
+
+**Visual verification:** N/A backend; F64's frontend change reuses the existing error-banner site (14 sibling `setError(apiErrorDetail(...))` calls in the same component already exercise the rendering path). Flagged in PR description.
+
+**Deferred → TODO (3 new items, F147–F149):**
+- **F147** [easy] [hardening] `/api/bots/reorder` server-side error visibility — backend route still has no `logger.exception` on failure and may leak `str(e)`. Parity fix with F115/F126/F133.
+- **F148** [medium] [testing] `test_short_backtest_api_endpoint` live yfinance call — mock `_fetch` at test layer or `@pytest.mark.network` and exclude from default runs.
+- **F149** [easy] [hardening] `ScanRequest.symbols` list-level cap parity — `Field(min_length=1, max_length=500)` to match Watchlist/Batch.
+
+**Builder env notes:**
+1. Main was force-updated overnight (`06e95b5` → `0a82142`). `git pull --ff-only` aborted; used `git reset --hard origin/main` since remote is canonical for this builder workflow.
+2. `backend/venv/` still missing (F97 unchanged, 6th run). `pip install` of pydantic/fastapi/yfinance/etc. at runtime worked for smoke + full pytest.
+3. Dedicated `compound-engineering:review:*-reviewer` agents still unresolved (6th run; F80) — moot for Tier A bundle since personas weren't dispatched.
+
+**Next up:**
+- **F127** [next] [medium] Batch quick-backtest request-level deadline — pre-existing [next] tag preserved; fix sketch corrected in build 25's morning calibration.
+- **F147** [easy] [hardening] reorder route logger.exception parity (build 27 follow-up).
+- **F149** [easy] [hardening] ScanRequest cap parity (build 27 follow-up).
+- **F148** [medium] [testing] mock yfinance in test_short_backtest_api_endpoint.
+
+**Previous run:** 2026-05-11 PR #33 (build 26 — F95 + F100 SymbolField rollout, F143 PATCH HTTP tests, F129+F130 signal_engine DoS hardening, F141 PATCH cap, F128 BoundedRuleList).
+
+## Build 25 Run
+
 **Date:** 2026-05-11 (build 25 — overnight)
 **Branch:** `claude/jolly-babbage-naH4F`
 

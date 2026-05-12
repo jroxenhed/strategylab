@@ -241,8 +241,12 @@ class IBKRDataProvider:
             future = asyncio.run_coroutine_threadsafe(coro, self._loop)
             try:
                 bars = future.result(timeout=30)
-            except Exception as e:
-                raise HTTPException(status_code=502, detail=f"IBKR fetch failed: {e}")
+            except Exception:
+                # F137: fixed message — `{e}` could include ib_insync stack
+                # frames, Gateway host:port, or contract-resolution diagnostics
+                # that leak internal topology. The trace is kept server-side.
+                logger.exception("IBKR fetch failed for %s", ticker)
+                raise HTTPException(status_code=502, detail="IBKR fetch failed")
 
         if not bars:
             raise HTTPException(status_code=404, detail=f"No IBKR data for {ticker}")
@@ -406,6 +410,9 @@ _fetch_cache: dict[tuple, tuple[float, pd.DataFrame]] = {}
 _fetch_dedup_locks: dict[tuple, threading.Lock] = {}
 _fetch_dedup_locks_meta = threading.Lock()  # protects _fetch_dedup_locks dict
 _CACHE_MAX = 100
+# F138: locks-dict size threshold that triggers eviction even when cache stays
+# below _CACHE_MAX (low-throughput, long-running, rotating-ticker workloads).
+_DEDUP_LOCKS_HIGH_WATERMARK = 200
 _TTL_HISTORICAL = 3600.0
 _TTL_LIVE = 120.0
 _TTL_DAILY_LIVE = 300.0
@@ -483,7 +490,12 @@ def _fetch(ticker: str, start: str, end: str, interval: str, source: str = "yaho
             else:
                 raise
 
-        if len(_fetch_cache) >= _CACHE_MAX:
+        # F124 prunes dedup locks inside _evict_cache, but eviction only fired
+        # when cache hit its cap. Low-throughput long-running deployments with
+        # rotating tickers never trip _CACHE_MAX yet still accumulate locks via
+        # the dedup_key first-add path above. F138: secondary trigger keeps
+        # _fetch_dedup_locks bounded without forcing a per-call scan.
+        if len(_fetch_cache) >= _CACHE_MAX or len(_fetch_dedup_locks) > _DEDUP_LOCKS_HIGH_WATERMARK:
             _evict_cache()
         _fetch_cache[key] = (now, df)
         return df

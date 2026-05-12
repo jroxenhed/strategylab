@@ -220,7 +220,14 @@ export default function BotControlCenter() {
       const map = new Map(old.bots.map(b => [b.bot_id, b]))
       return { ...old, bots: newOrder.map(id => map.get(id)).filter(Boolean) as BotSummary[] }
     })
-    reorderBots(newOrder).then(() => invalidateBots()).catch(() => {})
+    // F64: surface reorder failures + force re-sync so the optimistic
+    // update doesn't leave the UI out of step with the server's order.
+    reorderBots(newOrder)
+      .then(() => invalidateBots())
+      .catch((e) => {
+        setError(apiErrorDetail(e, 'Failed to reorder bots'))
+        invalidateBots()
+      })
   }, [orderedBots, invalidateBots])
 
   const [sparklineScale, setSparklineScale] = useState<'local' | 'aligned'>(() => {
