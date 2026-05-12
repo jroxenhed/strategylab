@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from main import app
 from routes import trading as trading_mod
 from routes.trading import ScanRequest, PerformanceRequest
+from tests.conftest import _STUB_RULE  # noqa: F401 — canonical stub (F142)
 
 
 @pytest.fixture
@@ -172,8 +173,6 @@ def test_watchlist_validation_rejects_invalid_chars(client, tmp_path, monkeypatc
 # ---------------------------------------------------------------------------
 # F128 — rule-list cap (max_length=100) for ScanRequest + PerformanceRequest
 # ---------------------------------------------------------------------------
-
-_STUB_RULE: dict = {"indicator": "rsi", "condition": "above", "value": 50}
 
 _SCAN_BASE = {"symbols": ["AAPL"], "interval": "15m"}
 _PERF_BASE = {"symbol": "AAPL", "start": "2024-01-01", "interval": "15m"}

@@ -5,6 +5,7 @@ import pytest
 from pydantic import ValidationError
 from models import StrategyRequest, RegimeConfig
 from bot_manager import BotConfig
+from tests.conftest import _STUB_RULE  # noqa: F401 — canonical stub (F142)
 
 
 def make_req(**kwargs):
@@ -87,9 +88,6 @@ def test_bot_config_direction_accepts_short():
 # StrategyRequest + RegimeConfig rule-list caps
 # ---------------------------------------------------------------------------
 
-_STUB_RULE = {"indicator": "price", "condition": "above", "value": 1}
-
-
 @pytest.mark.parametrize("field", ["buy_rules", "sell_rules"])
 def test_strategy_request_rejects_101_rules(field):
     """F128: >100 rules on primary buy/sell lists → ValidationError."""
@@ -104,8 +102,8 @@ def test_strategy_request_accepts_exactly_100_rules(field):
     req = make_req(**{field: rules})
     actual = getattr(req, field)
     assert len(actual) == 100
-    assert actual[0].indicator == "price"
-    assert actual[-1].value == 1
+    assert actual[0].indicator == "rsi"
+    assert actual[-1].value == 50
 
 
 @pytest.mark.parametrize("field", [
@@ -139,8 +137,8 @@ def test_strategy_request_optional_rule_lists_accept_exactly_100(field):
     actual = getattr(req, field)
     assert actual is not None
     assert len(actual) == 100
-    assert actual[0].indicator == "price"
-    assert actual[-1].value == 1
+    assert actual[0].indicator == "rsi"
+    assert actual[-1].value == 50
 
 
 def test_regime_config_rejects_51_rules():
@@ -154,8 +152,8 @@ def test_regime_config_accepts_exactly_50_rules():
     rules = [_STUB_RULE] * 50
     cfg = RegimeConfig(rules=rules)
     assert len(cfg.rules) == 50
-    assert cfg.rules[0].indicator == "price"
-    assert cfg.rules[-1].value == 1
+    assert cfg.rules[0].indicator == "rsi"
+    assert cfg.rules[-1].value == 50
 
 
 # ---------------------------------------------------------------------------

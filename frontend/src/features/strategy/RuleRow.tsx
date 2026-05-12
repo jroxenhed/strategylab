@@ -342,16 +342,19 @@ export default function RuleRow({ rule, onChange, onDelete, onSweep }: { rule: R
       )}
       {rule.indicator === 'stochastic' && (
         <>
+          <span style={{ fontSize: 10, color: '#8b949e', marginRight: 2 }}>K</span>
           <input type="number" min={2} max={500}
             value={rule.params?.k_period ?? 14}
             onChange={e => onChange({ ...rule, params: { ...rule.params, k_period: parseInt(e.target.value) || 14 } })}
             style={{ ...styles.ruleSelect, width: 40 }} title="K Period"
           />
+          <span style={{ fontSize: 10, color: '#8b949e', marginRight: 2 }}>D</span>
           <input type="number" min={2} max={500}
             value={rule.params?.d_period ?? 3}
             onChange={e => onChange({ ...rule, params: { ...rule.params, d_period: parseInt(e.target.value) || 3 } })}
             style={{ ...styles.ruleSelect, width: 35 }} title="D Period"
           />
+          <span style={{ fontSize: 10, color: '#8b949e', marginRight: 2 }}>Sk</span>
           <input type="number" min={1} max={50}
             value={rule.params?.smooth_k ?? 3}
             onChange={e => onChange({ ...rule, params: { ...rule.params, smooth_k: parseInt(e.target.value) || 3 } })}

@@ -169,7 +169,7 @@ export default function OptimizerPanel({ lastRequest }: Props) {
         if (!opt) throw new Error(`Unknown param: ${p.path}`)
         const minN = p.min !== '' ? parseFloat(p.min) : opt.defaultMin
         const maxN = p.max !== '' ? parseFloat(p.max) : opt.defaultMax
-        const stepsN = Math.max(1, parseInt(p.steps) || 5)
+        const stepsN = p.steps !== '' ? parseInt(p.steps) : NaN
         let values = linspace(minN, maxN, stepsN)
         if (opt.isInteger) {
           values = [...new Set(values.map(v => Math.round(v)))]

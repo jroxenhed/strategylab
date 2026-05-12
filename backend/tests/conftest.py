@@ -1,6 +1,15 @@
 import asyncio
 import pytest
 
+# ---------------------------------------------------------------------------
+# Shared stub rule (F142) — canonical form used across all test files that
+# need a syntactically valid Rule dict. indicator='rsi' is a registered
+# indicator; 'price' was historically used in test_models.py but could break
+# if Rule.indicator ever gains an allowlist validator (F106).
+# ---------------------------------------------------------------------------
+_STUB_RULE: dict = {"indicator": "rsi", "condition": "above", "value": 50}
+_STUB_RULES_100: list = [_STUB_RULE for _ in range(100)]
+
 
 @pytest.fixture(autouse=True)
 def _f139_ensure_event_loop():

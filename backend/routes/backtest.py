@@ -462,7 +462,10 @@ def run_backtest(
                     details.append({"rule": _rule_desc(r), "muted": True, "result": False})
                     continue
                 result = eval_rule(r, indicators, i)
-                ind_series = resolve_series(r, indicators) or indicators.get("close")
+                # `or` on a pd.Series triggers `bool(series)` → ValueError. Pick explicitly.
+                ind_series = resolve_series(r, indicators)
+                if ind_series is None:
+                    ind_series = indicators.get("close")
                 v_now = round(float(ind_series.iloc[i]), 4) if ind_series is not None and pd.notna(ind_series.iloc[i]) else None
                 v_prev = round(float(ind_series.iloc[i - 1]), 4) if ind_series is not None and i > 0 and pd.notna(ind_series.iloc[i - 1]) else None
                 details.append({

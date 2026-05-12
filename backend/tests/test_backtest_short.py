@@ -3,6 +3,7 @@ from sys import path as sys_path
 from os.path import dirname, abspath
 sys_path.insert(0, dirname(dirname(abspath(__file__))))
 
+import pytest
 import pandas as pd
 import numpy as np
 from unittest.mock import patch
@@ -454,3 +455,118 @@ def test_regime_exit_uses_direction_specific_sell_rules(mock_fetch, mock_htf):
         assert "below" not in rules_str, (
             f"Unified sell label ('below') leaked into exit trade rules: {t['rules']}"
         )
+
+
+# ---------------------------------------------------------------------------
+# F156 — signal_trace in b23_mode
+#
+# Two assertions from the F155 review:
+# (a) Trace entries on bars where the dual-mode rules fire reference the
+#     direction-specific rule labels (e.g. "price below 101"), NOT the unified
+#     "buy_rules" labels (e.g. "price above 0").
+# (b) The "MISSED (no position)" trace entry is suppressed when b23_mode=True
+#     and position=0.
+# ---------------------------------------------------------------------------
+
+
+@patch("routes.backtest.fetch_higher_tf")
+@patch("routes.backtest._fetch")
+def test_b23_signal_trace_uses_direction_specific_labels(mock_fetch, mock_htf):
+    """b23_mode + debug=True: trace buy_rules entries reference long_buy_rules,
+    not the hidden unified buy_rules (assertion a of F156).
+
+    Strategy: unified buy_rules uses "price above 0" (always fires),
+    long_buy_rules uses "price below 101" (also fires on flat-100 series, but
+    the description is distinguishable).  In b23 mode the trace must show the
+    "below 101" label, not "above 0".
+    """
+    df = _make_df_long(n=8)
+    mock_fetch.return_value = df
+    mock_htf.return_value = df
+
+    # Unified rule — "above 0": always fires; must NOT appear in the trace
+    unified_buy = Rule(indicator="price", condition="above", value=0)
+    # Direction-specific rule — "below 101": also fires on flat-100; distinguishable label
+    long_buy = Rule(indicator="price", condition="below", value=101)
+    # Sell rule fires after 1 bar (price below 999, always true → exit next open bar)
+    sell_rule = Rule(indicator="price", condition="below", value=999)
+
+    req = StrategyRequest(
+        ticker="TEST",
+        start="2024-01-01",
+        end="2024-12-31",
+        interval="1d",
+        buy_rules=[unified_buy],
+        sell_rules=[sell_rule],
+        long_buy_rules=[long_buy],
+        long_sell_rules=[sell_rule],
+        short_buy_rules=[],
+        short_sell_rules=[],
+        regime=_regime_always_long(),
+        initial_capital=10000.0,
+        position_size=1.0,
+        debug=True,
+    )
+
+    result = run_backtest(req)
+    trace = result.get("signal_trace", [])
+    assert trace, "Expected non-empty signal_trace with debug=True"
+
+    buy_entries = [e for e in trace if e.get("action") == "BUY"]
+    assert buy_entries, f"Expected at least one BUY trace entry, got {trace}"
+
+    for entry in buy_entries:
+        rule_descs = [r["rule"] for r in entry.get("buy_rules", [])]
+        combined = " ".join(rule_descs)
+        assert "below 101" in combined, (
+            f"Expected direction-specific rule ('below 101') in trace, got {rule_descs}"
+        )
+        assert "above 0" not in combined, (
+            f"Unified rule label ('above 0') leaked into b23 trace: {rule_descs}"
+        )
+
+
+@patch("routes.backtest.fetch_higher_tf")
+@patch("routes.backtest._fetch")
+def test_b23_signal_trace_suppresses_missed_no_position(mock_fetch, mock_htf):
+    """b23_mode + debug=True: 'MISSED (no position)' trace entries are
+    suppressed on flat-position bars (assertion b of F156).
+
+    The MISSED entry is emitted in non-b23 mode when sell_rules fire while
+    position == 0 (line 821 guard: `and not b23_mode`).  In b23 mode those
+    unified sell_rules are hidden, so no MISSED entry should appear.
+    """
+    df = _make_df_long(n=10)
+    mock_fetch.return_value = df
+    mock_htf.return_value = df
+
+    # long_buy_rules: fires on price > 200 — never on flat-100, so position stays 0.
+    # Every bar runs through the flat-position branch where MISSED would normally emit.
+    no_entry_rule = Rule(indicator="price", condition="above", value=200)
+    # sell_rules that fire on every bar (price below 999, always)
+    sell_always = Rule(indicator="price", condition="below", value=999)
+
+    req = StrategyRequest(
+        ticker="TEST",
+        start="2024-01-01",
+        end="2024-12-31",
+        interval="1d",
+        buy_rules=[],
+        sell_rules=[sell_always],
+        long_buy_rules=[no_entry_rule],
+        long_sell_rules=[sell_always],
+        short_buy_rules=[],
+        short_sell_rules=[],
+        regime=_regime_always_long(),
+        initial_capital=10000.0,
+        position_size=1.0,
+        debug=True,
+    )
+
+    result = run_backtest(req)
+    trace = result.get("signal_trace", [])
+
+    missed = [e for e in trace if e.get("action") == "MISSED (no position)"]
+    assert not missed, (
+        f"Expected MISSED (no position) suppressed in b23_mode, but got {missed}"
+    )

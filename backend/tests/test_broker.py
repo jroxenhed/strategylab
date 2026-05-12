@@ -154,17 +154,36 @@ def test_ibkr_provider_submit_market_order():
 
 
 def _make_ibkr_provider(ib, run_side_effect=None):
-    """Create an IBKRTradingProvider with a mock loop and _run bypass."""
+    """Create an IBKRTradingProvider with a mock loop and _run bypass.
+
+    Both loops (the one stored on provider._loop and the optional one-shot
+    _run loop) are closed after use to avoid ResourceWarning on GC (F150).
+    provider._loop is closed eagerly here; the _run one-shot loop is closed
+    after each run_until_complete call via a wrapper.
+    """
     import asyncio
     from broker import IBKRTradingProvider
     ib.isConnected.return_value = True
-    provider = IBKRTradingProvider(ib, asyncio.new_event_loop())
+    provider_loop = asyncio.new_event_loop()
+    provider = IBKRTradingProvider(ib, provider_loop)
     if run_side_effect is not None:
+        # This branch never uses provider._loop; close it immediately.
+        provider_loop.close()
         provider._run = lambda coro, **kw: run_side_effect
     else:
-        # Default: run the coroutine synchronously via a one-shot loop
-        _loop = asyncio.new_event_loop()
-        provider._run = lambda coro, **kw: _loop.run_until_complete(coro)
+        # Default: run the coroutine synchronously via a one-shot loop.
+        # The one-shot loop is closed after each call; provider._loop is
+        # also closed here because it is not used in this branch.
+        provider_loop.close()
+
+        def _run_and_close(coro, **kw):
+            _loop = asyncio.new_event_loop()
+            try:
+                return _loop.run_until_complete(coro)
+            finally:
+                _loop.close()
+
+        provider._run = _run_and_close
     return provider
 
 

@@ -7,7 +7,7 @@ import pandas as pd
 from datetime import date, timedelta
 from pydantic import BaseModel, Field, field_validator
 
-from shared import _fetch, _format_time
+from shared import _fetch, _format_time, require_valid_source
 from signal_engine import Rule, compute_indicators, eval_rules, migrate_rule
 from models import LogicField, SymbolField, SymbolList, DirectionField, TrailingStopConfig
 
@@ -29,6 +29,7 @@ class QuickBacktestRequest(BaseModel):
     initial_capital: float = Field(default=10000.0, gt=0)
     stop_loss_pct: float = Field(default=0.0, ge=0)
     trailing_stop: Optional[TrailingStopConfig] = None
+    source: str = "yahoo"
 
 
 class QuickBacktestResult(BaseModel):
@@ -62,6 +63,7 @@ class BatchQuickBacktestRequest(BaseModel):
     initial_capital: float = Field(default=10000.0, gt=0)
     stop_loss_pct: float = Field(default=0.0, ge=0)
     trailing_stop: Optional[TrailingStopConfig] = None
+    source: str = "yahoo"
 
     @field_validator('symbols', mode='before')
     @classmethod
@@ -84,6 +86,7 @@ class BatchQuickBacktestRequest(BaseModel):
 
 def _run_quick(req: QuickBacktestRequest) -> QuickBacktestResult:
     """Core quick backtest logic. Returns a QuickBacktestResult."""
+    source = require_valid_source(req.source)
     ticker = req.ticker.upper()
     end_date = date.today()
     start_date = end_date - timedelta(days=req.lookback_days)
@@ -91,7 +94,7 @@ def _run_quick(req: QuickBacktestRequest) -> QuickBacktestResult:
     end_str = end_date.isoformat()
 
     try:
-        df = _fetch(ticker, start_str, end_str, req.interval)
+        df = _fetch(ticker, start_str, end_str, req.interval, source=source)
     except Exception:
         logger.exception("quick-backtest fetch failed for %s", ticker)
         return QuickBacktestResult(ticker=ticker, error=f"No data for {ticker}")
@@ -232,6 +235,7 @@ def quick_backtest_batch(req: BatchQuickBacktestRequest):
             initial_capital=req.initial_capital,
             stop_loss_pct=req.stop_loss_pct,
             trailing_stop=req.trailing_stop,
+            source=req.source,
         )
         try:
             result = _run_quick(single_req)

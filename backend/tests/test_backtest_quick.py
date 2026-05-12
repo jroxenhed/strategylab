@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from main import app
+from tests.conftest import _STUB_RULE  # noqa: F401 — canonical stub (F142)
 
 
 def _base_batch_body(**overrides):
@@ -179,9 +180,6 @@ def test_quick_single_ticker_normalizes(monkeypatch, client):
     )
     assert resp.status_code == 200
     assert received == ["BRK.B"]
-
-
-_STUB_RULE: dict = {"indicator": "rsi", "condition": "above", "value": 50}
 
 
 def test_quick_rejects_more_than_100_buy_rules(client):

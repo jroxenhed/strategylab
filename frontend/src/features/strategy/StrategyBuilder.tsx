@@ -1162,7 +1162,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
           </button>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
             <input type="checkbox" checked={debug} onChange={e => setDebug(e.target.checked)} />
-            Signal Trace
+            Enable Signal Trace tab
           </label>
           {error && <span style={{ color: 'var(--accent-red)', fontSize: 13, fontWeight: 500 }}>{error}</span>}
         </div>

@@ -97,7 +97,7 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
                         volume=volume if volume is not None else pd.Series(0, index=close.index, dtype=float))
 
     macd_result = _get_or_compute(
-        cache, ("macd", 12, 26, 9),
+        cache, (id(close), "macd", 12, 26, 9),
         lambda: compute_instance("macd", {"fast": 12, "slow": 26, "signal": 9}, ohlcv),
     )
 
@@ -121,14 +121,14 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
 
     for period, rsi_type in rsi_specs:
         rsi_result = _get_or_compute(
-            cache, ("rsi", period, rsi_type),
+            cache, (id(close), "rsi", period, rsi_type),
             lambda p=period, t=rsi_type: compute_instance("rsi", {"period": p, "type": t}, ohlcv),
         )
         result[f"rsi_{period}_{rsi_type}"] = rsi_result["rsi"]
 
     if high is not None and low is not None:
         atr_result = _get_or_compute(
-            cache, ("atr", 14),
+            cache, (id(close), "atr", 14),
             lambda: compute_instance("atr", {"period": 14}, ohlcv),
         )
         result["atr"] = atr_result["atr"]
@@ -147,7 +147,7 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
 
     for period, ma_type in ma_specs:
         ma_result = _get_or_compute(
-            cache, ("ma", period, ma_type),
+            cache, (id(close), "ma", period, ma_type),
             lambda p=period, t=ma_type: compute_instance("ma", {"period": p, "type": t}, ohlcv),
         )
         result[f"ma_{period}_{ma_type}"] = ma_result["ma"]
@@ -169,7 +169,7 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
 
     for bb_period, bb_std in bb_specs:
         bb_result = _get_or_compute(
-            cache, ("bb", bb_period, bb_std),
+            cache, (id(close), "bb", bb_period, bb_std),
             lambda p=bb_period, s=bb_std: compute_instance("bb", {"period": p, "stddev": s}, ohlcv),
         )
         prefix = f"bb_{bb_period}_{bb_std}"
@@ -201,7 +201,7 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
         key = f"atr_{atr_period}"
         if key not in result:
             atr_r = _get_or_compute(
-                cache, ("atr", atr_period),
+                cache, (id(close), "atr", atr_period),
                 lambda p=atr_period: compute_instance("atr", {"period": p}, ohlcv),
             )
             result[key] = atr_r["atr"]

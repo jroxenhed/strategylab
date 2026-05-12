@@ -15,6 +15,7 @@ import pytest
 from datetime import datetime
 from pydantic import ValidationError
 from bot_manager import BotState, BotConfig
+from tests.conftest import _STUB_RULE  # noqa: F401 — canonical stub (F142)
 
 
 def test_append_slippage_bps_caps_at_1000():
@@ -84,8 +85,6 @@ def test_append_equity_snapshot_below_cap_preserves_order():
 # ---------------------------------------------------------------------------
 # F128: BotConfig buy_rules / sell_rules / long_* / short_* max_length=100
 # ---------------------------------------------------------------------------
-
-_STUB_RULE: dict = {"indicator": "rsi", "condition": "above", "value": 50}
 
 _BASE_CONFIG: dict = {
     "strategy_name": "test",

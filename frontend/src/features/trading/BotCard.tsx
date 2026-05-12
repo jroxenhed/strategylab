@@ -18,14 +18,17 @@ const POLL_SECONDS: Record<string, number> = { '1m': 10, '5m': 15, '15m': 20, '3
 // ActivityLog
 // ---------------------------------------------------------------------------
 
-function ActivityLog({ entries }: { entries: BotActivityEntry[] }) {
+function ActivityLog({ entries, status }: { entries: BotActivityEntry[], status?: string }) {
+  const emptyText = status === 'running' ? 'Waiting for next tick'
+    : status === 'stopped' ? 'Bot is stopped'
+    : 'No activity yet.'
   return (
     <div style={{
       maxHeight: 160, overflowY: 'auto', background: '#0d1117',
       border: '1px solid #1e2530', borderRadius: 4, padding: '6px 8px',
       fontFamily: 'monospace', fontSize: 11,
     }}>
-      {entries.length === 0 && <span style={{ color: '#555' }}>No activity yet.</span>}
+      {entries.length === 0 && <span style={{ color: '#555' }}>{emptyText}</span>}
       {entries.map((e, i) => (
         <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 2 }}>
           <span style={{ color: '#444', flexShrink: 0 }}>
@@ -299,7 +302,7 @@ export default function BotCard({
         {/* Expandable activity log */}
         {expanded && (
           <div style={{ padding: '0 8px 8px' }}>
-            <ActivityLog entries={detail?.state?.activity_log ?? []} />
+            <ActivityLog entries={detail?.state?.activity_log ?? []} status={summary.status} />
           </div>
         )}
       </div>
@@ -598,7 +601,7 @@ export default function BotCard({
 
       {/* Expandable activity log */}
       {expanded && (
-        <ActivityLog entries={detail?.state?.activity_log ?? []} />
+        <ActivityLog entries={detail?.state?.activity_log ?? []} status={summary.status} />
       )}
     </div>
   )
