@@ -4,6 +4,7 @@ sys_path.insert(0, dirname(dirname(abspath(__file__))))
 import pytest
 from pydantic import ValidationError
 from models import StrategyRequest, RegimeConfig
+from signal_engine import Rule
 from bot_manager import BotConfig
 from tests.conftest import _STUB_RULE  # noqa: F401 — canonical stub (F142)
 
@@ -182,3 +183,76 @@ def test_bot_config_rejects_invalid_symbol():
     """F95: symbol with disallowed characters raises ValidationError."""
     with pytest.raises(ValidationError):
         make_bot_config(symbol="AA@PL")
+
+
+# ---------------------------------------------------------------------------
+# F184: Interval "60m" → "1h" normalisation
+# ---------------------------------------------------------------------------
+
+def test_strategy_request_normalizes_60m_to_1h():
+    """F184: interval='60m' is silently normalised to '1h' on StrategyRequest."""
+    req = make_req(interval="60m")
+    assert req.interval == "1h"
+
+
+def test_strategy_request_preserves_1h():
+    """F184: interval='1h' is preserved as-is."""
+    req = make_req(interval="1h")
+    assert req.interval == "1h"
+
+
+def test_bot_config_normalizes_60m_to_1h():
+    """F184: interval='60m' is silently normalised to '1h' on BotConfig."""
+    cfg = make_bot_config(interval="60m")
+    assert cfg.interval == "1h"
+
+
+# ---------------------------------------------------------------------------
+# F106: Rule.indicator and Rule.condition allowlist (Literal types)
+# ---------------------------------------------------------------------------
+
+def test_rule_accepts_valid_indicator_and_condition():
+    """F106: a canonical indicator + condition pair is accepted without error."""
+    rule = Rule(indicator="rsi", condition="above", value=50)
+    assert rule.indicator == "rsi"
+    assert rule.condition == "above"
+
+
+def test_rule_rejects_invalid_indicator():
+    """F106: an unrecognised indicator raises ValidationError at construction time."""
+    with pytest.raises(ValidationError):
+        Rule(indicator="bogus", condition="above", value=50)
+
+
+def test_rule_rejects_invalid_condition():
+    """F106: an unrecognised condition raises ValidationError at construction time."""
+    with pytest.raises(ValidationError):
+        Rule(indicator="rsi", condition="zig_zag", value=50)
+
+
+def test_rule_all_canonical_indicators_accepted():
+    """F106: every indicator in the allowlist is accepted by Pydantic."""
+    indicators = [
+        "rsi", "macd", "ma", "bb", "atr", "atr_pct",
+        "volume", "stochastic", "adx", "price",
+    ]
+    for ind in indicators:
+        rule = Rule(indicator=ind, condition="above", value=1)
+        assert rule.indicator == ind
+
+
+def test_rule_all_canonical_conditions_accepted():
+    """F106: every condition in the allowlist is accepted by Pydantic."""
+    conditions = [
+        "above", "below",
+        "crossover_up", "crossover_down",
+        "crosses_above", "crosses_below",
+        "rising", "falling",
+        "rising_over", "falling_over",
+        "turns_up", "turns_down",
+        "turns_up_below", "turns_down_above",
+        "decelerating", "accelerating",
+    ]
+    for cond in conditions:
+        rule = Rule(indicator="rsi", condition=cond, value=50)
+        assert rule.condition == cond

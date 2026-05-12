@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import type { BacktestResult, IndicatorInstance, DataSource, StrategyRequest, DatePreset } from './shared/types'
+import { requestSignature } from './shared/types/requestSignature'
 import { DEFAULT_INDICATORS } from './shared/types/indicators'
 import type { IChartApi } from 'lightweight-charts'
 import { useOHLCV, useInstanceIndicators } from './shared/hooks/useOHLCV'
@@ -53,37 +54,37 @@ const saved = loadSettings()
 const _cachedBacktest = (() => {
   const cache = loadBacktestCache()
   if (!cache?.request) return null
-  const r = cache.request
-  if (r.ticker !== (saved?.ticker ?? 'AAPL') ||
-      r.start !== (saved?.start ?? oneYearAgo) ||
-      r.end !== (saved?.end ?? today) ||
-      r.interval !== (saved?.interval ?? '1d')) {
-    return null
-  }
   const strat = loadStrategyCache()
-  const ruleFields: Array<[string, string]> = [
-    ['buyRules', 'buy_rules'],
-    ['sellRules', 'sell_rules'],
-    ['buyLogic', 'buy_logic'],
-    ['sellLogic', 'sell_logic'],
-    ['longBuyRules', 'long_buy_rules'],
-    ['longSellRules', 'long_sell_rules'],
-    ['longBuyLogic', 'long_buy_logic'],
-    ['longSellLogic', 'long_sell_logic'],
-    ['shortBuyRules', 'short_buy_rules'],
-    ['shortSellRules', 'short_sell_rules'],
-    ['shortBuyLogic', 'short_buy_logic'],
-    ['shortSellLogic', 'short_sell_logic'],
-  ]
-  const req = r as unknown as Record<string, unknown>
-  for (const [camel, snake] of ruleFields) {
-    if (JSON.stringify(strat?.[camel] ?? null) !== JSON.stringify(req[snake] ?? null)) {
-      return null
-    }
+  // Build a StrategyRequest-shaped object from current saved settings + strategy
+  // cache so requestSignature can compare it against the cached request in one call.
+  // Mirror runBacktest's conditional: regime + long_*/short_* only populated when
+  // regime.enabled. Otherwise the cached request omits those keys (undefined → null
+  // in the signature) while a populated `current` would have arrays — silent mismatch.
+  const regimeOn = !!(strat?.regime as { enabled?: boolean } | undefined)?.enabled
+  const current: StrategyRequest = {
+    ticker: saved?.ticker ?? 'AAPL',
+    start: saved?.start ?? oneYearAgo,
+    end: saved?.end ?? today,
+    interval: saved?.interval ?? '1d',
+    buy_rules: (strat?.buyRules ?? null) as StrategyRequest['buy_rules'],
+    sell_rules: (strat?.sellRules ?? null) as StrategyRequest['sell_rules'],
+    buy_logic: (strat?.buyLogic ?? null) as StrategyRequest['buy_logic'],
+    sell_logic: (strat?.sellLogic ?? null) as StrategyRequest['sell_logic'],
+    long_buy_rules: regimeOn ? (strat?.longBuyRules ?? null) as StrategyRequest['long_buy_rules'] : undefined,
+    long_sell_rules: regimeOn ? (strat?.longSellRules ?? null) as StrategyRequest['long_sell_rules'] : undefined,
+    long_buy_logic: regimeOn ? (strat?.longBuyLogic ?? null) as StrategyRequest['long_buy_logic'] : undefined,
+    long_sell_logic: regimeOn ? (strat?.longSellLogic ?? null) as StrategyRequest['long_sell_logic'] : undefined,
+    short_buy_rules: regimeOn ? (strat?.shortBuyRules ?? null) as StrategyRequest['short_buy_rules'] : undefined,
+    short_sell_rules: regimeOn ? (strat?.shortSellRules ?? null) as StrategyRequest['short_sell_rules'] : undefined,
+    short_buy_logic: regimeOn ? (strat?.shortBuyLogic ?? null) as StrategyRequest['short_buy_logic'] : undefined,
+    short_sell_logic: regimeOn ? (strat?.shortSellLogic ?? null) as StrategyRequest['short_sell_logic'] : undefined,
+    regime: regimeOn ? (strat?.regime ?? null) as StrategyRequest['regime'] : undefined,
+    // required non-compared fields — defaults; only the signature fields above matter
+    initial_capital: 0,
+    position_size: 0,
+    source: 'yahoo',
   }
-  if (JSON.stringify(strat?.['regime'] ?? null) !== JSON.stringify(req['regime'] ?? null)) {
-    return null
-  }
+  if (requestSignature(cache.request) !== requestSignature(current)) return null
   return cache
 })()
 
@@ -147,7 +148,7 @@ export default function App() {
   const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', start, end, chartInterval, dataSource, extendedHours, chartEnabled && showSpy)
   const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', start, end, chartInterval, dataSource, extendedHours, chartEnabled && showQqq)
 
-  const { data: instanceData = {}, refetch: refetchIndicators, isLoading: instanceLoading } = useInstanceIndicators(
+  const { data: instanceData = {}, refetch: refetchIndicators, isLoading: instanceLoading, isError: instanceError, errorMessage: instanceErrorMessage } = useInstanceIndicators(
     ticker, start, end, interval, chartEnabled ? indicators : [], dataSource, extendedHours, viewInterval,
   )
 
@@ -267,6 +268,8 @@ export default function App() {
                           indicators={indicators}
                           instanceData={instanceData}
                           instanceLoading={instanceLoading}
+                          instanceError={instanceError}
+                          instanceErrorMessage={instanceErrorMessage}
                           trades={trades}
                           emaOverlays={emaOverlays}
                           ruleSignals={ruleSignals}

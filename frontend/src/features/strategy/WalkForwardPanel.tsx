@@ -13,6 +13,30 @@ import { parseSseFrame } from './sseParser'
 // Inline types — match backend Pydantic models verbatim
 // ---------------------------------------------------------------------------
 
+interface BacktestSummary {
+  num_trades: number
+  sharpe_ratio: number | null
+  total_return_pct: number
+  win_rate_pct: number
+  max_drawdown_pct: number
+  final_value: number
+  initial_capital?: number
+  buy_hold_return_pct?: number
+  // edge_stats fields
+  gross_profit?: number
+  gross_loss?: number
+  ev_per_trade?: number | null
+  profit_factor?: number | null
+  // spy correlation
+  beta?: number | null
+  r_squared?: number | null
+}
+
+interface WfaEquityPoint {
+  time: string | number
+  value: number
+}
+
 interface WindowResult {
   window_index: number
   is_start: string
@@ -21,8 +45,8 @@ interface WindowResult {
   oos_end: string
   best_params: Record<string, number>
   is_sharpe: number
-  is_metrics: Record<string, number>
-  oos_metrics: Record<string, number>
+  is_metrics: BacktestSummary
+  oos_metrics: BacktestSummary
   stability_tag: StabilityTag
   is_combo_count: number
   scale_factor: number
@@ -32,7 +56,7 @@ type StabilityTag = 'stable_plateau' | 'spike' | 'low_trades_is' | 'no_oos_trade
 
 interface WalkForwardResponse {
   windows: WindowResult[]
-  stitched_equity: Array<{ time: string | number; value: number }>
+  stitched_equity: WfaEquityPoint[]
   wfe: number | null
   param_cv: Record<string, number>
   total_combos: number
@@ -181,7 +205,7 @@ function StabilityBadge({ tag }: { tag: StabilityTag }) {
 // Stitched equity chart — self-contained, never shares the main Chart instance
 // ---------------------------------------------------------------------------
 
-function StitchedEquityChart({ data }: { data: Array<{ time: string | number; value: number }> }) {
+function StitchedEquityChart({ data }: { data: WfaEquityPoint[] }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
 

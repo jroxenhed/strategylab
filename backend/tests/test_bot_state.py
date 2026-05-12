@@ -407,5 +407,50 @@ class TestBotManagerLoadResidual:
         assert normalize_symbol(valid) == valid
 
         invalid = "A" * 21
-        with pytest.raises(ValueError, match="too long"):
+        with pytest.raises(ValueError, match="invalid_symbol"):  # F98: structured message
             normalize_symbol(invalid)
+
+
+# ---------------------------------------------------------------------------
+# R-001 — BotManager.load() ValidationError catch for non-allowlisted indicators
+# ---------------------------------------------------------------------------
+
+class TestBotManagerLoadValidationError:
+    """R-001: ValidationError from Pydantic Literal validation is caught per-bot,
+    leaving valid bots intact instead of aborting the entire load."""
+
+    def _write_bots_json(self, path, entries: list, bot_fund: float = 0.0):
+        path.write_text(_json.dumps({"bot_fund": bot_fund, "bots": entries}))
+
+    def _make_bot_entry_with_rule(self, bot_id: str, symbol: str, indicator: str) -> dict:
+        return {
+            "config": {
+                "bot_id": bot_id,
+                "strategy_name": "Test",
+                "symbol": symbol,
+                "interval": "5m",
+                "buy_rules": [{"indicator": indicator, "condition": "above", "value": 50}],
+                "sell_rules": [],
+                "allocated_capital": 100.0,
+            },
+            "state": {},
+        }
+
+    def test_bogus_indicator_dropped_valid_survives(self, tmp_path, monkeypatch, caplog):
+        """A bot with an unknown indicator is skipped; the valid bot loads fine."""
+        bots_file = tmp_path / "bots.json"
+        entries = [
+            self._make_bot_entry_with_rule("good-bot", "AAPL", "rsi"),
+            self._make_bot_entry_with_rule("bad-bot", "MSFT", "bogus_indicator_xyz"),
+        ]
+        self._write_bots_json(bots_file, entries)
+        monkeypatch.setattr(_bot_manager_mod, "DATA_PATH", str(bots_file))
+
+        mgr = BotManager()
+        with caplog.at_level(_logging.WARNING, logger="bot_manager"):
+            mgr.load()
+
+        assert "good-bot" in mgr.bots, "Valid bot must survive"
+        assert "bad-bot" not in mgr.bots, "Bot with bogus indicator must be skipped"
+        assert "bad-bot" in caplog.text
+        assert "invalid config" in caplog.text

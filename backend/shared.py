@@ -29,9 +29,7 @@ class DataRateCounter:
         return len(self._calls)
 
 
-# F174: WORKER-SAFE — DataRateCounter() allocates a deque; no I/O or external
-# state. Each WFA worker subprocess gets its own independent counter — calls
-# recorded in a worker are not visible to the parent or other workers.
+# F174: WORKER-SAFE — pure in-process deque allocation; no I/O.
 _data_rate_counter = DataRateCounter()
 
 

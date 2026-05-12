@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 import pandas as pd
 from shared import _fetch, _format_time, fetch_higher_tf, align_htf_to_ltf, htf_lookback_days, _INTRADAY_INTERVALS, require_valid_source
 from indicators import compute_instance, OHLCVSeries
-from models import Interval
+from models import Interval, IntervalField
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -37,7 +37,7 @@ class InstanceRequest(BaseModel):
 class IndicatorsPostRequest(BaseModel):
     start: str = "2023-01-01"
     end: str = "2024-01-01"
-    interval: Interval = "1d"
+    interval: IntervalField = "1d"
     source: str = "yahoo"
     extended_hours: bool = False
     instances: list[InstanceRequest] = Field(max_length=20)
@@ -45,7 +45,7 @@ class IndicatorsPostRequest(BaseModel):
     view_interval: Optional[str] = None
 
 
-@router.post("/api/indicators/{ticker}")
+@router.post("/api/indicators/{ticker}", responses={400: {"description": "Invalid source"}})
 def post_indicators(ticker: str, body: IndicatorsPostRequest):
     # F94: shared allowlist + case-normalize. Runs before any fetch_higher_tf
     # or compute_instance call so unknown-source requests can't do work.

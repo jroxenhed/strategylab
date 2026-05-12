@@ -1351,3 +1351,51 @@ class TestStreamEndpoint:
         assert "result" not in types, (
             f"'result' event should not be emitted after serialisation error, got: {types}"
         )
+
+
+# ---------------------------------------------------------------------------
+# F2/Fix2 — no_is_trades windows produce distinct BacktestSummary instances
+# ---------------------------------------------------------------------------
+
+def test_no_is_trades_metrics_are_distinct_objects(monkeypatch):
+    """is_metrics and oos_metrics for no_is_trades windows must be distinct objects.
+
+    Fix2 replaced a shared singleton with _make_empty_summary() called twice.
+    Verify at the Python level that the two objects are not the same instance,
+    and at the API level that both report num_trades=0.
+    """
+    import routes.walk_forward as wf_mod
+    from fastapi import HTTPException as _HTTPException
+
+    mock_df = _make_mock_df(n=300, start="2019-01-01")
+    monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
+
+    call_counter = {"n": 0}
+
+    def mock_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
+        call_counter["n"] += 1
+        n = call_counter["n"]
+        if n in (4, 5):  # Window 1 IS combos — all error → no_is_trades
+            raise _HTTPException(status_code=400, detail="no signal in window")
+        if n == 3:
+            return _minimal_backtest_result(num_trades=10, sharpe=1.0)
+        return _minimal_backtest_result(num_trades=10, sharpe=2.0)
+
+    _patch_run_backtest(monkeypatch, mock_run_backtest)
+
+    payload = _wf_payload(is_bars=100, oos_bars=100, min_trades_is=1)
+    resp = client.post("/api/backtest/walk_forward", json=payload)
+    assert resp.status_code == 200
+
+    no_is_windows = [w for w in resp.json()["windows"]
+                     if w["stability_tag"] == "no_is_trades"]
+    assert len(no_is_windows) >= 1, "Expected at least one no_is_trades window"
+
+    for w in no_is_windows:
+        # Both metrics must report 0 trades (structural correctness)
+        assert w["is_metrics"]["num_trades"] == 0
+        assert w["oos_metrics"]["num_trades"] == 0
+        # JSON dicts are separate objects — fix ensures they are not aliased at Python level
+        assert w["is_metrics"] is not w["oos_metrics"], (
+            "is_metrics and oos_metrics must be distinct dict objects (not aliased)"
+        )

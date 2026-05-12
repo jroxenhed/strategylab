@@ -82,9 +82,9 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [skipAfterStop, setSkipAfterStop] = useState<SkipAfterStopConfig>(saved?.skipAfterStop ?? { enabled: false, count: 1, trigger: 'sl' })
   const [tradingHours, setTradingHours] = useState<TradingHoursConfig>(() => {
     const th = saved?.tradingHours
-    if (!th) return { enabled: false, start_time: '08:30', end_time: '16:00', skip_ranges: [] }
+    if (!th) return { enabled: false, start_time: '09:30', end_time: '16:00', skip_ranges: [] }
     // Migrate old formats
-    const start = typeof th.start_hour === 'number' ? `${String(th.start_hour).padStart(2,'0')}:00` : (th.start_time ?? '08:30')
+    const start = typeof th.start_hour === 'number' ? `${String(th.start_hour).padStart(2,'0')}:00` : (th.start_time ?? '09:30')
     const end = typeof th.end_hour === 'number' ? `${String(th.end_hour).padStart(2,'0')}:00` : (th.end_time ?? '16:00')
     const ranges = th.skip_ranges ?? (th.skip_hours ? (th.skip_hours as number[]).map((h: number) => `${String(h).padStart(2,'0')}:00-${String(h+1).padStart(2,'0')}:00`) : [])
     return { enabled: th.enabled, start_time: start, end_time: end, skip_ranges: ranges }
@@ -190,7 +190,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     setTrailingEnabled(s.trailingEnabled); setTrailingConfig(s.trailingConfig)
     setDynamicSizing(s.dynamicSizing ?? { enabled: false, consec_sls: 2, reduced_pct: 25, trigger: 'sl' })
     setSkipAfterStop(s.skipAfterStop ?? { enabled: false, count: 1, trigger: 'sl' })
-    setTradingHours(s.tradingHours)
+    setTradingHours(s.tradingHours ?? { enabled: false, start_time: '09:30', end_time: '16:00', skip_ranges: [] })
     setSlippageBps(s.slippageBps); setCommission(s.commission)
     setPerShareRate(s.perShareRate ?? 0)
     setMinPerOrder(s.minPerOrder ?? 0)

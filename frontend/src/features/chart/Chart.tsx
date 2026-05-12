@@ -27,6 +27,8 @@ interface ChartProps {
   indicators: IndicatorInstance[]
   instanceData: Record<string, Record<string, { time: string; value: number | null }[]>>
   instanceLoading?: boolean
+  instanceError?: boolean
+  instanceErrorMessage?: string | null
   trades?: Trade[]
   emaOverlays?: EMAOverlay[]
   ruleSignals?: RuleSignal[]
@@ -114,7 +116,7 @@ function buildMarkers(trades: Trade[], subPane = false) {
   })
 }
 
-export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, instanceLoading, trades, emaOverlays, ruleSignals, regimeSeries, viewInterval, backtestInterval, onChartReady }: ChartProps) {
+export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, instanceLoading, instanceError, instanceErrorMessage, trades, emaOverlays, ruleSignals, regimeSeries, viewInterval, backtestInterval, onChartReady }: ChartProps) {
   const [tzMode] = useTimezone()
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -813,6 +815,8 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
             defaultSize={defaultSizes[idx + 1]}
             instanceData={instanceData}
             instanceLoading={instanceLoading}
+            instanceError={instanceError}
+            instanceErrorMessage={instanceErrorMessage}
             chartRef={chartRef}
             candleSeriesRef={candleSeriesRef}
             paneRegistryRef={paneRegistryRef}
@@ -830,7 +834,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
 
 // Extracted to avoid inline JSX fragments with Separator+Panel pairs
 function SubPanelEntry({
-  group, paneIndex, defaultSize, instanceData, instanceLoading, chartRef, candleSeriesRef,
+  group, paneIndex, defaultSize, instanceData, instanceLoading, instanceError, instanceErrorMessage, chartRef, candleSeriesRef,
   paneRegistryRef, syncWidthsRef, subPaneMarkers, toET, tzMode, onDoubleClick,
 }: {
   group: { key: string; label: string; instances: IndicatorInstance[] }
@@ -838,6 +842,8 @@ function SubPanelEntry({
   defaultSize: number
   instanceData: Record<string, Record<string, { time: string; value: number | null }[]>>
   instanceLoading?: boolean
+  instanceError?: boolean
+  instanceErrorMessage?: string | null
   chartRef: React.RefObject<IChartApi | null>
   candleSeriesRef: React.RefObject<ISeriesApi<any> | null>
   paneRegistryRef: React.RefObject<PaneRegistry>
@@ -860,6 +866,8 @@ function SubPanelEntry({
             instances={group.instances}
             instanceData={instanceData}
             loading={instanceLoading}
+            error={instanceError}
+            errorMessage={instanceErrorMessage}
             mainChartRef={chartRef}
             mainSeriesRef={candleSeriesRef}
             paneRegistryRef={paneRegistryRef}

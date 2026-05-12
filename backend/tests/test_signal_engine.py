@@ -354,3 +354,38 @@ def test_compute_indicators_rejects_21_distinct_volume_sma_specs():
     ]
     with pytest.raises(ValueError, match="Too many distinct volume SMA"):
         compute_indicators(close, volume=volume, rules=rules)
+
+
+# ---------------------------------------------------------------------------
+# Fix 3 / F-COR-1 — eval_rule auto-migrates legacy indicators at dispatch time
+# ---------------------------------------------------------------------------
+
+def _make_close(n: int = 100, base: float = 100.0) -> pd.Series:
+    import numpy as np
+    rng = np.random.default_rng(42)
+    prices = base + rng.normal(0, 1, n).cumsum()
+    return pd.Series(prices, dtype=float)
+
+
+def test_eval_rule_legacy_ema20_migrates_transparently():
+    """eval_rule with indicator='ema20' (legacy) must produce the same result
+    as the canonical Rule(indicator='ma', params={'period': 20, 'type': 'ema'})."""
+    n = 50
+    close = _make_close(n=n, base=100.0)
+
+    # Populate the indicators dict with the canonical key that resolve_series expects
+    ema_series = close.ewm(span=20, adjust=False).mean()
+    indicators = {"ma_20_ema": ema_series}
+
+    # Legacy form — migrate_rule will turn indicator="ema20" → indicator="ma", params={...}
+    legacy_rule = Rule(indicator="ema20", condition="above", value=0)
+    # Canonical form for comparison
+    canonical_rule = Rule(indicator="ma", condition="above", value=0, params={"period": 20, "type": "ema"})
+
+    i = 30  # well past warmup
+    result_legacy = eval_rule(legacy_rule, indicators, i=i)
+    result_canonical = eval_rule(canonical_rule, indicators, i=i)
+
+    assert result_legacy == result_canonical, (
+        f"Legacy ema20 rule ({result_legacy}) must match canonical ma rule ({result_canonical}) at bar {i}"
+    )

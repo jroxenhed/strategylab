@@ -168,8 +168,6 @@ export default function OptimizerPanel({ lastRequest }: Props) {
         return
       }
     }
-    // Abort any in-flight request before starting a new one.
-    abortControllerRef.current?.abort()
     const controller = new AbortController()
     abortControllerRef.current = controller
 

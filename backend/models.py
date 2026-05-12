@@ -3,13 +3,22 @@
 import re
 from typing import Annotated, Literal, Optional
 from pydantic import BaseModel, Field, field_validator, BeforeValidator
-from signal_engine import Rule
+from signal_engine import Rule, RuleIndicator, RuleCondition  # noqa: F401 — re-export for consumers
 
 LogicField = Annotated[Literal['AND', 'OR'], BeforeValidator(lambda v: v.upper() if isinstance(v, str) else v)]
 DirectionField = Annotated[Literal['long', 'short'], BeforeValidator(lambda v: v.lower().strip() if isinstance(v, str) else v)]
 
 # F105: canonical interval allowlist. Matches yfinance + provider routing in shared.py.
 Interval = Literal["1m", "2m", "5m", "15m", "30m", "60m", "1h", "90m", "1d", "1wk", "1mo"]
+
+
+def _normalize_interval(v: str) -> str:
+    """F184: Normalise '60m' → '1h' so IBKR and other providers see a uniform value."""
+    return "1h" if v == "60m" else v
+
+
+# F184: annotated type that silently normalises "60m" → "1h" before validation.
+IntervalField = Annotated[Interval, BeforeValidator(_normalize_interval)]
 
 _RULE_LIST_CAP = 100  # F128: O(n_rules × n_bars) guard — same cap for all primary rule lists
 BoundedRuleList = Annotated[list[Rule], Field(max_length=_RULE_LIST_CAP)]
@@ -35,9 +44,9 @@ def normalize_symbol(v: object) -> str:
     if not s:
         raise ValueError("symbol must not be empty")
     if len(s) > 20:
-        raise ValueError(f"symbol too long (max 20 chars): {s[:20]!r}...")
+        raise ValueError("invalid_symbol:must_match_pattern")
     if not _SYMBOL_RE.fullmatch(s):
-        raise ValueError(f"invalid symbol characters: {s!r}")
+        raise ValueError("invalid_symbol:must_match_pattern")
     return s
 
 
@@ -105,7 +114,7 @@ class StrategyRequest(BaseModel):
     ticker: SymbolField
     start: str = "2023-01-01"
     end: str = "2024-01-01"
-    interval: Interval = "1d"
+    interval: IntervalField = "1d"
     # F128: bound O(n_rules × n_bars) per backtest — mirrors QuickBacktestRequest cap (F102)
     buy_rules: BoundedRuleList
     sell_rules: BoundedRuleList

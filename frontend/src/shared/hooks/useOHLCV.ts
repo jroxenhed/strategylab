@@ -3,6 +3,7 @@ import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../api/client'
 import { fetchBroker, setBroker as setBrokerApi, type BrokerInfo } from '../../api/trading'
 import type { OHLCVBar, DataSource, IndicatorInstance } from '../types'
+import { apiErrorDetail } from '../utils/errors'
 
 export function useOHLCV(ticker: string, start: string, end: string, interval: string, source: DataSource = 'yahoo', extendedHours: boolean = false, enabled: boolean = true) {
   const query = useQuery<OHLCVBar[]>({
@@ -105,7 +106,17 @@ export function useInstanceIndicators(
   ]
   const isLoading = allQueries.some(q => q.isLoading)
 
-  return { data: merged, refetch, isSuccess, fetchStatus, isLoading }
+  // Aggregate error state across all underlying queries.
+  // Pane-level error (any query fails) matches the pane-level loading flag pattern.
+  // Per-instance granularity deferred to A14d (known limitation).
+  const isError = allQueries.some(q => q.isError)
+  const errorMessage: string | null = (() => {
+    const firstErrorQuery = allQueries.find(q => q.isError)
+    if (!firstErrorQuery) return null
+    return apiErrorDetail(firstErrorQuery.error, 'Failed to load indicator')
+  })()
+
+  return { data: merged, refetch, isSuccess, fetchStatus, isLoading, isError, errorMessage }
 }
 
 export function useProviders() {

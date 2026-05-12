@@ -3,9 +3,31 @@ import pandas as pd
 from typing import Literal, Optional
 from pydantic import BaseModel
 
+# F106: allowlisted indicator and condition values — free-form strings no longer
+# reach eval_rule's dispatch; Pydantic raises 422 at validation time instead.
+# Legacy MA shorthand values ("ema20", "ema50", "ema200", "ma8", "ma21") are
+# included so stored bots.json rules survive Pydantic load; migrate_rule()
+# converts them to canonical "ma" before they reach eval_rule dispatch.
+RuleIndicator = Literal[
+    "rsi", "macd", "ma", "bb", "atr", "atr_pct",
+    "volume", "stochastic", "adx", "price",
+    # Legacy migration values — accepted at validation, converted by migrate_rule()
+    "ema20", "ema50", "ema200", "ma8", "ma21",
+]
+RuleCondition = Literal[
+    "above", "below",
+    "crossover_up", "crossover_down",
+    "crosses_above", "crosses_below",
+    "rising", "falling",
+    "rising_over", "falling_over",
+    "turns_up", "turns_down",
+    "turns_up_below", "turns_down_above",
+    "decelerating", "accelerating",
+]
+
 class Rule(BaseModel):
-    indicator: str       # "macd", "rsi", "price", "ema"
-    condition: str       # "crossover_up", "crossover_down", "above", "below", "crosses_above", "crosses_below", "turns_up_below", "turns_down_above"
+    indicator: RuleIndicator  # F106: allowlisted — 422 on unknown value
+    condition: RuleCondition  # F106: allowlisted — 422 on unknown value
     value: Optional[float] = None   # threshold (e.g. RSI < 30)
     param: Optional[str] = None     # e.g. "signal", "ema20"
     threshold: Optional[float] = None  # min move % for turns_up/turns_down
@@ -400,6 +422,8 @@ def resolve_ref(rule: Rule, indicators: dict[str, pd.Series]) -> pd.Series | Non
 
 def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
     """Evaluate a single rule at bar index i."""
+    if rule.indicator in _MA_MIGRATION or (rule.param and rule.param in _PARAM_MIGRATION):
+        rule = migrate_rule(rule)
     if i < 1:
         return False
     cond = rule.condition.lower()

@@ -300,7 +300,7 @@ def _compute_regime_series(req: StrategyRequest, ltf_df: pd.DataFrame) -> "pd.Se
     return aligned.fillna(0).astype(bool)
 
 
-@router.post("/api/backtest")
+@router.post("/api/backtest", responses={400: {"description": "Invalid source"}})
 def backtest_endpoint(req: StrategyRequest):
     # FastAPI route wrapper. Keep the public HTTP signature one-arg so Pydantic
     # doesn't wrap the body into {"req": ..., "indicator_cache": ...}. Internal

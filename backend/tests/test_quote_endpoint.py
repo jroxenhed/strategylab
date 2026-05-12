@@ -140,19 +140,20 @@ def test_invalid_source_rejected_on_batch_quotes():
 
 
 def test_log_injection_ticker_rejected_on_single_quote():
-    """F38: characters outside the [A-Z0-9.-] allowlist on path-param ticker → 400.
+    """F38/F98: characters outside the [A-Z0-9.-] allowlist on path-param ticker → 422.
 
-    Pre-F38 the route only enforced `len <= 20`; a ticker like `AAPL;evil` would
-    propagate through `f"No data for {ticker}"` HTTPException details and any
-    log sink that consumed them. The regex closes that path before _fetch().
+    F98 promotes from 400 to 422 (consistent with Pydantic envelope) and switches
+    to a structured detail object — no raw input echo, machine-readable error key.
 
     Note: Starlette URL-decodes `%3B` to `;` *before* the route handler runs,
-    so the validator (not routing) is what produces the 400. The 400 is the
+    so the validator (not routing) is what produces the 422. The 422 is the
     intended outcome, but the path is "decoded → regex rejects" not "404 routing".
     """
     resp = TestClient(app).get("/api/quote/AAPL%3Bevil")  # %3B = ';'
-    assert resp.status_code == 400
-    assert resp.json()["detail"] == "Invalid ticker symbol"
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail["error"] == "invalid_symbol"
+    assert "^[A-Z0-9]" in detail["reason"]
 
 
 def test_log_injection_ticker_rejected_on_batch_quotes(monkeypatch):
@@ -163,3 +164,27 @@ def test_log_injection_ticker_rejected_on_batch_quotes(monkeypatch):
     monkeypatch.setattr(quote_mod, "_fetch", boom_if_called)
     body = TestClient(app).post("/api/quotes", json=["AAPL\nevil"]).json()
     assert body[0]["error"] == "invalid symbol"
+
+
+# ---------------------------------------------------------------------------
+# F98: structured invalid-symbol detail on GET /api/quote/{ticker}
+# ---------------------------------------------------------------------------
+
+def test_invalid_ticker_single_quote_structured_detail():
+    """F98: GET /api/quote/{ticker} with bad chars returns 422 with structured detail."""
+    resp = TestClient(app).get("/api/quote/BAD%21SYM")  # %21 = '!'
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert isinstance(detail, dict)
+    assert detail["error"] == "invalid_symbol"
+    assert "^[A-Z0-9]" in detail["reason"]
+
+
+def test_invalid_ticker_single_quote_no_input_echo():
+    """F98: the structured 422 response must not echo the raw malicious input."""
+    resp = TestClient(app).get("/api/quote/AAPL%3Bevil")  # ';' via %3B
+    assert resp.status_code == 422
+    body_text = resp.text
+    # Raw input (';evil') must not appear anywhere in the response
+    assert "evil" not in body_text
+    assert ";" not in body_text

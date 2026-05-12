@@ -10,6 +10,12 @@ from __future__ import annotations
 import asyncio
 import sys
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Optional
+
+import pandas as pd
+
+if TYPE_CHECKING:
+    from bot_manager import BotConfig, BotState
 
 from slippage import slippage_cost_bps, fill_bias_bps
 from post_loss import is_post_loss_trigger
@@ -21,7 +27,7 @@ def _br():
     return sys.modules["bot_runner"]
 
 
-def _compute_borrow_cost(pos_is_short: bool, entry_price, entry_time, borrow_rate_annual: float, broker_qty: float) -> float:
+def _compute_borrow_cost(pos_is_short: bool, entry_price: Optional[float], entry_time: Optional[str], borrow_rate_annual: float, broker_qty: float) -> float:
     """Compute short borrow cost: rate × notional × hold_days. Returns 0.0 when not applicable."""
     if not pos_is_short or not entry_price or not entry_time:
         return 0.0
@@ -37,8 +43,8 @@ def _compute_borrow_cost(pos_is_short: bool, entry_price, entry_time, borrow_rat
 
 class ExitsMixin:
 
-    async def _detect_external_close(self, cfg, state, has_position, pos_is_short,
-                                      broker_qty, price, df, i, in_hours, indicators):
+    async def _detect_external_close(self, cfg: BotConfig, state: BotState, has_position: bool, pos_is_short: bool,
+                                      broker_qty: float, price: float, df: pd.DataFrame, i: int, in_hours: bool, indicators: dict) -> bool:
         """Detect externally-closed position (e.g. broker SL fill).
 
         Called when not has_position but state.entry_price is not None.
@@ -165,8 +171,8 @@ class ExitsMixin:
         self.manager.save()
         return False
 
-    async def _evaluate_exit_reason(self, cfg, state, price, df, i, pos_is_short,
-                                     indicators, sell_rules, is_regime):
+    async def _evaluate_exit_reason(self, cfg: BotConfig, state: BotState, price: float, df: pd.DataFrame, i: int, pos_is_short: bool,
+                                     indicators: dict, sell_rules: list, is_regime: bool) -> Optional[str]:
         """Update trailing stop state and evaluate exit reason.
 
         Increments entry_bar_count, updates trail_peak/trail_stop_price,
@@ -271,8 +277,8 @@ class ExitsMixin:
 
         return exit_reason
 
-    async def _execute_exit(self, cfg, state, exit_reason, price, broker_qty,
-                             pos_is_short, df, i, in_hours, indicators):
+    async def _execute_exit(self, cfg: BotConfig, state: BotState, exit_reason: str, price: float, broker_qty: float,
+                             pos_is_short: bool, df: pd.DataFrame, i: int, in_hours: bool, indicators: dict) -> bool:
         """Execute exit order, verify close, journal, and clear position state.
 
         Returns True if exit was executed (including early-return paths).

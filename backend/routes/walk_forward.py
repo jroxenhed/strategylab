@@ -120,6 +120,40 @@ class WalkForwardRequest(BaseModel):
     # route boundary (locked decision 14).
 
 
+class BacktestSummary(BaseModel):
+    """Typed mirror of run_backtest()["summary"]. Fields from WFA-relevant subset;
+    extra keys from edge_stats / spy_corr are preserved via model_config extra='allow'.
+
+    All numeric fields default to 0.0 / None so that no_is_trades and no_oos_trades
+    stub dicts (e.g. {"num_trades": 0}) validate without error.
+    """
+
+    model_config = {"extra": "allow"}
+
+    num_trades: int = 0
+    sharpe_ratio: Optional[float] = None    # None when num_trades == 0
+    total_return_pct: float = 0.0
+    win_rate_pct: float = 0.0
+    max_drawdown_pct: float = 0.0
+    final_value: float = 0.0
+    initial_capital: Optional[float] = None
+    buy_hold_return_pct: Optional[float] = None
+    # edge_stats fields (optional — absent in no_is_trades / no_oos_trades stubs)
+    gross_profit: Optional[float] = None
+    gross_loss: Optional[float] = None
+    ev_per_trade: Optional[float] = None
+    profit_factor: Optional[float] = None
+    # spy correlation fields
+    beta: Optional[float] = None
+    r_squared: Optional[float] = None
+
+
+class WfaEquityPoint(BaseModel):
+    """One point in the stitched OOS equity curve."""
+    time: str | int
+    value: float
+
+
 class WindowResult(BaseModel):
     window_index: int
     is_start: str
@@ -128,8 +162,8 @@ class WindowResult(BaseModel):
     oos_end: str
     best_params: dict[str, float]
     is_sharpe: float
-    is_metrics: dict               # full summary dict from run_backtest()["summary"]
-    oos_metrics: dict
+    is_metrics: BacktestSummary        # full summary dict from run_backtest()["summary"]
+    oos_metrics: BacktestSummary
     stability_tag: StabilityTag
     is_combo_count: int            # how many IS combos were evaluated (0 when no_is_trades)
     scale_factor: float            # rescaling multiplier applied to this window's OOS curve (1.0 for no_is_trades)
@@ -139,7 +173,7 @@ class WindowResult(BaseModel):
 
 class WalkForwardResponse(BaseModel):
     windows: list[WindowResult]
-    stitched_equity: list[dict]       # [{"time": str|int, "value": float}]
+    stitched_equity: list[WfaEquityPoint]  # typed equity points
     wfe: Optional[float]              # None when no OOS trades at all
     param_cv: dict[str, float]        # {param_path: CV} — std/mean of best_params per window
     total_combos: int                 # sum of IS combos across all windows
@@ -189,7 +223,7 @@ def _deduplicate_by_time(points: list[dict]) -> list[dict]:
     Keep the last occurrence for each time value (later window takes precedence at seam).
     Preserves order.
     """
-    seen = {}
+    seen: dict = {}
     for pt in points:
         seen[pt["time"]] = pt
     # Reconstruct in original order (dict preserves insertion order; last write wins)
@@ -360,6 +394,15 @@ def _assemble_walk_forward_response(
             continue
 
         if out.skipped_for_no_is_trades:
+            def _make_empty_summary() -> BacktestSummary:
+                return BacktestSummary(
+                    num_trades=0,
+                    sharpe_ratio=None,
+                    total_return_pct=0.0,
+                    win_rate_pct=0.0,
+                    max_drawdown_pct=0.0,
+                    final_value=0.0,
+                )
             results.append(WindowResult(
                 window_index=w_idx,
                 is_start=out.is_start_date,
@@ -368,8 +411,8 @@ def _assemble_walk_forward_response(
                 oos_end=out.oos_end_date,
                 best_params={},
                 is_sharpe=0.0,
-                is_metrics={},
-                oos_metrics={"num_trades": 0},
+                is_metrics=_make_empty_summary(),
+                oos_metrics=_make_empty_summary(),
                 stability_tag="no_is_trades",
                 is_combo_count=0,
                 scale_factor=1.0,
@@ -399,8 +442,8 @@ def _assemble_walk_forward_response(
             oos_end=out.oos_end_date,
             best_params=out.best_combo,
             is_sharpe=round(out.is_summary.get("sharpe_ratio", 0.0), 3),
-            is_metrics=out.is_summary,
-            oos_metrics=out.oos_summary,
+            is_metrics=BacktestSummary(**out.is_summary),
+            oos_metrics=BacktestSummary(**out.oos_summary),
             stability_tag=out.stability_tag,
             is_combo_count=out.is_combo_count,
             scale_factor=scale_factor,
@@ -409,14 +452,15 @@ def _assemble_walk_forward_response(
     # ------------------------------------------------------------------
     # AGGREGATE
     # ------------------------------------------------------------------
-    stitched = [pt for curve in window_stitched for pt in curve]
-    stitched = _deduplicate_by_time(stitched)
+    stitched_dicts = [pt for curve in window_stitched for pt in curve]
+    stitched_dicts = _deduplicate_by_time(stitched_dicts)
+    stitched = [WfaEquityPoint(time=pt["time"], value=pt["value"]) for pt in stitched_dicts]
 
     contributing = [
         w for w in results
-        if w.stability_tag != "no_is_trades" and w.oos_metrics.get("num_trades", 0) > 0
+        if w.stability_tag != "no_is_trades" and w.oos_metrics.num_trades > 0
     ]
-    oos_sharpes = [w.oos_metrics.get("sharpe_ratio", 0.0) for w in contributing]
+    oos_sharpes = [w.oos_metrics.sharpe_ratio or 0.0 for w in contributing]
     is_sharpes = [w.is_sharpe for w in contributing]
     if oos_sharpes and is_sharpes and mean(is_sharpes) != 0:
         wfe: Optional[float] = round(mean(oos_sharpes) / mean(is_sharpes), 3)

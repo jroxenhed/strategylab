@@ -13,6 +13,12 @@ logger = logging.getLogger(__name__)
 # null bytes / control chars an attacker embedded in the request payload.
 _DISPLAY_CLEAN = re.compile(r"[^A-Z0-9.\-]")
 
+# F98: machine-readable structured detail for all invalid-symbol rejections.
+_INVALID_SYMBOL_DETAIL = {
+    "error": "invalid_symbol",
+    "reason": "must match ^[A-Z0-9][A-Z0-9.-]{0,19}$",
+}
+
 
 class QuoteResult(BaseModel):
     symbol: str
@@ -24,26 +30,12 @@ class QuoteResult(BaseModel):
 router = APIRouter()
 
 
-@router.get("/api/quote/{ticker}")
-def get_quote(ticker: str, source: str = "yahoo"):
-    """Return latest price + daily change % for a single ticker."""
+def _fetch_quote(ticker: str, source: str) -> dict:
+    """F96: core fetch logic — no HTTP-boundary validation. Caller must have already
+    called require_valid_source(source) and normalize_symbol(ticker)."""
     from datetime import date, timedelta
 
-    try:
-        ticker = normalize_symbol(ticker)
-    except ValueError:
-        # `from None` suppresses Python's implicit __context__ chaining so the
-        # original ValueError doesn't ride into structured log sinks.
-        raise HTTPException(status_code=400, detail="Invalid ticker symbol") from None
-
-    # F37/F94: shared allowlist + case-normalize at the route boundary so
-    # unknown providers can't be silently swallowed by callers that catch
-    # broad Exception (e.g. get_quotes), which would leak provider state via
-    # timing/error differentials.
-    source = require_valid_source(source)
-
     today = date.today().isoformat()
-    # Fetch last 5 trading days of daily data — enough to get prev close
     start = (date.today() - timedelta(days=10)).isoformat()
     try:
         df = _fetch(ticker, start, today, "1d", source=source)
@@ -63,17 +55,31 @@ def get_quote(ticker: str, source: str = "yahoo"):
     except HTTPException:
         raise
     except Exception:
-        logger.exception("get_quote failed for %s [%s]", ticker, source)
+        logger.exception("_fetch_quote failed for %s [%s]", ticker, source)
         raise HTTPException(status_code=500, detail="quote fetch failed")
 
 
-@router.post("/api/quotes", response_model=list[QuoteResult])
+@router.get("/api/quote/{ticker}", responses={400: {"description": "Invalid source"}, 422: {"description": "Invalid ticker symbol"}})
+def get_quote(ticker: str, source: str = "yahoo"):
+    """Return latest price + daily change % for a single ticker."""
+    try:
+        ticker = normalize_symbol(ticker)
+    except ValueError:
+        # F98: structured 422 — no raw input echo, machine-readable error key.
+        raise HTTPException(status_code=422, detail=_INVALID_SYMBOL_DETAIL) from None
+
+    # F37/F94: shared allowlist + case-normalize at the route boundary.
+    source = require_valid_source(source)
+
+    return _fetch_quote(ticker, source)
+
+
+@router.post("/api/quotes", response_model=list[QuoteResult], responses={400: {"description": "Invalid source"}})
 def get_quotes(symbols: list[str], source: str = "yahoo") -> list[QuoteResult]:
     """Batch quote endpoint — returns quotes for multiple symbols."""
     # F37/F94: same boundary validation as the single-ticker route. Reject up
     # front so the per-symbol HTTPException catch can't quietly turn an unknown
-    # source into 20 "no data" rows (provider enumeration vector). get_quote()
-    # below also validates source — defense-in-depth for any future direct caller.
+    # source into 20 "no data" rows (provider enumeration vector).
     source = require_valid_source(source)
     results = []
     for sym in symbols[:20]:  # cap at 20 to prevent abuse
@@ -91,7 +97,7 @@ def get_quotes(symbols: list[str], source: str = "yahoo") -> list[QuoteResult]:
             results.append({"symbol": display, "price": None, "change_pct": None, "error": "invalid symbol"})
             continue
         try:
-            q = get_quote(normalized, source)
+            q = _fetch_quote(normalized, source)
             results.append(q)
         except HTTPException as e:
             if e.status_code == 404:

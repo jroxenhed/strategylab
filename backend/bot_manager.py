@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from fileutil import atomic_write_text
 from slippage import slippage_cost_bps, fill_bias_bps
 
-from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest, RegimeConfig, LogicField, DirectionField, BoundedRuleList, OptionalBoundedRuleList, SymbolField, normalize_symbol, Interval
+from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest, RegimeConfig, LogicField, DirectionField, BoundedRuleList, OptionalBoundedRuleList, SymbolField, normalize_symbol, Interval, IntervalField
 from routes.backtest import run_backtest
 from signal_engine import migrate_rule, Rule
 from shared import _fetch
@@ -45,7 +45,7 @@ class BotConfig(BaseModel):
     bot_id: str = ""
     strategy_name: str
     symbol: SymbolField
-    interval: Interval
+    interval: IntervalField
     # F128: bound O(n_rules × n_bars) per tick — same cap as backtest (F102).
     buy_rules: BoundedRuleList
     sell_rules: BoundedRuleList
@@ -607,11 +607,10 @@ class BotManager:
                     for key in ("buy_rules", "sell_rules"):
                         if key in cfg_dict and cfg_dict[key]:
                             cfg_dict[key] = [migrate_rule(Rule(**r)).model_dump() for r in cfg_dict[key]]
-                except ValueError as e:
+                except (ValueError, ValidationError) as e:
                     logger.warning(
-                        "skipped bot %r: invalid symbol %r (%s)",
+                        "skipped bot %r: invalid config (%s)",
                         bot_id,
-                        raw_symbol,
                         e,
                     )
                     continue

@@ -113,8 +113,6 @@ export default function SensitivityPanel({ lastRequest, sweepInit, onSweepConsum
     const rawValues = linspace(minN, maxN, stepsN)
     const values = selected.isInteger ? rawValues.map(v => Math.round(v)) : rawValues
 
-    // Abort any in-flight request before starting a new one.
-    abortControllerRef.current?.abort()
     const controller = new AbortController()
     abortControllerRef.current = controller
 
