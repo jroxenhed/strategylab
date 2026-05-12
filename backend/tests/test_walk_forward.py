@@ -400,17 +400,30 @@ class TestValidation:
             f"Expected provider-limit hint in error, got: {detail!r}"
         )
 
-    def test_max_combos_cap_per_window(self):
-        """3 params × 7 values = 343 combos > 200 → 400 before any backtest runs."""
-        payload = _wf_payload()
-        payload["params"] = [
-            {"path": "stop_loss_pct", "values": [float(i) for i in range(1, 8)]},
-            {"path": "slippage_bps", "values": [float(i) for i in range(1, 8)]},
-            {"path": "buy_rule_0_value", "values": [float(i) for i in range(1, 8)]},
-        ]
-        resp = client.post("/api/backtest/walk_forward", json=payload)
-        assert resp.status_code == 400
-        assert "200" in resp.json()["detail"] or "combination" in resp.json()["detail"].lower()
+    def test_large_grid_accepted_under_new_cap(self):
+        """After raising _MAX_COMBOS_PER_WINDOW from 200 → 1000 (backend ~10× faster
+        after F162/F166), a 343-combo grid that previously 400'd is now accepted by
+        validation and only blocked by the _MAX_VALUES_PER_PARAM=10 Pydantic ceiling.
+        Confirms the cap is no longer the active constraint at typical grid sizes."""
+        import routes.walk_forward as wf_mod
+        import routes.grid_runner as grid_runner_mod
+        mock_df = _make_mock_df(n=400, start="2019-01-01")
+        monkeypatch_fixture = pytest.MonkeyPatch()
+        try:
+            monkeypatch_fixture.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
+            monkeypatch_fixture.setattr(grid_runner_mod, "run_backtest", lambda req, **kwargs: _minimal_backtest_result())
+            monkeypatch_fixture.setattr(wf_mod, "run_backtest", lambda req, **kwargs: _minimal_backtest_result())
+            payload = _wf_payload()
+            payload["params"] = [
+                {"path": "stop_loss_pct", "values": [float(i) for i in range(1, 8)]},
+                {"path": "slippage_bps", "values": [float(i) for i in range(1, 8)]},
+                {"path": "buy_rule_0_value", "values": [float(i) for i in range(1, 8)]},
+            ]
+            resp = client.post("/api/backtest/walk_forward", json=payload)
+            # 7 × 7 × 7 = 343 combos — under the new 1000 cap, should NOT 400.
+            assert resp.status_code == 200, resp.text
+        finally:
+            monkeypatch_fixture.undo()
 
     def test_invalid_metric_rejected(self):
         """Unknown metric → 400."""
@@ -1186,3 +1199,113 @@ class TestPureHelpers:
         # Find the 2020-01-02 entry — must be 999.0
         mid = next(p for p in result if p["time"] == "2020-01-02")
         assert mid["value"] == 999.0
+
+
+# ---------------------------------------------------------------------------
+# Streaming endpoint tests (F175)
+# ---------------------------------------------------------------------------
+
+class TestStreamEndpoint:
+    """Tests for POST /api/backtest/walk_forward/stream.
+
+    Covers SSE event ordering (started→progress→result), validation errors surfacing
+    as HTTP 4xx before the stream opens, and result parity with the sync endpoint.
+    """
+
+    def test_stream_endpoint_emits_progress_and_result(self, monkeypatch):
+        """Streaming endpoint: started → N progress events → result, in order."""
+        import json
+        import routes.walk_forward as wf_mod
+        import routes.grid_runner as grid_runner_mod
+
+        mock_df = _make_mock_df(n=400, start="2020-01-01")
+        monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
+        monkeypatch.setattr(grid_runner_mod, "run_backtest", lambda req, **kw: _minimal_backtest_result())
+        monkeypatch.setattr(wf_mod, "run_backtest", lambda req, **kw: _minimal_backtest_result())
+
+        with client.stream("POST", "/api/backtest/walk_forward/stream",
+                           json=_wf_payload(is_bars=100, oos_bars=100)) as resp:
+            assert resp.status_code == 200
+            events = []
+            for line in resp.iter_lines():
+                if line and line.startswith("data: "):
+                    events.append(json.loads(line[6:]))
+
+        types = [e["type"] for e in events]
+        assert types[0] == "started", f"First event must be 'started', got: {types[0]}"
+        assert types[-1] == "result", f"Last event must be 'result', got: {types[-1]}"
+
+        progress_events = [e for e in events if e["type"] == "progress"]
+        assert len(progress_events) >= 1, "Expected at least 1 progress event"
+
+        # progress count must be monotone non-decreasing
+        assert all(
+            progress_events[i]["completed"] <= progress_events[i + 1]["completed"]
+            for i in range(len(progress_events) - 1)
+        ), f"Progress events not monotone: {[e['completed'] for e in progress_events]}"
+
+        # final progress event reached total
+        last_progress = progress_events[-1]
+        assert last_progress["completed"] == last_progress["total"], (
+            f"Last progress event: completed={last_progress['completed']} "
+            f"!= total={last_progress['total']}"
+        )
+
+        # result event has the WFA response shape
+        result_event = events[-1]
+        assert "windows" in result_event, "result event missing 'windows'"
+        assert "stitched_equity" in result_event, "result event missing 'stitched_equity'"
+        assert "wfe" in result_event, "result event missing 'wfe'"
+
+        # started event carries the correct total
+        started = events[0]
+        assert started["total"] == last_progress["total"], (
+            f"started.total={started['total']} != progress.total={last_progress['total']}"
+        )
+
+    def test_stream_endpoint_validation_error_returns_http_error(self, monkeypatch):
+        """Validation failures must surface as HTTP 4xx, not as a stream error event."""
+        import routes.walk_forward as wf_mod
+
+        monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: _make_mock_df(n=400))
+
+        # is_bars=0 → Pydantic 422 before any stream opens
+        payload = _wf_payload(is_bars=0)
+        resp = client.post("/api/backtest/walk_forward/stream", json=payload)
+        assert resp.status_code == 422
+
+    def test_stream_endpoint_result_matches_sync_endpoint(self, monkeypatch):
+        """The result event from the streaming endpoint must have the same
+        windows count and wfe as the sync endpoint on identical inputs."""
+        import json
+        import routes.walk_forward as wf_mod
+        import routes.grid_runner as grid_runner_mod
+
+        mock_df = _make_mock_df(n=400, start="2020-01-01")
+        monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
+        monkeypatch.setattr(grid_runner_mod, "run_backtest", lambda req, **kw: _minimal_backtest_result())
+        monkeypatch.setattr(wf_mod, "run_backtest", lambda req, **kw: _minimal_backtest_result())
+
+        payload = _wf_payload(is_bars=100, oos_bars=100)
+
+        # Run sync endpoint
+        sync_resp = client.post("/api/backtest/walk_forward", json=payload)
+        assert sync_resp.status_code == 200
+        sync_data = sync_resp.json()
+
+        # Run streaming endpoint and collect result event
+        stream_result = None
+        with client.stream("POST", "/api/backtest/walk_forward/stream", json=payload) as resp:
+            assert resp.status_code == 200
+            for line in resp.iter_lines():
+                if line and line.startswith("data: "):
+                    event = json.loads(line[6:])
+                    if event.get("type") == "result":
+                        stream_result = event
+                        break
+
+        assert stream_result is not None, "Streaming endpoint did not emit a result event"
+        assert len(stream_result["windows"]) == len(sync_data["windows"]), (
+            f"Window count mismatch: stream={len(stream_result['windows'])} "
+            f"sync={len(sync_data['windows'])}"
+        )

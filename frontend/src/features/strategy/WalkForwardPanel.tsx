@@ -2,9 +2,9 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import { createChart, LineSeries, ColorType } from 'lightweight-charts'
 import type { IChartApi, UTCTimestamp, LineData, Time } from 'lightweight-charts'
 import type { StrategyRequest } from '../../shared/types'
-import { api } from '../../api/client'
 import { useRequestTimer } from '../../shared/hooks/useRequestTimer'
 import { apiErrorDetail } from '../../shared/utils/errors'
+import { api } from '../../api/client'
 import { buildParamOptions, linspace } from './paramOptions'
 import type { ParamOption } from './paramOptions'
 
@@ -40,6 +40,16 @@ interface WalkForwardResponse {
   low_windows_warn: boolean
   timed_out: boolean
 }
+
+// ---------------------------------------------------------------------------
+// SSE discriminated union (KT-1)
+// ---------------------------------------------------------------------------
+
+type SseEvent =
+  | { type: 'started'; total: number }
+  | { type: 'progress'; completed: number; total: number }
+  | ({ type: 'result' } & WalkForwardResponse)
+  | { type: 'error'; detail: string; status: number }
 
 // ---------------------------------------------------------------------------
 // Local types
@@ -100,7 +110,15 @@ const YAHOO_INTRADAY_MAX_DAYS: Record<string, number> = {
   '60m': 730, '90m': 60, '1h': 730,
 }
 
-const _WFA_TIMEOUT_SECS = 120
+// Mirror of backend `routes/walk_forward.py:_WFA_TIMEOUT_SECS`. Raised from 120 → 600
+// after F162/F166/F175 (backend ~10× faster + live stream progress lets the user
+// see what's happening and abort if needed; the old 120s was a leftover safety net).
+const _WFA_TIMEOUT_SECS = 600
+
+// Mirror of backend `_MAX_COMBOS_PER_WINDOW`. Hard ceiling for the IS grid combo count.
+const _MAX_COMBOS_PER_WINDOW = 1000
+// Soft warning threshold — above this, show amber instead of neutral.
+const _COMBO_WARN_THRESHOLD = 500
 
 // ---------------------------------------------------------------------------
 // Fix 5: Stability tag short labels
@@ -236,6 +254,9 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
   const { elapsed: elapsedSec, final: finalSec } = useRequestTimer(loading)
   const [error, setError] = useState('')
   const [result, setResult] = useState<WalkForwardResponse | null>(null)
+  const [progress, setProgress] = useState<{ completed: number; total: number } | null>(null)
+  // KT-2: AbortController ref for cancelling the fetch on unmount or user cancel.
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   // Persist input config per (ticker, interval, source) so the user's WFA
   // setup sticks to a strategy across tab switches AND page reloads.
@@ -299,6 +320,13 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
       }))
     } catch { /* quota exceeded — silently drop */ }
   }, [storageKey, isBarStr, oosBarStr, gapBarStr, stepBarStr, expandTrain, metric, paramRows])
+
+  // KT-2: Abort in-flight stream on unmount.
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort()
+    }
+  }, [])
 
   const activeRows = paramRows.filter((p): p is ParamRow => p !== null && p.path !== NONE_PATH)
 
@@ -518,7 +546,7 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
       return
     }
     if (activeRows.length === 0 || loading) return
-    if (estimatedCombos > 200) return
+    if (estimatedCombos > _MAX_COMBOS_PER_WINDOW) return
 
     // Validate param ranges
     for (const p of activeRows) {
@@ -552,6 +580,11 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
     setLoading(true)
     setError('')
     setResult(null)
+    setProgress(null)
+
+    // KT-2: Fresh AbortController for this run. Aborted on Cancel or unmount.
+    const controller = new AbortController()
+    abortControllerRef.current = controller
 
     try {
       const requestParams = activeRows.map(p => {
@@ -567,7 +600,7 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
         return { path: p.path, values }
       })
 
-      const { data } = await api.post<WalkForwardResponse>('/api/backtest/walk_forward', {
+      const payload = {
         base: lastRequest,
         params: requestParams,
         is_bars: isN,
@@ -576,13 +609,114 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
         step_bars: stepN,
         expand_train: expandTrain,
         metric,
+      }
+
+      // Same baseURL as the axios client (default http://localhost:8000) — the
+      // SSE endpoint can't go through axios so we re-use the resolved base.
+      const apiBase = (api.defaults.baseURL ?? '').replace(/\/$/, '')
+      const resp = await fetch(`${apiBase}/api/backtest/walk_forward/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal,  // KT-2: wire abort signal
       })
-      setResult(data)
+
+      if (!resp.ok) {
+        const text = await resp.text()
+        let parsed: unknown = text
+        try { parsed = JSON.parse(text) } catch { /* keep raw text */ }
+        setError(apiErrorDetail({ response: { status: resp.status, data: parsed } }, `HTTP ${resp.status}: Walk-forward failed`))
+        return
+      }
+
+      if (!resp.body) {
+        setError('Streaming not supported by this browser')
+        return
+      }
+
+      const reader = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+
+      // KT-3: Release lock in finally so the body is always unlocked.
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += decoder.decode(value, { stream: true })
+          // C4/KT-4: Process ALL \n\n-separated events per chunk, not just the first.
+          let sepIdx: number
+          while ((sepIdx = buf.indexOf('\n\n')) !== -1) {
+            const raw = buf.slice(0, sepIdx)
+            buf = buf.slice(sepIdx + 2)
+            // Each event may have multiple `data:` lines; concatenate them.
+            const dataLines = raw.split('\n').filter(l => l.startsWith('data: ')).map(l => l.slice(6))
+            if (dataLines.length === 0) continue
+            // KT-3: Guard against malformed events from the server.
+            let evt: SseEvent
+            try {
+              evt = JSON.parse(dataLines.join('\n')) as SseEvent
+            } catch (parseErr) {
+              console.warn('[WFA] Malformed SSE event, skipping:', dataLines.join('\n'), parseErr)
+              continue
+            }
+            if (evt.type === 'started') {
+              setProgress({ completed: 0, total: evt.total })
+            } else if (evt.type === 'progress') {
+              setProgress({ completed: evt.completed, total: evt.total })
+            } else if (evt.type === 'result') {
+              // KT-5: Snap progress bar to 100% when result lands.
+              setProgress(prev => prev ? { completed: prev.total, total: prev.total } : prev)
+              // Strip the discriminator before storing.
+              const { type: _t, ...resultData } = evt
+              setResult(resultData as WalkForwardResponse)
+            } else if (evt.type === 'error') {
+              setError(evt.detail || 'Walk-forward failed')
+            }
+          }
+        }
+        // C4/KT-4: Flush any partial bytes held by the decoder, then process
+        // any remaining complete SSE event(s) in the buffer.
+        buf += decoder.decode()
+        let sepIdx: number
+        while ((sepIdx = buf.indexOf('\n\n')) !== -1) {
+          const raw = buf.slice(0, sepIdx)
+          buf = buf.slice(sepIdx + 2)
+          const dataLines = raw.split('\n').filter(l => l.startsWith('data: ')).map(l => l.slice(6))
+          if (dataLines.length === 0) continue
+          let evt: SseEvent
+          try {
+            evt = JSON.parse(dataLines.join('\n')) as SseEvent
+          } catch (parseErr) {
+            console.warn('[WFA] Malformed SSE event in flush, skipping:', dataLines.join('\n'), parseErr)
+            continue
+          }
+          if (evt.type === 'result') {
+            setProgress(prev => prev ? { completed: prev.total, total: prev.total } : prev)
+            const { type: _t, ...resultData } = evt
+            setResult(resultData as WalkForwardResponse)
+          } else if (evt.type === 'error') {
+            setError(evt.detail || 'Walk-forward failed')
+          }
+        }
+      } finally {
+        // KT-3: Always release the reader lock so the body can be GC'd.
+        reader.releaseLock()
+      }
     } catch (e) {
+      // Ignore abort errors from Cancel / unmount — not a user-visible failure.
+      if (e instanceof Error && e.name === 'AbortError') return
       setError(apiErrorDetail(e, 'Walk-forward failed'))
     } finally {
       setLoading(false)
+      abortControllerRef.current = null
     }
+  }
+
+  function cancelWalkForward() {
+    abortControllerRef.current?.abort()
+    setLoading(false)
+    setProgress(null)
   }
 
   const wfeBadgeColor = (wfe: number | null) => {
@@ -713,9 +847,13 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
           {loading ? (
             <>
               <span>
-                Elapsed: {elapsedSec}s / ~{preflightEstimate.timeStr} estimated · {preflightEstimate.nBacktests} backtests
+                Elapsed: {elapsedSec}s / ~{preflightEstimate.timeStr} estimated
+                {progress
+                  ? ` · ${progress.completed}/${progress.total} windows`
+                  : ` · ${preflightEstimate.nBacktests} backtests`}
               </span>
-              {/* Time-based progress bar (synthetic — no streaming from backend).
+              {/* Progress bar: real window-based when streaming data is available,
+                  synthetic clock-based during the brief window before first event.
                   Cap at 99% so the user knows the run isn't done until result lands. */}
               <div
                 style={{
@@ -728,7 +866,10 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
               >
                 <div
                   style={{
-                    width: `${Math.min(99, (elapsedSec / Math.max(1, preflightEstimate.estimatedSeconds)) * 100)}%`,
+                    width: `${progress
+                      ? Math.min(99, (progress.completed / Math.max(1, progress.total)) * 100)
+                      : Math.min(99, (elapsedSec / Math.max(1, preflightEstimate.estimatedSeconds)) * 100)
+                    }%`,
                     height: '100%',
                     background: '#58a6ff',
                     transition: 'width 250ms linear',
@@ -767,17 +908,34 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
       <div style={{ ...s.section, ...s.row, gap: 12 }}>
         <button
           onClick={runWalkForward}
-          disabled={loading || activeRows.length === 0 || estimatedCombos > 200}
+          disabled={loading || activeRows.length === 0 || estimatedCombos > _MAX_COMBOS_PER_WINDOW}
           style={{
             ...s.runBtn,
-            opacity: loading || activeRows.length === 0 || estimatedCombos > 200 ? 0.6 : 1,
+            opacity: loading || activeRows.length === 0 || estimatedCombos > _MAX_COMBOS_PER_WINDOW ? 0.6 : 1,
           }}
         >
           {loading ? `Running ${elapsedSec}s…` : 'Run Walk-Forward'}
         </button>
-        <span style={{ fontSize: 12, color: estimatedCombos > 200 ? '#ef5350' : '#8b949e' }}>
+        {/* KT-2: Cancel button — visible only while loading; aborts the stream. */}
+        {loading && (
+          <button onClick={cancelWalkForward} style={s.cancelBtn}>
+            Cancel
+          </button>
+        )}
+        <span style={{
+          fontSize: 12,
+          color: estimatedCombos > _MAX_COMBOS_PER_WINDOW
+            ? '#ef5350'
+            : estimatedCombos > _COMBO_WARN_THRESHOLD
+              ? '#f0883e'
+              : '#8b949e',
+        }}>
           {estimatedCombos} combination{estimatedCombos !== 1 ? 's' : ''} per IS window
-          {estimatedCombos > 200 ? ' — reduce steps or params (max 200)' : ''}
+          {estimatedCombos > _MAX_COMBOS_PER_WINDOW
+            ? ` — reduce steps or params (max ${_MAX_COMBOS_PER_WINDOW})`
+            : estimatedCombos > _COMBO_WARN_THRESHOLD
+              ? ' — large grid, check the time estimate'
+              : ''}
         </span>
       </div>
 
@@ -976,6 +1134,10 @@ const s: Record<string, React.CSSProperties> = {
   removeBtn: {
     fontSize: 11, padding: '2px 6px', borderRadius: 4, cursor: 'pointer',
     background: 'transparent', color: '#8b949e', border: 'none',
+  },
+  cancelBtn: {
+    fontSize: 12, padding: '5px 14px', borderRadius: 4, cursor: 'pointer',
+    background: 'transparent', color: '#8b949e', border: '1px solid #30363d',
   },
   table: {
     borderCollapse: 'collapse', fontSize: 11, width: '100%',

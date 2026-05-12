@@ -28,9 +28,11 @@ import logging
 import multiprocessing as mp
 import os
 import pickle
-from concurrent.futures import ProcessPoolExecutor, wait, ALL_COMPLETED
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeout
 from concurrent.futures.process import BrokenProcessPool
 from time import monotonic
+from collections.abc import Callable
 from typing import NamedTuple, Optional
 
 import numpy as np
@@ -256,6 +258,7 @@ def run_windows_parallel(
     timeout_secs: float,
     max_workers: Optional[int] = None,
     _run_backtest_fn=None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> tuple:
     """Dispatch one worker per window. Returns (results_by_idx, timed_out).
 
@@ -269,6 +272,9 @@ def run_windows_parallel(
     serial path (_FORCE_SERIAL=True or n < _MIN_WINDOWS_FOR_POOL). Parallel
     workers import routes.backtest.run_backtest directly and cannot be
     monkeypatched from the test process.
+
+    progress_callback: optional callable(completed, total) fired after each
+    window completes. Default None preserves current behavior with no overhead.
     """
     n = len(windows)
 
@@ -277,6 +283,7 @@ def run_windows_parallel(
             full_df, windows, base, params, interval, metric,
             min_trades_is, timeout_secs,
             _run_backtest_fn=_run_backtest_fn,
+            progress_callback=progress_callback,
         )
 
     # Budget already exhausted (caller's clock returned 9999 in tests, or
@@ -331,35 +338,35 @@ def run_windows_parallel(
                 f.cancel()
             return results, timed_out
 
-        done, not_done = wait(
-            list(future_to_idx.keys()),
-            timeout=max(0.0, remaining),
-            return_when=ALL_COMPLETED,
-        )
-
-        if not_done:
+        completed_count = 0
+        total_count = len(future_to_idx)
+        try:
+            for f in as_completed(list(future_to_idx.keys()), timeout=max(0.0, remaining)):
+                try:
+                    out = f.result()
+                    results[out.window_index] = out
+                except HTTPException as exc:
+                    if exc.status_code >= 500:
+                        raise  # 5xx must surface — system is broken
+                    w_idx = future_to_idx[f]
+                    logger.warning("WFA window %d worker 4xx: %s", w_idx, exc.detail)
+                except BrokenProcessPool as exc:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"WFA worker pool crashed: {exc}",
+                    )
+                except Exception as exc:
+                    w_idx = future_to_idx[f]
+                    logger.warning("WFA window %d worker raised: %s", w_idx, exc)
+                    # Drop the window; main process skips this index.
+                completed_count += 1
+                if progress_callback is not None:
+                    try:
+                        progress_callback(completed_count, total_count)
+                    except Exception as cb_exc:
+                        logger.warning("WFA progress_callback raised: %s", cb_exc)
+        except FuturesTimeout:
             timed_out = True
-            for f in not_done:
-                f.cancel()
-
-        for f in done:
-            try:
-                out = f.result()
-                results[out.window_index] = out
-            except HTTPException as exc:
-                if exc.status_code >= 500:
-                    raise  # 5xx must surface — system is broken
-                w_idx = future_to_idx[f]
-                logger.warning("WFA window %d worker 4xx: %s", w_idx, exc.detail)
-            except BrokenProcessPool as exc:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"WFA worker pool crashed: {exc}",
-                )
-            except Exception as exc:
-                w_idx = future_to_idx[f]
-                logger.warning("WFA window %d worker raised: %s", w_idx, exc)
-                # Drop the window; main process skips this index.
 
         return results, timed_out
     finally:
@@ -380,6 +387,7 @@ def _run_windows_serial(
     min_trades_is: int,
     timeout_secs: float,
     _run_backtest_fn=None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> tuple:
     """Serial path for n < _MIN_WINDOWS_FOR_POOL or _FORCE_SERIAL=True.
 
@@ -418,13 +426,23 @@ def _run_windows_serial(
 
     results: dict = {}
     timed_out = False
+    _total_windows = len(windows)
 
     # If the caller's budget is already exhausted (e.g. test mocks returning 9999),
     # immediately report timed_out without running any windows.
     if timeout_secs <= 0:
         return results, True
 
+    def _fire_progress(completed: int) -> None:
+        """Fire progress_callback safely, suppressing exceptions."""
+        if progress_callback is not None:
+            try:
+                progress_callback(completed, _total_windows)
+            except Exception as _cb_exc:
+                logger.warning("WFA progress_callback raised: %s", _cb_exc)
+
     start = monotonic()
+    _serial_completed = 0
 
     for w_idx, (is_s, is_e, oos_s, oos_e) in enumerate(windows):
         if monotonic() - start > timeout_secs:
@@ -478,6 +496,8 @@ def _run_windows_serial(
                     skipped_for_no_is_trades=False,
                     biased_partial=True,
                 )
+                _serial_completed += 1
+                _fire_progress(_serial_completed)
                 continue
 
         if len(is_combos) == 0:
@@ -498,6 +518,8 @@ def _run_windows_serial(
                 low_trades_is=False,
                 skipped_for_no_is_trades=True,
             )
+            _serial_completed += 1
+            _fire_progress(_serial_completed)
             continue
 
         # Pick IS winner
@@ -574,6 +596,8 @@ def _run_windows_serial(
             low_trades_is=low_trades_is,
             skipped_for_no_is_trades=False,
         )
+        _serial_completed += 1
+        _fire_progress(_serial_completed)
 
     return results, timed_out
 

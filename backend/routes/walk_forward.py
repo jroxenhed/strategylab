@@ -7,6 +7,9 @@ adjacent held-out OOS window and roll forward. Returns per-window IS vs OOS metr
 a rescaled OOS equity curve that is never in the optimizer's view, Walk-Forward Efficiency
 (WFE), and parameter stability CV across windows.
 
+POST /api/backtest/walk_forward/stream — SSE variant that streams per-window progress
+events while the WFA runs, then emits a final result event with the full response.
+
 WFE = mean(per-window OOS Sharpe) / mean(per-window IS-winner Sharpe). Mean-of-Sharpes form.
 
 Reuses _apply_param from backtest_sweep.py and constants from backtest_optimizer.py.
@@ -23,19 +26,24 @@ Anchored / expanding (expand_train=True):
   window grows monotonically with each step.
 """
 
+import asyncio
+import json
 import logging
 import math
+import threading
 from statistics import mean, stdev
 from time import monotonic
-from typing import Literal, Optional
+from typing import Literal, NamedTuple, Optional
 
 import numpy as np
+import pandas as pd
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from models import StrategyRequest
 from routes.backtest import run_backtest
-from routes.backtest_optimizer import _MAX_COMBOS, _MAX_PARAMS, _VALID_METRICS
+from routes.backtest_optimizer import _MAX_PARAMS, _VALID_METRICS
 from routes.backtest_sweep import _apply_param
 from routes.grid_runner import run_grid
 from routes.wfa_pool import run_windows_parallel
@@ -46,15 +54,34 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Module-level constants (per plan)
 # ---------------------------------------------------------------------------
-_WFA_TIMEOUT_SECS = 120
+_WFA_TIMEOUT_SECS = 600  # raised from 120s after F162/F166 backend speedup + F175 stream
+                          # progress (user can see runs in flight and abort if needed).
 _STABILITY_THRESHOLD = 0.60
 _MAX_VALUES_PER_PARAM = 10  # mirror backtest_optimizer.py
+# WFA per-IS-window combo cap. Distinct from the optimizer's _MAX_COMBOS=200 — WFA's
+# indicator cache + per-window parallelism amortize cost so larger grids are reasonable.
+# Hard ceiling protects against accidental abuse; the timeout above is the real safety net.
+_MAX_COMBOS_PER_WINDOW = 1000
 
 StabilityTag = Literal[
     "stable_plateau", "spike", "low_trades_is", "no_oos_trades", "no_is_trades"
 ]
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Named return type for _setup_walk_forward
+# ---------------------------------------------------------------------------
+
+class WalkForwardSetup(NamedTuple):
+    """Return value of _setup_walk_forward — prevents positional-index drift."""
+    wfa_start: float
+    full_df: "pd.DataFrame"
+    windows: list
+    base: "StrategyRequest"
+    total_combos_per_window: int
+    low_windows_warn: bool
 
 
 # ---------------------------------------------------------------------------
@@ -181,13 +208,18 @@ def _format_boundary(ts, interval: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Route
+# Shared setup helper
 # ---------------------------------------------------------------------------
 
-@router.post("/api/backtest/walk_forward")
-def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
-    # Capture start time at the very top so elapsed fetch + window-construction
-    # time is correctly subtracted from the WFA budget (Fix 5 / KP-04).
+def _setup_walk_forward(
+    req: WalkForwardRequest,
+) -> WalkForwardSetup:
+    """Validate, fetch, and compute windows. Returns a WalkForwardSetup NamedTuple:
+      (wfa_start, full_df, windows, base, total_combos_per_window, low_windows_warn)
+
+    Raises HTTPException on validation or data errors.
+    Called from both the sync and streaming endpoints before any parallel work.
+    """
     _wfa_start = monotonic()
 
     # ------------------------------------------------------------------
@@ -202,12 +234,9 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
             status_code=400,
             detail=f"metric must be one of: {sorted(_VALID_METRICS)}",
         )
-    # (param count, is_bars/oos_bars positivity, gap_bars non-negativity, values cap,
-    # NaN/Inf rejection are all enforced by Pydantic Field constraints above.)
 
     step = req.step_bars if req.step_bars > 0 else req.oos_bars
     if step < req.oos_bars:
-        # Overlapping OOS produces stitched-equity sawtooths and biased WFE; not supported in v1.
         raise HTTPException(
             status_code=400,
             detail=(
@@ -219,19 +248,17 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
     total_combos_per_window = 1
     for p in req.params:
         total_combos_per_window *= len(p.values)
-    if total_combos_per_window > _MAX_COMBOS:
+    if total_combos_per_window > _MAX_COMBOS_PER_WINDOW:
         raise HTTPException(
             status_code=400,
             detail=(
                 f"Too many combinations ({total_combos_per_window}). "
-                f"Max {_MAX_COMBOS}. Reduce values or param count."
+                f"Max {_MAX_COMBOS_PER_WINDOW} per IS window. Reduce values or param count."
             ),
         )
 
     # ------------------------------------------------------------------
     # FETCH BARS
-    # Strip regime unconditionally (locked decision 13). Deep copy so we
-    # don't mutate the caller's request object.
     # ------------------------------------------------------------------
     base = req.base.model_copy(deep=True, update={"regime": None})
     df = _fetch(base.ticker, base.start, base.end, base.interval, source=base.source)
@@ -257,13 +284,10 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
     oos_end_idx = req.is_bars + req.gap_bars + req.oos_bars - 1
     while oos_end_idx < total_bars:
         if req.expand_train:
-            # Anchored/expanding: IS is fixed at data start and grows each step.
-            # oos_start is derived from the cursor; IS fills everything before it.
             oos_start_idx = oos_end_idx - req.oos_bars + 1
             is_end_idx = oos_start_idx - 1 - req.gap_bars
             is_start_idx = 0
         else:
-            # Rolling: fixed-width IS slides forward
             is_start_idx = oos_end_idx - req.oos_bars - req.gap_bars - req.is_bars + 1
             is_end_idx = is_start_idx + req.is_bars - 1
             oos_start_idx = is_end_idx + 1 + req.gap_bars
@@ -271,7 +295,6 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
         if oos_end_idx_actual >= total_bars:
             break
         if is_end_idx < is_start_idx or is_end_idx < 0:
-            # Degenerate anchored window before first IS bar reached — skip cursor forward
             oos_end_idx += step
             continue
         windows.append((is_start_idx, is_end_idx, oos_start_idx, oos_end_idx_actual))
@@ -286,59 +309,55 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
             ),
         )
 
-    low_windows_warn = len(windows) < 6  # inline literal per plan
+    low_windows_warn = len(windows) < 6
 
-    # ------------------------------------------------------------------
-    # WALK-FORWARD LOOP — parallel dispatch via wfa_pool
-    # ------------------------------------------------------------------
-    results: list[WindowResult] = []
-    window_stitched: list[list[dict]] = []  # per-window rescaled curves; flattened in AGGREGATE
-    prev_final_equity = base.initial_capital
-    total_oos_trades = 0
-    low_trades_is_count = 0
-    timed_out = False
-
-    # Subtract elapsed time (fetch + window construction) from the budget.
-    # _wfa_start was captured at the very top of the function so the budget
-    # is accurate. Tests that monkeypatch wf_mod.monotonic to return 9999
-    # on the second call yield a large-negative remaining_budget, which
-    # _run_windows_serial treats as already-expired → timed_out=True.
-    remaining_budget = max(0.0, _WFA_TIMEOUT_SECS - (monotonic() - _wfa_start))
-
-    # Dispatch all windows in parallel (or serial if n < threshold / test seam).
-    # Workers produce WindowOutput per window; we post-process in index order
-    # because scale_factor depends on prev_final_equity (sequential dependency).
-    window_outputs, timed_out_parallel = run_windows_parallel(
+    return WalkForwardSetup(
+        wfa_start=_wfa_start,
         full_df=df,
         windows=windows,
         base=base,
-        params=req.params,
-        interval=base.interval,
-        metric=req.metric,
-        min_trades_is=req.min_trades_is,
-        timeout_secs=remaining_budget,
-        # Pass this module's run_backtest reference so monkeypatches on
-        # routes.walk_forward.run_backtest are honoured in the serial path
-        # (tests that set wf_mod.run_backtest).
-        _run_backtest_fn=run_backtest,
+        total_combos_per_window=total_combos_per_window,
+        low_windows_warn=low_windows_warn,
     )
-    timed_out = timed_out or timed_out_parallel
+
+
+# ---------------------------------------------------------------------------
+# Shared response assembly helper
+# ---------------------------------------------------------------------------
+
+def _assemble_walk_forward_response(
+    *,
+    window_outputs: dict,
+    windows: list,
+    base: StrategyRequest,
+    req: WalkForwardRequest,
+    full_df: pd.DataFrame,
+    timed_out_parallel: bool,
+    low_windows_warn: bool,
+    total_combos_per_window: int,
+) -> WalkForwardResponse:
+    """Post-process raw WindowOutput dict into the final WalkForwardResponse.
+
+    Called by both the sync and streaming endpoints after parallel/serial
+    dispatch completes. Behavior is identical for both callers.
+    """
+    results: list[WindowResult] = []
+    window_stitched: list[list[dict]] = []
+    prev_final_equity = base.initial_capital
+    total_oos_trades = 0
+    low_trades_is_count = 0
+    timed_out = timed_out_parallel
 
     for w_idx, _ in enumerate(windows):
         if w_idx not in window_outputs:
-            # Window was dropped: timeout or worker error.
             continue
 
         out = window_outputs[w_idx]
 
-        # Biased-partial window: IS timed out mid-grid — winner from a
-        # deterministic prefix of combos, result is biased. Drop it and
-        # surface timed_out so callers know the run was cut short.
         if out.biased_partial:
             timed_out = True
             continue
 
-        # Degenerate window: IS grid produced zero successful backtests.
         if out.skipped_for_no_is_trades:
             results.append(WindowResult(
                 window_index=w_idx,
@@ -354,14 +373,12 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
                 is_combo_count=0,
                 scale_factor=1.0,
             ))
-            window_stitched.append([])  # no contribution to stitched equity
+            window_stitched.append([])
             continue
 
-        # Propagate low_trades_is count (IS-side flag from the worker).
         if out.low_trades_is:
             low_trades_is_count += 1
 
-        # Equity rescaling — sequential: depends on prev_final_equity.
         raw_curve = out.oos_equity_curve
         scale_factor = prev_final_equity / base.initial_capital
         rescaled_curve = [
@@ -394,8 +411,6 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
     stitched = [pt for curve in window_stitched for pt in curve]
     stitched = _deduplicate_by_time(stitched)
 
-    # WFE = mean(per-window OOS Sharpe) / mean(per-window IS-winner Sharpe).
-    # Excludes "no_is_trades" windows (IS Sharpe is 0 by construction, would dilute denominator).
     contributing = [
         w for w in results
         if w.stability_tag != "no_is_trades" and w.oos_metrics.get("num_trades", 0) > 0
@@ -407,8 +422,6 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
     else:
         wfe = None
 
-    # Param CV per dimension — exclude only no_is_trades windows (empty best_params).
-    # no_oos_trades and low_trades_is DO contribute: IS-winner params are real.
     contributing_for_cv = [w for w in results if w.stability_tag != "no_is_trades"]
     param_cv: dict[str, float] = {}
     for p in req.params:
@@ -428,4 +441,204 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
         low_trades_is_count=low_trades_is_count,
         low_windows_warn=low_windows_warn,
         timed_out=timed_out,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+@router.post("/api/backtest/walk_forward")
+def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
+    """Synchronous WFA endpoint. Unchanged from pre-F175 behavior."""
+    setup = _setup_walk_forward(req)
+
+    # Subtract elapsed time (fetch + window construction) from the budget.
+    # wfa_start was captured at the very top of _setup_walk_forward so the
+    # budget is accurate. Tests that monkeypatch wf_mod.monotonic to return 9999
+    # on the second call yield a large-negative remaining_budget, which
+    # _run_windows_serial treats as already-expired → timed_out=True.
+    remaining_budget = max(0.0, _WFA_TIMEOUT_SECS - (monotonic() - setup.wfa_start))
+
+    window_outputs, timed_out_parallel = run_windows_parallel(
+        full_df=setup.full_df,
+        windows=setup.windows,
+        base=setup.base,
+        params=req.params,
+        interval=setup.base.interval,
+        metric=req.metric,
+        min_trades_is=req.min_trades_is,
+        timeout_secs=remaining_budget,
+        # Pass this module's run_backtest reference so monkeypatches on
+        # routes.walk_forward.run_backtest are honoured in the serial path
+        # (tests that set wf_mod.run_backtest).
+        _run_backtest_fn=run_backtest,
+    )
+
+    return _assemble_walk_forward_response(
+        window_outputs=window_outputs,
+        windows=setup.windows,
+        base=setup.base,
+        req=req,
+        full_df=setup.full_df,
+        timed_out_parallel=timed_out_parallel,
+        low_windows_warn=setup.low_windows_warn,
+        total_combos_per_window=setup.total_combos_per_window,
+    )
+
+
+@router.post("/api/backtest/walk_forward/stream")
+async def run_walk_forward_stream(req: WalkForwardRequest) -> StreamingResponse:
+    """SSE variant of POST /api/backtest/walk_forward.
+
+    Streams `started` + per-window `progress` events while the WFA runs,
+    then a final `result` event carrying the full WalkForwardResponse body.
+
+    The synchronous setup phase (validation, _fetch, window construction)
+    runs in a thread via asyncio.to_thread so the event loop is never blocked
+    by the I/O-bound _fetch call. HTTPException raised during setup surfaces
+    as a proper HTTP 4xx/5xx before the StreamingResponse opens.
+    """
+    # Run synchronous setup off the event loop so _fetch I/O doesn't block
+    # the main thread. HTTPException propagates up here → FastAPI returns 4xx.
+    setup = await asyncio.to_thread(_setup_walk_forward, req)
+
+    async def event_stream():
+        # REL-001: cancel_event lets the async generator signal the worker thread
+        # that the client has disconnected. The thread checks it in the progress
+        # callback and stops enqueuing; the WFA work itself runs to completion
+        # (we can't forcibly kill the thread), but at least we stop feeding a dead queue.
+        cancel_event = threading.Event()
+        queue: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def make_progress_callback():
+            def cb(completed: int, total: int) -> None:
+                # Check cancel before enqueuing — client may have disconnected.
+                if cancel_event.is_set():
+                    return
+                # progress callback runs on a worker thread; asyncio.Queue methods
+                # are not thread-safe. call_soon_threadsafe is the supported
+                # asyncio bridge for scheduling queue.put_nowait from a non-async thread.
+                try:
+                    loop.call_soon_threadsafe(
+                        queue.put_nowait,
+                        # REL-003/KP-02: use json.dumps for all SSE payloads (no hand-rolled f-strings).
+                        "data: " + json.dumps(
+                            {"type": "progress", "completed": completed, "total": total},
+                            allow_nan=False,
+                        ) + "\n\n",
+                    )
+                except RuntimeError:
+                    # REL-002: loop may be closed if client disconnected mid-run.
+                    pass
+            return cb
+
+        def run_in_thread() -> None:
+            try:
+                remaining_budget = max(0.0, _WFA_TIMEOUT_SECS - (monotonic() - setup.wfa_start))
+                window_outputs, timed_out_parallel = run_windows_parallel(
+                    full_df=setup.full_df,
+                    windows=setup.windows,
+                    base=setup.base,
+                    params=req.params,
+                    interval=setup.base.interval,
+                    metric=req.metric,
+                    min_trades_is=req.min_trades_is,
+                    timeout_secs=remaining_budget,
+                    # Pass this module's run_backtest reference so monkeypatches on
+                    # routes.walk_forward.run_backtest are honoured in the serial path.
+                    _run_backtest_fn=run_backtest,
+                    progress_callback=make_progress_callback(),
+                )
+                response = _assemble_walk_forward_response(
+                    window_outputs=window_outputs,
+                    windows=setup.windows,
+                    base=setup.base,
+                    req=req,
+                    full_df=setup.full_df,
+                    timed_out_parallel=timed_out_parallel,
+                    low_windows_warn=setup.low_windows_warn,
+                    total_combos_per_window=setup.total_combos_per_window,
+                )
+                # REL-003/KP-02: json.dumps with allow_nan=False — WFA metrics
+                # can contain NaN (e.g. Sharpe on zero-variance returns). Catch
+                # serialisation failure and emit an error event instead of breaking
+                # the stream with invalid JSON.
+                try:
+                    payload = json.dumps(
+                        {"type": "result", **response.model_dump()},
+                        allow_nan=False,
+                    )
+                except (ValueError, OverflowError) as json_err:
+                    err_payload = json.dumps(
+                        {"type": "error", "detail": f"Result serialisation failed: {json_err}", "status": 500},
+                        allow_nan=False,
+                    )
+                    try:
+                        loop.call_soon_threadsafe(queue.put_nowait, f"data: {err_payload}\n\n")
+                    except RuntimeError:
+                        pass
+                    return
+                try:
+                    loop.call_soon_threadsafe(queue.put_nowait, f"data: {payload}\n\n")
+                except RuntimeError:
+                    # REL-002: loop closed (client disconnected).
+                    pass
+            except HTTPException as exc:
+                err_payload = json.dumps(
+                    {"type": "error", "detail": str(exc.detail), "status": exc.status_code},
+                    allow_nan=False,
+                )
+                try:
+                    loop.call_soon_threadsafe(queue.put_nowait, f"data: {err_payload}\n\n")
+                except RuntimeError:
+                    pass
+            except Exception as exc:
+                err_payload = json.dumps(
+                    {"type": "error", "detail": str(exc), "status": 500},
+                    allow_nan=False,
+                )
+                try:
+                    loop.call_soon_threadsafe(queue.put_nowait, f"data: {err_payload}\n\n")
+                except RuntimeError:
+                    pass
+            finally:
+                # REL-002: sentinel push — wrap in try/except in case the event
+                # loop is already closed (client disconnected / request cancelled).
+                try:
+                    loop.call_soon_threadsafe(queue.put_nowait, None)
+                except RuntimeError:
+                    pass  # loop closed — generator already exited via cancel_event
+
+        try:
+            # Emit the initial "started" event before kicking off work.
+            # REL-003/KP-02: use json.dumps for all SSE payloads.
+            yield "data: " + json.dumps(
+                {"type": "started", "total": len(setup.windows)},
+                allow_nan=False,
+            ) + "\n\n"
+
+            # Launch the work on a daemon thread and stream queue events until sentinel.
+            threading.Thread(target=run_in_thread, daemon=True).start()
+
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+                yield event
+        finally:
+            # REL-001: signal the worker thread that the client is gone.
+            # The progress callback checks cancel_event before enqueuing,
+            # avoiding put_nowait on a generator that's no longer consuming.
+            cancel_event.set()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # nginx: disable response buffering
+            "Connection": "keep-alive",
+        },
     )
