@@ -82,7 +82,10 @@ def test_happy_path_2_param_grid(monkeypatch):
         return _minimal_summary(sharpe_ratio=sharpe)
 
     import routes.backtest_optimizer as opt_mod
-    monkeypatch.setattr(opt_mod, "run_backtest", mock_run_backtest)
+
+
+    import routes.grid_runner as grid_runner_mod
+    monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
 
     payload = _optimize_payload(
         params=[
@@ -113,7 +116,10 @@ def test_happy_path_top_n_limits_results(monkeypatch):
         return _minimal_summary()
 
     import routes.backtest_optimizer as opt_mod
-    monkeypatch.setattr(opt_mod, "run_backtest", mock_run_backtest)
+
+
+    import routes.grid_runner as grid_runner_mod
+    monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
 
     payload = _optimize_payload(
         params=[{"path": "stop_loss_pct", "values": [1.0, 2.0, 3.0, 4.0, 5.0]}],
@@ -219,7 +225,10 @@ def test_4xx_skip_increments_skipped(monkeypatch):
         return _minimal_summary()
 
     import routes.backtest_optimizer as opt_mod
-    monkeypatch.setattr(opt_mod, "run_backtest", mock_run_backtest)
+
+
+    import routes.grid_runner as grid_runner_mod
+    monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
 
     payload = _optimize_payload(params=[
         {"path": "stop_loss_pct", "values": [1.0, 5.0, 10.0]},
@@ -242,7 +251,10 @@ def test_500_re_raises(monkeypatch):
         raise HTTPException(status_code=500, detail="data provider failure")
 
     import routes.backtest_optimizer as opt_mod
-    monkeypatch.setattr(opt_mod, "run_backtest", mock_run_backtest)
+
+
+    import routes.grid_runner as grid_runner_mod
+    monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
 
     payload = _optimize_payload(params=[
         {"path": "stop_loss_pct", "values": [5.0]},
@@ -267,7 +279,10 @@ def test_non_http_exception_counts_as_skipped(monkeypatch):
         return _minimal_summary()
 
     import routes.backtest_optimizer as opt_mod
-    monkeypatch.setattr(opt_mod, "run_backtest", mock_run_backtest)
+
+
+    import routes.grid_runner as grid_runner_mod
+    monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
 
     payload = _optimize_payload(params=[
         {"path": "stop_loss_pct", "values": [1.0, 2.0, 3.0]},
@@ -290,12 +305,14 @@ def test_timeout_sets_timed_out_flag(monkeypatch):
     """
     import routes.backtest_optimizer as opt_mod
 
+    import routes.grid_runner as grid_runner_mod
+
     monkeypatch.setattr(opt_mod, "_TIMEOUT_SECS", 0)
 
     def mock_run_backtest(req, **kwargs):
         return _minimal_summary()
 
-    monkeypatch.setattr(opt_mod, "run_backtest", mock_run_backtest)
+    monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
 
     payload = _optimize_payload(params=[
         {"path": "stop_loss_pct", "values": [1.0, 2.0, 3.0, 4.0, 5.0]},
@@ -325,7 +342,10 @@ def test_metric_sort_order(monkeypatch, metric, field, values):
         return _minimal_summary(**{field: v})
 
     import routes.backtest_optimizer as opt_mod
-    monkeypatch.setattr(opt_mod, "run_backtest", mock_run_backtest)
+
+
+    import routes.grid_runner as grid_runner_mod
+    monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
 
     payload = _optimize_payload(
         params=[{"path": "stop_loss_pct", "values": [1.0, 2.0, 3.0, 4.0]}],
@@ -353,7 +373,10 @@ def test_response_has_timed_out_field(monkeypatch):
         return _minimal_summary()
 
     import routes.backtest_optimizer as opt_mod
-    monkeypatch.setattr(opt_mod, "run_backtest", mock_run_backtest)
+
+
+    import routes.grid_runner as grid_runner_mod
+    monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
 
     payload = _optimize_payload()
     resp = client.post("/api/backtest/optimize", json=payload)

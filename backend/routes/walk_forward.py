@@ -25,7 +25,6 @@ Anchored / expanding (expand_train=True):
 
 import logging
 import math
-from itertools import product
 from statistics import mean, stdev
 from time import monotonic
 from typing import Literal, Optional
@@ -38,6 +37,7 @@ from models import StrategyRequest
 from routes.backtest import run_backtest
 from routes.backtest_optimizer import _MAX_COMBOS, _MAX_PARAMS, _VALID_METRICS
 from routes.backtest_sweep import _apply_param
+from routes.grid_runner import run_grid
 from shared import _INTERVAL_MAX_DAYS, _INTRADAY_INTERVALS, _fetch
 
 logger = logging.getLogger(__name__)
@@ -303,33 +303,24 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
         is_end_date = _format_boundary(df.index[is_e], base.interval)
         oos_start_date = _format_boundary(df.index[oos_s], base.interval)
         oos_end_date = _format_boundary(df.index[oos_e], base.interval)
-        indicator_cache: dict[tuple, object] = {}  # per-window: df slice changes, cache invalidated
-
-        # -- IS grid search --
-        is_combos: list[tuple[dict, dict]] = []  # (combo_dict, summary_dict)
-        for combo_values in product(*[p.values for p in req.params]):
-            if monotonic() - start_time > _WFA_TIMEOUT_SECS:
-                timed_out = True
-                break
-            combo = {p.path: v for p, v in zip(req.params, combo_values)}
-            is_req = base.model_copy(update={"start": is_start_date, "end": is_end_date})
-            for path, value in combo.items():
-                is_req = _apply_param(is_req, path, value)
-            try:
-                r = run_backtest(is_req, include_spy_correlation=False, indicator_cache=indicator_cache)
-                is_combos.append((combo, r["summary"]))
-            except HTTPException as exc:
-                if exc.status_code >= 500:
-                    raise
-                # 4xx = invalid param for this IS slice, skip this combo
-            except Exception as exc:
-                logger.warning(
-                    "WFA window %d IS combo %s skipped: %s", w_idx, combo, exc
-                )
-
-        if timed_out and len(is_combos) < total_combos_per_window:
-            # Partial IS grid → biased winner → drop the window entirely
+        # -- IS grid search (via shared run_grid; serial with cross-combo indicator cache) --
+        remaining_budget = _WFA_TIMEOUT_SECS - (monotonic() - start_time)
+        if remaining_budget <= 0:
+            timed_out = True
             break
+
+        is_req_template = base.model_copy(update={"start": is_start_date, "end": is_end_date})
+        is_combos, is_timed_out, _is_skipped = run_grid(
+            is_req_template,
+            req.params,
+            timeout_secs=remaining_budget,
+        )
+
+        if is_timed_out:
+            timed_out = True
+            if len(is_combos) < total_combos_per_window:
+                # Partial IS grid → biased winner → drop the window entirely
+                break
 
         if len(is_combos) == 0:
             # IS grid search produced zero successful backtests — append degenerate window row

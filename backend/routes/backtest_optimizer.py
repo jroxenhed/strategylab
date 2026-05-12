@@ -6,18 +6,17 @@ total backtests), return top-N results ranked by a chosen metric. Answers "what
 combination of RSI period, stop loss, and MA period maximizes Sharpe?"
 
 Reuses _apply_param() from backtest_sweep.py for parameter mutation logic.
+Grid execution runs through routes.grid_runner.run_grid, which amortizes
+indicator computation across combos via a shared indicator_cache.
 """
 
-import time
-from itertools import product
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from models import StrategyRequest
-from routes.backtest import run_backtest
-from routes.backtest_sweep import _apply_param
+from routes.grid_runner import run_grid
 
 _TIMEOUT_SECS = 60
 
@@ -85,41 +84,23 @@ def optimize_backtest(req: OptimizeRequest) -> OptimizeResponse:
             detail=f"Too many combinations ({total_combos}). Max {_MAX_COMBOS}. Reduce values or param count.",
         )
 
+    grid_results, timed_out, skipped = run_grid(
+        req.base,
+        req.params,
+        timeout_secs=_TIMEOUT_SECS,
+    )
+
     results: list[OptimizerCombo] = []
-    skipped = 0
-    start = time.monotonic()
-    indicator_cache: dict[tuple, object] = {}
-
-    for combo in product(*[p.values for p in req.params]):
-        param_values = {p.path: v for p, v in zip(req.params, combo)}
-        try:
-            modified = req.base
-            for path, value in param_values.items():
-                modified = _apply_param(modified, path, value)
-        except HTTPException:
-            raise  # invalid param_path — fail fast
-
-        try:
-            result = run_backtest(modified, include_spy_correlation=False, indicator_cache=indicator_cache)
-            s = result["summary"]
-            results.append(OptimizerCombo(
-                param_values=param_values,
-                num_trades=s.get("num_trades", 0),
-                total_return_pct=round(s.get("total_return_pct", 0.0), 2),
-                sharpe_ratio=round(s.get("sharpe_ratio", 0.0), 3),
-                win_rate_pct=s.get("win_rate_pct", 0.0),
-                max_drawdown_pct=round(s.get("max_drawdown_pct", 0.0), 2),
-                ev_per_trade=s.get("ev_per_trade"),
-            ))
-        except HTTPException as exc:
-            if exc.status_code >= 500:
-                raise  # data/server failure — surface to caller
-            skipped += 1  # 4xx = invalid param value for this combo
-        except Exception:
-            skipped += 1  # non-HTTP error (pandas ValueError etc) — isolate per-combo
-
-        if time.monotonic() - start > _TIMEOUT_SECS:
-            break
+    for combo, summary in grid_results:
+        results.append(OptimizerCombo(
+            param_values=combo,
+            num_trades=summary.get("num_trades", 0),
+            total_return_pct=round(summary.get("total_return_pct", 0.0), 2),
+            sharpe_ratio=round(summary.get("sharpe_ratio", 0.0), 3),
+            win_rate_pct=summary.get("win_rate_pct", 0.0),
+            max_drawdown_pct=round(summary.get("max_drawdown_pct", 0.0), 2),
+            ev_per_trade=summary.get("ev_per_trade"),
+        ))
 
     results.sort(key=lambda r: getattr(r, req.metric), reverse=True)
 
@@ -128,5 +109,5 @@ def optimize_backtest(req: OptimizeRequest) -> OptimizeResponse:
         total_combos=total_combos,
         completed=len(results),
         skipped=skipped,
-        timed_out=len(results) + skipped < total_combos,
+        timed_out=timed_out,
     )
