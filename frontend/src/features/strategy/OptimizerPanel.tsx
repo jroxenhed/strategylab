@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import type { StrategyRequest } from '../../shared/types'
 import { api } from '../../api/client'
-import { useElapsedSeconds } from '../../shared/hooks/useElapsedSeconds'
+import { useRequestTimer } from '../../shared/hooks/useRequestTimer'
 import { apiErrorDetail } from '../../shared/utils/errors'
 import { buildParamOptions, linspace } from './paramOptions'
 import type { ParamOption } from './paramOptions'
@@ -56,7 +56,7 @@ export default function OptimizerPanel({ lastRequest }: Props) {
   const [metric, setMetric] = useState('sharpe_ratio')
   const [topN, setTopN] = useState('10')
   const [loading, setLoading] = useState(false)
-  const elapsedSec = useElapsedSeconds(loading)
+  const { elapsed: elapsedSec, final: finalSec } = useRequestTimer(loading)
   const [error, setError] = useState('')
   const [result, setResult] = useState<OptimizeResponse | null>(null)
 
@@ -300,6 +300,11 @@ export default function OptimizerPanel({ lastRequest }: Props) {
           {estimatedCombos} combination{estimatedCombos !== 1 ? 's' : ''} estimated
           {estimatedCombos > 200 ? ' — reduce steps or params (max 200)' : ''}
         </span>
+        {finalSec !== null && !loading && (
+          <span style={{ fontSize: 12, color: '#3fb950' }}>
+            · Completed in {finalSec}s
+          </span>
+        )}
       </div>
 
       {/* ─── Error ──────────────────────────────────────────────────── */}

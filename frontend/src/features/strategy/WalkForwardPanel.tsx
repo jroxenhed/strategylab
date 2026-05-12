@@ -3,7 +3,7 @@ import { createChart, LineSeries, ColorType } from 'lightweight-charts'
 import type { IChartApi, UTCTimestamp, LineData, Time } from 'lightweight-charts'
 import type { StrategyRequest } from '../../shared/types'
 import { api } from '../../api/client'
-import { useElapsedSeconds } from '../../shared/hooks/useElapsedSeconds'
+import { useRequestTimer } from '../../shared/hooks/useRequestTimer'
 import { apiErrorDetail } from '../../shared/utils/errors'
 import { buildParamOptions, linspace } from './paramOptions'
 import type { ParamOption } from './paramOptions'
@@ -233,7 +233,7 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
   const [metric, setMetric] = useState('sharpe_ratio')
   const [paramRows, setParamRows] = useState<(ParamRow | null)[]>(() => [emptyRow(), null, null])
   const [loading, setLoading] = useState(false)
-  const elapsedSec = useElapsedSeconds(loading)
+  const { elapsed: elapsedSec, final: finalSec } = useRequestTimer(loading)
   const [error, setError] = useState('')
   const [result, setResult] = useState<WalkForwardResponse | null>(null)
 
@@ -401,6 +401,7 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
     return {
       nWindows,
       nBacktests,
+      estimatedSeconds: tSecs,
       timeStr,
       statusColor,
       statusSuffix,
@@ -697,12 +698,45 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
         )
       })}
 
-      {/* ─── Pre-flight estimate (or live elapsed while loading) ──── */}
+      {/* ─── Pre-flight estimate / live elapsed / final time ────────── */}
       {preflightEstimate && (
-        <div style={{ padding: '6px 0', fontSize: 12, color: loading ? '#58a6ff' : preflightEstimate.statusColor }}>
+        <div style={{ padding: '6px 0', fontSize: 12, color: loading ? '#58a6ff' : (finalSec !== null && !loading ? '#3fb950' : preflightEstimate.statusColor) }}>
           {loading ? (
+            <>
+              <span>
+                Elapsed: {elapsedSec}s / ~{preflightEstimate.timeStr} estimated · {preflightEstimate.nBacktests} backtests
+              </span>
+              {/* Time-based progress bar (synthetic — no streaming from backend).
+                  Cap at 99% so the user knows the run isn't done until result lands. */}
+              <div
+                style={{
+                  marginTop: 4,
+                  height: 4,
+                  background: '#1e2530',
+                  borderRadius: 2,
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    width: `${Math.min(99, (elapsedSec / Math.max(1, preflightEstimate.estimatedSeconds)) * 100)}%`,
+                    height: '100%',
+                    background: '#58a6ff',
+                    transition: 'width 250ms linear',
+                  }}
+                />
+              </div>
+            </>
+          ) : finalSec !== null ? (
             <span>
-              Elapsed: {elapsedSec}s / ~{preflightEstimate.timeStr} estimated · {preflightEstimate.nBacktests} backtests
+              Completed in {finalSec}s · {preflightEstimate.nBacktests} backtests
+              {preflightEstimate.estimatedSeconds > 0 && (
+                <span style={{ marginLeft: 8, color: '#8b949e' }}>
+                  ({finalSec < preflightEstimate.estimatedSeconds
+                    ? `${Math.round((1 - finalSec / preflightEstimate.estimatedSeconds) * 100)}% under estimate`
+                    : `${Math.round((finalSec / preflightEstimate.estimatedSeconds - 1) * 100)}% over estimate`})
+                </span>
+              )}
             </span>
           ) : (
             <>

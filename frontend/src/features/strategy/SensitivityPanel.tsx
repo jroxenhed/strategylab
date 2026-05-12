@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import type { StrategyRequest } from '../../shared/types'
 import { api } from '../../api/client'
-import { useElapsedSeconds } from '../../shared/hooks/useElapsedSeconds'
+import { useRequestTimer } from '../../shared/hooks/useRequestTimer'
 import { apiErrorDetail } from '../../shared/utils/errors'
 import { buildParamOptions, linspace } from './paramOptions'
 
@@ -47,7 +47,7 @@ export default function SensitivityPanel({ lastRequest, sweepInit, onSweepConsum
   const [maxVal, setMaxVal] = useState<string>('')
   const [steps, setSteps] = useState<string>('')
   const [loading, setLoading] = useState(false)
-  const elapsedSec = useElapsedSeconds(loading)
+  const { elapsed: elapsedSec, final: finalSec } = useRequestTimer(loading)
   const [error, setError] = useState('')
   const [warning, setWarning] = useState('')
   const [results, setResults] = useState<SweepPoint[] | null>(null)
@@ -210,6 +210,11 @@ export default function SensitivityPanel({ lastRequest, sweepInit, onSweepConsum
         >
           {loading ? `Running ${elapsedSec}s…` : 'Run Sweep'}
         </button>
+        {finalSec !== null && !loading && (
+          <span style={{ fontSize: 12, color: '#3fb950', alignSelf: 'center' }}>
+            Completed in {finalSec}s
+          </span>
+        )}
       </div>
 
       {error && (
