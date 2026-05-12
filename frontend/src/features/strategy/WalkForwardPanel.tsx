@@ -345,11 +345,20 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
     const usableBars = estimatedTotalBars - isBars - oosBars - gapBars
     const nWindows = usableBars < 0 ? 0 : Math.floor(usableBars / stepBars) + 1
     const nBacktests = nWindows * estimatedCombos + nWindows  // IS grid + OOS calls
-    // Per-backtest cost scales with IS-window size (indicator math + bar loop dominate).
-    // Calibrated against observed runs: ~50ms for 250-bar daily, ~350ms for 1560-bar 5m.
-    // Floor at 50ms covers OOS backtests (smaller) and fast small-window cases.
-    const secsPerBacktest = Math.max(0.05, isBars * 2.2e-4)
-    const tSecs = nBacktests * secsPerBacktest
+    // Per-backtest serial cost. Calibrated against measured WFA runs after
+    // F162 (indicator cache) + F169 (pre-sliced df) + F166 (window-level
+    // ProcessPool):
+    //   NVDA 5m 1y, isBars=3000, 5292 backtests, 8-core parallel → 84s wall
+    //     → serial-equivalent 84 * 8 ≈ 672s / 5292 ≈ 127ms/backtest
+    //     → per-bar cost ≈ 127ms / 3000 ≈ 4.2e-5 s/bar
+    // Floor at 8ms covers OOS backtests and small grids.
+    const serialSecsPerBacktest = Math.max(0.008, isBars * 5e-5)
+    // F166 spins up a per-request pool sized to min(cpu_count, n_windows).
+    // Below _MIN_WINDOWS_FOR_POOL (4) the serial path is used (matches
+    // backend wfa_pool.py). Assume 8 cores as the typical case.
+    const parallelism = nWindows >= 4 ? 8 : 1
+    const fetchOverheadSecs = 1.5
+    const tSecs = nBacktests * serialSecsPerBacktest / parallelism + fetchOverheadSecs
 
     // Frontend mirror of backend step >= oos_bars guard (walk_forward.py).
     // Surface the rejection condition before the user clicks Run.
