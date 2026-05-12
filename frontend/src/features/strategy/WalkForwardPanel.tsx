@@ -3,6 +3,7 @@ import { createChart, LineSeries, ColorType } from 'lightweight-charts'
 import type { IChartApi, UTCTimestamp, LineData, Time } from 'lightweight-charts'
 import type { StrategyRequest } from '../../shared/types'
 import { api } from '../../api/client'
+import { useElapsedSeconds } from '../../shared/hooks/useElapsedSeconds'
 import { apiErrorDetail } from '../../shared/utils/errors'
 import { buildParamOptions, linspace } from './paramOptions'
 import type { ParamOption } from './paramOptions'
@@ -232,6 +233,7 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
   const [metric, setMetric] = useState('sharpe_ratio')
   const [paramRows, setParamRows] = useState<(ParamRow | null)[]>(() => [emptyRow(), null, null])
   const [loading, setLoading] = useState(false)
+  const elapsedSec = useElapsedSeconds(loading)
   const [error, setError] = useState('')
   const [result, setResult] = useState<WalkForwardResponse | null>(null)
 
@@ -695,17 +697,25 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
         )
       })}
 
-      {/* ─── Pre-flight estimate ─────────────────────────────────── */}
+      {/* ─── Pre-flight estimate (or live elapsed while loading) ──── */}
       {preflightEstimate && (
-        <div style={{ padding: '6px 0', fontSize: 12, color: preflightEstimate.statusColor }}>
-          <span>
-            Estimated: ~{preflightEstimate.nWindows} windows × {estimatedCombos} combo{estimatedCombos !== 1 ? 's' : ''}{' '}
-            = ~{preflightEstimate.nBacktests} backtests ({preflightEstimate.timeStr}){preflightEstimate.statusSuffix}
-          </span>
-          {preflightEstimate.sizingHint && (
-            <span style={{ marginLeft: 12, color: '#8b949e' }}>
-              {preflightEstimate.intervalLabel} — {preflightEstimate.sizingHint}
+        <div style={{ padding: '6px 0', fontSize: 12, color: loading ? '#58a6ff' : preflightEstimate.statusColor }}>
+          {loading ? (
+            <span>
+              Elapsed: {elapsedSec}s / ~{preflightEstimate.timeStr} estimated · {preflightEstimate.nBacktests} backtests
             </span>
+          ) : (
+            <>
+              <span>
+                Estimated: ~{preflightEstimate.nWindows} windows × {estimatedCombos} combo{estimatedCombos !== 1 ? 's' : ''}{' '}
+                = ~{preflightEstimate.nBacktests} backtests ({preflightEstimate.timeStr}){preflightEstimate.statusSuffix}
+              </span>
+              {preflightEstimate.sizingHint && (
+                <span style={{ marginLeft: 12, color: '#8b949e' }}>
+                  {preflightEstimate.intervalLabel} — {preflightEstimate.sizingHint}
+                </span>
+              )}
+            </>
           )}
         </div>
       )}
@@ -720,7 +730,7 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
             opacity: loading || activeRows.length === 0 || estimatedCombos > 200 ? 0.6 : 1,
           }}
         >
-          {loading ? 'Running…' : 'Run Walk-Forward'}
+          {loading ? `Running ${elapsedSec}s…` : 'Run Walk-Forward'}
         </button>
         <span style={{ fontSize: 12, color: estimatedCombos > 200 ? '#ef5350' : '#8b949e' }}>
           {estimatedCombos} combination{estimatedCombos !== 1 ? 's' : ''} per IS window

@@ -6,6 +6,12 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-12
 
+### F171 — Live elapsed-time timer for WFA / Optimizer / Sensitivity (interactive, polish)
+
+- After F166 dropped WFA wall-clock to ~18s, the user noted the frozen button during the wait was the new biggest UX gap. Added a shared `useElapsedSeconds(active)` hook (`frontend/src/shared/hooks/useElapsedSeconds.ts`) that ticks every 250ms via `performance.now()` while `active=true` and resets on the flip back to false.
+- **[F171](TODO.md#f171)** Wired into all three strategy panels with the same one-line button-text swap: `loading ? \`Running ${elapsedSec}s…\` : '<original>'`. WFA gets an extra calibration banner: the pre-flight `Estimated: ~40 windows × 10 combos = ~440 backtests (~6m 27s)` line morphs during loading into `Elapsed: 12s / ~6m 27s estimated · 440 backtests`, so the user sees the actual vs estimated comparison and gets confidence the run will complete (and we get calibration data on the estimator). Implementation chose `performance.now()` deltas over an accumulating counter so wall-clock stays honest if the browser throttles the tab.
+- `npm run build` clean. Not visually verified — flagged for next dev-server boot, but the change is purely additive (button text + conditional inside the existing estimate banner), zero runtime risk.
+
 ### F166 — Window-level parallel WFA (interactive, Tier C)
 
 - After F169 dropped the NVDA 5m 1y WFA to 36s in-process (57s real-world), user OK'd the parallel design. F163 had prototyped IS-grid-level parallelism and lost to serial-with-cache; F166 moves the parallelism boundary to the WINDOW level. Each worker owns one complete window (IS grid + OOS backtest), so spawn cost amortizes over ~50 backtests of real work instead of fighting against the 250ms IS grid.

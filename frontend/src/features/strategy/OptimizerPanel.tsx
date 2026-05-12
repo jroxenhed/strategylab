@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import type { StrategyRequest } from '../../shared/types'
 import { api } from '../../api/client'
+import { useElapsedSeconds } from '../../shared/hooks/useElapsedSeconds'
 import { apiErrorDetail } from '../../shared/utils/errors'
 import { buildParamOptions, linspace } from './paramOptions'
 import type { ParamOption } from './paramOptions'
@@ -55,6 +56,7 @@ export default function OptimizerPanel({ lastRequest }: Props) {
   const [metric, setMetric] = useState('sharpe_ratio')
   const [topN, setTopN] = useState('10')
   const [loading, setLoading] = useState(false)
+  const elapsedSec = useElapsedSeconds(loading)
   const [error, setError] = useState('')
   const [result, setResult] = useState<OptimizeResponse | null>(null)
 
@@ -292,7 +294,7 @@ export default function OptimizerPanel({ lastRequest }: Props) {
             opacity: loading || activeRows.length === 0 || estimatedCombos > 200 ? 0.6 : 1,
           }}
         >
-          {loading ? 'Running…' : 'Run Optimizer'}
+          {loading ? `Running ${elapsedSec}s…` : 'Run Optimizer'}
         </button>
         <span style={{ fontSize: 12, color: estimatedCombos > 200 ? '#ef5350' : '#8b949e' }}>
           {estimatedCombos} combination{estimatedCombos !== 1 ? 's' : ''} estimated

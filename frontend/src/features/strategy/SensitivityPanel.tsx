@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import type { StrategyRequest } from '../../shared/types'
 import { api } from '../../api/client'
+import { useElapsedSeconds } from '../../shared/hooks/useElapsedSeconds'
 import { apiErrorDetail } from '../../shared/utils/errors'
 import { buildParamOptions, linspace } from './paramOptions'
 
@@ -46,6 +47,7 @@ export default function SensitivityPanel({ lastRequest, sweepInit, onSweepConsum
   const [maxVal, setMaxVal] = useState<string>('')
   const [steps, setSteps] = useState<string>('')
   const [loading, setLoading] = useState(false)
+  const elapsedSec = useElapsedSeconds(loading)
   const [error, setError] = useState('')
   const [warning, setWarning] = useState('')
   const [results, setResults] = useState<SweepPoint[] | null>(null)
@@ -206,7 +208,7 @@ export default function SensitivityPanel({ lastRequest, sweepInit, onSweepConsum
             background: loading ? '#1e2530' : '#1e3a5f', color: loading ? '#555' : '#58a6ff',
           }}
         >
-          {loading ? 'Running…' : 'Run Sweep'}
+          {loading ? `Running ${elapsedSec}s…` : 'Run Sweep'}
         </button>
       </div>
 

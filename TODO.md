@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*232 / 292 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*233 / 292 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 - [F127](#f127) — [next] [medium] Batch quick-backtest endpoint has no request-level deadline [medium]
 
-## Open Work — 83 items
+## Open Work — 82 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -23,7 +23,7 @@ _(none open)_
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 16 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F71](#f71), [F96](#f96), [F98](#f98), [F113](#f113), [F117](#f117), [F153](#f153), [F158](#f158), [F170](#f170), [F173](#f173) |
 | [F · Hardening](#f-hardening) | Security, reliability, validation | 14 | [F49](#f49), [F55](#f55), [F59](#f59), [F62](#f62), [F74](#f74), [F83](#f83), [F105](#f105)–[F106](#f106), [F127](#f127), [F154](#f154), [F159](#f159)–[F160](#f160), [F165](#f165), [F174](#f174) |
-| [F · Polish](#f-polish) | UI, naming, dead code | 6 | [F34](#f34)–[F35](#f35), [F44](#f44), [F140](#f140), [F157](#f157), [F171](#f171) |
+| [F · Polish](#f-polish) | UI, naming, dead code | 5 | [F34](#f34)–[F35](#f35), [F44](#f44), [F140](#f140), [F157](#f157) |
 | [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 17 | [F50](#f50)–[F51](#f51), [F61](#f61), [F79](#f79), [F84](#f84), [F89](#f89), [F97](#f97), [F142](#f142), [F144](#f144), [F146](#f146), [F150](#f150), [F156](#f156), [F161](#f161), [F164](#f164), [F167](#f167)–[F168](#f168), [F172](#f172) |
 
 ## A — Charts & Indicators
@@ -227,7 +227,7 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f116"></a> **F116** `BodySizeLimitMiddleware` non-HTTP scope passthrough — added a 3-line comment at the `if scope["type"] != "http":` guard documenting that WebSocket/lifespan scopes intentionally bypass the body cap, and that future WS routes need a separate frame-size limit. (F122 bundle) [easy] [polish]
 - [ ] <a id="f140"></a> **F140** [easy] Visual smoke check for F78 + F135 error states — both items add error-conditional rendering that wasn't triggered in-browser when shipped (the F47/F48/F36 portion is visually trivial or invisible, but F78's red `!` indicator requires a permanently-failing quote symbol and F135's save-error span requires posting an all-empty-string watchlist to trigger 422). Boot `npm run dev`, add a bogus symbol like `ZZZZZZ` to the watchlist and confirm the `!` shows up red with the underlying error in the tooltip; in SignalScanner, clear the symbols input, click Save Watchlist, confirm a red error line appears beneath the button. Catch any layout regression introduced by F135's column-flex wrapper around the Save button. (from F36+F47+F48+F78+F135 bundle 2026-05-11 — orchestrator dispatched 4 parallel Sonnet agents but did not boot the dev server) [polish]
 - [ ] <a id="f157"></a> **F157** Tighten the comment at `backend/routes/backtest.py:328` about `all_rules` extension. Today says "Combine all rules so indicators are computed for every rule across both sets" — should clarify that the unified `buy_rules` + `sell_rules` were already added to `all_rules` at line 314, and the b23 branch appends direction-specific rules on top. Pure prose polish; flagged as kieran-python KP-1 in F155 review. [easy] [polish] (added 2026-05-12)
-- [ ] <a id="f171"></a> **F171** WFA UI elapsed-time timer — during a Run Walk-Forward request, show a live `elapsed: 12s` counter next to the button (or replace the pre-flight estimate while running). Today the user stares at a frozen button for 10–60s with no indication anything is happening; the estimate is shown only PRE-flight, not during. Implementation: `useEffect` in `WalkForwardPanel.tsx` that starts `setInterval(setSeconds(s => s + 1), 1000)` when `running` flips true, clears on completion. Bonus: compare actual vs estimated and show `12s / ~18s est` to calibrate the user's expectations. Same UX gap exists in `OptimizerPanel.tsx` and `SensitivityPanel.tsx`; fix all three together (5–10 min of work). [easy] [polish] (added 2026-05-12 after F166)
+- [x] <a id="f171"></a> **F171** WFA UI elapsed-time timer — new shared `useElapsedSeconds(active: boolean)` hook in `frontend/src/shared/hooks/useElapsedSeconds.ts` ticks once per 250ms while `active=true`, reports whole-seconds elapsed since the flip from false → true. Used in WalkForwardPanel, OptimizerPanel, and SensitivityPanel to replace `Running…` button text with `Running 12s…` while a request is in flight. WFA bonus: the pre-flight estimate banner morphs into `Elapsed: 12s / ~18s estimated · 429 backtests` during loading (calibration feedback — user sees actual vs estimated and gets confidence the run will complete). Hook uses `performance.now()` instead of an accumulating counter so wall-clock is honest even if the browser tab is throttled. `npm run build` clean. [easy] [polish] (resolved 2026-05-12)
 
 ### F · Testing and Infra
 - [x] <a id="f30"></a> **F30** `fetch_ohlcv_async` coverage — F26 added `fetch_ohlcv_async()` to `shared.py` but the bot_runner test harness (F20) still uses `_run_in_executor(_fetch, ...)` via a mock executor. Updated `test_bot_runner.py` with `TestFetchOhlcvAsyncDedup`: concurrent dedup test (two simultaneous calls share one Future) + sequential independence test. [easy] [testing]
