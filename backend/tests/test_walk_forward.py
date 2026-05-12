@@ -119,7 +119,7 @@ class TestRescalingMath:
         # Call order: IS combo 1, IS combo 2, OOS → IS combo 1, IS combo 2, OOS
         # We track OOS calls by count.
 
-        def mock_run_backtest(req):
+        def mock_run_backtest(req, **kwargs):
             # IS window dates will have start <= bar 100 approximately
             # Simplest: track whether we've produced enough IS results yet
             # OOS window start is always later than IS end
@@ -182,7 +182,7 @@ class TestRescalingMath:
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
         # Use a rising equity curve for OOS: ends at 1.2x initial each time
-        def mock_run_backtest(req):
+        def mock_run_backtest(req, **kwargs):
             return _minimal_backtest_result(
                 num_trades=5, sharpe=1.2,
                 equity_start=10000.0, equity_end=12000.0,
@@ -227,7 +227,7 @@ class TestNeighborhoodStabilityTag:
 
         sharpes = {3.0: 0.1, 5.0: 5.0, 7.0: 0.1}
 
-        def mock_run_backtest(req):
+        def mock_run_backtest(req, **kwargs):
             slp = req.stop_loss_pct
             s = sharpes.get(round(slp, 1), 1.0)
             return _minimal_backtest_result(num_trades=10, sharpe=s)
@@ -262,7 +262,7 @@ class TestNeighborhoodStabilityTag:
         mock_df = _make_mock_df(n=400, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req):
+        def mock_run_backtest(req, **kwargs):
             # All combos return high sharpe — plateau
             return _minimal_backtest_result(num_trades=10, sharpe=1.8)
 
@@ -322,7 +322,7 @@ class TestValidation:
         mock_df = _make_mock_df(n=1500, start="2024-03-01 09:30:00", freq="5min")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
         monkeypatch.setattr(
-            wf_mod, "run_backtest", lambda req: _minimal_backtest_result()
+            wf_mod, "run_backtest", lambda req, **kwargs: _minimal_backtest_result()
         )
 
         payload = _wf_payload(is_bars=500, oos_bars=200, min_trades_is=1)
@@ -462,7 +462,7 @@ class TestWindowLogic:
         mock_df = _make_mock_df(n=n, start="2020-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req):
+        def mock_run_backtest(req, **kwargs):
             return _minimal_backtest_result(num_trades=5, sharpe=1.0)
 
         monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
@@ -490,7 +490,7 @@ class TestWindowLogic:
         mock_df = _make_mock_df(n=n, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req):
+        def mock_run_backtest(req, **kwargs):
             return _minimal_backtest_result(num_trades=5, sharpe=1.0)
 
         monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
@@ -550,7 +550,7 @@ class TestWindowLogic:
         mock_df = _make_mock_df(n=400, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req):
+        def mock_run_backtest(req, **kwargs):
             # IS windows (start before OOS threshold) return trades
             if req.start >= "2019-05-20":
                 return _minimal_backtest_result(num_trades=0, sharpe=0.0)
@@ -585,7 +585,7 @@ class TestWindowLogic:
         mock_df = _make_mock_df(n=n, start="2018-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req):
+        def mock_run_backtest(req, **kwargs):
             return _minimal_backtest_result(num_trades=5, sharpe=1.0)
 
         monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
@@ -631,7 +631,7 @@ class TestWindowLogic:
 
         # Window 0: IS combo(3.0)=call1, IS combo(5.0)=call2, OOS=call3
         # Window 1: IS combo(3.0)=call4, IS combo(5.0)=call5 → both error → no_is_trades
-        def mock_run_backtest(req):
+        def mock_run_backtest(req, **kwargs):
             call_counter["n"] += 1
             n = call_counter["n"]
             if n in (4, 5):  # Window 1 IS combos — all error
@@ -673,7 +673,7 @@ class TestWindowLogic:
         mock_df = _make_mock_df(n=n, start="2020-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req):
+        def mock_run_backtest(req, **kwargs):
             return _minimal_backtest_result(num_trades=5, sharpe=1.0)
 
         monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
@@ -695,7 +695,7 @@ class TestWindowLogic:
         mock_df = _make_mock_df(n=400, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req):
+        def mock_run_backtest(req, **kwargs):
             return _minimal_backtest_result(num_trades=5, sharpe=1.0)
 
         monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
@@ -718,7 +718,7 @@ class TestWindowLogic:
         mock_df = _make_mock_df(n=400, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req):
+        def mock_run_backtest(req, **kwargs):
             return _minimal_backtest_result(num_trades=10, sharpe=1.0)
 
         monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
@@ -749,7 +749,7 @@ class TestWindowLogic:
         call_counter = {"n": 0}
 
         # 2 combos per IS → calls 1-2 IS w0, call 3 OOS w0, calls 4-5 IS w1, call 6 OOS w1
-        def mock_run_backtest(req):
+        def mock_run_backtest(req, **kwargs):
             call_counter["n"] += 1
             n = call_counter["n"]
             if n in (3, 6):  # Both OOS calls → 0 trades
@@ -774,7 +774,7 @@ class TestWindowLogic:
         mock_df = _make_mock_df(n=400, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req):
+        def mock_run_backtest(req, **kwargs):
             return _minimal_backtest_result(num_trades=10, sharpe=0.0)
 
         monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
@@ -808,7 +808,7 @@ class TestWindowLogic:
         # calls 4-5 IS w1, call 6 OOS w1 (→ 0 trades)
         # calls 7-8 IS w2, call 9 OOS w2 (→ normal)
 
-        def mock_run_backtest(req):
+        def mock_run_backtest(req, **kwargs):
             call_counter["n"] += 1
             n = call_counter["n"]
             if n == 3:  # First OOS — ends at $12k
@@ -853,7 +853,7 @@ class TestWindowLogic:
         mock_df = _make_mock_df(n=n, start="2019-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req):
+        def mock_run_backtest(req, **kwargs):
             return _minimal_backtest_result(num_trades=5, sharpe=1.0)
 
         monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
@@ -898,7 +898,7 @@ class TestWindowLogic:
         mock_df = _make_mock_df(n=n, start="2018-01-01")
         monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
 
-        def mock_run_backtest(req):
+        def mock_run_backtest(req, **kwargs):
             return _minimal_backtest_result(num_trades=5, sharpe=1.0)
 
         monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)

@@ -65,10 +65,28 @@ def migrate_rule(rule: Rule) -> Rule:
 
 
 
+def _get_or_compute(cache: dict | None, key, factory):
+    """Read-through memoization. If cache is None, just calls factory()."""
+    if cache is None:
+        return factory()
+    if key not in cache:
+        cache[key] = factory()
+    return cache[key]
+
+
 def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series = None,
                        volume: pd.Series = None,
-                       rules: list[Rule] = None) -> dict[str, pd.Series]:
-    """Compute indicators based on what rules require. MACD/RSI always included."""
+                       rules: list[Rule] = None,
+                       cache: dict | None = None) -> dict[str, pd.Series]:
+    """Compute indicators based on what rules require. MACD/RSI always included.
+
+    cache: optional dict shared across calls for the same underlying data.
+    When provided, expensive compute_instance calls are memoized so repeated
+    calls with identical indicator specs (same params, same close series) skip
+    recomputation. The caller is responsible for invalidating the cache when the
+    underlying data changes (e.g. between WFA windows or optimizer runs on
+    different tickers/date ranges).
+    """
     from indicators import compute_instance, OHLCVSeries
 
     if rules is None:
@@ -78,7 +96,10 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
                         low=low if low is not None else close,
                         volume=volume if volume is not None else pd.Series(0, index=close.index, dtype=float))
 
-    macd_result = compute_instance("macd", {"fast": 12, "slow": 26, "signal": 9}, ohlcv)
+    macd_result = _get_or_compute(
+        cache, ("macd", 12, 26, 9),
+        lambda: compute_instance("macd", {"fast": 12, "slow": 26, "signal": 9}, ohlcv),
+    )
 
     result = {
         "macd": macd_result["macd"],
@@ -99,11 +120,17 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
     _assert_family_cap("RSI", rsi_specs)
 
     for period, rsi_type in rsi_specs:
-        rsi_result = compute_instance("rsi", {"period": period, "type": rsi_type}, ohlcv)
+        rsi_result = _get_or_compute(
+            cache, ("rsi", period, rsi_type),
+            lambda p=period, t=rsi_type: compute_instance("rsi", {"period": p, "type": t}, ohlcv),
+        )
         result[f"rsi_{period}_{rsi_type}"] = rsi_result["rsi"]
 
     if high is not None and low is not None:
-        atr_result = compute_instance("atr", {"period": 14}, ohlcv)
+        atr_result = _get_or_compute(
+            cache, ("atr", 14),
+            lambda: compute_instance("atr", {"period": 14}, ohlcv),
+        )
         result["atr"] = atr_result["atr"]
 
     ma_specs: set[tuple[int, str]] = set()
@@ -119,18 +146,18 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
     _assert_family_cap("MA", ma_specs)
 
     for period, ma_type in ma_specs:
-        key = f"ma_{period}_{ma_type}"
-        ma_result = compute_instance("ma", {"period": period, "type": ma_type}, ohlcv)
-        result[key] = ma_result["ma"]
+        ma_result = _get_or_compute(
+            cache, ("ma", period, ma_type),
+            lambda p=period, t=ma_type: compute_instance("ma", {"period": p, "type": t}, ohlcv),
+        )
+        result[f"ma_{period}_{ma_type}"] = ma_result["ma"]
 
-    # --- Bollinger Bands ---
     bb_specs: set[tuple[int, float]] = set()
     for rule in rules:
         if rule.indicator == "bb":
             p = rule.params.get("period", 20) if rule.params else 20
             s = rule.params.get("std", 2) if rule.params else 2
             bb_specs.add((int(p), float(s)))
-        # Also check param refs like bb:20:2:upper
         if rule.param and rule.param.startswith("bb:"):
             parts = rule.param.split(":")
             if len(parts) >= 3:
@@ -141,7 +168,10 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
     _assert_family_cap("BB", bb_specs)
 
     for bb_period, bb_std in bb_specs:
-        bb_result = compute_instance("bb", {"period": bb_period, "stddev": bb_std}, ohlcv)
+        bb_result = _get_or_compute(
+            cache, ("bb", bb_period, bb_std),
+            lambda p=bb_period, s=bb_std: compute_instance("bb", {"period": p, "stddev": s}, ohlcv),
+        )
         prefix = f"bb_{bb_period}_{bb_std}"
         result[f"{prefix}_upper"] = bb_result["upper"]
         result[f"{prefix}_lower"] = bb_result["lower"]
@@ -170,9 +200,11 @@ def compute_indicators(close: pd.Series, high: pd.Series = None, low: pd.Series 
     for atr_period in atr_specs:
         key = f"atr_{atr_period}"
         if key not in result:
-            atr_r = compute_instance("atr", {"period": atr_period}, ohlcv)
+            atr_r = _get_or_compute(
+                cache, ("atr", atr_period),
+                lambda p=atr_period: compute_instance("atr", {"period": p}, ohlcv),
+            )
             result[key] = atr_r["atr"]
-        # ATR as % of close
         result[f"atr_pct_{atr_period}"] = result[key] / close * 100
 
     # Also store default ATR with keyed name for consistency

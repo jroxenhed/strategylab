@@ -88,6 +88,7 @@ def optimize_backtest(req: OptimizeRequest) -> OptimizeResponse:
     results: list[OptimizerCombo] = []
     skipped = 0
     start = time.monotonic()
+    indicator_cache: dict[tuple, object] = {}
 
     for combo in product(*[p.values for p in req.params]):
         param_values = {p.path: v for p, v in zip(req.params, combo)}
@@ -99,7 +100,7 @@ def optimize_backtest(req: OptimizeRequest) -> OptimizeResponse:
             raise  # invalid param_path — fail fast
 
         try:
-            result = run_backtest(modified)
+            result = run_backtest(modified, include_spy_correlation=False, indicator_cache=indicator_cache)
             s = result["summary"]
             results.append(OptimizerCombo(
                 param_values=param_values,

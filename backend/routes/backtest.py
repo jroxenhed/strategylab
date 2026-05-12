@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
-from shared import _fetch, _format_time, _INTRADAY_INTERVALS, fetch_higher_tf, align_htf_to_ltf, htf_lookback_days, require_valid_source
+from shared import _fetch, _format_time, _format_time_index, _INTRADAY_INTERVALS, fetch_higher_tf, align_htf_to_ltf, htf_lookback_days, require_valid_source
 from signal_engine import Rule, compute_indicators, eval_rules, eval_rule, migrate_rule, resolve_series
 from routes.indicators import _series_to_list
 from models import TrailingStopConfig, DynamicSizingConfig, TradingHoursConfig, StrategyRequest, RegimeConfig
@@ -296,7 +296,15 @@ def _compute_regime_series(req: StrategyRequest, ltf_df: pd.DataFrame) -> "pd.Se
 
 
 @router.post("/api/backtest")
-def run_backtest(req: StrategyRequest):
+def backtest_endpoint(req: StrategyRequest):
+    # FastAPI route wrapper. Keep the public HTTP signature one-arg so Pydantic
+    # doesn't wrap the body into {"req": ..., "indicator_cache": ...}. Internal
+    # callers (optimizer, walk_forward) import run_backtest directly to pass
+    # the performance kwargs.
+    return run_backtest(req)
+
+
+def run_backtest(req: StrategyRequest, *, include_spy_correlation: bool = True, indicator_cache: dict | None = None):
     # F94: shared allowlist + case-normalize at the route boundary. The
     # regime path below also calls fetch_higher_tf(source=req.source) and
     # ad-hoc _fetch calls; bouncing unknown providers up front keeps the
@@ -333,7 +341,7 @@ def run_backtest(req: StrategyRequest):
             short_buy_rules = []
             short_sell_rules = []
 
-        indicators = compute_indicators(close, high=high, low=low, volume=volume, rules=all_rules)
+        indicators = compute_indicators(close, high=high, low=low, volume=volume, rules=all_rules, cache=indicator_cache)
 
         # Simulate
         capital = req.initial_capital
@@ -441,9 +449,13 @@ def run_backtest(req: StrategyRequest):
                 })
             return details
 
+        close_arr = close.to_numpy(dtype=float, copy=False)
+        # Pre-format every bar's timestamp once (vectorized)
+        date_strs = _format_time_index(df.index, req.interval)
+
         for i in range(len(df)):
-            price = close.iloc[i]
-            date = _format_time(df.index[i], req.interval)
+            price = close_arr[i]
+            date = date_strs[i]
 
             # Trading hours filter (only affects entries, not exits)
             hour_ok = True
@@ -865,8 +877,8 @@ def run_backtest(req: StrategyRequest):
         first_close = float(close.iloc[0])
         baseline_curve = [
             {
-                "time": _format_time(df.index[i], req.interval),
-                "value": round(req.initial_capital * float(close.iloc[i]) / first_close, 2),
+                "time": date_strs[i],
+                "value": round(req.initial_capital * close_arr[i] / first_close, 2),
             }
             for i in range(len(df))
         ]
@@ -886,8 +898,8 @@ def run_backtest(req: StrategyRequest):
                     fired = (not raw) if (rule.negated and bar_idx >= 1) else raw
                     if fired:
                         signals.append({
-                            "time": _format_time(df.index[bar_idx], req.interval),
-                            "price": round(float(close.iloc[bar_idx]), 4),
+                            "time": date_strs[bar_idx],
+                            "price": round(close_arr[bar_idx], 4),
                         })
                 rule_signals.append({
                     "rule_index": rule_index,
@@ -904,7 +916,10 @@ def run_backtest(req: StrategyRequest):
             "trades": trades,
         })
 
-        spy_corr = _compute_spy_correlation(trades, req.start, req.end)
+        if include_spy_correlation:
+            spy_corr = _compute_spy_correlation(trades, req.start, req.end)
+        else:
+            spy_corr = {"beta": None, "r_squared": None}
 
         result = {
             "summary": {
@@ -936,7 +951,7 @@ def run_backtest(req: StrategyRequest):
         if regime_active_series is not None:
             result["regime_series"] = [
                 {
-                    "time": _format_time(df.index[i], req.interval),
+                    "time": date_strs[i],
                     "direction": (
                         req.direction if bool(regime_active_series.iloc[i])
                         else ("short" if req.direction == "long" else "long")

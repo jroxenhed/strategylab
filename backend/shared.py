@@ -568,6 +568,25 @@ def _format_time(idx, interval: str):
     return str(idx)[:10]
 
 
+def _format_time_index(idx: pd.DatetimeIndex, interval: str) -> list[int] | list[str]:
+    """Vectorized form of _format_time over a whole DatetimeIndex.
+
+    Returns a Python list of length len(idx). For intraday intervals,
+    each element is an int unix-seconds (UTC). For daily+ intervals,
+    each element is a 'YYYY-MM-DD' string.
+    """
+    if interval in _INTRADAY_INTERVALS:
+        ts = pd.DatetimeIndex(idx)
+        if ts.tz is not None:
+            ts = ts.tz_convert('UTC')
+        # Normalize to second-resolution first — pandas 2.0+ preserves source
+        # datetime64 unit ([s] from yfinance, [us] from Alpaca), and a raw
+        # `view('int64')` would otherwise return seconds/microseconds rather
+        # than nanoseconds. `as_unit('s')` makes the int64 read unit-agnostic.
+        return ts.as_unit('s').view('int64').tolist()
+    return idx.strftime("%Y-%m-%d").tolist()
+
+
 def is_retryable_error(e: Exception) -> bool:
     """Check if an Alpaca API error is a stale connection that should be retried."""
     msg = str(e)

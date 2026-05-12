@@ -303,6 +303,7 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
         is_end_date = _format_boundary(df.index[is_e], base.interval)
         oos_start_date = _format_boundary(df.index[oos_s], base.interval)
         oos_end_date = _format_boundary(df.index[oos_e], base.interval)
+        indicator_cache: dict[tuple, object] = {}  # per-window: df slice changes, cache invalidated
 
         # -- IS grid search --
         is_combos: list[tuple[dict, dict]] = []  # (combo_dict, summary_dict)
@@ -315,7 +316,7 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
             for path, value in combo.items():
                 is_req = _apply_param(is_req, path, value)
             try:
-                r = run_backtest(is_req)
+                r = run_backtest(is_req, include_spy_correlation=False, indicator_cache=indicator_cache)
                 is_combos.append((combo, r["summary"]))
             except HTTPException as exc:
                 if exc.status_code >= 500:

@@ -74,7 +74,7 @@ def test_happy_path_2_param_grid(monkeypatch):
     """2-param grid returns correct total_combos, completed, results ranked by metric."""
     call_count = 0
 
-    def mock_run_backtest(req):
+    def mock_run_backtest(req, **kwargs):
         nonlocal call_count
         call_count += 1
         # Return varying sharpe values so we can verify sort order
@@ -109,7 +109,7 @@ def test_happy_path_2_param_grid(monkeypatch):
 
 def test_happy_path_top_n_limits_results(monkeypatch):
     """top_n truncates the returned list."""
-    def mock_run_backtest(req):
+    def mock_run_backtest(req, **kwargs):
         return _minimal_summary()
 
     import routes.backtest_optimizer as opt_mod
@@ -211,7 +211,7 @@ def test_4xx_skip_increments_skipped(monkeypatch):
     """HTTPException(400) from run_backtest counts as skipped; other combos still returned."""
     call_count = 0
 
-    def mock_run_backtest(req):
+    def mock_run_backtest(req, **kwargs):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -238,7 +238,7 @@ def test_4xx_skip_increments_skipped(monkeypatch):
 
 def test_500_re_raises(monkeypatch):
     """HTTPException(500) from run_backtest must propagate — not be counted as skipped."""
-    def mock_run_backtest(req):
+    def mock_run_backtest(req, **kwargs):
         raise HTTPException(status_code=500, detail="data provider failure")
 
     import routes.backtest_optimizer as opt_mod
@@ -259,7 +259,7 @@ def test_non_http_exception_counts_as_skipped(monkeypatch):
     """ValueError (or similar) from run_backtest is isolated per-combo and counted as skipped."""
     call_count = 0
 
-    def mock_run_backtest(req):
+    def mock_run_backtest(req, **kwargs):
         nonlocal call_count
         call_count += 1
         if call_count == 2:
@@ -292,7 +292,7 @@ def test_timeout_sets_timed_out_flag(monkeypatch):
 
     monkeypatch.setattr(opt_mod, "_TIMEOUT_SECS", 0)
 
-    def mock_run_backtest(req):
+    def mock_run_backtest(req, **kwargs):
         return _minimal_summary()
 
     monkeypatch.setattr(opt_mod, "run_backtest", mock_run_backtest)
@@ -320,7 +320,7 @@ def test_metric_sort_order(monkeypatch, metric, field, values):
     """Results are sorted descending by each supported metric."""
     value_iter = iter(values)
 
-    def mock_run_backtest(req):
+    def mock_run_backtest(req, **kwargs):
         v = next(value_iter)
         return _minimal_summary(**{field: v})
 
@@ -349,7 +349,7 @@ def test_metric_sort_order(monkeypatch, metric, field, values):
 
 def test_response_has_timed_out_field(monkeypatch):
     """timed_out must be present in all successful responses (False when no timeout)."""
-    def mock_run_backtest(req):
+    def mock_run_backtest(req, **kwargs):
         return _minimal_summary()
 
     import routes.backtest_optimizer as opt_mod
