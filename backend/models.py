@@ -40,6 +40,12 @@ def normalize_symbol(v: object) -> str:
 
 SymbolField = Annotated[str, BeforeValidator(normalize_symbol)]
 
+# F145: shared alias for `list[SymbolField]`. Callers add list-level caps via
+# `Field(min_length=..., max_length=...)` (ScanRequest is uncapped; Watchlist
+# and Batch pair this with their own mode='before' validator that drops empty
+# entries before per-element SymbolField normalization).
+SymbolList = list[SymbolField]
+
 
 class TrailingStopConfig(BaseModel):
     type: str = "pct"               # "pct" | "atr"

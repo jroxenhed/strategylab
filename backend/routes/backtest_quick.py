@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from shared import _fetch, _format_time
 from signal_engine import Rule, compute_indicators, eval_rules, migrate_rule
-from models import LogicField, SymbolField, DirectionField, normalize_symbol, TrailingStopConfig
+from models import LogicField, SymbolField, SymbolList, DirectionField, TrailingStopConfig
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -44,12 +44,13 @@ class QuickBacktestResult(BaseModel):
 
 
 class BatchQuickBacktestRequest(BaseModel):
-    # F91: Field(min_length, max_length) surfaces minItems/maxItems in the
+    # F91/F145: Field(min_length, max_length) surfaces minItems/maxItems in the
     # OpenAPI JSON schema so agent clients can discover the cap without
     # probing. The mode='before' validator below still runs first and keeps
     # the custom error message ("too many symbols (max 500, got N)") that
-    # the test contract pins.
-    symbols: list[str] = Field(min_length=1, max_length=500)
+    # the test contract pins. SymbolList = list[SymbolField] does per-element
+    # normalize+regex after the validator drops empty entries.
+    symbols: SymbolList = Field(min_length=1, max_length=500)
     interval: str = "1d"
     lookback_days: int = Field(default=90, gt=0)
     # F102: same per-list cap as QuickBacktestRequest — bound per-symbol work.
@@ -64,20 +65,18 @@ class BatchQuickBacktestRequest(BaseModel):
 
     @field_validator('symbols', mode='before')
     @classmethod
-    def _validate_symbols(cls, v):
+    def _cap_and_drop_empty(cls, v):
         # F91: list-level cap mirrors F69 watchlist. mode='before' ensures
         # this custom message wins over Pydantic's generic max_length message.
         # /batch is unauthenticated and sequential _fetch() per symbol is
-        # OOM-feasible without this cap.
+        # OOM-feasible without this cap. Per-element normalize+regex moved
+        # to SymbolList (F145); this pass only drops empty entries so
+        # SymbolField doesn't trip on them.
         if not isinstance(v, list):
             raise TypeError("symbols must be a list")
         if len(v) > 500:
             raise ValueError(f"too many symbols (max 500, got {len(v)})")
-        cleaned: list[str] = []
-        for sym in v:
-            if isinstance(sym, str) and not sym.strip():
-                continue
-            cleaned.append(normalize_symbol(sym))
+        cleaned = [s for s in v if not (isinstance(s, str) and not s.strip())]
         if not cleaned:
             raise ValueError("symbols must contain at least one non-empty entry")
         return cleaned

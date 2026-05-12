@@ -17,7 +17,7 @@ from broker import get_trading_provider, OrderRequest as BrokerOrderRequest, _tr
 from broker_aggregate import aggregate_from_brokers
 from signal_engine import Rule, compute_indicators, eval_rules, migrate_rule
 from journal import _log_trade, DATA_DIR, JOURNAL_PATH
-from models import StrategyRequest, LogicField, SymbolField, normalize_symbol, BoundedRuleList
+from models import StrategyRequest, LogicField, SymbolField, SymbolList, normalize_symbol, BoundedRuleList
 from routes.backtest import run_backtest
 
 WATCHLIST_PATH = DATA_DIR / "watchlist.json"
@@ -39,7 +39,7 @@ class SellRequest(BaseModel):
 
 
 class ScanRequest(BaseModel):
-    symbols: list[SymbolField]
+    symbols: SymbolList
     interval: str = "15m"
     buy_rules: BoundedRuleList
     sell_rules: BoundedRuleList
@@ -57,43 +57,38 @@ class ScanRequest(BaseModel):
 
 
 class WatchlistRequest(BaseModel):
-    # F104 follow-up (build 25 morning calibration agent-native-001):
-    # min_length=1 surfaces the "non-empty" constraint in the OpenAPI schema
-    # so agent clients reading /openapi.json see minItems:1 without probing.
-    # Mirrors the F91 pattern on BatchQuickBacktestRequest.symbols. The
-    # @field_validator below still raises the same custom ValueError after
-    # the strip+normalize pass, so a request that POSTs [''] (one whitespace
-    # entry) still hits the explicit "must contain at least one non-empty
-    # entry" message — Field(min_length=1) catches the literal-empty case
-    # earlier in the OpenAPI surface.
-    symbols: list[str] = Field(min_length=1)
+    # F145: SymbolList = list[SymbolField] — per-element normalize+regex runs
+    # in SymbolField. The mode='before' validator below pre-cleans the raw
+    # input (cap + drop empties + reject-all-empty) so empty/whitespace
+    # entries don't trip SymbolField's strict "must not be empty" guard.
+    # The mode='after' dedup runs on normalized output. min_length=1 surfaces
+    # the non-empty constraint in OpenAPI (mirrors F91 batch pattern).
+    symbols: SymbolList = Field(min_length=1)
 
-    @field_validator('symbols')
+    @field_validator('symbols', mode='before')
     @classmethod
-    def _validate_symbols(cls, v: list[str]) -> list[str]:
+    def _cap_and_drop_empty(cls, v):
         # List-level cap stays inline so the custom error message survives any
         # future Field(max_length=...) drift (test_watchlist_validation_caps_length).
+        if not isinstance(v, list):
+            return v  # let Pydantic raise the type-level error
         if len(v) > 500:
             raise ValueError(f"too many symbols (max 500, got {len(v)})")
-        cleaned = []
-        for sym in v:
-            # Drop empty/whitespace-only entries silently — pre-existing F69 behavior.
-            # Non-empty entries go through the strict normalize+regex path; invalid
-            # characters or oversized symbols raise → 422 for the whole request.
-            if isinstance(sym, str) and not sym.strip():
-                continue
-            cleaned.append(normalize_symbol(sym))
-        # F104: reject all-empty-after-strip to match BatchQuickBacktestRequest
-        # (F91). Closes F87 — POST {symbols: []} or {symbols: ["", "  "]} no
-        # longer silently overwrites the on-disk watchlist with []. Wiping the
-        # watchlist requires an explicit DELETE (not yet wired) or a non-empty
-        # POST first; the strict contract is consistent across both request
-        # models.
+        # Drop empty/whitespace-only entries silently — pre-existing F69 behavior.
+        # Non-empty entries flow into SymbolField for strict normalize+regex.
+        cleaned = [s for s in v if not (isinstance(s, str) and not s.strip())]
         if not cleaned:
+            # F104: reject all-empty-after-strip to match BatchQuickBacktestRequest
+            # (F91). Closes F87 silent-wipe of watchlist.json.
             raise ValueError("symbols must contain at least one non-empty entry")
-        # F93: dedup while preserving first-occurrence order. Prevents 500 duplicate
-        # "AAPL" entries from amplifying scanner backtests 500x.
-        return list(dict.fromkeys(cleaned))
+        return cleaned
+
+    @field_validator('symbols', mode='after')
+    @classmethod
+    def _dedup_symbols(cls, v: list[str]) -> list[str]:
+        # F93: dedup post-normalize, preserve first-occurrence order. Prevents
+        # 500 duplicate "AAPL" entries from amplifying scanner backtests 500x.
+        return list(dict.fromkeys(v))
 
 
 @router.get("/account")
