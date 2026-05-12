@@ -38,20 +38,52 @@ function loadBacktestCache(): { result: BacktestResult; request: StrategyRequest
   } catch { return null }
 }
 
+function loadStrategyCache(): Record<string, unknown> | null {
+  try {
+    const raw = localStorage.getItem('strategylab-strategy')
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
 const saved = loadSettings()
 
 // Restore last backtest result if the settings (ticker/dates/interval) still match
+// and the rule/logic/regime state hasn't changed since the backtest was run.
 const _cachedBacktest = (() => {
   const cache = loadBacktestCache()
   if (!cache?.request) return null
   const r = cache.request
-  if (r.ticker === (saved?.ticker ?? 'AAPL') &&
-      r.start === (saved?.start ?? oneYearAgo) &&
-      r.end === (saved?.end ?? today) &&
-      r.interval === (saved?.interval ?? '1d')) {
-    return cache
+  if (r.ticker !== (saved?.ticker ?? 'AAPL') ||
+      r.start !== (saved?.start ?? oneYearAgo) ||
+      r.end !== (saved?.end ?? today) ||
+      r.interval !== (saved?.interval ?? '1d')) {
+    return null
   }
-  return null
+  const strat = loadStrategyCache()
+  const ruleFields: Array<[string, string]> = [
+    ['buyRules', 'buy_rules'],
+    ['sellRules', 'sell_rules'],
+    ['buyLogic', 'buy_logic'],
+    ['sellLogic', 'sell_logic'],
+    ['longBuyRules', 'long_buy_rules'],
+    ['longSellRules', 'long_sell_rules'],
+    ['longBuyLogic', 'long_buy_logic'],
+    ['longSellLogic', 'long_sell_logic'],
+    ['shortBuyRules', 'short_buy_rules'],
+    ['shortSellRules', 'short_sell_rules'],
+    ['shortBuyLogic', 'short_buy_logic'],
+    ['shortSellLogic', 'short_sell_logic'],
+  ]
+  const req = r as unknown as Record<string, unknown>
+  for (const [camel, snake] of ruleFields) {
+    if (JSON.stringify(strat?.[camel] ?? null) !== JSON.stringify(req[snake] ?? null)) {
+      return null
+    }
+  }
+  if (JSON.stringify(strat?.['regime'] ?? null) !== JSON.stringify(req['regime'] ?? null)) {
+    return null
+  }
+  return cache
 })()
 
 const SKELETON_HEIGHTS = [35, 55, 45, 70, 50, 40, 65, 80, 60, 45, 55, 70, 40, 50, 65, 75, 55, 45, 60, 50]

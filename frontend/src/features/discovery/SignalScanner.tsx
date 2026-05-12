@@ -26,7 +26,7 @@ function loadStrategies(): SavedStrategy[] {
 export default function SignalScanner({ onSpawnBot }: { onSpawnBot?: (symbol: string, strategyName: string) => void }) {
   const [symbols, setSymbols] = useState('')
   const [loaded, setLoaded] = useState(false)
-  const [strategies] = useState<SavedStrategy[]>(loadStrategies)
+  const [strategies, setStrategies] = useState<SavedStrategy[]>(loadStrategies)
   const [selectedIdx, setSelectedIdx] = useState(-1)
   const [lookback, setLookback] = useState(90)
   const [scanning, setScanning] = useState(false)
@@ -46,6 +46,16 @@ export default function SignalScanner({ onSpawnBot }: { onSpawnBot?: (symbol: st
       setSymbols('AAPL, ENPH, TSLA, NVDA, AMD')
       setLoaded(true)
     })
+  }, [])
+
+  useEffect(() => {
+    const refresh = () => setStrategies(loadStrategies())
+    window.addEventListener('focus', refresh)
+    window.addEventListener('storage', refresh)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      window.removeEventListener('storage', refresh)
+    }
   }, [])
 
   const handleSave = async () => {
