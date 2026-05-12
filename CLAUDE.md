@@ -169,6 +169,20 @@ Non-obvious bits:
 - **No OTO brackets for shorts** — Alpaca OTO doesn't cleanly support stops above entry, so all short stops managed via polling. Same-symbol guard allows one long + one short bot simultaneously.
 - `TrailingStopConfig.activate_pct` — when `activate_on_profit` is true, trailing starts only once `source_price >= entry * (1 + activate_pct/100)`. Gives positions room to breathe.
 
+## Walk-Forward Analysis (C28)
+
+`POST /api/backtest/walk_forward` — partitions history into rolling (or anchored) IS / OOS windows, runs a grid search on each IS window, evaluates the IS winner on the held-out OOS, rolls forward, stitches the rescaled OOS equity into a continuous curve. Output: per-window IS/OOS metrics, stability tags, WFE (mean-of-Sharpes form), param CV.
+
+Non-obvious bits:
+- **Capital reset is rescaled in post-processing**, not avoided: each `run_backtest()` call inside WFA resets `capital = req.initial_capital` (see Bot System above), producing a sawtooth if naively concatenated. The route multiplies each OOS curve by `prev_final_equity / base.initial_capital` before stitching. Don't "simplify" by chaining capital through the loop — see C28 plan + tests.
+- **Regime is unconditionally stripped** at the route boundary (`base = req.base.model_copy(deep=True, update={"regime": None})`). HTF lookback would silently clip yfinance intraday limits at window boundaries. Documented limitation; deferred follow-up.
+- **Intraday boundary strings need datetime precision.** Daily uses `"%Y-%m-%d"`, intraday uses `"%Y-%m-%d %H:%M:%S"` via `_format_boundary(ts, interval)` so adjacent IS-end and OOS-start bars on the same calendar day don't collide on string equality (which would re-fetch the full day and leak IS into OOS).
+- **YahooProvider.fetch() accepts both date and datetime strings** via `pd.Timestamp()` since C28. The earlier strict `strptime('%Y-%m-%d')` would crash on intraday WFA window boundaries.
+- **5 stability tags** (`StabilityTag = Literal[...]`): `stable_plateau` / `spike` / `low_trades_is` / `no_oos_trades` / `no_is_trades`. `low_trades_is` is NOT overwritten by `no_oos_trades` — IS-side signal is more actionable.
+- **Timeout drops biased windows.** If `_WFA_TIMEOUT_SECS` fires mid-IS-grid, the partial-grid window is NOT appended (would report a winner picked from a deterministic prefix of the combo product). Loop breaks instead.
+- **Frontend `WalkForwardPanel` + `OptimizerPanel` persist input config** to localStorage keyed by `(ticker, interval, source)`. Survives tab switches and page reloads. Result objects are NOT persisted (MB-scale). Param paths validated against current `paramOptions` on restore.
+- **Sub-panels in `Results.tsx` stay mounted across sub-tab switches** via `display: 'none'` (same pattern as App.tsx top-level tabs, F152). Conditional `&&` rendering would unmount and lose run results on every tab click.
+
 ## Bot System
 
 - `BotManager` singleton persists to `backend/data/bots.json`, loaded at FastAPI lifespan.

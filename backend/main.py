@@ -36,6 +36,7 @@ from routes.notifications import router as notifications_router
 from routes.monte_carlo import router as monte_carlo_router
 from routes.backtest_sweep import router as backtest_sweep_router
 from routes.backtest_optimizer import router as backtest_optimizer_router
+from routes.walk_forward import router as walk_forward_router
 import routes.bots as bots_module
 from bot_manager import BotManager
 from middleware import BodySizeLimitMiddleware, DEFAULT_MAX_BYTES, parse_max_body_env
@@ -122,6 +123,7 @@ app.include_router(notifications_router)
 app.include_router(monte_carlo_router)
 app.include_router(backtest_sweep_router)
 app.include_router(backtest_optimizer_router)
+app.include_router(walk_forward_router)
 
 
 @app.get("/api/cache")

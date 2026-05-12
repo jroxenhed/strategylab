@@ -15,8 +15,9 @@ import StreakPanel from './StreakPanel'
 import KellySizing from './KellySizing'
 import SensitivityPanel from './SensitivityPanel'
 import OptimizerPanel from './OptimizerPanel'
+import WalkForwardPanel from './WalkForwardPanel'
 
-export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace' | 'session' | 'monte_carlo' | 'rolling' | 'hold_duration' | 'sensitivity' | 'optimizer'
+export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace' | 'session' | 'monte_carlo' | 'rolling' | 'hold_duration' | 'sensitivity' | 'optimizer' | 'walk_forward'
 
 function fmtDate(d: string | number | undefined): string {
   if (typeof d === 'number') return fmtDateTimeET(d)
@@ -395,7 +396,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
              ...(sells.length >= 2 ? ['monte_carlo'] : []),
              ...(sells.length >= 5 ? ['rolling'] : []),
              ...(sells.length >= 2 ? ['hold_duration'] : []),
-             ...(lastRequest ? ['sensitivity', 'optimizer'] : []),
+             ...(lastRequest ? ['sensitivity', 'optimizer', 'walk_forward'] : []),
           ] as ResultsTab[]).map(tab => (
             <button
               key={tab}
@@ -411,6 +412,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
                 : tab === 'hold_duration' ? 'Hold Time'
                 : tab === 'sensitivity' ? 'Sensitivity'
                 : tab === 'optimizer' ? 'Optimizer'
+                : tab === 'walk_forward' ? 'Walk-Forward'
                 : `Signal Trace (${signal_trace!.length})`}
             </button>
           ))}
@@ -736,15 +738,24 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
         </div>
       )}
 
-      {activeTab === 'sensitivity' && lastRequest && (
-        <div style={{ padding: '0 16px 16px' }}>
+      {/* Keep panels mounted across sub-tab switches so expensive run results
+          (sweep heatmaps, optimizer tables, walk-forward windows) survive
+          tab switching. Visibility is toggled via display:none. */}
+      {lastRequest && (
+        <div style={{ padding: '0 16px 16px', display: activeTab === 'sensitivity' ? undefined : 'none' }}>
           <SensitivityPanel lastRequest={lastRequest} sweepInit={sweepInit} onSweepConsumed={onSweepConsumed} />
         </div>
       )}
 
-      {activeTab === 'optimizer' && lastRequest && (
-        <div style={{ padding: '0 16px 16px' }}>
+      {lastRequest && (
+        <div style={{ padding: '0 16px 16px', display: activeTab === 'optimizer' ? undefined : 'none' }}>
           <OptimizerPanel lastRequest={lastRequest} />
+        </div>
+      )}
+
+      {lastRequest && (
+        <div style={{ padding: '0 16px 16px', display: activeTab === 'walk_forward' ? undefined : 'none' }}>
+          <WalkForwardPanel lastRequest={lastRequest} />
         </div>
       )}
 

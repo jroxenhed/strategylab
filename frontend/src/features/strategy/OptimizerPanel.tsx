@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import type { StrategyRequest } from '../../shared/types'
 import { api } from '../../api/client'
 import { apiErrorDetail } from '../../shared/utils/errors'
@@ -58,15 +58,44 @@ export default function OptimizerPanel({ lastRequest }: Props) {
   const [error, setError] = useState('')
   const [result, setResult] = useState<OptimizeResponse | null>(null)
 
-  const prevRequestRef = useRef(lastRequest)
+  // Persist input config per (ticker, interval, source). Survives tab switches
+  // and page reloads. Result is NOT persisted (could be MB-scale).
+  const storageKey = `strategylab-optimizer-config-${lastRequest.ticker}-${lastRequest.interval}-${lastRequest.source ?? 'yahoo'}`
+
   useEffect(() => {
-    if (prevRequestRef.current === lastRequest) return
-    prevRequestRef.current = lastRequest
-    const opts = buildParamOptions(lastRequest, 5)
-    setParamRows([{ path: opts[0]?.path ?? '', min: '', max: '', steps: '5' }, null, null])
+    let saved: { metric?: string; topN?: string; paramRows?: (ParamRow | null)[] } | null = null
+    try {
+      const raw = localStorage.getItem(storageKey)
+      if (raw) saved = JSON.parse(raw)
+    } catch { /* corrupt entry — fall through */ }
+
+    if (saved) {
+      if (typeof saved.metric === 'string') setMetric(saved.metric)
+      if (typeof saved.topN === 'string') setTopN(saved.topN)
+      if (Array.isArray(saved.paramRows)) {
+        const validPaths = new Set(paramOptions.map((o) => o.path))
+        const restored = saved.paramRows.map((r) =>
+          r && validPaths.has(r.path) ? r : null
+        )
+        while (restored.length < 3) restored.push(null)
+        if (restored.filter(Boolean).length === 0) restored[0] = emptyRow()
+        setParamRows(restored as (ParamRow | null)[])
+      }
+    } else {
+      setMetric('sharpe_ratio')
+      setTopN('10')
+      setParamRows([emptyRow(), null, null])
+    }
     setResult(null)
     setError('')
-  }, [lastRequest])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageKey])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({ metric, topN, paramRows }))
+    } catch { /* quota exceeded */ }
+  }, [storageKey, metric, topN, paramRows])
 
   const activeRows = paramRows.filter((p): p is ParamRow => p !== null && p.path !== NONE_PATH)
 

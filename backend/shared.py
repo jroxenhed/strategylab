@@ -54,17 +54,25 @@ class DataProvider(Protocol):
 class YahooProvider:
     def fetch(self, ticker: str, start: str, end: str, interval: str, extended_hours: bool = False) -> pd.DataFrame:
         _data_rate_counter.record()
-        # Clamp date range to yfinance limits for intraday intervals
+        # Clamp date range to yfinance limits for intraday intervals.
+        # Accept both date strings ("2024-03-15") and datetime strings ("2024-03-15 14:30:00")
+        # via pd.Timestamp — needed by walk-forward intraday window boundaries.
         max_days = _INTERVAL_MAX_DAYS.get(interval)
+        end_ts = pd.Timestamp(end)
+        start_ts = pd.Timestamp(start)
         if max_days is not None:
-            from datetime import datetime, timedelta
-            end_dt = datetime.strptime(end, '%Y-%m-%d')
-            earliest = end_dt - timedelta(days=max_days)
-            start_dt = datetime.strptime(start, '%Y-%m-%d')
-            if start_dt < earliest:
-                start = earliest.strftime('%Y-%m-%d')
+            from datetime import timedelta
+            earliest = end_ts - timedelta(days=max_days)
+            if start_ts < earliest:
+                start_ts = earliest
 
-        df = yf.Ticker(ticker).history(start=start, end=end, interval=interval, auto_adjust=True, prepost=extended_hours)
+        df = yf.Ticker(ticker).history(
+            start=start_ts.to_pydatetime(),
+            end=end_ts.to_pydatetime(),
+            interval=interval,
+            auto_adjust=True,
+            prepost=extended_hours,
+        )
         if df.empty:
             raise HTTPException(status_code=404, detail=f"No data for {ticker}")
         return df.dropna()
