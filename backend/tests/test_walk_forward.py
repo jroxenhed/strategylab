@@ -1309,3 +1309,133 @@ class TestStreamEndpoint:
             f"Window count mismatch: stream={len(stream_result['windows'])} "
             f"sync={len(sync_data['windows'])}"
         )
+
+    def test_cancel_signal_sets_event_on_early_close(self, monkeypatch):
+        """F177 — Cancel-signal integration test.
+
+        When the SSE client closes the stream early (after consuming only the
+        first progress event), the generator's finally block runs and calls
+        cancel_event.set(). Verify the set() call is made by wrapping
+        threading.Event with a recording subclass that tracks all instances.
+        """
+        import json
+        import threading
+        import routes.walk_forward as wf_mod
+        import routes.grid_runner as grid_runner_mod
+
+        # Track every Event instance created + how many times set() fires.
+        instances: list["_RecordingEvent"] = []
+        set_calls: list[int] = []
+
+        class _RecordingEvent(threading.Event):
+            """threading.Event subclass — records set() calls and self-registers."""
+            def __init__(self):
+                super().__init__()
+                instances.append(self)
+
+            def set(self):
+                set_calls.append(1)
+                super().set()
+
+        monkeypatch.setattr(wf_mod.threading, "Event", _RecordingEvent)
+
+        # Enough data for >= 3 windows so at least one progress event fires
+        # before we break.
+        mock_df = _make_mock_df(n=500, start="2020-01-01")
+        monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
+
+        def _stub_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
+            return _minimal_backtest_result()
+
+        monkeypatch.setattr(grid_runner_mod, "run_backtest", _stub_run_backtest)
+        monkeypatch.setattr(wf_mod, "run_backtest", _stub_run_backtest)
+
+        with client.stream(
+            "POST",
+            "/api/backtest/walk_forward/stream",
+            json=_wf_payload(is_bars=100, oos_bars=100),
+        ) as resp:
+            assert resp.status_code == 200
+            for line in resp.iter_lines():
+                if line and line.startswith("data: "):
+                    event = json.loads(line[6:])
+                    if event.get("type") == "progress":
+                        # Got first progress event — disconnect early.
+                        break
+
+        # Exiting the with-block triggers the generator's finally → cancel_event.set().
+        # Assert that the last-created Event instance (the cancel_event constructed
+        # inside event_stream()) was set — not just that any set() fired anywhere.
+        assert instances, "No threading.Event was constructed during the stream"
+        assert instances[-1].is_set(), (
+            "Last-created Event (the cancel_event) was not set after client disconnect; "
+            f"set_calls={set_calls}, instances={instances}"
+        )
+
+    def test_nan_in_metrics_emits_error_event(self, monkeypatch):
+        """F178 — NaN-in-metrics serialisation test.
+
+        When _assemble_walk_forward_response returns a WalkForwardResponse
+        containing NaN, json.dumps(allow_nan=False) raises ValueError. The
+        stream route must catch it and emit an error event with status 500.
+        No result event should appear after the error event.
+        """
+        import json
+        import routes.walk_forward as wf_mod
+        import routes.grid_runner as grid_runner_mod
+
+        mock_df = _make_mock_df(n=400, start="2020-01-01")
+        monkeypatch.setattr(wf_mod, "_fetch", lambda *a, **kw: mock_df)
+
+        def _stub_run_backtest(req, *, include_spy_correlation=True, indicator_cache=None, df=None):
+            return _minimal_backtest_result()
+
+        monkeypatch.setattr(grid_runner_mod, "run_backtest", _stub_run_backtest)
+        monkeypatch.setattr(wf_mod, "run_backtest", _stub_run_backtest)
+
+        # Inject NaN into the assembled response by patching _assemble_walk_forward_response.
+        _real_assemble = wf_mod._assemble_walk_forward_response
+
+        def _nan_assemble(*args, **kwargs):
+            result = _real_assemble(*args, **kwargs)
+            # Replace wfe with NaN to trigger json.dumps(allow_nan=False) failure.
+            return result.model_copy(update={"wfe": float("nan")})
+
+        monkeypatch.setattr(wf_mod, "_assemble_walk_forward_response", _nan_assemble)
+
+        events: list[dict] = []
+        with client.stream(
+            "POST",
+            "/api/backtest/walk_forward/stream",
+            json=_wf_payload(is_bars=100, oos_bars=100),
+        ) as resp:
+            assert resp.status_code == 200
+            for line in resp.iter_lines():
+                if line and line.startswith("data: "):
+                    events.append(json.loads(line[6:]))
+
+        types = [e["type"] for e in events]
+
+        # started event must be present
+        assert "started" in types, f"No 'started' event in stream: {types}"
+
+        # An error event with status 500 must be present
+        error_events = [e for e in events if e.get("type") == "error"]
+        assert len(error_events) >= 1, (
+            f"Expected an 'error' event due to NaN serialisation, got events: {types}"
+        )
+
+        err = error_events[0]
+        assert err.get("status") == 500, (
+            f"Expected error status 500, got: {err.get('status')}"
+        )
+        assert "detail" in err, f"Error event missing 'detail': {err}"
+        # The detail should mention serialisation (matches walk_forward.py:575 wording)
+        assert "serialis" in err["detail"].lower() or "serial" in err["detail"].lower(), (
+            f"Error detail doesn't mention serialisation: {err['detail']}"
+        )
+
+        # No result event should appear after the error
+        assert "result" not in types, (
+            f"'result' event should not be emitted after serialisation error, got: {types}"
+        )

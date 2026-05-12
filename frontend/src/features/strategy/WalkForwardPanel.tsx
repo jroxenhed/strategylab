@@ -7,6 +7,7 @@ import { apiErrorDetail } from '../../shared/utils/errors'
 import { api } from '../../api/client'
 import { buildParamOptions, linspace } from './paramOptions'
 import type { ParamOption } from './paramOptions'
+import { parseSseFrame } from './sseParser'
 
 // ---------------------------------------------------------------------------
 // Inline types — match backend Pydantic models verbatim
@@ -653,11 +654,10 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
             const dataLines = raw.split('\n').filter(l => l.startsWith('data: ')).map(l => l.slice(6))
             if (dataLines.length === 0) continue
             // KT-3: Guard against malformed events from the server.
-            let evt: SseEvent
-            try {
-              evt = JSON.parse(dataLines.join('\n')) as SseEvent
-            } catch (parseErr) {
-              console.warn('[WFA] Malformed SSE event, skipping:', dataLines.join('\n'), parseErr)
+            const evt = parseSseFrame(dataLines) as SseEvent | null
+            if (evt === null) continue
+            if (typeof (evt as { type?: unknown }).type !== 'string') {
+              console.warn('[WFA] SSE event missing .type, skipping:', evt)
               continue
             }
             if (evt.type === 'started') {
@@ -684,11 +684,10 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
           buf = buf.slice(sepIdx + 2)
           const dataLines = raw.split('\n').filter(l => l.startsWith('data: ')).map(l => l.slice(6))
           if (dataLines.length === 0) continue
-          let evt: SseEvent
-          try {
-            evt = JSON.parse(dataLines.join('\n')) as SseEvent
-          } catch (parseErr) {
-            console.warn('[WFA] Malformed SSE event in flush, skipping:', dataLines.join('\n'), parseErr)
+          const evt = parseSseFrame(dataLines, 'SSE event in flush') as SseEvent | null
+          if (evt === null) continue
+          if (typeof (evt as { type?: unknown }).type !== 'string') {
+            console.warn('[WFA] SSE event missing .type, skipping:', evt)
             continue
           }
           if (evt.type === 'result') {
