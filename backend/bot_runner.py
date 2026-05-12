@@ -195,7 +195,7 @@ class BotRunner(RegimeMixin, ExitsMixin):
             bot_id=cfg.bot_id,
         ))
 
-        self.manager.save()
+        await asyncio.to_thread(self.manager.save)
 
     async def _tick(self):
         cfg = self.config
@@ -332,7 +332,7 @@ class BotRunner(RegimeMixin, ExitsMixin):
                 state.pending_close_reason = None
                 self._last_broker_qty = None
                 has_position = False
-                self.manager.save()
+                await asyncio.to_thread(self.manager.save)
                 # If close_and_reverse and new direction is valid: enter, then return
                 if cfg.regime.on_flip == "close_and_reverse" and entry_dir not in ("flat", None) and in_hours:
                     if state.skip_remaining > 0:
@@ -503,7 +503,7 @@ class BotRunner(RegimeMixin, ExitsMixin):
         self.state.started_at = datetime.now(timezone.utc).isoformat()
         self._log("INFO", f"Bot started: {self.config.symbol} {self.config.interval}")
         self._register_error_listener()
-        self.manager.save()
+        await asyncio.to_thread(self.manager.save)
 
         if _POLL_MS > 0:
             interval_secs = _POLL_MS / 1000.0
@@ -526,12 +526,12 @@ class BotRunner(RegimeMixin, ExitsMixin):
                 except Exception as e:
                     consec_errors += 1
                     self._log("WARN", f"Tick failed ({consec_errors}/{MAX_CONSEC_ERRORS}): {e}")
-                    self.manager.save()
+                    await asyncio.to_thread(self.manager.save)
                     if consec_errors >= MAX_CONSEC_ERRORS:
                         # Transient failures: backoff and retry instead of dying
                         self._log("WARN", f"Backing off {RECOVERY_WAIT}s after {MAX_CONSEC_ERRORS} consecutive failures")
                         self.state.error_message = f"Recovering: {e}"
-                        self.manager.save()
+                        await asyncio.to_thread(self.manager.save)
                         asyncio.create_task(notify_error(
                             symbol=self.config.symbol,
                             error_msg=f"{MAX_CONSEC_ERRORS} consecutive tick failures: {e}",
@@ -542,11 +542,11 @@ class BotRunner(RegimeMixin, ExitsMixin):
                         self._log("INFO", "Resuming after recovery backoff")
                         self.state.error_message = None
                         self.state.status = "running"
-                        self.manager.save()
+                        await asyncio.to_thread(self.manager.save)
                         continue
                 await asyncio.sleep(interval_secs)
         finally:
             self._unregister_error_listener()
             self.state.status = "stopped"
             self.state.started_at = None
-            self.manager.save()
+            await asyncio.to_thread(self.manager.save)

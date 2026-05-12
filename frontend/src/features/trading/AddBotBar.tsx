@@ -40,6 +40,7 @@ export default function AddBotBar({
   const [maxSpreadBps, setMaxSpreadBps] = useState('50')
   const [maxDrawdownPct, setMaxDrawdownPct] = useState('')
   const [error, setError] = useState('')
+  const [adding, setAdding] = useState(false)
 
   const loadStrategies = () => {
     try {
@@ -77,6 +78,7 @@ export default function AddBotBar({
       const s = strategies[idx]
       setSymbol(s.ticker ?? '')
       setInterval(s.interval ?? '15m')
+      setDirection((s.direction as 'long' | 'short') ?? 'long')
     }
   }
 
@@ -84,11 +86,13 @@ export default function AddBotBar({
   const canAdd = fund && fund.bot_fund > 0 && available > 0 && selectedIdx >= 0 && symbol && allocation
 
   const handleAdd = async () => {
+    if (adding) return
     setError('')
     const alloc = parseFloat(allocation)
     if (isNaN(alloc) || alloc <= 0) { setError('Enter a valid allocation'); return }
     if (alloc > available) { setError(`Max available: ${fmtUsd(available)}`); return }
     const s = strategies[selectedIdx]
+    setAdding(true)
     try {
       const hasRegime = !!(s.regime && s.regime.enabled)
       await onAdd({
@@ -127,6 +131,8 @@ export default function AddBotBar({
       setAllocation('')
     } catch (e) {
       setError(apiErrorDetail(e, 'Failed to add bot'))
+    } finally {
+      setAdding(false)
     }
   }
 
@@ -231,10 +237,10 @@ export default function AddBotBar({
 
         <button
           onClick={handleAdd}
-          disabled={!canAdd}
-          style={btnStyle('#1e3a5f', !canAdd)}
+          disabled={!canAdd || adding}
+          style={btnStyle('#1e3a5f', !canAdd || adding)}
         >
-          + Add Bot
+          {adding ? 'Adding…' : '+ Add Bot'}
         </button>
       </div>
 

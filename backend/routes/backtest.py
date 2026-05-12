@@ -355,7 +355,9 @@ def run_backtest(
             long_sell_rules = [migrate_rule(r) for r in (req.long_sell_rules or [])]
             short_buy_rules = [migrate_rule(r) for r in (req.short_buy_rules or [])]
             short_sell_rules = [migrate_rule(r) for r in (req.short_sell_rules or [])]
-            # Combine all rules so indicators are computed for every rule across both sets
+            # all_rules already contains unified buy + sell rules (see line above).
+            # In b23 mode, append direction-specific rules so their indicators are pre-computed too.
+            # Duplicates are harmless — compute_indicators caches by (indicator, params).
             all_rules = all_rules + long_buy_rules + long_sell_rules + short_buy_rules + short_sell_rules
         else:
             long_buy_rules = []

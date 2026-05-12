@@ -523,6 +523,6 @@ export default function RuleRow({ rule, onChange, onDelete, onSweep }: { rule: R
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  ruleRow: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 },
+  ruleRow: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, overflowX: 'auto', flexWrap: 'nowrap' },
   ruleSelect: { fontSize: 12, padding: '3px 6px', background: '#0d1117', border: '1px solid #30363d', borderRadius: 4, color: '#e6edf3' },
 }

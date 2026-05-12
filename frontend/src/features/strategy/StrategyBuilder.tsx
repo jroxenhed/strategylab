@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Plus, Play } from 'lucide-react'
 import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, SavedStrategy, RegimeConfig } from '../../shared/types'
@@ -342,6 +342,25 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
       shortTrailingEnabled, shortTrailingConfig,
       longMaxBarsHeld, shortMaxBarsHeld,
       longPosSize, shortPosSize])
+
+  // B32 — Cmd/Ctrl+Enter triggers Run Backtest globally.
+  // runBacktestRef keeps the listener bound once while always invoking the
+  // latest closure (otherwise empty-deps would pin the mount-time state).
+  const runBacktestRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    runBacktestRef.current = runBacktest
+  })
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey) || e.key !== 'Enter') return
+      const el = document.activeElement
+      if (el instanceof HTMLElement && (el.tagName === 'TEXTAREA' || el.isContentEditable)) return
+      e.preventDefault()
+      runBacktestRef.current()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   async function runBacktest() {
     setLoading(true)
@@ -736,6 +755,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   // ─── Main render ───────────────────────────────────────────────────────────
   return (
     <>
+      {/* B33 — spinner keyframes */}
+      <style>{`@keyframes sb-spin { to { transform: rotate(360deg); } }`}</style>
       {/* Settings: portaled to right panel or inline fallback */}
       {settingsTarget
         ? createPortal(settingsJSX, settingsTarget)
@@ -1130,8 +1151,14 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
           <div style={{ color: 'var(--accent-red)', fontSize: 11, padding: '0 16px 4px' }}>{importError}</div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '8px 16px' }}>
-          <button onClick={runBacktest} disabled={loading} style={styles.runBtn}>
-            <Play size={14} fill="currentColor" /> {loading ? 'Running...' : 'Run Backtest'}
+          <button
+            onClick={runBacktest}
+            disabled={loading}
+            style={{ ...styles.runBtn, ...(loading ? { opacity: 0.6, cursor: 'not-allowed' } : {}) }}
+          >
+            {loading
+              ? <><span style={styles.spinner} />{' Running...'}</>
+              : <><Play size={14} fill="currentColor" />{' Run Backtest'}</>}
           </button>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
             <input type="checkbox" checked={debug} onChange={e => setDebug(e.target.checked)} />
@@ -1168,4 +1195,5 @@ const styles: Record<string, React.CSSProperties> = {
   settingsLabel: { fontSize: 12, color: 'var(--text-secondary)', width: 100, flexShrink: 0 },
   settingsInput: { width: 90, fontSize: 12, padding: '4px 8px' },
   runBtn: { display: 'flex', alignItems: 'center', gap: 8, background: 'linear-gradient(135deg, var(--accent-green), #059669)', color: '#fff', padding: '10px 24px', borderRadius: 'var(--radius-md)', fontSize: 14, fontWeight: 600, cursor: 'pointer', boxShadow: 'rgba(16, 185, 129, 0.2) 0px 4px 12px', transition: 'all 0.2s ease', border: 'none' },
+  spinner: { display: 'inline-block', width: 13, height: 13, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%', animation: 'sb-spin 0.7s linear infinite', flexShrink: 0 },
 }

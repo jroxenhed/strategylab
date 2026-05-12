@@ -388,8 +388,8 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
 
   return (
     <div style={styles.container}>
-      <div style={{ ...styles.tabBar, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex' }}>
+      <div style={{ ...styles.tabBar, flexWrap: 'nowrap', overflowX: 'auto' }}>
+        <div style={{ display: 'flex', flexWrap: 'nowrap' }}>
           {(['summary', 'equity', 'trades',
              ...(signal_trace ? ['trace'] : []),
              ...(result.session_analytics && result.session_analytics.length > 0 ? ['session'] : []),
@@ -481,7 +481,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
         </div>
       </div>
 
-      {(activeTab === 'summary' || activeTab === 'equity') && (
+      {activeTab === 'summary' && (
         <div style={styles.metricsGrid}>
           {[
             { label: 'Return', value: `${summary.total_return_pct > 0 ? '+' : ''}${summary.total_return_pct}%`, color: summary.total_return_pct >= 0 ? '#26a641' : '#f85149', primary: true },
@@ -492,6 +492,20 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
             { label: 'Win Rate', value: `${summary.win_rate_pct}%`, color: summary.win_rate_pct >= 50 ? '#26a641' : '#f85149', primary: false },
             { label: 'Sharpe', value: summary.sharpe_ratio, color: summary.sharpe_ratio >= 1 ? '#26a641' : summary.sharpe_ratio >= 0.5 ? '#d29922' : summary.sharpe_ratio < 0 ? '#f85149' : '#8b949e', primary: false },
             { label: 'Max DD', value: `${summary.max_drawdown_pct}%`, color: Math.abs(summary.max_drawdown_pct) >= 10 ? '#f85149' : '#8b949e', primary: false },
+          ].map(({ label, value, color, primary }) => (
+            <div key={label} style={{ ...styles.metric, minWidth: primary ? 140 : 90 }}>
+              <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>{label}</div>
+              <div style={{ fontSize: primary ? 22 : 13, fontWeight: 700, color }}>{value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {activeTab === 'equity' && (
+        <div style={{ ...styles.metricsGrid, padding: '8px 16px' }}>
+          {[
+            { label: 'Return', value: `${summary.total_return_pct > 0 ? '+' : ''}${summary.total_return_pct}%`, color: summary.total_return_pct >= 0 ? '#26a641' : '#f85149', primary: true },
+            { label: 'Sharpe', value: summary.sharpe_ratio, color: summary.sharpe_ratio >= 1 ? '#26a641' : summary.sharpe_ratio >= 0.5 ? '#d29922' : summary.sharpe_ratio < 0 ? '#f85149' : '#8b949e', primary: false },
           ].map(({ label, value, color, primary }) => (
             <div key={label} style={{ ...styles.metric, minWidth: primary ? 140 : 90 }}>
               <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>{label}</div>
@@ -608,7 +622,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
             </div>
           )
         ) : (
-          <div ref={chartRef} style={{ width: '100%', height: 250, minHeight: 100, maxHeight: 600, resize: 'vertical', overflow: 'hidden' }} />
+          <div ref={chartRef} style={{ width: '100%', height: 250, minHeight: 100, maxHeight: 600, resize: 'vertical', overflow: 'auto' }} />
         )
       )}
 
@@ -1148,6 +1162,7 @@ const styles: Record<string, React.CSSProperties> = {
   tab: {
     padding: '6px 14px', fontSize: 12, color: '#8b949e',
     background: 'none', border: 'none', borderBottom: '2px solid transparent', cursor: 'pointer',
+    whiteSpace: 'nowrap' as const, flexShrink: 0,
   },
   tabActive: { color: '#58a6ff', borderBottomColor: '#58a6ff' },
   metricsGrid: { display: 'flex', flexWrap: 'wrap', padding: '12px 16px', gap: 0, alignContent: 'flex-start', flexShrink: 0 },
