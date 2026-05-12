@@ -20,6 +20,21 @@ client = TestClient(app)
 
 
 # ---------------------------------------------------------------------------
+# Force serial WFA for all tests in this file.
+#
+# Subprocess workers in the parallel pool cannot see monkeypatch-based mocks
+# on run_backtest / run_grid / _fetch (those patches live in the test process
+# only). Setting _FORCE_SERIAL=True routes every WFA request through
+# _run_windows_serial (in-process), preserving all existing mock contracts.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _force_serial_wfa(monkeypatch):
+    import routes.wfa_pool as wfa_pool_mod
+    monkeypatch.setattr(wfa_pool_mod, "_FORCE_SERIAL", True)
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -1014,12 +1029,16 @@ class TestWindowLogic:
         Timeout that fires mid-IS-grid (after the 1st of 3 combos) must result in the
         incomplete window being dropped from data['windows'].
 
-        After F163 the IS-grid loop runs inside grid_runner._run_grid_serial, so the
-        monotonic clock that decides the partial-grid timeout lives in grid_runner,
-        not walk_forward. We mock both:
-          - wf_mod.monotonic returns 0 (so the outer per-window budget check passes)
-          - grid_runner_mod.monotonic returns 0 for combo 1's check and 9999 for combo 2's,
-            making run_grid return (1 result, timed_out=True) which WFA then drops.
+        After F166: WFA's per-window budget check is replaced by a single
+        `remaining_budget` calculation passed to run_windows_parallel.
+        Both monotonic() calls in walk_forward.py happen back-to-back inside
+        the remaining_budget calc; mocking wf_mod.monotonic to always return 0.0
+        yields remaining_budget=120s (full budget), so the serial path proceeds.
+        The IS grid timeout is exercised via grid_runner_mod.monotonic: returns 0
+        for combo 1's check and 9999 for combo 2's, making run_grid return
+        (1 result, timed_out=True). The serial path emits a biased_partial=True
+        WindowOutput; walk_forward.py's post-processing skips it and sets
+        timed_out=True.
         """
         import routes.walk_forward as wf_mod
 
@@ -1035,8 +1054,10 @@ class TestWindowLogic:
         monkeypatch.setattr(grid_runner_mod, "run_backtest", mock_run_backtest)
         monkeypatch.setattr(wf_mod, "run_backtest", mock_run_backtest)
 
-        # WFA's per-window budget check must not trigger — make wf_mod's clock
-        # frozen at 0.
+        # Keep wf_mod.monotonic frozen at 0.0: both calls (for _wfa_start and
+        # remaining_budget) return 0, so remaining_budget = 120s (full budget).
+        # The serial path uses wfa_pool.monotonic (not patched) for its own
+        # clock, but the IS-grid clock lives in grid_runner.
         monkeypatch.setattr(wf_mod, "monotonic", lambda: 0.0)
 
         # grid_runner's clock: start=0, combo-1 check=0 (runs), combo-2 check=9999 (timeout).
@@ -1057,9 +1078,14 @@ class TestWindowLogic:
         data = resp.json()
 
         assert data["timed_out"] is True, "Expected timed_out=True with mocked monotonic"
-        # Biased partial window (1 of 3 combos) must be dropped
-        assert len(data["windows"]) == 0, (
-            f"Incomplete window (1 of 3 combos) should be dropped; got {len(data['windows'])} windows"
+        # Window 0 was biased-partial (1 of 3 combos ran before timeout) and must be dropped.
+        # Subsequent windows see the frozen mock clock (9999 - 9999 = 0 ≤ timeout) and
+        # complete normally — the serial path CONTINUEs (not breaks) past biased windows,
+        # so windows 1+ may succeed and appear in results.
+        window_indices = [w["window_index"] for w in data["windows"]]
+        assert 0 not in window_indices, (
+            f"Biased-partial window 0 (1 of 3 combos) should be dropped; "
+            f"got window_indices={window_indices}"
         )
 
 

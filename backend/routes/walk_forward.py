@@ -38,6 +38,7 @@ from routes.backtest import run_backtest
 from routes.backtest_optimizer import _MAX_COMBOS, _MAX_PARAMS, _VALID_METRICS
 from routes.backtest_sweep import _apply_param
 from routes.grid_runner import run_grid
+from routes.wfa_pool import run_windows_parallel
 from shared import _INTERVAL_MAX_DAYS, _INTRADAY_INTERVALS, _fetch
 
 logger = logging.getLogger(__name__)
@@ -185,6 +186,10 @@ def _format_boundary(ts, interval: str) -> str:
 
 @router.post("/api/backtest/walk_forward")
 def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
+    # Capture start time at the very top so elapsed fetch + window-construction
+    # time is correctly subtracted from the WFA budget (Fix 5 / KP-04).
+    _wfa_start = monotonic()
+
     # ------------------------------------------------------------------
     # VALIDATE
     # ------------------------------------------------------------------
@@ -284,7 +289,7 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
     low_windows_warn = len(windows) < 6  # inline literal per plan
 
     # ------------------------------------------------------------------
-    # WALK-FORWARD LOOP
+    # WALK-FORWARD LOOP — parallel dispatch via wfa_pool
     # ------------------------------------------------------------------
     results: list[WindowResult] = []
     window_stitched: list[list[dict]] = []  # per-window rescaled curves; flattened in AGGREGATE
@@ -292,46 +297,55 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
     total_oos_trades = 0
     low_trades_is_count = 0
     timed_out = False
-    start_time = monotonic()
 
-    for w_idx, (is_s, is_e, oos_s, oos_e) in enumerate(windows):
-        if monotonic() - start_time > _WFA_TIMEOUT_SECS:
+    # Subtract elapsed time (fetch + window construction) from the budget.
+    # _wfa_start was captured at the very top of the function so the budget
+    # is accurate. Tests that monkeypatch wf_mod.monotonic to return 9999
+    # on the second call yield a large-negative remaining_budget, which
+    # _run_windows_serial treats as already-expired → timed_out=True.
+    remaining_budget = max(0.0, _WFA_TIMEOUT_SECS - (monotonic() - _wfa_start))
+
+    # Dispatch all windows in parallel (or serial if n < threshold / test seam).
+    # Workers produce WindowOutput per window; we post-process in index order
+    # because scale_factor depends on prev_final_equity (sequential dependency).
+    window_outputs, timed_out_parallel = run_windows_parallel(
+        full_df=df,
+        windows=windows,
+        base=base,
+        params=req.params,
+        interval=base.interval,
+        metric=req.metric,
+        min_trades_is=req.min_trades_is,
+        timeout_secs=remaining_budget,
+        # Pass this module's run_backtest reference so monkeypatches on
+        # routes.walk_forward.run_backtest are honoured in the serial path
+        # (tests that set wf_mod.run_backtest).
+        _run_backtest_fn=run_backtest,
+    )
+    timed_out = timed_out or timed_out_parallel
+
+    for w_idx, _ in enumerate(windows):
+        if w_idx not in window_outputs:
+            # Window was dropped: timeout or worker error.
+            continue
+
+        out = window_outputs[w_idx]
+
+        # Biased-partial window: IS timed out mid-grid — winner from a
+        # deterministic prefix of combos, result is biased. Drop it and
+        # surface timed_out so callers know the run was cut short.
+        if out.biased_partial:
             timed_out = True
-            break
+            continue
 
-        is_start_date = _format_boundary(df.index[is_s], base.interval)
-        is_end_date = _format_boundary(df.index[is_e], base.interval)
-        oos_start_date = _format_boundary(df.index[oos_s], base.interval)
-        oos_end_date = _format_boundary(df.index[oos_e], base.interval)
-        # -- IS grid search (via shared run_grid; serial with cross-combo indicator cache) --
-        remaining_budget = _WFA_TIMEOUT_SECS - (monotonic() - start_time)
-        if remaining_budget <= 0:
-            timed_out = True
-            break
-
-        is_req_template = base.model_copy(update={"start": is_start_date, "end": is_end_date})
-        is_df = df.iloc[is_s : is_e + 1]
-        is_combos, is_timed_out, _is_skipped = run_grid(
-            is_req_template,
-            req.params,
-            timeout_secs=remaining_budget,
-            df=is_df,
-        )
-
-        if is_timed_out:
-            timed_out = True
-            if len(is_combos) < total_combos_per_window:
-                # Partial IS grid → biased winner → drop the window entirely
-                break
-
-        if len(is_combos) == 0:
-            # IS grid search produced zero successful backtests — append degenerate window row
+        # Degenerate window: IS grid produced zero successful backtests.
+        if out.skipped_for_no_is_trades:
             results.append(WindowResult(
                 window_index=w_idx,
-                is_start=is_start_date,
-                is_end=is_end_date,
-                oos_start=oos_start_date,
-                oos_end=oos_end_date,
+                is_start=out.is_start_date,
+                is_end=out.is_end_date,
+                oos_start=out.oos_start_date,
+                oos_end=out.oos_end_date,
                 best_params={},
                 is_sharpe=0.0,
                 is_metrics={},
@@ -343,59 +357,12 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
             window_stitched.append([])  # no contribution to stitched equity
             continue
 
-        # -- Pick IS winner --
-        is_combos.sort(key=lambda x: x[1].get(req.metric, 0), reverse=True)
-        best_combo, best_is_summary = is_combos[0]
-
-        # -- Low-trades IS check --
-        if best_is_summary.get("num_trades", 0) < req.min_trades_is:
+        # Propagate low_trades_is count (IS-side flag from the worker).
+        if out.low_trades_is:
             low_trades_is_count += 1
-            stability_tag = "low_trades_is"
-        else:
-            # -- Neighborhood stability tag --
-            # Build lookup of combo_key → summary for all IS results
-            all_sharpes = [s.get("sharpe_ratio", 0.0) for _, s in is_combos]
-            q75 = float(np.percentile(all_sharpes, 75))  # inline literal: 75th percentile
-            neighbor_keys = _get_neighbor_keys(best_combo, req.params)
-            neighbor_results = [
-                s for c, s in is_combos if _combo_key(c) in neighbor_keys
-            ]
-            if len(neighbor_results) == 0:
-                stability_tag = "spike"  # no neighbors available (edge of 1-value grid)
-            else:
-                top_q_neighbors = sum(
-                    1 for s in neighbor_results if s.get("sharpe_ratio", 0.0) >= q75
-                )
-                stability_tag = (
-                    "stable_plateau"
-                    if top_q_neighbors / len(neighbor_results) >= _STABILITY_THRESHOLD
-                    else "spike"
-                )
 
-        # -- OOS evaluation --
-        oos_req = base.model_copy(update={"start": oos_start_date, "end": oos_end_date})
-        for path, value in best_combo.items():
-            oos_req = _apply_param(oos_req, path, value)
-        oos_df = df.iloc[oos_s : oos_e + 1]
-        try:
-            oos_result = run_backtest(oos_req, df=oos_df, include_spy_correlation=False)
-        except HTTPException as exc:
-            if exc.status_code >= 500:
-                raise
-            logger.warning("WFA window %d OOS skipped (4xx): %s", w_idx, exc.detail)
-            oos_result = {"summary": {"num_trades": 0}, "equity_curve": []}
-        except Exception as exc:
-            logger.warning("WFA window %d OOS raised: %s", w_idx, exc)
-            oos_result = {"summary": {"num_trades": 0}, "equity_curve": []}
-
-        # Only overwrite to "no_oos_trades" if IS-side check didn't already flag low_trades_is —
-        # low_trades_is is more actionable (optimizer had too little IS signal to trust);
-        # no_oos_trades is often a downstream symptom of that.
-        if oos_result["summary"].get("num_trades", 0) == 0 and stability_tag != "low_trades_is":
-            stability_tag = "no_oos_trades"
-
-        # -- Equity rescaling --
-        raw_curve = oos_result.get("equity_curve", [])
+        # Equity rescaling — sequential: depends on prev_final_equity.
+        raw_curve = out.oos_equity_curve
         scale_factor = prev_final_equity / base.initial_capital
         rescaled_curve = [
             {"time": pt["time"], "value": pt["value"] * scale_factor}
@@ -405,19 +372,19 @@ def run_walk_forward(req: WalkForwardRequest) -> WalkForwardResponse:
             prev_final_equity = rescaled_curve[-1]["value"]
         window_stitched.append(rescaled_curve)
 
-        total_oos_trades += oos_result["summary"].get("num_trades", 0)
+        total_oos_trades += out.oos_summary.get("num_trades", 0)
         results.append(WindowResult(
             window_index=w_idx,
-            is_start=is_start_date,
-            is_end=is_end_date,
-            oos_start=oos_start_date,
-            oos_end=oos_end_date,
-            best_params=best_combo,
-            is_sharpe=round(best_is_summary.get("sharpe_ratio", 0.0), 3),
-            is_metrics=best_is_summary,
-            oos_metrics=oos_result["summary"],
-            stability_tag=stability_tag,
-            is_combo_count=len(is_combos),
+            is_start=out.is_start_date,
+            is_end=out.is_end_date,
+            oos_start=out.oos_start_date,
+            oos_end=out.oos_end_date,
+            best_params=out.best_combo,
+            is_sharpe=round(out.is_summary.get("sharpe_ratio", 0.0), 3),
+            is_metrics=out.is_summary,
+            oos_metrics=out.oos_summary,
+            stability_tag=out.stability_tag,
+            is_combo_count=out.is_combo_count,
             scale_factor=scale_factor,
         ))
 
