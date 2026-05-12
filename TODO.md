@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*170 / 192 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*170 / 193 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 - [F127](#f127) — [next] [medium] Batch quick-backtest endpoint has no request-level deadline [medium]
 
-## Open Work — 45 items
+## Open Work — 46 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -23,7 +23,7 @@ _(none open)_
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 14 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F96](#f96), [F98](#f98), [F117](#f117), [F153](#f153), [F158](#f158), [F170](#f170), [F173](#f173) |
 | [F · Hardening](#f-hardening) | Security, reliability, validation | 7 | [F49](#f49), [F106](#f106), [F127](#f127), [F181](#f181)–[F182](#f182), [F184](#f184)–[F185](#f185) |
-| [F · Polish](#f-polish) | UI, naming, dead code | 5 | [F34](#f34)–[F35](#f35), [F44](#f44), [F140](#f140), [F183](#f183) |
+| [F · Polish](#f-polish) | UI, naming, dead code | 6 | [F34](#f34)–[F35](#f35), [F44](#f44), [F140](#f140), [F183](#f183), [F186](#f186) |
 | [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 6 | [F50](#f50)–[F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F172](#f172) |
 
 ## A — Charts & Indicators
@@ -138,6 +138,7 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f157"></a> **F157** `routes/backtest.py:358` comment rewritten — now states explicitly that `all_rules` already holds the unified buy+sell pool from an earlier line, that the b23 branch appends direction-specific rules so their indicators are pre-computed, and that duplicates are harmless because `compute_indicators` caches by `(indicator, params)`. Pure prose; no code change. [easy] [polish] (resolved 2026-05-12)
 - [x] <a id="f171"></a> **F171** WFA UI run-progress feedback — shared `useRequestTimer(active)` hook (renamed from `useElapsedSeconds` mid-session) in `frontend/src/shared/hooks/useRequestTimer.ts` returns `{elapsed, final}`: `elapsed` ticks every ~250ms while `active=true`, `final` captures the run duration on the falling edge and stays stable until the next run starts. Used in WalkForwardPanel, OptimizerPanel, SensitivityPanel. Three UX additions: (1) button text `Running 12s…` while in flight; (2) post-run `Completed in 18s` indicator (with `35% under estimate` / `12% over estimate` calibration callout in WFA when the pre-flight estimate is non-zero); (3) thin time-based progress bar in WFA underneath the live elapsed line, width = `min(99%, elapsed / estimatedSeconds * 100%)` (capped at 99% so the user knows the run isn't done until result lands). Progress bar is synthetic (no streaming from backend, no granular events) — it divides clock time, not real work. Required exposing `estimatedSeconds: tSecs` from `preflightEstimate` (was previously only `timeStr`). Hook uses `performance.now()` so wall-clock stays honest under browser tab throttling. `npm run build` clean. [easy] [polish] (resolved 2026-05-12)
 - [ ] <a id="f183"></a> **F183** Trim F174 `_data_rate_counter` comment in `shared.py:32` — currently over-explains by referencing subprocess isolation as the safety property. Should be one sentence: `# F174: WORKER-SAFE — pure in-process deque allocation; no I/O.` (from 20-item bundle kieran-python KP-6) [easy] [polish] (added 2026-05-13)
+- [ ] <a id="f186"></a> **F186** F160 abort-on-resubmit path is dead in OptimizerPanel + SensitivityPanel — both buttons are `disabled={loading}` (OptimizerPanel.tsx:308, SensitivityPanel.tsx:223), so users can never double-fire and the `abortControllerRef.current?.abort()` at submit time (lines 172/117) never has anything to abort. Unmount-cleanup is also rarely exercised because Results.tsx sub-panels stay mounted via `display: 'none'`. Either delete the resubmit-abort branch + keep only unmount cleanup, or wire a real Cancel button (like F175 WFA) if user-triggered abort has value for long Optimizer runs. F175 retains its full abort surface (Cancel button is the user trigger). (browser-verified during F160 smoke test 2026-05-13) [easy] [polish] (added 2026-05-13)
 
 ### F · Testing and Infra
 - [ ] <a id="f50"></a> **F50** Frontend console-error smoke test in overnight build — after `npm run build`, boot `npm run preview &` (Vite preview server, default port **4173** — distinct from `npm run dev`'s 5173 because we want to validate the production `dist/` artifact, not the dev server). `curl -fsS http://localhost:4173/` to verify the page loads, then a short headless check (e.g. `node -e` with a minimal fetch + parse) that there are no obvious crash markers in the served HTML. Catches "compiles clean but throws on mount" and broken import paths that `tsc -b` doesn't detect. Append to `docs/overnight-builder-prompt-patch.md` Section 3.5 (smoke test). [easy] (from overnight pipeline gap review) [infra]
