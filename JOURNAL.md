@@ -6,6 +6,15 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-13
 
+### F198 — IBKR close orders auto-cancelled due to NYSE-direct routing (root-caused via new debug surface)
+
+- Follow-on to F195. After the routing fix, manual IBKR closes still silently failed — `close_position` returned `fill_price=null, fill_qty=null` and `/api/trading/orders` showed the order as `cancelled` with no submitted timestamp.
+- Added a 50-entry ring-buffer `_recent_errors` on `IBKRTradingProvider` (hooked from existing `_on_ib_error`) and a `GET /api/debug/ibkr-errors` endpoint. Triggering the close once captured the full ib_insync error chain — **code 10311** ("This order will be directly routed to NYSE. Direct routed orders may result in higher trade fees. Restriction is specified in Precautionary Settings of Global Configuration/API.") followed by **code 201** ("Order rejected - reason:Order was discarded.").
+- **Root cause**: `close_position` placed orders against `p.contract` (the position's stored contract) — IBKR records the position's `contract.exchange` as the actual fill exchange ("NYSE"), not "SMART". Gateway's Precautionary Settings → "Bypass direct routed orders for API" refuse direct-routed orders by default, so IBKR discards the order.
+- **Fix**: rebuild the contract via `self._contract(symbol)` (= `Stock(symbol, "SMART", "USD")`) for both `close_position` and `close_all_positions`. The contract used for `placeOrder` is now always SMART-routed regardless of where the position originally filled.
+- Diagnostic endpoint kept — useful for future IBKR investigations where backend stderr isn't reachable from the agent session. Tradeoff: it's a debug surface with no auth gate; acceptable on localhost paper-trading scope, would need protecting if backend were ever exposed.
+- User closed the live IBKR BABA position via **IBKR Mobile** in parallel with the fix work — the SMART-route patch is verified mechanically but the API end-to-end retry would require a uvicorn full restart (the `broker.py` auto-reload de-registered the IBKR provider; lifespan startup re-registers on a clean restart, not on `--reload`-triggered module reload).
+
 ### F195 — Close button routed to wrong broker (live incident fix)
 
 - User clicked Close on an IBKR BABA LONG 7 position; nothing happened in the UI but an unrelated Alpaca BABA SHORT 30 got bought-to-cover. Root cause: `placeSell()` never sent a `broker` field and `/api/trading/sell` called `get_trading_provider()` with no args, defaulting to the global `_active_broker` (`"alpaca"`). All cross-broker manual closes were silently mis-routed.

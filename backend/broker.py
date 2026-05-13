@@ -331,16 +331,35 @@ class IBKRTradingProvider:
         self._cache_ttl = 3.0
         # Error event callback registry — bot_runner registers per-bot callbacks
         self._error_listeners: list = []  # list of callables(reqId, errorCode, errorString)
+        # F198 diagnostic: ring buffer of recent errorEvent payloads
+        from collections import deque
+        self._recent_errors: deque = deque(maxlen=50)
         # Subscribe to ib_insync error event
         self._ib.errorEvent += self._on_ib_error
 
+    def recent_errors(self) -> list[dict]:
+        return list(self._recent_errors)
+
     def _on_ib_error(self, reqId, errorCode, errorString, contract):
         """Handle async IBKR errors (order rejects, connectivity, etc.)."""
-        import logging
+        import logging, time
         log = logging.getLogger(__name__)
         is_structural = errorCode in self._STRUCTURAL_ERRORS
         tag = "STRUCTURAL" if is_structural else "TRANSIENT"
         log.warning("[IBKR %s] reqId=%s code=%s: %s", tag, reqId, errorCode, errorString)
+        sym = None
+        try:
+            sym = contract.symbol if contract is not None else None
+        except Exception:
+            sym = None
+        self._recent_errors.append({
+            "ts": time.time(),
+            "req_id": reqId,
+            "code": errorCode,
+            "message": errorString,
+            "symbol": sym,
+            "structural": is_structural,
+        })
         for listener in self._error_listeners:
             try:
                 listener(reqId, errorCode, errorString, is_structural)
@@ -641,7 +660,12 @@ class IBKRTradingProvider:
                     order = MarketOrder(side, abs(qty))
                     if acct:
                         order.account = acct
-                    trade = self._ib.placeOrder(p.contract, order)
+                    # F198: route through SMART, not the position's stored exchange.
+                    # IBKR positions filled on NYSE get contract.exchange="NYSE",
+                    # which trips Gateway's Precautionary Settings "direct routed
+                    # orders" guard and IBKR discards the order (code 10311 → 201).
+                    contract = self._contract(symbol)
+                    trade = self._ib.placeOrder(contract, order)
                     return (trade, qty, side)
             return None
 
@@ -668,7 +692,9 @@ class IBKRTradingProvider:
                     continue
                 side = "SELL" if qty > 0 else "BUY"
                 order = MarketOrder(side, abs(qty))
-                self._ib.placeOrder(p.contract, order)
+                # F198: SMART-route, see close_position note above.
+                contract = self._contract(p.contract.symbol)
+                self._ib.placeOrder(contract, order)
         self._run(_close_all())
 
     def cancel_all_orders(self) -> None:

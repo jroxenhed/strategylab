@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*186 / 205 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*187 / 205 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 - [F127](#f127) — [next] [medium] Batch quick-backtest endpoint has no request-level deadline [medium]
 
-## Open Work — 42 items
+## Open Work — 41 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -22,7 +22,7 @@ _(none open)_
 | [D](#d-bots-live-trading) | Bots (live trading) | 1 | [D24b](#d24b) |
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 12 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F173](#f173), [F188](#f188)–[F190](#f190) |
-| [F · Hardening](#f-hardening) | Security, reliability, validation | 7 | [F127](#f127), [F187](#f187), [F191](#f191)–[F192](#f192), [F196](#f196)–[F198](#f198) |
+| [F · Hardening](#f-hardening) | Security, reliability, validation | 6 | [F127](#f127), [F187](#f187), [F191](#f191)–[F192](#f192), [F196](#f196)–[F197](#f197) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 4 | [F34](#f34)–[F35](#f35), [F44](#f44), [F140](#f140) |
 | [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 7 | [F50](#f50)–[F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F193](#f193)–[F194](#f194) |
 
@@ -138,7 +138,7 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f195"></a> **F195** Manual Close button on `PositionsTable` rows hit the wrong broker — `placeSell()` and the `/api/trading/sell` route ignored the position's `broker` and routed through the global `_active_broker` (default `"alpaca"`). Reproduced live 2026-05-13: clicking Close on an IBKR BABA LONG 7 position routed the close to Alpaca, where `close_position` bought-to-cover an unrelated Alpaca BABA SHORT 30. Fix: `placeSell(symbol, qty?, broker?)` sends `broker` in body; `SellRequest.broker: Optional[str]` accepted server-side; `place_sell()` uses `get_trading_provider(req.broker)`. Also keyed `PositionsTable`'s `closing` state by `symbol+broker+side` so the same symbol on two brokers no longer disables both rows simultaneously. `npm run build` clean. F196/F197/F198 follow-ups capture the cover-vs-sell journal mislabel, the wrong-sided stop-cancel cleanup, and the still-mysterious IBKR auto-cancellation of the close orders themselves. [medium] [hardening] (added 2026-05-13) (resolved 2026-05-13)
 - [ ] <a id="f196"></a> **F196** `_log_trade` in `/api/trading/sell` hardcodes side as `"sell"` — covering a short position via the manual Close button logs as "sell" instead of "cover". Other call sites (`exits.py:120,398`, `regime.py:203`) already do `"cover" if pos_is_short else "sell"`. Mirror that pattern: query `provider.get_positions()` for the symbol's side before close, log `"cover"` for shorts. Surfaced 2026-05-13 when the F195 routing bug caused a wrong-broker close that buy-covered an Alpaca short and journaled it as "SELL 30 manual" — actively misleading. [easy] [hardening] (added 2026-05-13)
 - [ ] <a id="f197"></a> **F197** `/api/trading/sell` pre-close cleanup hardcodes `o["side"] == "sell"` when cancelling pending orders. For a short position the stop-loss is a BUY order, so the cleanup is wrong-sided. Same direction-aware fix as F196: cancel `"buy"` for shorts, `"sell"` for longs. (added 2026-05-13) [easy] [hardening]
-- [ ] <a id="f198"></a> **F198** Investigate why IBKR market SELL orders for the existing BABA LONG 7 position get auto-cancelled during RTH. Reproduced 2026-05-13 ~11:00-11:10 ET — orders 15 and 17 both placed cleanly via `IBKRTradingProvider.close_position`, both cancelled within 2s (status returned "cancelled" with no fill, no submitted_at). Account is paper DUQ198248, market open, position real, contract uses `Stock(symbol, "SMART", "USD")`. Backend stderr logs (where ib_insync `errorEvent` warnings would surface) not accessible from the orchestrator session. Need either: redirect uvicorn stderr to a file so subsequent sessions can read it, or add a small ring-buffer of recent IBKR error events to the broker provider and expose via `/api/debug/ibkr-errors`. Also try the order with `orderRef` set, `tif="DAY"` explicit, and `outsideRth=False` (currently all defaults — possibly an ib_insync default mismatch on the new connection). [medium] [hardening] (added 2026-05-13)
+- [x] <a id="f198"></a> **F198** IBKR `close_position` orders got auto-cancelled with no visible reason — root-caused via a new `/api/debug/ibkr-errors` endpoint (50-entry `deque` hooked into `_on_ib_error`) that captured the actual ib_insync chain: code 10311 ("This order will be directly routed to NYSE. Direct routed orders may result in higher trade fees. Restriction is specified in Precautionary Settings of Global Configuration/API.") → code 201 ("Order rejected - reason:Order was discarded."). Root cause: `close_position` placed the order against `p.contract` directly — the position's stored contract has `exchange="NYSE"` because that's where the original BUY filled, and Gateway's Precautionary Settings refuse direct-routed API orders. Fix: rebuild the contract via `self._contract(symbol)` (= `Stock(symbol, "SMART", "USD")`) for both `close_position` and `close_all_positions`. Diagnostic endpoint left in place. Verified mechanically; user closed the actual stuck position via IBKR Mobile while the SMART-route patch was being verified, so the API end-to-end retry needs a backend restart (the broker.py auto-reload de-registered the IBKR provider; lifespan startup re-registers it on a full uvicorn restart). [medium] [hardening] (added 2026-05-13) (resolved 2026-05-13)
 
 ### F · Polish
 - [ ] <a id="f34"></a> **F34** 118+ hardcoded hex colors while CSS variables exist — theme change requires touching dozens of files. Migrate Results.tsx and BotCard.tsx to use --bg-*, --accent-*, --text-* variables. [medium] [polish]

@@ -65,6 +65,16 @@ def set_broker(req: SetBrokerRequest):
     return _broker_payload()
 
 
+@router.get("/api/debug/ibkr-errors")
+def get_ibkr_errors():
+    """F198: recent ib_insync errorEvent payloads — diagnose order rejects."""
+    from broker import _trading_providers
+    p = _trading_providers.get("ibkr")
+    if p is None or not hasattr(p, "recent_errors"):
+        return {"errors": [], "available": False}
+    return {"errors": p.recent_errors(), "available": True}
+
+
 @router.patch("/api/broker/poll-interval")
 def set_poll_interval(body: dict):
     ms = body.get("ms")
