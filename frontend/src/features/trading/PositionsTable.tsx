@@ -17,6 +17,7 @@ interface Props {
 export default function PositionsTable({ brokerFilter, onBrokerFilterChange, availableBrokers, health, heartbeatWarmup, onStale }: Props) {
   const qc = useQueryClient()
   const [closing, setClosing] = useState<string | null>(null)
+  const closeKey = (symbol: string, broker: string | null, side: string) => `${symbol}|${broker ?? ''}|${side}`
   const { data: positionsData } = usePositionsQuery(brokerFilter)
   const { data: journal = [] } = useJournalQuery(brokerFilter)
   const positions = positionsData?.rows ?? []
@@ -38,10 +39,11 @@ export default function PositionsTable({ brokerFilter, onBrokerFilterChange, ava
     entryTimeFallback.set(`${t.symbol}|${side}`, t.timestamp)
   }
 
-  const handleClose = async (symbol: string) => {
-    setClosing(symbol)
+  const handleClose = async (symbol: string, broker: string | null, side: string) => {
+    const key = closeKey(symbol, broker, side)
+    setClosing(key)
     try {
-      await placeSell(symbol)
+      await placeSell(symbol, undefined, broker ?? undefined)
       qc.invalidateQueries({ queryKey: ['positions'] })
     } catch { /* ignore */ }
     setClosing(null)
@@ -98,11 +100,11 @@ export default function PositionsTable({ brokerFilter, onBrokerFilterChange, ava
                 </span>
                 <span style={styles.cell}>
                   <button
-                    onClick={() => handleClose(p.symbol)}
-                    disabled={closing === p.symbol}
+                    onClick={() => handleClose(p.symbol, p.broker, p.side)}
+                    disabled={closing === closeKey(p.symbol, p.broker, p.side)}
                     style={styles.closeBtn}
                   >
-                    {closing === p.symbol ? '...' : 'Close'}
+                    {closing === closeKey(p.symbol, p.broker, p.side) ? '...' : 'Close'}
                   </button>
                 </span>
               </div>

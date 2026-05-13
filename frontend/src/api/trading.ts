@@ -156,8 +156,8 @@ export async function placeBuy(symbol: string, qty: number, stop_loss_pct?: numb
   return data
 }
 
-export async function placeSell(symbol: string, qty?: number) {
-  const { data } = await api.post('/api/trading/sell', { symbol, qty })
+export async function placeSell(symbol: string, qty?: number, broker?: string) {
+  const { data } = await api.post('/api/trading/sell', { symbol, qty, broker })
   return data
 }
 

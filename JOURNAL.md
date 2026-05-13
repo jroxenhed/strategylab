@@ -6,6 +6,13 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-13
 
+### F195 — Close button routed to wrong broker (live incident fix)
+
+- User clicked Close on an IBKR BABA LONG 7 position; nothing happened in the UI but an unrelated Alpaca BABA SHORT 30 got bought-to-cover. Root cause: `placeSell()` never sent a `broker` field and `/api/trading/sell` called `get_trading_provider()` with no args, defaulting to the global `_active_broker` (`"alpaca"`). All cross-broker manual closes were silently mis-routed.
+- Fix is small and contained: **(1)** `frontend/src/api/trading.ts` — `placeSell(symbol, qty?, broker?)`; **(2)** `frontend/src/features/trading/PositionsTable.tsx` — handler takes `(symbol, broker, side)`, passes broker to `placeSell`, keys the `closing` state by `${symbol}|${broker}|${side}` so the same symbol on two brokers no longer disables both rows together; **(3)** `backend/routes/trading.py` — `SellRequest.broker: Optional[str]`, `provider = get_trading_provider(req.broker)`.
+- Verified via curl: `POST /api/trading/sell {"symbol":"ZZZZNOPE","broker":"ibkr"}` returns IBKR's 404 ("No open position for ZZZZNOPE") and the global active broker stays `"alpaca"` — no global side-effect from a per-request broker override. `npm run build` clean.
+- **Three follow-ups surfaced** and added to TODO.md: **[F196]** `_log_trade` in the manual /sell route still hardcodes `"sell"` (mislabels cover-shorts); **[F197]** pre-close stop-cancel cleanup hardcodes side="sell" (wrong-sided on shorts); **[F198]** the underlying IBKR auto-cancellation of the actual close order (orders 15 + 17, mid-RTH, both cancelled within 2s with no visible reason) — backend stderr isn't reachable from the orchestrator session, so this needs either a uvicorn-stderr-to-file redirect or a small in-process ring buffer of IBKR errorEvent payloads exposed via a debug endpoint. The user closed BABA on IBKR manually via IB Gateway as the immediate workaround.
+
 ### 15-item Tier A+B bundle — C25c, F49, F96, F98, F106, F117, F153, F158, F172, F181, F182, F183, F184, F185, F186 (interactive, full orchestrator workflow)
 
 - User asked for up to 15 Tier A/B items via orchestrator workflow. Routing: 4 parallel Sonnet implementers for Tier A (frontend hardening, backend hardening, backend arch, frontend test) + 3 parallel Sonnet implementers for Tier B (backend hardening, frontend hardening, backend testing) + 4 parallel persona reviews + one holistic Sonnet fixer. ~700 insertions / 122 deletions across 26 files (Tier C territory by line count + contract surface).

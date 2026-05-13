@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*185 / 201 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*186 / 205 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 - [F127](#f127) — [next] [medium] Batch quick-backtest endpoint has no request-level deadline [medium]
 
-## Open Work — 39 items
+## Open Work — 42 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -22,7 +22,7 @@ _(none open)_
 | [D](#d-bots-live-trading) | Bots (live trading) | 1 | [D24b](#d24b) |
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 12 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F173](#f173), [F188](#f188)–[F190](#f190) |
-| [F · Hardening](#f-hardening) | Security, reliability, validation | 4 | [F127](#f127), [F187](#f187), [F191](#f191)–[F192](#f192) |
+| [F · Hardening](#f-hardening) | Security, reliability, validation | 7 | [F127](#f127), [F187](#f187), [F191](#f191)–[F192](#f192), [F196](#f196)–[F198](#f198) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 4 | [F34](#f34)–[F35](#f35), [F44](#f44), [F140](#f140) |
 | [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 7 | [F50](#f50)–[F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F193](#f193)–[F194](#f194) |
 
@@ -135,6 +135,10 @@ Own multi-session research project. Needs its own design work before implementat
 - [ ] <a id="f187"></a> **F187** Optimizer param-substitution is broken for everything except `slippage_bps`. Sweeping `buy_rule_0_value`, `sell_rule_0_value`, `buy_rule_0_params_period`, `sell_rule_0_params_period` returns identical metrics across all combos — the rule-nested param paths aren't actually overriding `req.buy_rules[i].value` / `req.buy_rules[i].params.period` server-side. Reproduced 2026-05-13 with KO RSI(2) demo: 16-combo sweep of (buy threshold 5–20, sell threshold 50–80) returned identical Sharpe 0.309 / 108 trades / -17.99% DD for every row. User has noticed the same pattern previously, so this is not a one-off. Likely fix: audit the optimizer route's param-path resolver in `backend/routes/optimize.py` (or wherever the sweep applies overrides) to ensure nested keys like `buy_rules.0.value` traverse into the rules array. Until fixed, the Optimizer is effectively unusable for any non-slippage parameter. [hard] [hardening] (added 2026-05-13)
 - [ ] <a id="f191"></a> **F191** `apiErrorDetail` (frontend/src/shared/utils/errors.ts) doesn't handle dict-typed 422 detail. F98 changed `get_quote` to return structured `{error, reason}`; helper falls through to generic Axios message instead of `reason`. Add: after the Array branch, check `typeof detail === 'object'` and prefer `detail.reason` then `detail.error`. (from 15-item bundle correctness COR-3) [easy] [hardening] (added 2026-05-13)
 - [ ] <a id="f192"></a> **F192** F49 error overlay sticks indefinitely once React Query exhausts its 3 retries (~7s). Recovery requires window refocus. Either add a visible Retry button in the SubPane error overlay, or set `refetchInterval: 30_000` while in error state. (from 15-item bundle reliability R-002) [medium] [hardening] (added 2026-05-13)
+- [x] <a id="f195"></a> **F195** Manual Close button on `PositionsTable` rows hit the wrong broker — `placeSell()` and the `/api/trading/sell` route ignored the position's `broker` and routed through the global `_active_broker` (default `"alpaca"`). Reproduced live 2026-05-13: clicking Close on an IBKR BABA LONG 7 position routed the close to Alpaca, where `close_position` bought-to-cover an unrelated Alpaca BABA SHORT 30. Fix: `placeSell(symbol, qty?, broker?)` sends `broker` in body; `SellRequest.broker: Optional[str]` accepted server-side; `place_sell()` uses `get_trading_provider(req.broker)`. Also keyed `PositionsTable`'s `closing` state by `symbol+broker+side` so the same symbol on two brokers no longer disables both rows simultaneously. `npm run build` clean. F196/F197/F198 follow-ups capture the cover-vs-sell journal mislabel, the wrong-sided stop-cancel cleanup, and the still-mysterious IBKR auto-cancellation of the close orders themselves. [medium] [hardening] (added 2026-05-13) (resolved 2026-05-13)
+- [ ] <a id="f196"></a> **F196** `_log_trade` in `/api/trading/sell` hardcodes side as `"sell"` — covering a short position via the manual Close button logs as "sell" instead of "cover". Other call sites (`exits.py:120,398`, `regime.py:203`) already do `"cover" if pos_is_short else "sell"`. Mirror that pattern: query `provider.get_positions()` for the symbol's side before close, log `"cover"` for shorts. Surfaced 2026-05-13 when the F195 routing bug caused a wrong-broker close that buy-covered an Alpaca short and journaled it as "SELL 30 manual" — actively misleading. [easy] [hardening] (added 2026-05-13)
+- [ ] <a id="f197"></a> **F197** `/api/trading/sell` pre-close cleanup hardcodes `o["side"] == "sell"` when cancelling pending orders. For a short position the stop-loss is a BUY order, so the cleanup is wrong-sided. Same direction-aware fix as F196: cancel `"buy"` for shorts, `"sell"` for longs. (added 2026-05-13) [easy] [hardening]
+- [ ] <a id="f198"></a> **F198** Investigate why IBKR market SELL orders for the existing BABA LONG 7 position get auto-cancelled during RTH. Reproduced 2026-05-13 ~11:00-11:10 ET — orders 15 and 17 both placed cleanly via `IBKRTradingProvider.close_position`, both cancelled within 2s (status returned "cancelled" with no fill, no submitted_at). Account is paper DUQ198248, market open, position real, contract uses `Stock(symbol, "SMART", "USD")`. Backend stderr logs (where ib_insync `errorEvent` warnings would surface) not accessible from the orchestrator session. Need either: redirect uvicorn stderr to a file so subsequent sessions can read it, or add a small ring-buffer of recent IBKR error events to the broker provider and expose via `/api/debug/ibkr-errors`. Also try the order with `orderRef` set, `tif="DAY"` explicit, and `outsideRth=False` (currently all defaults — possibly an ib_insync default mismatch on the new connection). [medium] [hardening] (added 2026-05-13)
 
 ### F · Polish
 - [ ] <a id="f34"></a> **F34** 118+ hardcoded hex colors while CSS variables exist — theme change requires touching dozens of files. Migrate Results.tsx and BotCard.tsx to use --bg-*, --accent-*, --text-* variables. [medium] [polish]

@@ -36,6 +36,7 @@ class BuyRequest(BaseModel):
 class SellRequest(BaseModel):
     symbol: SymbolField
     qty: Optional[float] = Field(default=None, gt=0)
+    broker: Optional[str] = None
 
 
 class ScanRequest(BaseModel):
@@ -193,7 +194,7 @@ def _clear_bot_entry_state(symbol: str):
 
 @router.post("/sell")
 def place_sell(req: SellRequest):
-    provider = get_trading_provider()
+    provider = get_trading_provider(req.broker)
     from fastapi import HTTPException as _HTTPException
 
     # Cancel pending stop-loss orders first
