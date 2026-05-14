@@ -35,6 +35,26 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
+**Date:** 2026-05-14 (build 29 — overnight, SKIPPED)
+**Branch:** `claude/jolly-babbage-kLbQg`
+
+**Skipped run — open builder PR #35 (`claude/jolly-babbage-X7mDA`, build 28 — F127 batch quick-backtest request-level deadline) must be merged first.**
+
+Pre-flight check #1 (no open builder PR) caught it via `mcp__github__list_pull_requests(state="open")`. Current branch was at origin/main (`8f1da78`), zero work in flight on this side — clean abort. NEXT_RUN.md skip note committed and PR opened as draft for visibility per harness rules. No code changes; no TODO/JOURNAL edits.
+
+**Builder env notes:**
+1. MCP `list_pull_requests` resolved on first call — no fallback needed (build 27's force-update fallback path was not exercised this run).
+2. PR #35 has been sitting open since 2026-05-13T00:30 — the protocol's intent is to gate against parallel builds racing the same TODO surface, and #35's F127 work overlaps directly with the [next] item I would have picked. Correct skip.
+
+**Next up (deferred to next non-skipped run):**
+- Once #35 is reviewed/merged on main: re-evaluate [next] picks. F127 will be off the list (shipped via #35); next prereq-of-in-progress candidate is **F147** [easy] [hardening] reorder route logger.exception parity (build 27 follow-up) — already shipped per JOURNAL? grep first. **F149** ScanRequest cap parity also already shipped per build 27 notes. The real first-class candidates per current TODO are **F127** (gone after #35 merges), **F161** visual smoke for C28 WFA, and the F189–F194 bundle from the 2026-05-13 15-item Tier C deferrals.
+
+**Previous run:** 2026-05-12 (build 27 — F145, F64, F65, F137, F138).
+
+---
+
+## Build 27 Run
+
 **Date:** 2026-05-12 (build 27 — overnight)
 **Branch:** `claude/jolly-babbage-8fjwl`
 
