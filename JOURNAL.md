@@ -6,6 +6,27 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-13
 
+### Overnight build 28 — F127 batch quick-backtest request-level deadline (Tier B)
+
+- **[F127](TODO.md#f127)** — Wall-clock request deadline added to `quick_backtest_batch` in `backend/routes/backtest_quick.py`. Option (a) from F127's 3-option design: at handler entry, `deadline = time.monotonic() + _get_batch_deadline_secs()`; deadline checked between symbols only; once tripped, remaining symbols short-circuit to `QuickBacktestResult(ticker=symbol.upper(), error="deadline exceeded")` without invoking `_run_quick`. Configurable via env `STRATEGYLAB_BATCH_DEADLINE_SECS` (default 30s); `DEFAULT_BATCH_DEADLINE_SECS` constant mirrors F86's `DEFAULT_MAX_BYTES` naming.
+- **5 new tests** in `test_backtest_quick.py` (21/21 file-local pass, was 16): short-circuit invariant + `received` count assertion (no `_run_quick` on tail), default-completion happy-path, uppercase parity with the existing ValueError/Exception branches, malformed-env fallback parametrized over `["not-a-number", "0", "-5", "", "inf", "-inf", "nan"]`, positive-override fractional + integer.
+- **Review tier B (2 personas — correctness + kieran-python)**: 4 findings round 1 (2 P2 + 2 P3 from correctness, 10 P2/P3 style fixes from kieran). Round 2 (correctness on deltas) returned `findings: []` clean.
+  - **P2 0.92 correctness** — `inf` / `-inf` env value bypassed `> 0` guard, silently neutering the deadline (`monotonic() >= inf` is permanently False). Fixed with `math.isfinite(v) and v > 0`. Verbatim safe_auto.
+  - **P2 0.82 correctness** — 10ms test deadline + 30ms `slow_run` was a race; first symbol could short-circuit on a slow CI worker. Bumped to 50ms deadline + 100ms slow_run (2× margin) in both timing tests. Manual fix.
+  - **P2 kieran-python** — `_DEFAULT_BATCH_DEADLINE_SECS` underscore prefix diverged from F86's `DEFAULT_MAX_BYTES` (public constant). Renamed to `DEFAULT_BATCH_DEADLINE_SECS` + added `: float` annotation.
+  - **P2/P3 kieran-python** — removed 3-line block comment above the constant, removed handler-docstring WHAT-paragraph (kept one-line WHY about "checked between symbols"), removed 4 inline comments duplicating assertion intent, removed section label `# F127: request-level deadline tests`.
+  - **P3 kieran-python** — `import time as _time` inside test bodies → hoisted module-level; unit tests switched from direct private-symbol import to module alias (`bq_mod.DEFAULT_BATCH_DEADLINE_SECS`) for house-style parity with the file's other tests.
+  - **P3 0.78 correctness (advisory, deferred)** — first symbol not guaranteed to process if deadline expires before iteration 1 (e.g. microsecond-scale env override). Filed as [F201](TODO.md#f201).
+- **Verification**: full backend pytest **477 passed / 1 fail** (sole failure: F139 ib_insync env contamination — pre-existing, 7th build). 21/21 in `test_backtest_quick.py`. Helper smoke covers 7 env-value scenarios incl. `inf`. Diff: +128 / -1 across 2 files, well within Tier B (100-300 line, no contract surface).
+- **Surfaced → TODO (3 new items, F199-F201)**:
+  - **[F199](TODO.md#f199)** [hard] [arch] Middleware-level request deadline — F127's architecturally-preferred option (c) generalized to all routes.
+  - **[F200](TODO.md#f200)** [easy] [next] [hardening] Per-symbol watchdog inside F127 — single hung `_run_quick` can still exceed budget; wrap in `concurrent.futures` `submit().result(timeout=remaining)`.
+  - **[F201](TODO.md#f201)** [easy] [hardening] First-symbol deadline-at-entry contract — document zero-processed behaviour OR add `first=True` guard.
+- **Process notes**:
+  - **Tier B routing was right**: 138-line diff, [medium] item, no contract surface. Both correctness P2s would have shipped under Tier A; kieran-python's 10 style fixes are appearance-only but compound.
+  - **Round 2 re-dispatch correct**: one applied fix was `autofix_class: manual` (test-timing bump) → skip license disqualified. Round 2 returned clean in 21s — cheap insurance, matches the protocol.
+  - **Builder env**: `backend/venv/` still missing (F97 unchanged, 7th run). Substituted via runtime `pip install fastapi pydantic numpy pandas httpx yfinance python-dotenv pytest pytest-asyncio alpaca-py tzdata` then `PYTHONPATH=. pytest`. Dedicated `compound-engineering:review:*-reviewer` agents still unresolved (F80 unchanged, 7th run) — manual `general-purpose` + persona-injection continues to work.
+
 ### F198 — IBKR close orders auto-cancelled due to NYSE-direct routing (root-caused via new debug surface)
 
 - Follow-on to F195. After the routing fix, manual IBKR closes still silently failed — `close_position` returned `fill_price=null, fill_qty=null` and `/api/trading/orders` showed the order as `cancelled` with no submitted timestamp.

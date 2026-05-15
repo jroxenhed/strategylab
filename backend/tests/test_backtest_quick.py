@@ -1,6 +1,7 @@
 """Tests for /api/backtest/quick* — covers F91 BatchQuickBacktestRequest length cap
 and SymbolField parity with F69's watchlist validator.
 """
+import time
 from sys import path as sys_path
 from os.path import dirname, abspath
 sys_path.insert(0, dirname(dirname(abspath(__file__))))
@@ -256,3 +257,98 @@ def test_batch_accepts_exactly_100_rules(monkeypatch, client):
     )
     resp = client.post("/api/backtest/quick/batch", json=body)
     assert resp.status_code == 200
+
+
+def test_batch_deadline_short_circuits_remaining_symbols(monkeypatch, client):
+    """F127: once wall-clock budget is exhausted, remaining symbols return
+    error='deadline exceeded' without invoking _run_quick."""
+    from routes import backtest_quick as bq_mod
+
+    received: list[str] = []
+
+    def slow_run(req):
+        time.sleep(0.1)
+        received.append(req.ticker)
+        return bq_mod.QuickBacktestResult(ticker=req.ticker)
+
+    monkeypatch.setattr(bq_mod, "_run_quick", slow_run)
+    monkeypatch.setenv("STRATEGYLAB_BATCH_DEADLINE_SECS", "0.05")
+    resp = client.post(
+        "/api/backtest/quick/batch",
+        json=_base_batch_body(symbols=["AAPL", "MSFT", "GOOG"]),
+    )
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert len(results) == 3
+    assert results[0]["ticker"] == "AAPL"
+    assert results[0]["error"] is None
+    assert results[1]["ticker"] == "MSFT"
+    assert results[1]["error"] == "deadline exceeded"
+    assert results[2]["ticker"] == "GOOG"
+    assert results[2]["error"] == "deadline exceeded"
+    assert received == ["AAPL"]
+
+
+def test_batch_deadline_default_allows_completion(monkeypatch, client):
+    """F127: with no env override (default 30s), a fast happy-path batch
+    completes normally and reports no deadline errors."""
+    from routes import backtest_quick as bq_mod
+
+    def fake_run(req):
+        return bq_mod.QuickBacktestResult(ticker=req.ticker)
+
+    monkeypatch.setattr(bq_mod, "_run_quick", fake_run)
+    monkeypatch.delenv("STRATEGYLAB_BATCH_DEADLINE_SECS", raising=False)
+    resp = client.post(
+        "/api/backtest/quick/batch",
+        json=_base_batch_body(symbols=["AAPL", "MSFT", "GOOG"]),
+    )
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert [r["error"] for r in results] == [None, None, None]
+
+
+def test_batch_deadline_uppercases_short_circuited_symbol(monkeypatch, client):
+    """F127: past the deadline, the short-circuit error row uppercases the
+    ticker to match the existing per-symbol ValueError / Exception branches."""
+    from routes import backtest_quick as bq_mod
+
+    def slow_run(req):
+        time.sleep(0.1)
+        return bq_mod.QuickBacktestResult(ticker=req.ticker)
+
+    monkeypatch.setattr(bq_mod, "_run_quick", slow_run)
+    monkeypatch.setenv("STRATEGYLAB_BATCH_DEADLINE_SECS", "0.05")
+    resp = client.post(
+        "/api/backtest/quick/batch",
+        json=_base_batch_body(symbols=["aapl", "msft"]),
+    )
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert results[1]["ticker"] == "MSFT"
+    assert results[1]["error"] == "deadline exceeded"
+
+
+def test_get_batch_deadline_secs_invalid_falls_back(monkeypatch):
+    """F127: malformed / non-positive env values fall back to the default
+    rather than poisoning the loop with a 0s deadline that would error every
+    symbol on a healthy request."""
+    from routes import backtest_quick as bq_mod
+
+    for bad in ["not-a-number", "0", "-5", "", "inf", "-inf", "nan"]:
+        monkeypatch.setenv("STRATEGYLAB_BATCH_DEADLINE_SECS", bad)
+        assert bq_mod._get_batch_deadline_secs() == bq_mod.DEFAULT_BATCH_DEADLINE_SECS, f"failed for {bad!r}"
+
+    monkeypatch.delenv("STRATEGYLAB_BATCH_DEADLINE_SECS", raising=False)
+    assert bq_mod._get_batch_deadline_secs() == bq_mod.DEFAULT_BATCH_DEADLINE_SECS
+
+
+def test_get_batch_deadline_secs_positive_override(monkeypatch):
+    """F127: any positive float overrides the default (fractional values
+    accepted so tests can drive sub-second deadlines)."""
+    from routes import backtest_quick as bq_mod
+
+    monkeypatch.setenv("STRATEGYLAB_BATCH_DEADLINE_SECS", "0.5")
+    assert bq_mod._get_batch_deadline_secs() == 0.5
+    monkeypatch.setenv("STRATEGYLAB_BATCH_DEADLINE_SECS", "120")
+    assert bq_mod._get_batch_deadline_secs() == 120.0

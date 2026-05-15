@@ -35,6 +35,38 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
+**Date:** 2026-05-13 (build 28 — overnight)
+**Branch:** `claude/jolly-babbage-X7mDA`
+
+**Shipped (1 item, Tier B):**
+- **F127** [medium] [hardening] Wall-clock request deadline on `POST /api/backtest/quick/batch`. Option (a) variant: `deadline = time.monotonic() + _get_batch_deadline_secs()`, checked between symbols; tail short-circuits to `QuickBacktestResult(ticker=symbol.upper(), error="deadline exceeded")` without invoking `_run_quick`. Env `STRATEGYLAB_BATCH_DEADLINE_SECS` (default 30s); helper rejects `inf`/`-inf`/`nan` via `math.isfinite(v) and v > 0` (correctness round-1 P2 0.92 — `monotonic() >= inf` is permanently False, silently neutering the cap). 5 new tests in `test_backtest_quick.py` (file local 16 → 21). Diff +128 / -1 across 2 files.
+
+**Review:** Tier B — 2 personas (correctness + kieran-python). 4 findings round 1 (2 P2 + 2 P3 correctness; 10 P2/P3 style fixes kieran), all P2s applied. 1 manual P2 (test-timing 10ms→50ms / 30ms→100ms) disqualified the round-2 skip license; round 2 correctness on the deltas returned `findings: []` in 21s.
+
+**Build:** N/A frontend (backend-only). Backend pytest **477 passed / 1 failed** — sole failure F139 (ib_insync env contamination, 7th build). 21/21 in `test_backtest_quick.py` after fixes.
+
+**Visual verification:** N/A — backend-only PR.
+
+**Deferred → TODO (3 new items, F199-F201):**
+- **F199** [hard] [arch] Middleware-level request deadline — F127 option (c) generalized to all routes.
+- **F200** [easy] [next] [hardening] Per-symbol watchdog inside F127 batch deadline — wraps `_run_quick` in `concurrent.futures.submit().result(timeout=remaining)`.
+- **F201** [easy] [hardening] First-symbol deadline-at-entry contract — document zero-processed behaviour OR add `first=True` guard.
+
+**Builder env notes:**
+1. Main was force-updated overnight (`06e95b5` → `9cc95bb`). `git pull --ff-only` would have aborted; used `git reset --hard origin/main` since remote is canonical for this builder workflow (4th build with this pattern).
+2. `backend/venv/` still missing (F97 unchanged, 7th run). Substituted via runtime `pip install fastapi pydantic numpy pandas httpx yfinance python-dotenv pytest pytest-asyncio alpaca-py tzdata` then `PYTHONPATH=. pytest`.
+3. Dedicated `compound-engineering:review:*-reviewer` agents still unresolved (F80 unchanged, 7th run) — manual `general-purpose` + persona-injection prefix.
+4. Tooling: `chrome-devtools-mcp` wasn't needed (backend-only).
+
+**Next up:**
+- **F200** [easy] [next] [hardening] Per-symbol watchdog inside F127 — uses `concurrent.futures` to cap one hung `_run_quick`. Cleanly composes with the wall-clock deadline shipped today.
+- **F148** [done] / **F147** [done] — pre-existing [next] tags now stale (shipped in build 27 PR #34 / build 27 PR-34-bundle).
+- **F94** / **F95** rollout follow-ups — covered by F128/F141/F149.
+
+**Previous run:** 2026-05-12 PR (build 27 — F145 SymbolList, F64 reorder UX, F137 IBKR exception leak, F138 `_DEDUP_LOCKS_HIGH_WATERMARK`).
+
+## Build 27 Run
+
 **Date:** 2026-05-12 (build 27 — overnight)
 **Branch:** `claude/jolly-babbage-8fjwl`
 

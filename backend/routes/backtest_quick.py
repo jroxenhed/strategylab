@@ -1,4 +1,7 @@
 import logging
+import math
+import os
+import time
 
 from fastapi import APIRouter, HTTPException
 from typing import Optional
@@ -13,6 +16,24 @@ from models import LogicField, SymbolField, SymbolList, DirectionField, Trailing
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+DEFAULT_BATCH_DEADLINE_SECS: float = 30.0
+
+
+def _get_batch_deadline_secs() -> float:
+    # Read at call time so tests can monkeypatch STRATEGYLAB_BATCH_DEADLINE_SECS between requests.
+    raw = os.environ.get("STRATEGYLAB_BATCH_DEADLINE_SECS")
+    if raw is None:
+        return DEFAULT_BATCH_DEADLINE_SECS
+    try:
+        v = float(raw)
+    except ValueError:
+        return DEFAULT_BATCH_DEADLINE_SECS
+    # isfinite rejects 'inf' / '-inf' / 'nan' — float('inf') would pass the > 0
+    # guard and silently disable the deadline (monotonic() >= inf is False forever).
+    if math.isfinite(v) and v > 0:
+        return v
+    return DEFAULT_BATCH_DEADLINE_SECS
 
 
 class QuickBacktestRequest(BaseModel):
@@ -220,9 +241,19 @@ def quick_backtest(req: QuickBacktestRequest):
 
 @router.post("/api/backtest/quick/batch")
 def quick_backtest_batch(req: BatchQuickBacktestRequest):
-    """Batch quick backtest over a list of symbols. Runs sequentially to respect rate limits."""
+    """Batch quick backtest over a list of symbols. Runs sequentially to respect rate limits.
+
+    Deadline is checked between symbols (``STRATEGYLAB_BATCH_DEADLINE_SECS``,
+    default 30s); a single slow ``_run_quick`` can still exceed it.
+    """
     results = []
+    deadline = time.monotonic() + _get_batch_deadline_secs()
+    deadline_hit = False
     for symbol in req.symbols:
+        if deadline_hit or time.monotonic() >= deadline:
+            deadline_hit = True
+            results.append(QuickBacktestResult(ticker=symbol.upper(), error="deadline exceeded"))
+            continue
         single_req = QuickBacktestRequest(
             ticker=symbol,
             interval=req.interval,
