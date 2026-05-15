@@ -65,6 +65,34 @@ def set_broker(req: SetBrokerRequest):
     return _broker_payload()
 
 
+@router.post("/api/broker/ibkr/reconnect")
+async def reconnect_ibkr():
+    """F198b: re-run IBKR lifespan init so the provider re-registers without a full backend restart.
+
+    Needed because uvicorn --reload reloads broker.py without re-running the
+    FastAPI lifespan, which leaves the IBKR provider de-registered while Alpaca
+    continues working.
+    """
+    from shared import init_ibkr
+    from broker import _trading_providers
+    try:
+        await init_ibkr()
+    except Exception as e:
+        raise HTTPException(503, f"IBKR reconnect failed: {e}")
+    registered = "ibkr" in _trading_providers
+    return {"registered": registered, "available": list(_trading_providers.keys())}
+
+
+@router.get("/api/debug/ibkr-errors")
+def get_ibkr_errors():
+    """F198: recent ib_insync errorEvent payloads — diagnose order rejects."""
+    from broker import _trading_providers
+    p = _trading_providers.get("ibkr")
+    if p is None or not hasattr(p, "recent_errors"):
+        return {"errors": [], "available": False}
+    return {"errors": p.recent_errors(), "available": True}
+
+
 @router.patch("/api/broker/poll-interval")
 def set_poll_interval(body: dict):
     ms = body.get("ms")
