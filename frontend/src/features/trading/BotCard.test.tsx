@@ -144,6 +144,7 @@ function renderCard(summaryOverrides: Partial<BotSummary> = {}, cardProps: Recor
       onUpdate: NO_OP,
       onResetPnl: NO_OP,
       compact: false,
+      adaptiveInterval: (ms: number) => ms,
       ...cardProps,
     }),
     { wrapper },
@@ -583,6 +584,7 @@ describe('BotCard state: undefined defensive path', () => {
           onUpdate: NO_OP,
           onResetPnl: NO_OP,
           compact: false,
+          adaptiveInterval: (ms: number) => ms,
         }),
         { wrapper },
       )

@@ -6,6 +6,32 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-15
 
+### F215 — Idle CPU/perf bundle (5 fixes, browser-instrumented before/after)
+
+- Trigger: user reported the frontend tab spikes CPU even when idle, drops on tab close. Used `chrome-devtools-mcp` to instrument `window.setInterval` + `performance.getEntriesByType('resource')` over 10s idle windows for before/after measurement.
+- **Baseline (10s idle):** 48 setInterval registrations (28 × 10000ms broker-poll observers, 20 × 5000ms tanstack timer-rearms), 7 idle API fetches, 0 long tasks. Journal payload 177 KB / fetch (542 trades).
+- **Five fixes shipped together** (one impl agent, then one manual follow-up):
+  1. **BotCard dropped `useBroker()`** — N×bot per-card observers each armed their own broker-poll timer. `BotControlCenter` already calls `useBroker()` so it now passes `adaptiveInterval` down as a prop. Test (`BotCard.test.tsx`) updated to pass the prop directly.
+  2. **TradeJournal pairing memoized on `[trades]`** — the O(n) LIFO pairing loop was re-running on every parent re-render in BOTH TradeJournal and PositionsTable. Wrapped in `useMemo` returning `{exitPnl, exitEntryPrice}`.
+  3. **Constant `refetchInterval`** in `useTradingQueries.ts` — function-form `() => adaptiveMs(...)` was re-evaluated after every fetch (clear+rearm cost); replaced with `5_000` / `30_000` constants. Removed unused `adaptiveMs` helper and `useQueryClient` calls.
+  4. **`/api/trading/journal` paginated** — `routes/trading.py` `get_journal` accepts `limit: Optional[int] = None` and slices `trades[-limit:]`. Frontend: `fetchJournal` accepts `limit?`, `useJournalQuery` includes `limit` in queryKey for cache separation. `TradeJournal` defaults to `limit=200` with a `Last 100/200/500/1000/All` dropdown persisted to `strategylab-journal-limit`. CSV export does a one-shot full-history `await fetchJournal(...)` so users still get everything (button shows `…` while exporting). PositionsTable also passes `limit=200` (only needs entry timestamps for open positions).
+  5. **Single-owner polling for `journal` + `bots`** (manual follow-up after first profile showed dedupe still incomplete) — removed `refetchInterval` from `useJournalQuery` + `useBotsQuery` entirely. `PaperTrading` now owns one `setInterval(5000)` calling `qc.invalidateQueries(['journal'])` + `(['bots'])`. tanstack dedupes the refetch across observers — N consumers → 1 fetch per cycle.
+- **After (10s idle):** 14 setInterval registrations (4 × 5000, 6 × 10000, 4 × 30000), 9 idle fetches, 0 long tasks. Journal payload 67 KB / fetch.
+- **Net deltas vs baseline:** total interval registrations **48 → 14 (−71%)**, broker-timer churn **28 → 6 (−79%)**, journal channel bandwidth **354 KB → 67 KB per 5s window (−81%)**. Long tasks remained at zero throughout.
+- **Caveat surfaced during measurement:** running uvicorn had no `--reload`, so the first re-profile showed payload still at 177 KB; user restarted backend, second re-profile confirmed 67 KB. Documented because it's an easy trap when comparing builds.
+- Verification: `npm run build` clean (1889 modules), `npm test -- --run` 153/153, backend `pytest tests/ -q` 485/485.
+- Follow-ups: **[F216]** extend single-owner pattern to positions/orders/account for symmetry. **[F217]** "Last N of M" indicator in TradeJournal so users can see when the limit is truncating history.
+
+### F214 — Manual close attribution (broker tag, P&L, bot card credit) + journal backfill
+
+- User screenshot showed manual SELL rows on `BABA` / `NVDA` displaying `—` for broker, P&L, and Gain%, AND the realized P&L not contributing to the bot's total or the bot portfolio card. Bot had opened the position; user closed manually from the positions table; the journal didn't know they were related.
+- **Backend:** `routes/trading.py` `/sell` now resolves `broker_name = req.broker or get_active_broker()` and looks up the owning bot via new `_find_owning_bot(symbol, direction)` helper (iterates `bot_manager.bots`, matches `cfg.symbol` + `state.entry_price is not None` + direction; regime/bidirectional bots match either side). Both the `qty=None` close-position path and the explicit-qty path pass `broker=`, `bot_id=`, `direction=` to `_log_trade`. `/buy` also tags `broker=get_active_broker()`.
+- `journal.py compute_realized_pnl` extended: a row now counts when `(source == "bot")` OR `(bot_id is not None and t.bot_id == bot_id)`. Manual exits tagged with the owning `bot_id` credit the bot's realized P&L without polluting the broader "bot fills only" filter for untagged rows. Flows to bot card + portfolio card via `bot_runner._tick` recomputing on the next cycle.
+- **Frontend:** `TradeJournal.tsx` pairing loop dropped the `t.source !== 'bot'` gate so manual exits pair with bot entries chronologically; `sideColor`/`reasonColor`/`rowBackground` now color manual SELL rows green/red when paired (fall back to grey when unpaired so pure-manual no-context rows stay neutral).
+- **Backfill:** `bin/backfill-manual-trades.py` walks the journal chronologically, maintains a per-`(symbol, direction)` LIFO stack of unconsumed entries, and on each manual SELL/COVER (a) sets `broker="alpaca"` (the only historical broker) when missing and (b) inherits `bot_id` from the paired entry. Backs up `trade_journal.json.bak` before write. Ran `--apply` on the live journal: **8 manual rows broker-backfilled, 4 bot_id-tagged** (the other 4 had no preceding bot entry to pair with — pure-manual sequences).
+- Cache safety: `journal.py` cache key is `(mtime, size)` so the in-process backend picks up the rewritten file on next read without restart.
+- Verification: backend AST parse, `npm run build` clean, manual screenshot follow-up after backfill confirms ALPACA tag + green/red P&L visible on the previously-blank rows.
+
 ### F213 — Click-to-sort trades table (supersedes C26 dropdown)
 
 - User request: replace the C26 sort dropdown with click-to-sort column headers. 12 columns sortable (`#`, Entry date/price, Exit date/price, Shares, P&L, Return, Slip, Comm, Borrow, Exit type). 3-state cycle: click → asc ↑, click again → desc ↓, third click → clear (back to chronological). Cross-column switching resets to asc on the new target. Active header rendered with `--text-primary` colour + directional arrow; inactive stay muted. Header row carries a `title` tooltip documenting the cycle.

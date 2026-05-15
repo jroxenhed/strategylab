@@ -1,4 +1,5 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import AccountBar from './AccountBar'
 import BotControlCenter from './BotControlCenter'
 import PositionsTable from './PositionsTable'
@@ -12,6 +13,20 @@ export default function PaperTrading() {
   const [brokerFilter, setBrokerFilter] = useLocalStorage<string>('paper.brokerFilter', 'all')
   const [stale, setStale] = useState<string[]>([])
   const [dismissed, setDismissed] = useState(false)
+
+  // Single polling owner for journal + bots — invalidate triggers a deduped
+  // refetch on all subscribers, so 1 fetch/cycle no matter how many components
+  // read the data. Replaces per-observer refetchInterval (which fired N timers).
+  const qc = useQueryClient()
+  useEffect(() => {
+    const tick = () => {
+      if (document.hidden) return
+      qc.invalidateQueries({ queryKey: ['journal'] })
+      qc.invalidateQueries({ queryKey: ['bots'] })
+    }
+    const id = window.setInterval(tick, 5_000)
+    return () => window.clearInterval(id)
+  }, [qc])
 
   const onStale = useCallback((list: string[]) => {
     setStale(prev => {

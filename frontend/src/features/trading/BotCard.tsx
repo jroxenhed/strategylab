@@ -7,7 +7,6 @@ import { statusColor, levelColor } from '../../shared/utils/colors'
 import { fmtTimeET } from '../../shared/utils/time'
 import MiniSparkline from './MiniSparkline'
 import DailyPnlChart from './DailyPnlChart'
-import { useBroker } from '../../shared/hooks/useOHLCV'
 import { INFO_COLUMN_FLEX, StatCell, btnStyle } from './ui'
 
 const SAVED_KEY = 'strategylab-saved-strategies'
@@ -110,6 +109,7 @@ export default function BotCard({
   alignedRange,
   dragHandleProps,
   compact = false,
+  adaptiveInterval,
 }: {
   summary: BotSummary
   onStart: () => void
@@ -122,6 +122,7 @@ export default function BotCard({
   alignedRange?: { from: number; to: number }
   dragHandleProps?: Record<string, unknown>
   compact?: boolean
+  adaptiveInterval: (ms: number) => number
 }) {
   const [expanded, setExpanded] = useState(false)
   const [detail, setDetail] = useState<BotDetail | null>(null)
@@ -136,7 +137,6 @@ export default function BotCard({
   const [confirmingResetPnl, setConfirmingResetPnl] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
-  const { adaptiveInterval } = useBroker()
   const running = summary.status === 'running'
   const stopped = summary.status === 'stopped'
 

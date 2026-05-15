@@ -65,7 +65,13 @@ def compute_realized_pnl(symbol: str, direction: str = "long", bot_id: str | Non
     total = 0.0
     open_entry: dict | None = None  # {"price": float, "qty": float}
     for t in trades:
-        if t.get("source") != "bot":
+        # Accept a row when it's a bot fill OR (when bot_id is given) when it's
+        # tagged to that bot. Manual closes of a bot's position are tagged with
+        # bot_id by routes/trading.py so their P&L credits the bot, even though
+        # source == "manual".
+        is_bot_source = t.get("source") == "bot"
+        is_tagged_to_bot = bot_id is not None and t.get("bot_id") == bot_id
+        if not (is_bot_source or is_tagged_to_bot):
             continue
         if t.get("symbol", "").upper() != symbol.upper():
             continue

@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
-import { type JournalTrade, type BrokerHealth } from '../../api/trading'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
+import { fetchJournal, type JournalTrade, type BrokerHealth } from '../../api/trading'
 import { fmtShortET } from '../../shared/utils/time'
 import { BrokerTag } from './BrokerTag'
 import { useJournalQuery, useBotsQuery } from '../../shared/hooks/useTradingQueries'
@@ -7,6 +7,13 @@ import { useJournalQuery, useBotsQuery } from '../../shared/hooks/useTradingQuer
 const DEFAULT_HEIGHT = 300
 const MIN_HEIGHT = 100
 const MAX_HEIGHT = 800
+
+const LIMIT_OPTIONS = [100, 200, 500, 1000, 0] as const  // 0 = All
+const LIMIT_KEY = 'strategylab-journal-limit'
+const loadLimit = (): number => {
+  const v = Number(localStorage.getItem(LIMIT_KEY))
+  return (LIMIT_OPTIONS as readonly number[]).includes(v) ? v : 200
+}
 
 interface Props {
   brokerFilter: string
@@ -17,10 +24,13 @@ interface Props {
 }
 
 export default function TradeJournal({ brokerFilter, onBrokerFilterChange, availableBrokers, health, heartbeatWarmup }: Props) {
-  const { data: trades = [], refetch } = useJournalQuery(brokerFilter)
+  const [limit, setLimit] = useState<number>(loadLimit)
+  useEffect(() => { localStorage.setItem(LIMIT_KEY, String(limit)) }, [limit])
+  const { data: trades = [], refetch } = useJournalQuery(brokerFilter, limit === 0 ? undefined : limit)
   const { data: botsData } = useBotsQuery()
   const knownBotIds = botsData ? new Set(botsData.bots.map(b => b.bot_id)) : null
   const [filter, setFilter] = useState('')
+  const [exporting, setExporting] = useState(false)
   const [tableHeight, setTableHeight] = useState(DEFAULT_HEIGHT)
   const dragging = useRef(false)
   const startY = useRef(0)
@@ -52,34 +62,40 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
     ? trades.filter(t => t.symbol.toLowerCase().includes(filter.toLowerCase()))
     : trades
 
-  // Pair exits with most-recent entry of the same (symbol, direction, source).
-  // Mirrors compute_realized_pnl: only bot fills count, entries are consumed on exit
-  // (so duplicate/phantom exits can't reuse stale entry prices), and long/short on the
-  // same symbol don't clobber each other.
-  const exitPnl = new Map<string, number>()        // trade id → pnl
-  const exitEntryPrice = new Map<string, number>()  // trade id → entry price
-  const lastEntry = new Map<string, { price: number; qty: number }>()
-  for (const t of trades) {
-    if (t.source !== 'bot') continue
-    if (t.price == null || !t.qty) continue
-    const isEntry = t.side === 'buy' || t.side === 'short'
-    const dir = t.side === 'buy' || t.side === 'sell' ? 'long' : 'short'
-    const key = `${t.symbol}:${dir}`
-    if (isEntry) {
-      lastEntry.set(key, { price: t.price, qty: Math.abs(t.qty) })
-    } else {
-      const entry = lastEntry.get(key)
-      if (entry != null) {
-        const qty = Math.min(entry.qty, Math.abs(t.qty))
-        const pnl = dir === 'short'
-          ? (entry.price - t.price) * qty
-          : (t.price - entry.price) * qty
-        exitPnl.set(t.id, pnl)
-        exitEntryPrice.set(t.id, entry.price)
-        lastEntry.delete(key)
+  // Pair exits with most-recent entry of the same (symbol, direction).
+  // Entries are consumed on exit so duplicate/phantom exits can't reuse stale
+  // entry prices; long/short on the same symbol don't clobber each other.
+  // Manual exits pair with bot entries (and vice versa) so a manual close of a
+  // bot position gets a P&L row — matches the backend after compute_realized_pnl
+  // started honoring bot_id-tagged manual fills.
+  // Memoized so the O(n) loop only re-runs when `trades` reference changes,
+  // not on every incidental re-render of TradeJournal.
+  const { exitPnl, exitEntryPrice } = useMemo(() => {
+    const exitPnl = new Map<string, number>()        // trade id → pnl
+    const exitEntryPrice = new Map<string, number>()  // trade id → entry price
+    const lastEntry = new Map<string, { price: number; qty: number }>()
+    for (const t of trades) {
+      if (t.price == null || !t.qty) continue
+      const isEntry = t.side === 'buy' || t.side === 'short'
+      const dir = t.side === 'buy' || t.side === 'sell' ? 'long' : 'short'
+      const key = `${t.symbol}:${dir}`
+      if (isEntry) {
+        lastEntry.set(key, { price: t.price, qty: Math.abs(t.qty) })
+      } else {
+        const entry = lastEntry.get(key)
+        if (entry != null) {
+          const qty = Math.min(entry.qty, Math.abs(t.qty))
+          const pnl = dir === 'short'
+            ? (entry.price - t.price) * qty
+            : (t.price - entry.price) * qty
+          exitPnl.set(t.id, pnl)
+          exitEntryPrice.set(t.id, entry.price)
+          lastEntry.delete(key)
+        }
       }
     }
-  }
+    return { exitPnl, exitEntryPrice }
+  }, [trades])
 
   const hasBorrowCost = filtered.some(t => t.borrow_cost != null && t.borrow_cost > 0)
 
@@ -116,7 +132,45 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
     catch { return s }
   }
 
-  const exportCsv = () => {
+  const exportCsv = async () => {
+    setExporting(true)
+    let allTrades: JournalTrade[]
+    try {
+      // Fetch the full (unbounded) journal for export so the CSV contains
+      // complete history even when the live table is capped at 200 rows.
+      allTrades = await fetchJournal(filter || undefined, brokerFilter)
+    } catch {
+      allTrades = filtered  // fallback to what's already loaded
+    } finally {
+      setExporting(false)
+    }
+
+    // Build a paired P&L map for the full export data set.
+    const exportPnl = new Map<string, number>()
+    const exportEntryPrice = new Map<string, number>()
+    const lastEntryEx = new Map<string, { price: number; qty: number }>()
+    for (const t of allTrades) {
+      if (t.price == null || !t.qty) continue
+      const isEntry = t.side === 'buy' || t.side === 'short'
+      const dir = t.side === 'buy' || t.side === 'sell' ? 'long' : 'short'
+      const key = `${t.symbol}:${dir}`
+      if (isEntry) {
+        lastEntryEx.set(key, { price: t.price, qty: Math.abs(t.qty) })
+      } else {
+        const entry = lastEntryEx.get(key)
+        if (entry != null) {
+          const qty = Math.min(entry.qty, Math.abs(t.qty))
+          const pnl = dir === 'short'
+            ? (entry.price - t.price) * qty
+            : (t.price - entry.price) * qty
+          exportPnl.set(t.id, pnl)
+          exportEntryPrice.set(t.id, entry.price)
+          lastEntryEx.delete(key)
+        }
+      }
+    }
+
+    const hasBorrowCostExport = allTrades.some(t => t.borrow_cost != null && t.borrow_cost > 0)
     const csvField = (v: unknown): string => {
       const s = String(v ?? '')
       return (s.includes(',') || s.includes('"') || s.includes('\n'))
@@ -124,10 +178,10 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
         : s
     }
     const csvRow = (fields: unknown[]) => fields.map(csvField).join(',')
-    const headers = ['Time', 'Symbol', 'Broker', 'Side', 'Qty', 'Expected', 'Price', 'P&L', 'Gain %', 'Slippage', 'Source', 'Reason', ...(hasBorrowCost ? ['Borrow'] : [])]
-    const rows = [...filtered].reverse().map(t => {
-      const pnl = exitPnl.get(t.id)
-      const entryPx = exitEntryPrice.get(t.id)
+    const headers = ['Time', 'Symbol', 'Broker', 'Side', 'Qty', 'Expected', 'Price', 'P&L', 'Gain %', 'Slippage', 'Source', 'Reason', ...(hasBorrowCostExport ? ['Borrow'] : [])]
+    const rows = [...allTrades].reverse().map(t => {
+      const pnl = exportPnl.get(t.id)
+      const entryPx = exportEntryPrice.get(t.id)
       const gainPct = (pnl != null && entryPx != null && t.qty)
         ? ((pnl / (entryPx * t.qty)) * 100).toFixed(2) + '%'
         : ''
@@ -146,7 +200,7 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
         slippage,
         t.source,
         t.reason || '',
-        ...(hasBorrowCost ? [t.borrow_cost != null ? t.borrow_cost.toFixed(4) : ''] : []),
+        ...(hasBorrowCostExport ? [t.borrow_cost != null ? t.borrow_cost.toFixed(4) : ''] : []),
       ])
     })
     const csv = [csvRow(headers), ...rows].join('\n')
@@ -176,13 +230,25 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
             <option key={b} value={b}>{b.toUpperCase()}</option>
           ))}
         </select>
+        <select
+          value={limit}
+          onChange={e => setLimit(Number(e.target.value))}
+          style={styles.brokerFilter}
+          title="Rows loaded for the live table (CSV export always includes the full history)"
+        >
+          {LIMIT_OPTIONS.map(n => (
+            <option key={n} value={n}>{n === 0 ? 'All' : `Last ${n}`}</option>
+          ))}
+        </select>
         <input
           style={styles.filter}
           placeholder="Filter symbol..."
           value={filter}
           onChange={e => setFilter(e.target.value)}
         />
-        <button onClick={exportCsv} style={{ ...styles.reload, marginLeft: 'auto' }} title="Export CSV">⬇</button>
+        <button onClick={exportCsv} disabled={exporting} style={{ ...styles.reload, marginLeft: 'auto' }} title="Export CSV">
+          {exporting ? '…' : '⬇'}
+        </button>
       </div>
       {filtered.length === 0 ? (
         <div style={styles.empty}>{filter ? 'No matching trades' : 'No trades logged yet'}</div>
@@ -298,15 +364,14 @@ const exitColor = (t: JournalTrade, pnlMap: Map<string, number>) => {
 const sideColor = (t: JournalTrade, pnlMap: Map<string, number>) => {
   const isEntry = t.side === 'buy' || t.side === 'short'
   if (isEntry) return '#e5c07b'                    // orange — entry (matches chart markers)
-  if (t.reason === 'manual') return '#8b949e'      // grey — manual action
-  return exitColor(t, pnlMap)                      // green/red based on P&L
+  return exitColor(t, pnlMap)                      // green/red based on P&L (grey when unpaired)
 }
 
 const rowBackground = (t: JournalTrade, pnlMap: Map<string, number>) => {
   const isEntry = t.side === 'buy' || t.side === 'short'
   if (isEntry) return 'rgba(229, 192, 123, 0.06)'             // orange tint — entry
-  if (t.reason === 'manual') return 'rgba(139, 148, 158, 0.06)'  // grey tint
   const pnl = pnlMap.get(t.id)
+  if (t.reason === 'manual' && pnl == null) return 'rgba(139, 148, 158, 0.06)'
   if (pnl != null && pnl >= 0) return 'rgba(38, 166, 65, 0.06)'   // green tint — win
   if (pnl != null && pnl < 0) return 'rgba(248, 81, 73, 0.06)'    // red tint — loss
   return 'transparent'
@@ -342,7 +407,10 @@ const reasonColor = (r: string | null, pnl?: number | null) => {
     if (pnl != null) return pnl >= 0 ? '#26a641' : '#f85149'  // green win, red loss
     return '#8b949e'  // no P&L context
   }
-  if (r === 'manual') return '#8b949e'
+  if (r === 'manual') {
+    if (pnl != null) return pnl >= 0 ? '#26a641' : '#f85149'
+    return '#8b949e'
+  }
   return '#8b949e'
 }
 

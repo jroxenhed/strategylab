@@ -120,6 +120,7 @@ function SortableBotCard(props: {
   summary: BotSummary
   alignedRange?: { from: number; to: number }
   compact?: boolean
+  adaptiveInterval: (ms: number) => number
   onStart: () => void
   onStop: () => void
   onBacktest: () => void
@@ -148,6 +149,7 @@ function SortableBotCard(props: {
         summary={props.summary}
         alignedRange={props.alignedRange}
         compact={props.compact}
+        adaptiveInterval={props.adaptiveInterval}
         onStart={props.onStart}
         onStop={props.onStop}
         onBacktest={props.onBacktest}
@@ -167,7 +169,7 @@ function SortableBotCard(props: {
 
 export default function BotControlCenter() {
   const qc = useQueryClient()
-  const { anyBrokerUnhealthy, health, pollIntervalMs } = useBroker()
+  const { anyBrokerUnhealthy, health, pollIntervalMs, adaptiveInterval } = useBroker()
   const [brokerBannerDismissed, setBrokerBannerDismissed] = useState(false)
   const [botsErrorDismissed, setBotsErrorDismissed] = useState(false)
   const [error, setError] = useState('')
@@ -484,6 +486,7 @@ export default function BotControlCenter() {
               summary={bot}
               alignedRange={alignedRange}
               compact={compactMode}
+              adaptiveInterval={adaptiveInterval}
               onStart={() => handleStart(bot.bot_id)}
               onStop={() => handleStop(bot.bot_id)}
               onBacktest={() => handleBacktest(bot.bot_id)}

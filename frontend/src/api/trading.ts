@@ -185,9 +185,10 @@ export async function saveWatchlist(symbols: string[]): Promise<void> {
   await api.post('/api/trading/watchlist', { symbols })
 }
 
-export async function fetchJournal(symbol?: string, broker: string = 'all', signal?: AbortSignal): Promise<JournalTrade[]> {
-  const params: Record<string, string> = { broker }
+export async function fetchJournal(symbol?: string, broker: string = 'all', signal?: AbortSignal, limit?: number): Promise<JournalTrade[]> {
+  const params: Record<string, string | number> = { broker }
   if (symbol) params.symbol = symbol
+  if (limit != null) params.limit = limit
   const { data } = await api.get('/api/trading/journal', { params, signal })
   return data.trades ?? []
 }

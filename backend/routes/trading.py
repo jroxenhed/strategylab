@@ -13,7 +13,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 from shared import _fetch
-from broker import get_trading_provider, OrderRequest as BrokerOrderRequest, _trading_providers
+from broker import get_trading_provider, get_active_broker, OrderRequest as BrokerOrderRequest, _trading_providers
 from broker_aggregate import aggregate_from_brokers
 from signal_engine import Rule, compute_indicators, eval_rules, migrate_rule
 from journal import _log_trade, DATA_DIR, JOURNAL_PATH
@@ -148,7 +148,8 @@ def place_buy(req: BuyRequest):
     ))
 
     _log_trade(req.symbol, "buy", req.qty, price=current_price,
-               source="manual", stop_loss_price=stop_price, reason="entry")
+               source="manual", stop_loss_price=stop_price, reason="entry",
+               broker=get_active_broker())
 
     resp = {
         "order_id": result.order_id,
@@ -192,6 +193,32 @@ def _clear_bot_entry_state(symbol: str):
         logger.exception("_clear_bot_entry_state failed for %s", symbol)
 
 
+def _find_owning_bot(symbol: str, direction: str) -> str | None:
+    """Return bot_id of the bot currently holding this (symbol, direction), if any.
+
+    Manual closes pass this so the journal row attributes P&L to the bot —
+    compute_realized_pnl picks it up via bot_id even though source != "bot".
+    Regime (bidirectional) bots match either direction.
+    """
+    try:
+        from routes.bots import bot_manager
+        if bot_manager is None:
+            return None
+        sym = symbol.upper()
+        for bid, (cfg, state) in bot_manager.bots.items():
+            if cfg.symbol.upper() != sym:
+                continue
+            if state.entry_price is None:
+                continue
+            cfg_dir = getattr(cfg, "direction", "long")
+            if cfg_dir == "regime" or cfg_dir == direction:
+                return bid
+        return None
+    except Exception:
+        logger.exception("_find_owning_bot failed for %s", symbol)
+        return None
+
+
 @router.post("/sell")
 def place_sell(req: SellRequest):
     provider = get_trading_provider(req.broker)
@@ -210,6 +237,9 @@ def place_sell(req: SellRequest):
     cancel_side = "buy" if pos_is_short else "sell"
     log_side = "cover" if pos_is_short else "sell"
     order_side = "buy" if pos_is_short else "sell"
+    direction = "short" if pos_is_short else "long"
+    broker_name = req.broker or get_active_broker()
+    owning_bot_id = _find_owning_bot(req.symbol, direction)
 
     # Cancel pending stop-loss orders first
     try:
@@ -228,7 +258,8 @@ def place_sell(req: SellRequest):
 
         fill_price, fill_qty = _wait_for_fill(provider, result.order_id) if result.order_id else (None, None)
         _log_trade(req.symbol, log_side, fill_qty or 0, price=fill_price,
-                   source="manual", reason="manual")
+                   source="manual", reason="manual", direction=direction,
+                   bot_id=owning_bot_id, broker=broker_name)
         _clear_bot_entry_state(req.symbol)
         return {"symbol": req.symbol, "action": "position_closed",
                 "fill_price": fill_price, "fill_qty": fill_qty}
@@ -242,7 +273,8 @@ def place_sell(req: SellRequest):
     fill_price, fill_qty = _wait_for_fill(provider, result.order_id)
 
     _log_trade(req.symbol, log_side, fill_qty or req.qty, price=fill_price,
-               source="manual", reason="manual")
+               source="manual", reason="manual", direction=direction,
+               bot_id=owning_bot_id, broker=broker_name)
     _clear_bot_entry_state(req.symbol)
 
     return {
@@ -464,7 +496,7 @@ def get_performance(req: PerformanceRequest):
 
 
 @router.get("/journal")
-def get_journal(symbol: Optional[str] = None, broker: str = "all"):
+def get_journal(symbol: Optional[str] = None, broker: str = "all", limit: Optional[int] = None):
     if not JOURNAL_PATH.exists():
         return {"trades": []}
     journal = json.loads(JOURNAL_PATH.read_text())
@@ -473,6 +505,8 @@ def get_journal(symbol: Optional[str] = None, broker: str = "all"):
         trades = [t for t in trades if t["symbol"].upper() == symbol.upper()]
     if broker != "all":
         trades = [t for t in trades if t.get("broker") == broker]
+    if limit is not None:
+        trades = trades[-limit:]
     return {"trades": trades}
 
 
