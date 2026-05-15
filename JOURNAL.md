@@ -4,6 +4,15 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-15
+
+### PR #35 morning calibration — F127 merged + skip-stubs closed
+
+- Two overnights (PR #36 / #37) skipped 2026-05-14 + 2026-05-15 because PR #35 (build 28, F127) was unreviewed since 2026-05-13. Backlog drained today: morning calibration on #35, squash-merge, close skip-stubs.
+- **Calibration (2 personas, parallel)**: agent-native + reliability. Reliability **CONFIRMS** all of the builder's overnight calls — no overshoot, no undershoot. The `inf`/`isfinite` P2 catch was a genuine reliability bug; the test-timing 50ms/100ms 2× margin is structurally safe; the per-symbol watchdog deferral (PR's F200) and middleware deadline deferral (PR's F199) are correctly severity-tagged. Agent-native flags two non-blocking P2s: `QuickBacktestResult.error` is a free-text sentinel agents must substring-match → filed as **[F202]**; `STRATEGYLAB_BATCH_DEADLINE_SECS` (and pre-existing `STRATEGYLAB_MAX_BYTES`) missing from `.env.example` → filed as **[F203]**.
+- **Merge mechanics**: PR introduced its own F195/F196/F197 IDs that collided with 2026-05-13's main work (F195 Close routing, F198 SMART, F198b reconnect). Renumbered PR's three IDs to F199/F200/F201 on the PR branch before merge, then resolved TODO.md + JOURNAL.md textual conflicts (header counts will sync on next commit). Backend pytest after merge: 21/21 in `test_backtest_quick.py`, frontend `npm run build` clean.
+- **Skip-stubs**: #36 + #37 closed with referencing comments; queue is empty. Tonight's overnight should run normally.
+
 ## 2026-05-13
 
 ### Overnight build 28 — F127 batch quick-backtest request-level deadline (Tier B)

@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*188 / 208 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*188 / 210 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 - [F200](#f200) — [easy] [next] Per-symbol watchdog inside F127 batch deadline [easy]
 
-## Open Work — 43 items
+## Open Work — 45 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -22,7 +22,7 @@ _(none open)_
 | [D](#d-bots-live-trading) | Bots (live trading) | 1 | [D24b](#d24b) |
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 13 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F173](#f173), [F188](#f188)–[F190](#f190), [F199](#f199) |
-| [F · Hardening](#f-hardening) | Security, reliability, validation | 7 | [F187](#f187), [F191](#f191)–[F192](#f192), [F196](#f196)–[F197](#f197), [F200](#f200)–[F201](#f201) |
+| [F · Hardening](#f-hardening) | Security, reliability, validation | 9 | [F187](#f187), [F191](#f191)–[F192](#f192), [F196](#f196)–[F197](#f197), [F200](#f200)–[F203](#f203) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 4 | [F34](#f34)–[F35](#f35), [F44](#f44), [F140](#f140) |
 | [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 7 | [F50](#f50)–[F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F193](#f193)–[F194](#f194) |
 
@@ -142,6 +142,8 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f198"></a> **F198** IBKR `close_position` orders got auto-cancelled with no visible reason — root-caused via a new `/api/debug/ibkr-errors` endpoint (50-entry `deque` hooked into `_on_ib_error`) that captured the actual ib_insync chain: code 10311 ("This order will be directly routed to NYSE. Direct routed orders may result in higher trade fees. Restriction is specified in Precautionary Settings of Global Configuration/API.") → code 201 ("Order rejected - reason:Order was discarded."). Root cause: `close_position` placed the order against `p.contract` directly — the position's stored contract has `exchange="NYSE"` because that's where the original BUY filled, and Gateway's Precautionary Settings refuse direct-routed API orders. Fix: rebuild the contract via `self._contract(symbol)` (= `Stock(symbol, "SMART", "USD")`) for both `close_position` and `close_all_positions`. Diagnostic endpoint left in place. Verified mechanically; user closed the actual stuck position via IBKR Mobile while the SMART-route patch was being verified, so the API end-to-end retry needs a backend restart (the broker.py auto-reload de-registered the IBKR provider; lifespan startup re-registers it on a full uvicorn restart). [medium] [hardening] (added 2026-05-13) (resolved 2026-05-13)
 - [ ] <a id="f200"></a> **F200** [easy] [next] Per-symbol watchdog inside F127 batch deadline — F127 only checks `time.monotonic() >= deadline` BETWEEN symbols. A single hung `_run_quick` (e.g. yfinance request stuck before its httpx timeout fires, or a long `compute_indicators` on a degenerate dataframe) can still exceed the configured wall-clock budget by an unbounded amount. Wrap `_run_quick(single_req)` in a `concurrent.futures.ThreadPoolExecutor` `submit(...).result(timeout=remaining)` with `remaining = max(0, deadline - time.monotonic())` so the inner call is itself capped. On timeout, append `error="quick-backtest timed out"` and continue (or flip `deadline_hit=True` if remaining was zero). Documented as a known limitation in the F127 docstring. (from F127 build 28 — correctness residual_risk) [hardening]
 - [ ] <a id="f201"></a> **F201** [easy] First-symbol deadline-at-entry contract for F127 — currently if `_get_batch_deadline_secs()` returns a microsecond-scale value (or the call site is on a heavily loaded thread so elapsed time between `deadline = monotonic() + ...` and the first iteration check exceeds the budget), iteration 1 will short-circuit to `error="deadline exceeded"` with zero symbols processed. Either (a) document this in the handler docstring + OpenAPI description so clients know to expect all-deadline-exceeded on absurdly small budgets, or (b) add a `first = True` guard so at least one real attempt always runs. Build 28 correctness P3 0.78 advisory — current behaviour is defensible, just under-specified. (from F127 build 28 — correctness round-1 P3 advisory) [hardening] (added 2026-05-13)
+- [ ] <a id="f202"></a> **F202** [easy] `QuickBacktestResult.error` is a free-text string ("deadline exceeded", "No data for X", `str(e)`, "quick-backtest failed") — agents must substring-match an unenumerated sentinel to decide retry-the-tail vs give-up. Promote to a `Literal["deadline_exceeded", "no_data", "internal"]` companion field (e.g. `error_code: Optional[Literal[...]] = None`) while keeping the free-text `error` for humans, OR at minimum elevate `"deadline exceeded"` to a module-level `BATCH_DEADLINE_ERROR` constant referenced from the OpenAPI description so the sentinel is discoverable in the generated schema. (from PR #35 morning calibration — agent-native P2 0.85) [hardening]
+- [ ] <a id="f203"></a> **F203** [easy] `.env.example` missing entries for `STRATEGYLAB_BATCH_DEADLINE_SECS` (F127, 30s default) and `STRATEGYLAB_MAX_BYTES` (F86 pre-existing gap). Operators and agents reading OpenAPI see hard-coded defaults with no env name. Append both as commented examples; doc-only, no code change. (from PR #35 morning calibration — agent-native P2 0.90) [hardening]
 
 ### F · Polish
 - [ ] <a id="f34"></a> **F34** 118+ hardcoded hex colors while CSS variables exist — theme change requires touching dozens of files. Migrate Results.tsx and BotCard.tsx to use --bg-*, --accent-*, --text-* variables. [medium] [polish]
