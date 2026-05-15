@@ -16,12 +16,12 @@ What we've actually shipped. Reverse-chronological, one section per working day.
   - **P2 kieran-python** — `_DEFAULT_BATCH_DEADLINE_SECS` underscore prefix diverged from F86's `DEFAULT_MAX_BYTES` (public constant). Renamed to `DEFAULT_BATCH_DEADLINE_SECS` + added `: float` annotation.
   - **P2/P3 kieran-python** — removed 3-line block comment above the constant, removed handler-docstring WHAT-paragraph (kept one-line WHY about "checked between symbols"), removed 4 inline comments duplicating assertion intent, removed section label `# F127: request-level deadline tests`.
   - **P3 kieran-python** — `import time as _time` inside test bodies → hoisted module-level; unit tests switched from direct private-symbol import to module alias (`bq_mod.DEFAULT_BATCH_DEADLINE_SECS`) for house-style parity with the file's other tests.
-  - **P3 0.78 correctness (advisory, deferred)** — first symbol not guaranteed to process if deadline expires before iteration 1 (e.g. microsecond-scale env override). Filed as [F197](TODO.md#f197).
+  - **P3 0.78 correctness (advisory, deferred)** — first symbol not guaranteed to process if deadline expires before iteration 1 (e.g. microsecond-scale env override). Filed as [F201](TODO.md#f201).
 - **Verification**: full backend pytest **477 passed / 1 fail** (sole failure: F139 ib_insync env contamination — pre-existing, 7th build). 21/21 in `test_backtest_quick.py`. Helper smoke covers 7 env-value scenarios incl. `inf`. Diff: +128 / -1 across 2 files, well within Tier B (100-300 line, no contract surface).
-- **Surfaced → TODO (3 new items, F195-F197)**:
-  - **[F195](TODO.md#f195)** [hard] [arch] Middleware-level request deadline — F127's architecturally-preferred option (c) generalized to all routes.
-  - **[F196](TODO.md#f196)** [easy] [next] [hardening] Per-symbol watchdog inside F127 — single hung `_run_quick` can still exceed budget; wrap in `concurrent.futures` `submit().result(timeout=remaining)`.
-  - **[F197](TODO.md#f197)** [easy] [hardening] First-symbol deadline-at-entry contract — document zero-processed behaviour OR add `first=True` guard.
+- **Surfaced → TODO (3 new items, F199-F201)**:
+  - **[F199](TODO.md#f199)** [hard] [arch] Middleware-level request deadline — F127's architecturally-preferred option (c) generalized to all routes.
+  - **[F200](TODO.md#f200)** [easy] [next] [hardening] Per-symbol watchdog inside F127 — single hung `_run_quick` can still exceed budget; wrap in `concurrent.futures` `submit().result(timeout=remaining)`.
+  - **[F201](TODO.md#f201)** [easy] [hardening] First-symbol deadline-at-entry contract — document zero-processed behaviour OR add `first=True` guard.
 - **Process notes**:
   - **Tier B routing was right**: 138-line diff, [medium] item, no contract surface. Both correctness P2s would have shipped under Tier A; kieran-python's 10 style fixes are appearance-only but compound.
   - **Round 2 re-dispatch correct**: one applied fix was `autofix_class: manual` (test-timing bump) → skip license disqualified. Round 2 returned clean in 21s — cheap insurance, matches the protocol.

@@ -47,10 +47,10 @@ Tasks to skip even if tagged `[next]`:
 
 **Visual verification:** N/A — backend-only PR.
 
-**Deferred → TODO (3 new items, F195-F197):**
-- **F195** [hard] [arch] Middleware-level request deadline — F127 option (c) generalized to all routes.
-- **F196** [easy] [next] [hardening] Per-symbol watchdog inside F127 batch deadline — wraps `_run_quick` in `concurrent.futures.submit().result(timeout=remaining)`.
-- **F197** [easy] [hardening] First-symbol deadline-at-entry contract — document zero-processed behaviour OR add `first=True` guard.
+**Deferred → TODO (3 new items, F199-F201):**
+- **F199** [hard] [arch] Middleware-level request deadline — F127 option (c) generalized to all routes.
+- **F200** [easy] [next] [hardening] Per-symbol watchdog inside F127 batch deadline — wraps `_run_quick` in `concurrent.futures.submit().result(timeout=remaining)`.
+- **F201** [easy] [hardening] First-symbol deadline-at-entry contract — document zero-processed behaviour OR add `first=True` guard.
 
 **Builder env notes:**
 1. Main was force-updated overnight (`06e95b5` → `9cc95bb`). `git pull --ff-only` would have aborted; used `git reset --hard origin/main` since remote is canonical for this builder workflow (4th build with this pattern).
@@ -59,7 +59,7 @@ Tasks to skip even if tagged `[next]`:
 4. Tooling: `chrome-devtools-mcp` wasn't needed (backend-only).
 
 **Next up:**
-- **F196** [easy] [next] [hardening] Per-symbol watchdog inside F127 — uses `concurrent.futures` to cap one hung `_run_quick`. Cleanly composes with the wall-clock deadline shipped today.
+- **F200** [easy] [next] [hardening] Per-symbol watchdog inside F127 — uses `concurrent.futures` to cap one hung `_run_quick`. Cleanly composes with the wall-clock deadline shipped today.
 - **F148** [done] / **F147** [done] — pre-existing [next] tags now stale (shipped in build 27 PR #34 / build 27 PR-34-bundle).
 - **F94** / **F95** rollout follow-ups — covered by F128/F141/F149.
 
