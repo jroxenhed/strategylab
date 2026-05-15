@@ -4,6 +4,15 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-16
+
+### UX walkthrough plan + 30 TODO items (F221–F248)
+
+- Read both 2026-05-15 UX walkthrough postmortems (`docs/postmortems/2026-05-15-ux-walkthrough.md` + `-quant-laptop.md`), consolidated into single ranked plan at `docs/plans/2026-05-16-ux-walkthrough-improvements.md`. 24 postmortem items + 4 user feature requests (indicator sidebar overhaul, multi-TF rules, watchlist groups+reorder+quick-add, collapsible chart panel).
+- Ran 6 review-agent passes total: 4 personas on the postmortem-driven items (coherence, feasibility, scope, design) + 2 on the new feature requests (feasibility, scope). Findings drove substantive revisions: F-UX1 mechanism corrected (reorder `buildParamOptions`, not defaults helper), F-UX2 switched to frontend-only v1 (no backend response-contract change), F-UX3 dropped backend Pydantic validator, F-UX5 explicit ResizeObserver ban (F218 trap), F-UX12 hide-tab-not-dim resolved as the design call, F-UX26/27/28 split into v1/v2 to isolate schema-touching work. File paths in F-UX1/F-UX26 corrected (`features/strategy/` and `features/sidebar/`, not invented dirs).
+- Added 30 items to TODO: **[F221](TODO.md#f221)–[F224](TODO.md#f224)** (hardening), **[F229](TODO.md#f229)** + **[F245b](TODO.md#f245b)** + **[F246](TODO.md#f246)** + **[F248](TODO.md#f248)** (architecture), **[F225](TODO.md#f225)–[F244](TODO.md#f244)** + **[F245a](TODO.md#f245a)** + **[F247a](TODO.md#f247a)**/**[b](TODO.md#f247b)** (polish). One deferred-v2 (F-UX27b mixed-HTF + HTF chart panes) intentionally NOT in TODO — tracked in plan only. Each TODO entry is one-liner with `See plan F-UXn` pointer; depth lives in the plan doc.
+- User Q on backtest valid range: confirmed clamp is yahoo-only (`backend/shared.py:43-46` `_INTERVAL_MAX_DAYS` applied only inside `YahooProvider.fetch:64`); Alpaca + IBKR pass requested range straight through. F222 frontend-only clamp chip needs to be provider-aware.
+
 ## 2026-05-15
 
 ### F218 — Chart perpetual repaint loop (lw-charts v4 RO pattern fighting v5 autoSize)
