@@ -28,6 +28,7 @@ interface SubPaneProps {
   loading?: boolean
   error?: boolean
   errorMessage?: string | null
+  onRetry?: () => void
 }
 
 const CHART_BG = '#0d1117'
@@ -51,7 +52,7 @@ const chartOptions = {
 export default function SubPane({
   paneKey, instances, instanceData, mainChartRef, mainSeriesRef,
   paneRegistryRef, syncWidthsRef,
-  markers, toET, label, tzMode, loading, error, errorMessage,
+  markers, toET, label, tzMode, loading, error, errorMessage, onRetry,
 }: SubPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -298,12 +299,24 @@ export default function SubPane({
       {!loading && error && (
         <div style={{
           position: 'absolute', inset: 0, background: CHART_BG_SCRIM,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          zIndex: 2, pointerEvents: 'none',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          gap: 6, zIndex: 2,
         }}>
           <span style={{ fontSize: 11, color: DOWN }}>
             Failed to load: {errorMessage ?? 'indicator error'}
           </span>
+          {onRetry && (
+            <button
+              onClick={onRetry}
+              style={{
+                fontSize: 11, color: TEXT, background: 'transparent',
+                border: `1px solid ${GRID}`, borderRadius: 3,
+                padding: '2px 8px', cursor: 'pointer',
+              }}
+            >
+              Retry
+            </button>
+          )}
         </div>
       )}
     </div>

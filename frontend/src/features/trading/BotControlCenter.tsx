@@ -230,6 +230,7 @@ export default function BotControlCenter() {
       })
   }, [orderedBots, invalidateBots])
 
+  const [confirmingStopClose, setConfirmingStopClose] = useState(false)
   const [sparklineScale, setSparklineScale] = useState<'local' | 'aligned'>(() => {
     const v = localStorage.getItem('sparklineScale')
     return v === 'aligned' ? 'aligned' : 'local'
@@ -335,11 +336,11 @@ export default function BotControlCenter() {
   }
 
   const handleStopAndCloseAll = async () => {
-    const openCount = bots.filter(b => b.has_position).length
-    const running = bots.filter(b => b.status === 'running').length
-    if (!window.confirm(`Close ${openCount} open position${openCount === 1 ? '' : 's'} at market and stop ${running} running bot${running === 1 ? '' : 's'}?`)) {
-      return
-    }
+    setConfirmingStopClose(true)
+  }
+
+  const doStopAndCloseAll = async () => {
+    setConfirmingStopClose(false)
     try {
       const r = await stopAndCloseAllBots()
       invalidateBots()
@@ -365,10 +366,20 @@ export default function BotControlCenter() {
         <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 14 }}>
           Live Trading Bots
         </div>
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <button onClick={handleStartAll} style={btnStyle('#1a3a2a')}>Start All</button>
           <button onClick={handleStopAll} style={btnStyle('#3a1a1a')}>Stop All</button>
-          <button onClick={handleStopAndCloseAll} style={btnStyle('#5a1a1a')}>Stop and Close</button>
+          {confirmingStopClose ? (
+            <>
+              <span style={{ fontSize: 12, color: '#ccc' }}>
+                {`Close ${bots.filter(b => b.has_position).length} open position${bots.filter(b => b.has_position).length === 1 ? '' : 's'} at market and stop ${bots.filter(b => b.status === 'running').length} running bot${bots.filter(b => b.status === 'running').length === 1 ? '' : 's'}?`}
+              </span>
+              <button onClick={doStopAndCloseAll} style={btnStyle('#5a1a1a')}>Confirm</button>
+              <button onClick={() => setConfirmingStopClose(false)} style={btnStyle('#1e2530')}>Cancel</button>
+            </>
+          ) : (
+            <button onClick={handleStopAndCloseAll} style={btnStyle('#5a1a1a')}>Stop and Close</button>
+          )}
         </div>
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>

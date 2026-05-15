@@ -133,6 +133,7 @@ export default function BotCard({
   const [ddValue, setDdValue] = useState('')
   const [editingStrategy, setEditingStrategy] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [confirmingResetPnl, setConfirmingResetPnl] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
   const { adaptiveInterval } = useBroker()
@@ -310,7 +311,7 @@ export default function BotCard({
                       label: 'Reset P&L',
                       disabled: false,
                       action: () => {
-                        if (confirm('Reset P&L for this bot? Journal rows are kept; the display starts fresh from now.')) onResetPnl()
+                        setConfirmingResetPnl(true)
                         setMenuOpen(false)
                       },
                     },
@@ -351,6 +352,14 @@ export default function BotCard({
         {expanded && (
           <div style={{ padding: '0 8px 8px' }}>
             <ActivityLog entries={detail?.state?.activity_log ?? []} status={summary.status} />
+          </div>
+        )}
+        {/* Inline reset-P&L confirm (triggered from menu) */}
+        {confirmingResetPnl && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', background: 'rgba(240,183,78,0.08)', borderTop: '1px solid rgba(240,183,78,0.2)' }} onClick={e => e.stopPropagation()}>
+            <span style={{ fontSize: 11, color: '#ccc', flex: 1 }}>Reset P&L for this bot? Journal rows are kept; the display starts fresh from now.</span>
+            <button onClick={() => { onResetPnl(); setConfirmingResetPnl(false) }} style={btnStyle('#3a1a1a')}>Confirm</button>
+            <button onClick={() => setConfirmingResetPnl(false)} style={btnStyle('#1e2530')}>Cancel</button>
           </div>
         )}
       </div>
@@ -623,13 +632,19 @@ export default function BotCard({
             >
               {expanded ? 'Hide Log' : 'Show Log'}
             </button>
-            <button
-              onClick={() => {
-                if (confirm('Reset P&L for this bot? Journal rows are kept; the display starts fresh from now.')) onResetPnl()
-              }}
-              style={btnStyle('#3a2e1a')}
-              title="Soft reset: marks an epoch so only trades from now on count toward P&L"
-            >Reset P&L</button>
+            {confirmingResetPnl ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ fontSize: 11, color: '#ccc' }}>Reset P&L for this bot? Journal rows are kept; the display starts fresh from now.</span>
+                <button onClick={() => { onResetPnl(); setConfirmingResetPnl(false) }} style={btnStyle('#3a1a1a')}>Confirm</button>
+                <button onClick={() => setConfirmingResetPnl(false)} style={btnStyle('#1e2530')}>Cancel</button>
+              </span>
+            ) : (
+              <button
+                onClick={() => setConfirmingResetPnl(true)}
+                style={btnStyle('#3a2e1a')}
+                title="Soft reset: marks an epoch so only trades from now on count toward P&L"
+              >Reset P&L</button>
+            )}
             {stopped && (
               <button onClick={onDelete} style={btnStyle('#3a1a1a')}>Delete</button>
             )}

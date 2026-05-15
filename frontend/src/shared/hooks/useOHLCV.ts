@@ -106,9 +106,23 @@ export function useInstanceIndicators(
   ]
   const isLoading = allQueries.some(q => q.isLoading)
 
+  // Per-instance loading map (A14d): keyed by instance id.
+  // Regular instances share a single query → all get that query's isLoading.
+  // HTF instances are grouped by htfInterval → all instances in a group share
+  // that group's query isLoading.
+  const loadingByInstance: Record<string, boolean> = {}
+  for (const inst of regularInstances) {
+    loadingByInstance[inst.id] = regularQuery.isLoading
+  }
+  for (let i = 0; i < htfGroups.length; i++) {
+    const [, insts] = htfGroups[i]
+    const htfLoading = htfQueryResults[i]?.isLoading ?? false
+    for (const inst of insts) {
+      loadingByInstance[inst.id] = htfLoading
+    }
+  }
+
   // Aggregate error state across all underlying queries.
-  // Pane-level error (any query fails) matches the pane-level loading flag pattern.
-  // Per-instance granularity deferred to A14d (known limitation).
   const isError = allQueries.some(q => q.isError)
   const errorMessage: string | null = (() => {
     const firstErrorQuery = allQueries.find(q => q.isError)
@@ -116,7 +130,7 @@ export function useInstanceIndicators(
     return apiErrorDetail(firstErrorQuery.error, 'Failed to load indicator')
   })()
 
-  return { data: merged, refetch, isSuccess, fetchStatus, isLoading, isError, errorMessage }
+  return { data: merged, refetch, isSuccess, fetchStatus, isLoading, loadingByInstance, isError, errorMessage }
 }
 
 export function useProviders() {

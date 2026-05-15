@@ -46,7 +46,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     if (localStorage.getItem(NOTIFY_KEY)) return
     const legacy = saved && (saved.commission !== undefined) && saved.perShareRate === undefined
     if (!legacy) return
-    alert(
+    setMigrationNotice(
       'Commission model updated — defaults to commission-free (Alpaca US equities). ' +
       'For IBKR Fixed, set per-share to 0.0035 and min to 0.35 in Settings.'
     )
@@ -106,6 +106,9 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   const [debug, setDebug] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [migrationNotice, setMigrationNotice] = useState<string | null>(null)
+  const [renameError, setRenameError] = useState<string | null>(null)
+  const [importConfirm, setImportConfirm] = useState<{ destCount: number; sourceName: string; tab: 'regime' | 'long' | 'short'; migratedBuy: Rule[]; migratedSell: Rule[] } | null>(null)
   const [savedStrategies, setSavedStrategies] = useState<SavedStrategy[]>(loadSavedStrategies)
   const [activeStrategyName, setActiveStrategyName] = useState<string | null>(null)
   const [showSaveAs, setShowSaveAs] = useState(false)
@@ -269,7 +272,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   function renameStrategy(oldName: string, newName: string) {
     const trimmed = newName.trim()
     if (!trimmed || trimmed === oldName) { setRenamingStrategy(null); return }
-    if (savedStrategies.some(s => s.name === trimmed)) { alert(`"${trimmed}" already exists.`); return }
+    if (savedStrategies.some(s => s.name === trimmed)) { setRenameError(`"${trimmed}" already exists.`); return }
     const updated = savedStrategies.map(s => s.name === oldName ? { ...s, name: trimmed } : s)
     setSavedStrategies(updated)
     persistSavedStrategies(updated)
@@ -317,8 +320,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     }
 
     const destCount = tab === 'regime' ? regimeBuyRules.length : tab === 'long' ? longBuyRules.length : shortBuyRules.length
-    if (destCount > 0 && !window.confirm(`Replace ${destCount} existing rule${destCount > 1 ? 's' : ''} with rules from "${sourceName}"?`)) {
-      setImportingTab(null)
+    if (destCount > 0) {
+      setImportConfirm({ destCount, sourceName, tab, migratedBuy, migratedSell })
       return
     }
 
@@ -353,6 +356,38 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
       setShortPosSize(source.posSize ?? posSize)
     }
     setImportError(null)
+    setImportingTab(null)
+  }
+
+  function commitImport() {
+    if (!importConfirm) return
+    const { tab, sourceName, migratedBuy, migratedSell } = importConfirm
+    const source = savedStrategies.find(s => s.name === sourceName)
+    if (!source) { setImportConfirm(null); setImportingTab(null); return }
+    if (tab === 'regime') {
+      setRegimeBuyRules(migratedBuy)
+      setRegimeLogic(source.buyLogic ?? 'AND')
+    } else if (tab === 'long') {
+      setLongBuyRules(migratedBuy)
+      setLongSellRules(migratedSell)
+      setLongBuyLogic(source.longBuyLogic ?? source.buyLogic ?? 'AND')
+      setLongSellLogic(source.longSellLogic ?? source.sellLogic ?? 'AND')
+      if (source.stopLoss !== '') setLongStopLoss(source.stopLoss ?? '')
+      if (source.trailingEnabled) { setLongTrailingEnabled(true); setLongTrailingConfig(source.trailingConfig) }
+      if (source.maxBarsHeld !== undefined && source.maxBarsHeld !== '') setLongMaxBarsHeld(source.maxBarsHeld)
+      setLongPosSize(source.posSize ?? posSize)
+    } else if (tab === 'short') {
+      setShortBuyRules(migratedBuy)
+      setShortSellRules(migratedSell)
+      setShortBuyLogic(source.shortBuyLogic ?? source.buyLogic ?? 'AND')
+      setShortSellLogic(source.shortSellLogic ?? source.sellLogic ?? 'AND')
+      if (source.stopLoss !== '') setShortStopLoss(source.stopLoss ?? '')
+      if (source.trailingEnabled) { setShortTrailingEnabled(true); setShortTrailingConfig(source.trailingConfig) }
+      if (source.maxBarsHeld !== undefined && source.maxBarsHeld !== '') setShortMaxBarsHeld(source.maxBarsHeld)
+      setShortPosSize(source.posSize ?? posSize)
+    }
+    setImportError(null)
+    setImportConfirm(null)
     setImportingTab(null)
   }
 
@@ -876,16 +911,23 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
               <input
                 autoFocus
                 value={renameValue}
-                onChange={e => setRenameValue(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') renameStrategy(renamingStrategy, renameValue); if (e.key === 'Escape') setRenamingStrategy(null) }}
+                onChange={e => { setRenameValue(e.target.value); setRenameError(null) }}
+                onKeyDown={e => { if (e.key === 'Enter') renameStrategy(renamingStrategy, renameValue); if (e.key === 'Escape') { setRenamingStrategy(null); setRenameError(null) } }}
                 placeholder="New name"
-                style={styles.saveAsInput}
+                style={{ ...styles.saveAsInput, ...(renameError ? { borderColor: 'var(--accent-red)' } : {}) }}
               />
               <button onClick={() => renameStrategy(renamingStrategy, renameValue)} style={styles.strategyBtn}>OK</button>
-              <button onClick={() => setRenamingStrategy(null)} style={styles.strategyBtn}>Cancel</button>
+              <button onClick={() => { setRenamingStrategy(null); setRenameError(null) }} style={styles.strategyBtn}>Cancel</button>
+              {renameError && <span style={{ color: 'var(--accent-red)', fontSize: 11 }}>{renameError}</span>}
             </div>
           )}
         </div>
+        {migrationNotice && (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 16px', background: 'rgba(196,68,68,0.08)', borderBottom: '1px solid rgba(196,68,68,0.2)' }}>
+            <span style={{ color: 'var(--accent-red)', fontSize: 12, flex: 1 }}>{migrationNotice}</span>
+            <button onClick={() => setMigrationNotice(null)} style={{ fontSize: 11, padding: '1px 8px', background: 'var(--bg-input)', color: 'var(--text-secondary)', border: '1px solid var(--border-light)', borderRadius: 3, cursor: 'pointer', flexShrink: 0 }}>Dismiss</button>
+          </div>
+        )}
         {pendingDelete && createPortal(
           <div style={{
             position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
@@ -1219,6 +1261,15 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         )}
         {importError && (
           <div style={{ color: 'var(--accent-red)', fontSize: 11, padding: '0 16px 4px' }}>{importError}</div>
+        )}
+        {importConfirm && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 16px', background: 'rgba(196,68,68,0.08)', borderTop: '1px solid rgba(196,68,68,0.2)' }}>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              {`Replace ${importConfirm.destCount} existing rule${importConfirm.destCount > 1 ? 's' : ''} with rules from "${importConfirm.sourceName}"?`}
+            </span>
+            <button onClick={commitImport} style={{ fontSize: 11, padding: '2px 10px', background: '#3a1a1a', color: '#ef9a9a', border: '1px solid rgba(196,68,68,0.4)', borderRadius: 3, cursor: 'pointer' }}>Replace</button>
+            <button onClick={() => { setImportConfirm(null); setImportingTab(null) }} style={{ fontSize: 11, padding: '2px 10px', background: 'var(--bg-input)', color: 'var(--text-secondary)', border: '1px solid var(--border-light)', borderRadius: 3, cursor: 'pointer' }}>Cancel</button>
+          </div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '8px 16px' }}>
           <button

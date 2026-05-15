@@ -123,6 +123,23 @@ print('Import-time check passed.')
 
 If any step fails, investigate before proceeding to review. AST + import-time covers ~80% of "compiles clean but throws on first request" bugs that `tsc --noEmit`-equivalent static checks would miss; helper-logic covers the validator-wiring regressions that builds 22 + 23 surfaced.
 
+### 3.5b. Frontend preview-server smoke test (if frontend was built)
+
+Run this after a successful `npm run build`. It starts the Vite preview server (port 4173, separate from the dev server's 5173), fetches the root page, and asserts that the bundle is wired correctly — `<div id="root">` present, a bundled `<script src="*.js">` present, and no crash/error body markers. The server is killed on exit (trap covers the vite child process, not just the npm wrapper).
+
+```bash
+bash bin/preview-smoke.sh
+```
+
+The script (`bin/preview-smoke.sh`) exits non-zero on any failure. Failures to watch for:
+
+- **Port never ready** — Vite build output is missing or the `dist/` directory was not produced. Re-run `npm run build` and check for TypeScript errors.
+- **Missing `#root` marker** — the HTML skeleton is absent, which means the bundler produced an empty or wrong entry point.
+- **No bundled script tag** — Vite didn't emit the hashed JS bundle into `index.html`; usually a Rollup output config issue.
+- **Error marker in body** — a server-side render error or a Vite 500 response leaked into the HTML.
+
+Skip this step only when: (a) no frontend files changed in this run, or (b) `npm run build` itself already failed (don't mask the build failure with a preview-server hang). Note "preview smoke skipped — <reason>" in the JOURNAL entry.
+
 ### 4. Multi-Agent Review (severity-graded — match review depth to actual risk)
 
 Single-pass self-review consistently misses P1s on architectural changes — that's why multi-agent review exists. But running 4-6 personas on every PR overshoots when the diff is a bundle of `[easy]` hardening items (caps, logger.exception, type tightening). 2026-05-11 evidence: F119 + F122 + F125 shipped 24 `[easy]` items across 3 interactive batches with parallel Sonnet implementers + Opus orchestrator verification + ZERO persona review + zero regressions (user-validated). Personas earn their tokens at the architectural/adversarial tails, not on mechanical hardening.

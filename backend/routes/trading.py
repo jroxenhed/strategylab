@@ -209,6 +209,7 @@ def place_sell(req: SellRequest):
         logger.exception("get_positions failed in /sell %s; defaulting to long", req.symbol)
     cancel_side = "buy" if pos_is_short else "sell"
     log_side = "cover" if pos_is_short else "sell"
+    order_side = "buy" if pos_is_short else "sell"
 
     # Cancel pending stop-loss orders first
     try:
@@ -235,7 +236,7 @@ def place_sell(req: SellRequest):
     result = provider.submit_order(BrokerOrderRequest(
         symbol=req.symbol,
         qty=int(req.qty),
-        side="sell",
+        side=order_side,
     ))
 
     fill_price, fill_qty = _wait_for_fill(provider, result.order_id)
