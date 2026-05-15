@@ -6,6 +6,14 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-15
 
+### F213 — Click-to-sort trades table (supersedes C26 dropdown)
+
+- User request: replace the C26 sort dropdown with click-to-sort column headers. 12 columns sortable (`#`, Entry date/price, Exit date/price, Shares, P&L, Return, Slip, Comm, Borrow, Exit type). 3-state cycle: click → asc ↑, click again → desc ↓, third click → clear (back to chronological). Cross-column switching resets to asc on the new target. Active header rendered with `--text-primary` colour + directional arrow; inactive stay muted. Header row carries a `title` tooltip documenting the cycle.
+- Comparators: a `Map(sell → index)` resolves buy-pairing once per render and feeds the slip / commission pair-sum functions; date columns reuse a `toMs()` helper that handles both ISO strings and unix-int intraday timestamps. `exit_type` ranks SL → TSL → Signal so all SL exits cluster on asc.
+- Persistence: replaced the old `strategylab-trades-sort-mode` string with a `strategylab-trades-sort` JSON `{col, dir}`. Lazy `useState` initializer validates against the `SortCol` union + `SortDir` literal (no unsafe cast); `useEffect` removes the key when sort is cleared so the cleared state survives reload.
+- Browser-verified end-to-end on KO RSI 30/70 daily (106 trades): asc click → most-negative-first sequence `[-1237.96, -1135.22, -678.46, -647.34, -520.17]`, desc click → biggest-wins-first `[+632.13, +574.50, +502.04, +418.29, +403.77]`, third click → chronological restored `[-8.23, +3.31, -118.36, +194.06, -13.19]` (matches baseline), cross-column click on Return → `{col:'pnl_pct', dir:'asc'}` with first 3 returns `-10.85%, -10.38%, -6.36%`. localStorage round-trip verified at each transition. Screenshot at `docs/screenshots/trades-sort-click-headers.png`.
+- Verification: `npm run build` clean, frontend tests **153/153** unchanged.
+
 ### Follow-up sweep — F207 + F208 + F209 (test infra + a11y verify + sort persistence)
 
 - **[F207]** 11 long-standing pre-existing frontend test failures triaged and fixed → **153/153 pass**. Two root causes:

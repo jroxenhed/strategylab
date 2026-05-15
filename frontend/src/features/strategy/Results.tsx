@@ -18,7 +18,22 @@ import OptimizerPanel from './OptimizerPanel'
 import WalkForwardPanel from './WalkForwardPanel'
 
 export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace' | 'session' | 'monte_carlo' | 'rolling' | 'hold_duration' | 'sensitivity' | 'optimizer' | 'walk_forward'
-type SortMode = 'chronological' | 'pnl_high_low' | 'pnl_low_high' | 'hold_duration' | 'exit_type'
+type SortCol =
+  | 'index' | 'entry_date' | 'entry_price' | 'exit_date' | 'exit_price'
+  | 'shares' | 'pnl' | 'pnl_pct' | 'slip' | 'commission' | 'borrow' | 'exit_type'
+type SortDir = 'asc' | 'desc'
+type TradesSort = { col: SortCol; dir: SortDir } | null
+const SORT_COLS: SortCol[] = ['index','entry_date','entry_price','exit_date','exit_price','shares','pnl','pnl_pct','slip','commission','borrow','exit_type']
+function parseTradesSort(raw: string | null): TradesSort {
+  if (!raw) return null
+  try {
+    const v = JSON.parse(raw)
+    if (v && typeof v === 'object' && (SORT_COLS as string[]).includes(v.col) && (v.dir === 'asc' || v.dir === 'desc')) {
+      return { col: v.col, dir: v.dir }
+    }
+  } catch {}
+  return null
+}
 
 function fmtDate(d: string | number | undefined): string {
   if (typeof d === 'number') return fmtDateTimeET(d)
@@ -95,45 +110,53 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
 
   const [mcResult, setMcResult] = useState<MonteCarloResult | null>(null)
   const [mcLoading, setMcLoading] = useState(false)
-  const [sortMode, setSortMode] = useState<SortMode>(() => {
-    try {
-      const v = localStorage.getItem('strategylab-trades-sort-mode')
-      if (v === 'chronological' || v === 'pnl_high_low' || v === 'pnl_low_high' || v === 'hold_duration' || v === 'exit_type') {
-        return v
-      }
-    } catch {}
-    return 'chronological'
+  const [tradesSort, setTradesSort] = useState<TradesSort>(() => {
+    try { return parseTradesSort(localStorage.getItem('strategylab-trades-sort')) } catch { return null }
   })
 
   useEffect(() => {
     try {
-      localStorage.setItem('strategylab-trades-sort-mode', sortMode)
+      if (tradesSort) localStorage.setItem('strategylab-trades-sort', JSON.stringify(tradesSort))
+      else localStorage.removeItem('strategylab-trades-sort')
     } catch {}
-  }, [sortMode])
+  }, [tradesSort])
+
+  const cycleSort = (col: SortCol) => {
+    setTradesSort(prev => {
+      if (!prev || prev.col !== col) return { col, dir: 'asc' }
+      if (prev.dir === 'asc') return { col, dir: 'desc' }
+      return null
+    })
+  }
 
   const buysForSort = trades.filter(t => t.type === 'buy' || t.type === 'short')
   const sortedSells = useMemo(() => {
-    if (sortMode === 'chronological') return sells
-    if (sortMode === 'pnl_high_low') return [...sells].sort((a, b) => (b.pnl ?? 0) - (a.pnl ?? 0))
-    if (sortMode === 'pnl_low_high') return [...sells].sort((a, b) => (a.pnl ?? 0) - (b.pnl ?? 0))
-    if (sortMode === 'exit_type') {
-      return [...sells].sort((a, b) => {
-        const rank = (t: typeof a) => t.stop_loss ? 0 : t.trailing_stop ? 1 : 2
-        return rank(a) - rank(b)
-      })
+    if (!tradesSort) return sells
+    const toMs = (d: string | number | undefined) =>
+      typeof d === 'number' ? d * 1000 : (d ? new Date(d).getTime() : 0)
+    const sellIdx = new Map(sells.map((s, i) => [s, i]))
+    const buyFor = (s: typeof sells[number]) => buysForSort[sellIdx.get(s) ?? -1]
+    const totalSlipOf = (s: typeof sells[number]) => (buyFor(s)?.slippage ?? 0) + (s.slippage ?? 0)
+    const totalCommOf = (s: typeof sells[number]) => (buyFor(s)?.commission ?? 0) + (s.commission ?? 0)
+    const exitRank = (s: typeof sells[number]) => s.stop_loss ? 0 : s.trailing_stop ? 1 : 2
+    const cmp: Record<SortCol, (a: typeof sells[number], b: typeof sells[number]) => number> = {
+      index:       (a, b) => (sellIdx.get(a) ?? 0) - (sellIdx.get(b) ?? 0),
+      entry_date:  (a, b) => toMs(buyFor(a)?.date) - toMs(buyFor(b)?.date),
+      entry_price: (a, b) => (buyFor(a)?.price ?? 0) - (buyFor(b)?.price ?? 0),
+      exit_date:   (a, b) => toMs(a.date) - toMs(b.date),
+      exit_price:  (a, b) => a.price - b.price,
+      shares:      (a, b) => (a.shares ?? 0) - (b.shares ?? 0),
+      pnl:         (a, b) => (a.pnl ?? 0) - (b.pnl ?? 0),
+      pnl_pct:     (a, b) => (a.pnl_pct ?? 0) - (b.pnl_pct ?? 0),
+      slip:        (a, b) => totalSlipOf(a) - totalSlipOf(b),
+      commission:  (a, b) => totalCommOf(a) - totalCommOf(b),
+      borrow:      (a, b) => (a.borrow_cost ?? 0) - (b.borrow_cost ?? 0),
+      exit_type:   (a, b) => exitRank(a) - exitRank(b),
     }
-    if (sortMode === 'hold_duration') {
-      const toMs = (d: string | number) => typeof d === 'number' ? d * 1000 : new Date(d).getTime()
-      const withDur = sells.map((sell, i) => {
-        const buy = buysForSort[i]
-        const dur = buy ? (toMs(sell.date) - toMs(buy.date)) : 0
-        return { sell, dur }
-      })
-      withDur.sort((a, b) => b.dur - a.dur)
-      return withDur.map(x => x.sell)
-    }
-    return sells
-  }, [sells.length, sortMode]) // eslint-disable-line react-hooks/exhaustive-deps
+    const base = cmp[tradesSort.col]
+    const sign = tradesSort.dir === 'asc' ? 1 : -1
+    return [...sells].sort((a, b) => sign * base(a, b))
+  }, [sells, tradesSort, buysForSort])
 
   async function fetchMonteCarlo() {
     if (mcLoading || sells.length < 2) return
@@ -702,40 +725,50 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
           {sells.length === 0 ? (
             <div style={{ color: '#8b949e', fontSize: 12, padding: 8 }}>No completed trades</div>
           ) : (<>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0 6px', fontSize: 12 }}>
-              <span style={{ color: '#8b949e' }}>Sort:</span>
-              <select
-                value={sortMode}
-                onChange={e => setSortMode(e.target.value as SortMode)}
-                style={{ fontSize: 12, background: '#21262d', border: '1px solid #30363d', borderRadius: 6, color: '#e6edf3', padding: '2px 6px', cursor: 'pointer' }}
-              >
-                <option value="chronological">Chronological</option>
-                <option value="pnl_high_low">P&amp;L: High → Low</option>
-                <option value="pnl_low_high">P&amp;L: Low → High</option>
-                <option value="hold_duration">Hold Duration</option>
-                <option value="exit_type">Exit Type</option>
-              </select>
-            </div>
             {(() => {
               const hasMixedDirection = sells.some(t => t.type === 'cover') && sells.some(t => t.type === 'sell')
               const allShort = sells.length > 0 && sells.every(t => t.type === 'cover')
               const entryLabel = (hasMixedDirection || allShort) ? 'Entry' : 'Buy'
               const exitLabel = (hasMixedDirection || allShort) ? 'Exit' : 'Sell'
+              const arrow = (col: SortCol) =>
+                tradesSort?.col === col ? (tradesSort.dir === 'asc' ? ' ↑' : ' ↓') : ''
+              const headerStyle = (col: SortCol, width: number): React.CSSProperties => ({
+                ...styles.tradeCell,
+                width,
+                color: tradesSort?.col === col ? '#e6edf3' : '#8b949e',
+                fontSize: 10,
+                cursor: 'pointer',
+                userSelect: 'none',
+              })
+              const cols: Array<[SortCol, number, string]> = [
+                ['index', 24, '#'],
+                ['entry_date', 115, entryLabel],
+                ['entry_price', 65, `${entryLabel} $`],
+                ['exit_date', 115, exitLabel],
+                ['exit_price', 65, `${exitLabel} $`],
+                ['shares', 45, 'Shares'],
+                ['pnl', 60, 'P&L'],
+                ['pnl_pct', 50, 'Return'],
+                ['slip', 50, 'Slip'],
+                ['commission', 50, 'Comm'],
+                ['borrow', 50, 'Borrow'],
+                ['exit_type', 40, 'Exit'],
+              ]
               return (
-            <div style={{ ...styles.tradeRow, borderBottom: '1px solid #30363d', marginBottom: 2 }}>
-              <span style={{ ...styles.tradeCell, width: 24, color: '#8b949e', fontSize: 10 }}>#</span>
-              <span style={{ ...styles.tradeCell, width: 115, color: '#8b949e', fontSize: 10 }}>{entryLabel}</span>
-              <span style={{ ...styles.tradeCell, width: 65, color: '#8b949e', fontSize: 10 }}>{entryLabel} $</span>
-              <span style={{ ...styles.tradeCell, width: 115, color: '#8b949e', fontSize: 10 }}>{exitLabel}</span>
-              <span style={{ ...styles.tradeCell, width: 65, color: '#8b949e', fontSize: 10 }}>{exitLabel} $</span>
-              <span style={{ ...styles.tradeCell, width: 45, color: '#8b949e', fontSize: 10 }}>Shares</span>
-              <span style={{ ...styles.tradeCell, width: 60, color: '#8b949e', fontSize: 10 }}>P&L</span>
-              <span style={{ ...styles.tradeCell, width: 50, color: '#8b949e', fontSize: 10 }}>Return</span>
-              <span style={{ ...styles.tradeCell, width: 50, color: '#8b949e', fontSize: 10 }}>Slip</span>
-              <span style={{ ...styles.tradeCell, width: 50, color: '#8b949e', fontSize: 10 }}>Comm</span>
-              <span style={{ ...styles.tradeCell, width: 50, color: '#8b949e', fontSize: 10 }}>Borrow</span>
-              <span style={{ ...styles.tradeCell, width: 40, color: '#8b949e', fontSize: 10 }}>Exit</span>
-            </div>
+                <div
+                  style={{ ...styles.tradeRow, borderBottom: '1px solid #30363d', marginBottom: 2 }}
+                  title="Click a column to sort — click again to reverse, third click clears"
+                >
+                  {cols.map(([col, width, label]) => (
+                    <span
+                      key={col}
+                      style={headerStyle(col, width)}
+                      onClick={() => cycleSort(col)}
+                    >
+                      {label}{arrow(col)}
+                    </span>
+                  ))}
+                </div>
               )
             })()}
             {sortedSells.map((sell, i) => {
