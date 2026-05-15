@@ -35,6 +35,33 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
+**Date:** 2026-05-15 (build 30 — overnight)
+**Branch:** `claude/jolly-babbage-jlNSG`
+
+**Status:** SKIPPED — pre-flight check #1 (no open builder PR) caught **two** open `claude/`-prefixed builder PRs:
+
+- **PR #35** `claude/jolly-babbage-X7mDA` — build 28, ships F127 batch quick-backtest request-level deadline. Draft, opened 2026-05-13. The F127 surface overlaps with the queued `[next]` item — running build 30 in parallel would re-create the PR #26 + #27 merge-conflict failure mode the skip rule exists to prevent.
+- **PR #36** `claude/jolly-babbage-kLbQg` — build 29 skip-note. Draft, opened 2026-05-14. PR #36's own existence is what builds 29 + 30 are stacking against; the open prose-only PR keeps re-triggering pre-flight #1 until a human merges or closes both.
+
+My branch (`claude/jolly-babbage-jlNSG`) is at the same SHA as `origin/main` (`8f1da78`) — nothing in flight on this side, so the abort is clean.
+
+**This PR:** single commit updating `NEXT_RUN.md` ## Last Run with the skip note. No TODO.md / JOURNAL.md / code edits. Opened as draft for audit-trail visibility; the morning reviewer can merge it (preserves the skip record) or close it (discards the prose-only commit).
+
+**Action requested:** review and merge (or close) PR #35 and PR #36. Once main is clear of open builder PRs, the next overnight run can pick the queued `[next]` items:
+
+- **F127** [next] [medium] [hardening] batch quick-backtest request-level deadline — **note:** PR #35 ships this; once merged, the `[next]` tag should be removed from TODO.md.
+- **A8** [next] [medium] off-screen downsampling (chart perf at wide zoom).
+- **F189–F194** [easy/medium] follow-ups deferred from the 2026-05-13 15-item Tier C review (`requestSignature` JSDoc, BacktestSummary type dedup, `apiErrorDetail` dict-detail branch for F98, F49 retry button, F172d parallel-vs-serial gap docstring, F49 hook unit test + SubPane error overlay test).
+
+**Builder env notes:**
+1. Branch handed in by the sandbox was `claude/jolly-babbage-jlNSG` (3rd builder branch with the `jolly-babbage` prefix, distinct from PR #35's `-X7mDA` and PR #36's `-kLbQg` suffixes). No collision; clean push will work.
+2. Dedicated `compound-engineering:review:*-reviewer` agents still unresolved (8th run; F80 unchanged) — moot for this run since no code review was performed.
+3. `backend/venv/` still missing (F97 unchanged, 8th run) — moot for this run since no backend code was touched.
+
+**Previous run:** 2026-05-14 PR #36 (build 29 — skip note for PR #35).
+
+## Build 27 Run
+
 **Date:** 2026-05-12 (build 27 — overnight)
 **Branch:** `claude/jolly-babbage-8fjwl`
 
