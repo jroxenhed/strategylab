@@ -95,7 +95,21 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
 
   const [mcResult, setMcResult] = useState<MonteCarloResult | null>(null)
   const [mcLoading, setMcLoading] = useState(false)
-  const [sortMode, setSortMode] = useState<SortMode>('chronological')
+  const [sortMode, setSortMode] = useState<SortMode>(() => {
+    try {
+      const v = localStorage.getItem('strategylab-trades-sort-mode')
+      if (v === 'chronological' || v === 'pnl_high_low' || v === 'pnl_low_high' || v === 'hold_duration' || v === 'exit_type') {
+        return v
+      }
+    } catch {}
+    return 'chronological'
+  })
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('strategylab-trades-sort-mode', sortMode)
+    } catch {}
+  }, [sortMode])
 
   const buysForSort = trades.filter(t => t.type === 'buy' || t.type === 'short')
   const sortedSells = useMemo(() => {

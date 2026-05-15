@@ -3,7 +3,8 @@
  *
  * Mocks:
  *   - lightweight-charts  →  stub (no canvas needed)
- *   - ../../api/client    →  api.post returns a resolved promise
+ *   - ../../api/client    →  api.defaults.baseURL + api.post stub
+ *   - globalThis.fetch    →  SSE stream mock (WalkForwardPanel uses fetch(), not api.post)
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
@@ -42,6 +43,8 @@ vi.mock('lightweight-charts', () => ({
 
 // ---------------------------------------------------------------------------
 // Mock: api client
+// WalkForwardPanel uses api.defaults.baseURL to compute the fetch URL, then
+// calls native fetch() directly (SSE stream can't go through axios).
 // ---------------------------------------------------------------------------
 
 const mockApiPost = vi.fn()
@@ -49,8 +52,41 @@ const mockApiPost = vi.fn()
 vi.mock('../../api/client', () => ({
   api: {
     post: (...args: unknown[]) => mockApiPost(...args),
+    defaults: { baseURL: '' },
   },
 }))
+
+// ---------------------------------------------------------------------------
+// SSE fetch mock helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a mock fetch Response whose body is a ReadableStream emitting
+ * SSE-formatted events.  Each entry in `events` is serialised as:
+ *   data: <JSON>\n\n
+ * The WalkForwardPanel SSE parser expects this exact framing.
+ */
+function makeSseFetchMock(responseData: unknown) {
+  // Encode the single "result" SSE event the component needs.
+  const resultEvent = `data: ${JSON.stringify({ type: 'result', ...(responseData as object) })}\n\n`
+  const encoded = new TextEncoder().encode(resultEvent)
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoded)
+      controller.close()
+    },
+  })
+
+  return vi.fn().mockResolvedValue({
+    ok: true,
+    body: stream,
+    text: () => Promise.resolve(''),
+  })
+}
+
+/** Restore the original fetch after each test that overrides it. */
+let originalFetch: typeof globalThis.fetch
 
 // ---------------------------------------------------------------------------
 // ResizeObserver stub
@@ -160,6 +196,11 @@ describe('WalkForwardPanel', () => {
   afterEach(() => {
     cleanup()
     vi.clearAllMocks()
+    // Restore fetch if a test overrode it.
+    if (originalFetch !== undefined) {
+      globalThis.fetch = originalFetch
+      originalFetch = undefined as unknown as typeof fetch
+    }
     // Clear persisted panel config between tests so saved state from one test
     // doesn't leak into the next.
     try { localStorage.clear() } catch { /* jsdom may not have localStorage */ }
@@ -191,22 +232,17 @@ describe('WalkForwardPanel', () => {
     expect(mockApiPost).not.toHaveBeenCalled()
   })
 
-  it('run button disabled when estimatedCombos > 200', () => {
+  it('run button disabled when estimatedCombos > 1000', () => {
     renderPanel()
-    // Find the Steps input (4th spinbutton in the form: IS, OOS, Gap, Step, then param Steps)
-    // The first active param row has a Steps input
+    // The first active param row has a Steps input (value='5' by default).
+    // _MAX_COMBOS_PER_WINDOW = 1000, so we need steps > 1000 to trigger the guard.
     const allInputs = screen.getAllByRole('spinbutton')
-    // Find the Steps input by finding input near the "Steps" label
-    // Set steps to 10 on Param 1, then add 2 more params (not possible here without interactions)
-    // Simplest: set the first param row's Steps to a large number that causes combos > 200
-    // With 1 param and steps=201 the product > 200
     const stepsInput = allInputs.find(el => (el as HTMLInputElement).value === '5')
     if (stepsInput) {
-      fireEvent.change(stepsInput, { target: { value: '201' } })
+      fireEvent.change(stepsInput, { target: { value: '1001' } })
     }
-    // With 201 steps, combos = 201 > 200
+    // With 1001 steps, estimatedCombos = 1001 > 1000 → button disabled/faded
     const runBtn = screen.getByRole('button', { name: /run walk-forward/i })
-    // Check disabled or opacity style
     const isDisabledOrFaded =
       (runBtn as HTMLButtonElement).disabled ||
       (runBtn as HTMLElement).style.opacity === '0.6'
@@ -214,21 +250,13 @@ describe('WalkForwardPanel', () => {
   })
 
   it('renders result table after successful response', async () => {
-    mockApiPost.mockResolvedValue(makeTwoWindowResponse())
+    // WalkForwardPanel calls native fetch() with SSE stream (not api.post).
+    originalFetch = globalThis.fetch
+    globalThis.fetch = makeSseFetchMock(makeTwoWindowResponse().data)
 
     renderPanel()
 
-    // Fill in Min/Max for param row so validation passes
-    const allInputs = screen.getAllByRole('spinbutton')
-    // allInputs[4] = Min, allInputs[5] = Max
-    if (allInputs[4]) fireEvent.change(allInputs[4], { target: { value: '10' } })
-    if (allInputs[5]) fireEvent.change(allInputs[5], { target: { value: '20' } })
-
-    const runBtn = screen.getByRole('button', { name: /run walk-forward/i })
-    fireEvent.click(runBtn)
-
-    // Wait for the async mock to resolve and re-render
-    await screen.findByText('Walk-Forward timed out', { exact: false }).catch(() => null)
+    fireEvent.click(screen.getByRole('button', { name: /run walk-forward/i }))
 
     // The result should show the 2-window table rows
     // Check for WFE label which appears in summary bar
@@ -241,13 +269,10 @@ describe('WalkForwardPanel', () => {
   })
 
   it('renders low_windows_warn callout when low_windows_warn=true', async () => {
-    mockApiPost.mockResolvedValue(makeTwoWindowResponse())  // low_windows_warn: true
+    originalFetch = globalThis.fetch
+    globalThis.fetch = makeSseFetchMock(makeTwoWindowResponse().data)  // low_windows_warn: true
 
     renderPanel()
-
-    const allInputs = screen.getAllByRole('spinbutton')
-    if (allInputs[4]) fireEvent.change(allInputs[4], { target: { value: '10' } })
-    if (allInputs[5]) fireEvent.change(allInputs[5], { target: { value: '20' } })
 
     fireEvent.click(screen.getByRole('button', { name: /run walk-forward/i }))
 
@@ -257,20 +282,15 @@ describe('WalkForwardPanel', () => {
   })
 
   it('renders timed_out callout when timed_out=true', async () => {
-    const timedOutResponse = {
-      data: {
-        ...makeTwoWindowResponse().data,
-        timed_out: true,
-        low_windows_warn: false,
-      },
+    const timedOutData = {
+      ...makeTwoWindowResponse().data,
+      timed_out: true,
+      low_windows_warn: false,
     }
-    mockApiPost.mockResolvedValue(timedOutResponse)
+    originalFetch = globalThis.fetch
+    globalThis.fetch = makeSseFetchMock(timedOutData)
 
     renderPanel()
-
-    const allInputs = screen.getAllByRole('spinbutton')
-    if (allInputs[4]) fireEvent.change(allInputs[4], { target: { value: '10' } })
-    if (allInputs[5]) fireEvent.change(allInputs[5], { target: { value: '20' } })
 
     fireEvent.click(screen.getByRole('button', { name: /run walk-forward/i }))
 
@@ -355,13 +375,10 @@ describe('WalkForwardPanel', () => {
         timed_out: false,
       },
     }
-    mockApiPost.mockResolvedValue(allTagsResponse)
+    originalFetch = globalThis.fetch
+    globalThis.fetch = makeSseFetchMock(allTagsResponse.data)
 
     renderPanel()
-
-    const allInputs = screen.getAllByRole('spinbutton')
-    if (allInputs[4]) fireEvent.change(allInputs[4], { target: { value: '10' } })
-    if (allInputs[5]) fireEvent.change(allInputs[5], { target: { value: '20' } })
 
     fireEvent.click(screen.getByRole('button', { name: /run walk-forward/i }))
 
@@ -391,21 +408,16 @@ describe('WalkForwardPanel', () => {
       [0.55, '#f0883e'],  // amber
       [0.3, '#ef5350'],   // red
     ] as [number, string][]) {
-      const resp = {
-        data: {
-          ...makeTwoWindowResponse().data,
-          wfe,
-          low_windows_warn: false,
-          timed_out: false,
-        },
+      const respData = {
+        ...makeTwoWindowResponse().data,
+        wfe,
+        low_windows_warn: false,
+        timed_out: false,
       }
-      mockApiPost.mockResolvedValue(resp)
+      originalFetch = globalThis.fetch
+      globalThis.fetch = makeSseFetchMock(respData)
 
       renderPanel()
-
-      const allInputs = screen.getAllByRole('spinbutton')
-      if (allInputs[4]) fireEvent.change(allInputs[4], { target: { value: '10' } })
-      if (allInputs[5]) fireEvent.change(allInputs[5], { target: { value: '20' } })
 
       fireEvent.click(screen.getByRole('button', { name: /run walk-forward/i }))
 
@@ -532,12 +544,10 @@ describe('WalkForwardPanel', () => {
         ],
       },
     }
-    mockApiPost.mockResolvedValue(dupResponse)
+    originalFetch = globalThis.fetch
+    globalThis.fetch = makeSseFetchMock(dupResponse.data)
 
     renderPanel()
-    const allInputs = screen.getAllByRole('spinbutton')
-    if (allInputs[4]) fireEvent.change(allInputs[4], { target: { value: '10' } })
-    if (allInputs[5]) fireEvent.change(allInputs[5], { target: { value: '20' } })
 
     fireEvent.click(screen.getByRole('button', { name: /run walk-forward/i }))
     await screen.findByText('WFE')
@@ -556,13 +566,10 @@ describe('WalkForwardPanel', () => {
         wfe: -2.12,
       },
     }
-    mockApiPost.mockResolvedValue(lowTradesResponse)
+    originalFetch = globalThis.fetch
+    globalThis.fetch = makeSseFetchMock(lowTradesResponse.data)
 
     renderPanel()
-
-    const allInputs = screen.getAllByRole('spinbutton')
-    if (allInputs[4]) fireEvent.change(allInputs[4], { target: { value: '10' } })
-    if (allInputs[5]) fireEvent.change(allInputs[5], { target: { value: '20' } })
 
     fireEvent.click(screen.getByRole('button', { name: /run walk-forward/i }))
 
@@ -584,12 +591,10 @@ describe('WalkForwardPanel', () => {
         windows: base.windows.map((w) => ({ ...w, stability_tag: 'spike' })),
       },
     }
-    mockApiPost.mockResolvedValue(allSpikeResponse)
+    originalFetch = globalThis.fetch
+    globalThis.fetch = makeSseFetchMock(allSpikeResponse.data)
 
     renderPanel()
-    const allInputs = screen.getAllByRole('spinbutton')
-    if (allInputs[4]) fireEvent.change(allInputs[4], { target: { value: '10' } })
-    if (allInputs[5]) fireEvent.change(allInputs[5], { target: { value: '20' } })
     fireEvent.click(screen.getByRole('button', { name: /run walk-forward/i }))
 
     await screen.findByText('WFE')
@@ -608,13 +613,10 @@ describe('WalkForwardPanel', () => {
         timed_out: false,
       },
     }
-    mockApiPost.mockResolvedValue(healthyResponse)
+    originalFetch = globalThis.fetch
+    globalThis.fetch = makeSseFetchMock(healthyResponse.data)
 
     renderPanel()
-
-    const allInputs = screen.getAllByRole('spinbutton')
-    if (allInputs[4]) fireEvent.change(allInputs[4], { target: { value: '10' } })
-    if (allInputs[5]) fireEvent.change(allInputs[5], { target: { value: '20' } })
 
     fireEvent.click(screen.getByRole('button', { name: /run walk-forward/i }))
 

@@ -516,10 +516,12 @@ describe('BotCard compact layout', () => {
   // -- Show Log / Hide Log toggle --
 
   it('Show Log menu item expands the activity log', async () => {
+    // ActivityLog shows 'Bot is stopped' when status='stopped' and entries=[].
+    // 'No activity yet.' is the fallback for any other non-running status.
     renderCompactCard({ status: 'stopped' })
     await userEvent.click(screen.getByTitle('Actions'))
     await userEvent.click(screen.getByRole('button', { name: /show log/i }))
-    expect(screen.getByText('No activity yet.')).toBeInTheDocument()
+    expect(screen.getByText('Bot is stopped')).toBeInTheDocument()
   })
 
   it('menu shows Hide Log when log is expanded', async () => {
