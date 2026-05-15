@@ -25,6 +25,8 @@ interface SidebarProps {
   onExtendedHoursChange: (v: boolean) => void
   datePreset: DatePreset
   onDatePresetChange: (preset: DatePreset) => void
+  /** F222: surface backend 404 ("No data") so the clamp chip can render in error form. */
+  dataError?: boolean
 }
 
 const INTERVAL_LIMITS: Record<string, number> = {
@@ -115,12 +117,23 @@ export default function Sidebar({
   dataSource, onDataSourceChange,
   extendedHours, onExtendedHoursChange,
   datePreset, onDatePresetChange,
+  dataError,
 }: SidebarProps) {
   const daysDiff = Math.round(
     (new Date(end).getTime() - new Date(start).getTime()) / (1000 * 60 * 60 * 24)
   )
   const intervalLimit = INTERVAL_LIMITS[interval]
-  const showIntervalWarning = dataSource === 'yahoo' && intervalLimit !== undefined && daysDiff > intervalLimit
+  const isIntradayClamped = dataSource === 'yahoo' && intervalLimit !== undefined && daysDiff > intervalLimit
+  // F222: effective From = To minus the clamp window. Computed client-side from
+  // the documented yfinance limits; if the provider ever changes its limits the
+  // chip will lie until INTERVAL_LIMITS is updated (acceptable per plan v1).
+  const effectiveStart = isIntradayClamped
+    ? new Date(new Date(end).getTime() - (intervalLimit! - 1) * 86400_000)
+        .toISOString().slice(0, 10)
+    : ''
+  // The chip also renders in error form when the backend returns 404 — it's the
+  // only place the user learns the picked window resolved to no data.
+  const showClampError = dataError && intervalLimit !== undefined
 
   const { data: providers = ['yahoo'] } = useProviders()
 
@@ -372,9 +385,39 @@ export default function Sidebar({
             <option value="1wk">Weekly</option>
             <option value="1mo">Monthly</option>
           </select>
-          {showIntervalWarning && (
-            <div style={{ fontSize: 11, color: 'var(--accent-orange)', marginTop: 8, lineHeight: 1.4 }}>
-              {interval} data only supports {intervalLimit} days of history. Your range is {daysDiff} days — shorten the From date.
+          {isIntradayClamped && (
+            <div style={{
+              fontSize: 11, marginTop: 8, lineHeight: 1.4, padding: '8px 10px',
+              border: '1px solid var(--accent-orange)', borderRadius: 4,
+              background: 'rgba(255,165,0,0.08)', color: 'var(--accent-orange)',
+            }}>
+              <div style={{ fontWeight: 600 }}>⚠ Intraday clamped to last {intervalLimit} days</div>
+              <div style={{ marginTop: 4, color: 'var(--text-muted)' }}>
+                Effective range: {effectiveStart} → {end}
+              </div>
+              <button
+                onClick={() => onStartChange(effectiveStart)}
+                style={{
+                  marginTop: 6, padding: '3px 8px', fontSize: 11,
+                  background: 'var(--accent-orange)', color: '#000', border: 'none',
+                  borderRadius: 3, cursor: 'pointer', fontWeight: 600,
+                }}
+              >
+                Use effective range
+              </button>
+            </div>
+          )}
+          {showClampError && !isIntradayClamped && (
+            <div style={{
+              fontSize: 11, marginTop: 8, lineHeight: 1.4, padding: '8px 10px',
+              border: '1px solid var(--accent-red, #c33)', borderRadius: 4,
+              background: 'rgba(204,51,51,0.08)', color: 'var(--accent-red, #c33)',
+            }}>
+              <div style={{ fontWeight: 600 }}>⚠ No data for selected range</div>
+              <div style={{ marginTop: 4, color: 'var(--text-muted)' }}>
+                {interval} intraday data is limited to the last {intervalLimit} days.
+                Your range may be entirely before the clamp window.
+              </div>
             </div>
           )}
         </div>

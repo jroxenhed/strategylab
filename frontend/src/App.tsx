@@ -244,6 +244,7 @@ export default function App() {
                 onExtendedHoursChange={setExtendedHours}
                 datePreset={datePreset}
                 onDatePresetChange={v => { setDatePreset(v); setBacktestResult(null) }}
+                dataError={ohlcvError}
               />
             </Panel>
 
