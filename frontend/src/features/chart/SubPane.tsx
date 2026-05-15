@@ -41,6 +41,7 @@ const DOWN = '#f85149'
 const SUB_COLORS = ['#a371f7', '#58a6ff', '#f0883e', '#e8ab6a', '#56d4c4', '#f85149']
 
 const chartOptions = {
+  autoSize: true,
   layout: { background: { type: ColorType.Solid, color: CHART_BG }, textColor: TEXT },
   grid: { vertLines: { color: GRID }, horzLines: { color: GRID } },
   crosshair: { mode: 1 as const },
@@ -78,10 +79,7 @@ export default function SubPane({
   useEffect(() => {
     if (!containerRef.current || instances.length === 0) return
 
-    const chart = createChart(containerRef.current, {
-      ...chartOptions,
-      height: containerRef.current.clientHeight,
-    })
+    const chart = createChart(containerRef.current, chartOptions)
     chartRef.current = chart
     const seriesMap = new Map<string, ISeriesApi<any>>()
     let firstSeries: ISeriesApi<any> | null = null
@@ -169,12 +167,6 @@ export default function SubPane({
     }
     chart.subscribeCrosshairMove(crosshairHandler)
 
-    const ro = new ResizeObserver(() => {
-      if (containerRef.current)
-        chart.applyOptions({ width: containerRef.current.clientWidth, height: containerRef.current.clientHeight })
-    })
-    ro.observe(containerRef.current)
-
     return () => {
       paneRegistryRef.current.delete(paneKey)
       chartRef.current = null
@@ -186,7 +178,6 @@ export default function SubPane({
       }
       try { chart.unsubscribeCrosshairMove(crosshairHandler) } catch {}
       try { chart.remove() } catch {}
-      ro.disconnect()
       syncWidthsRef.current()
     }
   }, [paneKey, instancesKey, indicatorType, toET])

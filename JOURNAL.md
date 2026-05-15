@@ -6,6 +6,17 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-15
 
+### F218 — Chart perpetual repaint loop (lw-charts v4 RO pattern fighting v5 autoSize)
+
+- User photographed naked-eye chart flicker with a phone camera — long exposure captured "ghosted" duplicated axis labels (2021/2Q21 overlapping) and smeared B/S markers on MACD/RSI sub-panes. Browser screenshots came out crisp; symptom was invisible to static capture because each frame was clean but the frame-to-frame oscillation was what blurred under the camera shutter.
+- **Live measurements via chrome-devtools-mcp** on Chart tab, NVDA Daily, idle, no user input: `requestAnimationFrame` scheduled **120/sec sustained**, `getContext` called **~1320/sec**, canvas attributes mutating **120/sec** between two fixed sizes — `1298×94.375` and `1304×100.625` alternating every frame (6px width / 6.25px height — DPR fractional pixel rounding).
+- Diagnosis walked through and discarded: not duplicate charts (2 canvases per container is normal lw-charts), not StrictMode (disabling it changed nothing), not crosshair ping-pong (`setCrosshairPosition` doesn't re-fire `subscribeCrosshairMove` in v5). My first fix attempt (rAF-batch the RO + skip-if-same-size) made it WORSE — rAF 240→480, mutations 240→5040 in 2s — because rAF deferral retimes the oscillator into a two-frame cycle rather than breaking it.
+- Dispatched three parallel ce:review agents (`performance` + `julik-frontend-races` + `correctness`); all three confirmed at confidence ≥0.90: external `ResizeObserver` in `Chart.tsx:371` and `SubPane.tsx:172` calling `chart.applyOptions({width, height})` is a leftover v4 pattern that fights lw-charts v5's internal RO-based auto-sizing. The two never agree on the canonical canvas size due to DPR rounding → stable two-state oscillation at frame rate. `syncWidths()` from the `visibleLogicalRangeChange` handler amplifies but doesn't drive it.
+- **Fix (10 lines, two files):** add `autoSize: true` to `chartOptions`, drop explicit `height` from both `createChart()` calls, delete both `new ResizeObserver(...)` blocks and their `ro.disconnect()` cleanup lines.
+- **After:** rAF / getContext / canvas-mutations all = **0/sec while idle** (verified via chrome-devtools-mcp probe). User confirmed CPU usage dropped substantially in Activity Monitor. Three-pane sync, crosshair, syncWidths, regime background bands, trade markers, axis labels all intact and crisp (browser-screenshot verified on NVDA Daily with MACD>0 regime filter active).
+- Postmortem with full diagnostic flow: `docs/postmortems/2026-05-15-ux-walkthrough.md` (earlier session); reviewer transcripts under `tasks/`.
+- Follow-ups: **[F219]** idle-rAF canary smoke test (hooks rAF for 500ms after chart mount, asserts <5 calls — would have caught this) [testing]. **[F220]** grep remaining `new ResizeObserver` + `applyOptions({width,height})` callsites for the same v4 pattern (bot card sparklines, Discovery, equity curve overlay) [hardening].
+
 ### F215 — Idle CPU/perf bundle (5 fixes, browser-instrumented before/after)
 
 - Trigger: user reported the frontend tab spikes CPU even when idle, drops on tab close. Used `chrome-devtools-mcp` to instrument `window.setInterval` + `performance.getEntriesByType('resource')` over 10s idle windows for before/after measurement.

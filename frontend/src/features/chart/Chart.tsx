@@ -50,6 +50,7 @@ const DOWN = '#f85149'
 const RULE_SIGNAL_COLORS = ['#58a6ff', '#d2a8ff', '#f0883e', '#56d364', '#e5534b', '#768390', '#f778ba', '#a5d6ff']
 
 const chartOptions = {
+  autoSize: true,
   layout: { background: { type: ColorType.Solid, color: CHART_BG }, textColor: TEXT },
   grid: { vertLines: { color: GRID }, horzLines: { color: GRID } },
   crosshair: { mode: 1 as const },
@@ -284,7 +285,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   useEffect(() => {
     if (!containerRef.current) return
 
-    const chart = createChart(containerRef.current, { ...chartOptions, height: containerRef.current.clientHeight })
+    const chart = createChart(containerRef.current, chartOptions)
     chartRef.current = chart
     onChartReadyRef.current?.(chart)
 
@@ -368,11 +369,6 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     }
     chart.subscribeCrosshairMove(crosshairHandler)
 
-    const ro = new ResizeObserver(() => {
-      if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth, height: containerRef.current.clientHeight })
-    })
-    ro.observe(containerRef.current)
-
     return () => {
       clearTimeout(alignTimer)
       if (widthsRaf !== null) cancelAnimationFrame(widthsRaf)
@@ -390,7 +386,6 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       rangeRestoredRef.current = false
       onChartReadyRef.current?.(null)
       chart.remove()
-      ro.disconnect()
     }
     // subPaneCount triggers re-creation because the Group key changes,
     // remounting the containerRef DOM node. The chart must be recreated
