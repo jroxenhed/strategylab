@@ -86,6 +86,26 @@ class WindowOutput(NamedTuple):
     biased_partial: bool = False  # IS timed out mid-grid (winner from deterministic prefix → drop)
 
 
+class _WorkerArgs(NamedTuple):
+    """Typed, self-documenting argument bundle passed from the parallel
+    dispatcher to each spawn-context worker subprocess.  All fields must
+    be pickle-safe (primitives + bytes); callables are intentionally
+    excluded — workers import their own references.
+    F173: WORKER-SAFE — NamedTuple of primitives + bytes; no module-level state."""
+    window_index: int
+    is_s: int
+    is_e: int
+    oos_s: int
+    oos_e: int
+    base_pickled: bytes
+    params_pickled: bytes
+    interval: str
+    metric: str
+    min_trades_is: int
+    remaining_budget: float
+    total_combos_per_window: int
+
+
 def _init_worker(df_pickled: bytes) -> None:
     """Pool initializer — runs once per worker process. Deserializes the
     full df into a module global so each window's worker call slices it
@@ -94,48 +114,47 @@ def _init_worker(df_pickled: bytes) -> None:
     _WORKER_DF = pickle.loads(df_pickled)
 
 
-def _process_window_in_worker(args: tuple) -> WindowOutput:
-    """Worker entrypoint. args is a fully-serialized window descriptor.
-    Reads df from module global _WORKER_DF, runs IS grid + OOS, returns
-    a WindowOutput."""
-    # Import inside worker to avoid loading these in the main pickling path
-    from routes.grid_runner import run_grid
-    from routes.backtest import run_backtest
-    from routes.walk_forward import (
-        _format_boundary, _combo_key, _get_neighbor_keys,
-        _STABILITY_THRESHOLD,
+def _run_window_core(
+    window_index: int,
+    is_df: pd.DataFrame,
+    oos_df: pd.DataFrame,
+    is_start_date: str,
+    is_end_date: str,
+    oos_start_date: str,
+    oos_end_date: str,
+    base: StrategyRequest,
+    params: list,
+    interval: str,
+    metric: str,
+    min_trades_is: int,
+    remaining_budget: float,
+    total_combos_per_window: int,
+    run_grid_fn: Callable,
+    run_backtest_fn: Callable,
+    combo_key_fn: Callable,
+    get_neighbor_keys_fn: Callable,
+    apply_param_fn: Callable,
+    stability_threshold: float,
+) -> WindowOutput:
+    """Shared per-window math: IS grid search, winner selection, stability
+    tagging, and OOS evaluation.  Both the parallel worker and the serial
+    loop call this after slicing is_df / oos_df and resolving their own
+    callables.
+
+    Caller responsibilities (kept OUTSIDE this helper):
+    - Outer timeout loop / is_timed_out → timed_out propagation (serial path)
+    - Biased-partial detection is handled HERE and returned via biased_partial flag;
+      the caller must still decide whether to break or continue the outer loop.
+
+    All heavy callables are passed as positional arguments so:
+    - The parallel worker can import them locally (spawn-safe, no pickle of callables).
+    - The serial path can pass monkeypatched references (test-safe).
+    """
+    is_req_template = base.model_copy(
+        update={"start": is_start_date, "end": is_end_date}
     )
-    from routes.backtest_sweep import _apply_param
-    from fastapi import HTTPException
 
-    (
-        window_index, is_s, is_e, oos_s, oos_e,
-        base_pickled, params_pickled,
-        interval, metric, min_trades_is,
-        remaining_budget,
-        total_combos_per_window,
-    ) = args
-
-    base = pickle.loads(base_pickled)
-    params = pickle.loads(params_pickled)
-
-    df = _WORKER_DF
-    if df is None:
-        raise RuntimeError(
-            "Worker _WORKER_DF not initialized — initializer didn't run"
-        )
-
-    is_df = df.iloc[is_s : is_e + 1]
-    oos_df = df.iloc[oos_s : oos_e + 1]
-
-    is_start_date = _format_boundary(df.index[is_s], interval)
-    is_end_date = _format_boundary(df.index[is_e], interval)
-    oos_start_date = _format_boundary(df.index[oos_s], interval)
-    oos_end_date = _format_boundary(df.index[oos_e], interval)
-
-    is_req_template = base.model_copy(update={"start": is_start_date, "end": is_end_date})
-
-    is_combos, is_timed_out, _is_skipped = run_grid(
+    is_combos, is_timed_out, _is_skipped = run_grid_fn(
         is_req_template,
         params,
         timeout_secs=remaining_budget,
@@ -143,8 +162,8 @@ def _process_window_in_worker(args: tuple) -> WindowOutput:
     )
 
     # Biased-partial-drop: IS timed out with a subset of combos evaluated.
-    # The winner was picked from a deterministic prefix → biased. Drop via
-    # structured signal so the caller can set timed_out=True and skip this window.
+    # The winner was picked from a deterministic prefix → biased.  Signal via
+    # biased_partial=True so the caller can drop this window.
     if is_timed_out and 0 < len(is_combos) < total_combos_per_window:
         return WindowOutput(
             window_index=window_index,
@@ -195,12 +214,11 @@ def _process_window_in_worker(args: tuple) -> WindowOutput:
         stability_tag = "low_trades_is"
     else:
         low_trades_is = False
-        # Neighborhood stability tag
         all_sharpes = [s.get("sharpe_ratio", 0.0) for _, s in is_combos]
         q75 = float(np.percentile(all_sharpes, 75))
-        neighbor_keys = _get_neighbor_keys(best_combo, params)
+        neighbor_keys = get_neighbor_keys_fn(best_combo, params)
         neighbor_results = [
-            s for c, s in is_combos if _combo_key(c) in neighbor_keys
+            s for c, s in is_combos if combo_key_fn(c) in neighbor_keys
         ]
         if len(neighbor_results) == 0:
             stability_tag = "spike"
@@ -210,17 +228,17 @@ def _process_window_in_worker(args: tuple) -> WindowOutput:
             )
             stability_tag = (
                 "stable_plateau"
-                if top_q_neighbors / len(neighbor_results) >= _STABILITY_THRESHOLD
+                if top_q_neighbors / len(neighbor_results) >= stability_threshold
                 else "spike"
             )
 
     # OOS evaluation
     oos_req = base.model_copy(update={"start": oos_start_date, "end": oos_end_date})
     for path, value in best_combo.items():
-        oos_req = _apply_param(oos_req, path, value)
+        oos_req = apply_param_fn(oos_req, path, value)
 
     try:
-        oos_result = run_backtest(oos_req, df=oos_df, include_spy_correlation=False)
+        oos_result = run_backtest_fn(oos_req, df=oos_df, include_spy_correlation=False)
     except HTTPException as exc:
         if exc.status_code >= 500:
             raise
@@ -253,9 +271,63 @@ def _process_window_in_worker(args: tuple) -> WindowOutput:
     )
 
 
+def _process_window_in_worker(args: _WorkerArgs) -> WindowOutput:
+    """Worker entrypoint. args is a fully-serialized window descriptor.
+    Reads df from module global _WORKER_DF, runs IS grid + OOS via
+    _run_window_core, returns a WindowOutput."""
+    # Import inside worker to avoid loading these in the main pickling path
+    from routes.grid_runner import run_grid
+    from routes.backtest import run_backtest
+    from routes.walk_forward import (
+        _format_boundary, _combo_key, _get_neighbor_keys,
+        _STABILITY_THRESHOLD,
+    )
+    from routes.backtest_sweep import _apply_param
+
+    base = pickle.loads(args.base_pickled)
+    params = pickle.loads(args.params_pickled)
+
+    df = _WORKER_DF
+    if df is None:
+        raise RuntimeError(
+            "Worker _WORKER_DF not initialized — initializer didn't run"
+        )
+
+    is_df = df.iloc[args.is_s : args.is_e + 1]
+    oos_df = df.iloc[args.oos_s : args.oos_e + 1]
+
+    is_start_date = _format_boundary(df.index[args.is_s], args.interval)
+    is_end_date = _format_boundary(df.index[args.is_e], args.interval)
+    oos_start_date = _format_boundary(df.index[args.oos_s], args.interval)
+    oos_end_date = _format_boundary(df.index[args.oos_e], args.interval)
+
+    return _run_window_core(
+        window_index=args.window_index,
+        is_df=is_df,
+        oos_df=oos_df,
+        is_start_date=is_start_date,
+        is_end_date=is_end_date,
+        oos_start_date=oos_start_date,
+        oos_end_date=oos_end_date,
+        base=base,
+        params=params,
+        interval=args.interval,
+        metric=args.metric,
+        min_trades_is=args.min_trades_is,
+        remaining_budget=args.remaining_budget,
+        total_combos_per_window=args.total_combos_per_window,
+        run_grid_fn=run_grid,
+        run_backtest_fn=run_backtest,
+        combo_key_fn=_combo_key,
+        get_neighbor_keys_fn=_get_neighbor_keys,
+        apply_param_fn=_apply_param,
+        stability_threshold=_STABILITY_THRESHOLD,
+    )
+
+
 def run_windows_parallel(
     full_df: pd.DataFrame,
-    windows: list,
+    windows: list[tuple[int, int, int, int]],
     base: StrategyRequest,
     params: list,
     interval: str,
@@ -263,9 +335,9 @@ def run_windows_parallel(
     min_trades_is: int,
     timeout_secs: float,
     max_workers: Optional[int] = None,
-    _run_backtest_fn=None,
+    _run_backtest_fn: Optional[Callable] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
-) -> tuple:
+) -> tuple[dict[int, WindowOutput], bool]:
     """Dispatch one worker per window. Returns (results_by_idx, timed_out).
 
     See module docstring for the full contract.
@@ -310,7 +382,7 @@ def run_windows_parallel(
     params_pickled = pickle.dumps(params)
 
     ctx = mp.get_context("spawn")
-    results: dict = {}
+    results: dict[int, WindowOutput] = {}
     timed_out = False
 
     deadline = monotonic() + timeout_secs
@@ -322,20 +394,27 @@ def run_windows_parallel(
         initargs=(df_pickled,),
     )
     try:
-        future_to_idx = {}
+        future_to_idx: dict = {}
         for w_idx, (is_s, is_e, oos_s, oos_e) in enumerate(windows):
             # Shrinking deadline budget: workers submitted last see a smaller
             # timeout, matching the parallel-dispatch reality where the wall
             # clock has already advanced since the first submission.
             worker_budget = max(0.0, deadline - monotonic())
-            args = (
-                w_idx, is_s, is_e, oos_s, oos_e,
-                base_pickled, params_pickled,
-                interval, metric, min_trades_is,
-                worker_budget,
-                total_combos_per_window,
+            worker_args = _WorkerArgs(
+                window_index=w_idx,
+                is_s=is_s,
+                is_e=is_e,
+                oos_s=oos_s,
+                oos_e=oos_e,
+                base_pickled=base_pickled,
+                params_pickled=params_pickled,
+                interval=interval,
+                metric=metric,
+                min_trades_is=min_trades_is,
+                remaining_budget=worker_budget,
+                total_combos_per_window=total_combos_per_window,
             )
-            future_to_idx[ex.submit(_process_window_in_worker, args)] = w_idx
+            future_to_idx[ex.submit(_process_window_in_worker, worker_args)] = w_idx
 
         remaining = deadline - monotonic()
         if remaining <= 0:
@@ -385,16 +464,16 @@ def run_windows_parallel(
 
 def _run_windows_serial(
     full_df: pd.DataFrame,
-    windows: list,
+    windows: list[tuple[int, int, int, int]],
     base: StrategyRequest,
     params: list,
     interval: str,
     metric: str,
     min_trades_is: int,
     timeout_secs: float,
-    _run_backtest_fn=None,
+    _run_backtest_fn: Optional[Callable] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
-) -> tuple:
+) -> tuple[dict[int, WindowOutput], bool]:
     """Serial path for n < _MIN_WINDOWS_FOR_POOL or _FORCE_SERIAL=True.
 
     In-process equivalent of the parallel workers — so monkeypatches work.
@@ -419,7 +498,6 @@ def _run_windows_serial(
         _STABILITY_THRESHOLD,
     )
     from routes.backtest_sweep import _apply_param
-    from fastapi import HTTPException
 
     # Resolve the OOS run_backtest callable. Callers (e.g. walk_forward.py) may
     # pass their own module-level reference so that test monkeypatches on
@@ -430,7 +508,7 @@ def _run_windows_serial(
     for p in params:
         total_combos_per_window *= len(p.values)
 
-    results: dict = {}
+    results: dict[int, WindowOutput] = {}
     timed_out = False
     _total_windows = len(windows)
 
@@ -465,145 +543,43 @@ def _run_windows_serial(
             timed_out = True
             break
 
-        is_req_template = base.model_copy(
-            update={"start": is_start_date, "end": is_end_date}
-        )
         is_df = full_df.iloc[is_s : is_e + 1]
         oos_df = full_df.iloc[oos_s : oos_e + 1]
 
-        is_combos, is_timed_out, _is_skipped = run_grid(
-            is_req_template,
-            params,
-            timeout_secs=remaining_budget,
-            df=is_df,
-        )
-
-        if is_timed_out:
-            timed_out = True
-            if 0 < len(is_combos) < total_combos_per_window:
-                # Biased partial IS grid — winner from deterministic prefix → drop window.
-                # Use structured signal (biased_partial=True) and continue so the caller
-                # can detect it. Parity with parallel path which can't break mid-dispatch.
-                results[w_idx] = WindowOutput(
-                    window_index=w_idx,
-                    is_start_date=is_start_date,
-                    is_end_date=is_end_date,
-                    oos_start_date=oos_start_date,
-                    oos_end_date=oos_end_date,
-                    best_combo={},
-                    is_summary={},
-                    oos_summary={"num_trades": 0},
-                    oos_equity_curve=[],
-                    stability_tag="no_is_trades",
-                    is_combo_count=len(is_combos),
-                    is_timed_out=True,
-                    is_combos_total=total_combos_per_window,
-                    low_trades_is=False,
-                    skipped_for_no_is_trades=False,
-                    biased_partial=True,
-                )
-                _serial_completed += 1
-                _fire_progress(_serial_completed)
-                continue
-
-        if len(is_combos) == 0:
-            results[w_idx] = WindowOutput(
-                window_index=w_idx,
-                is_start_date=is_start_date,
-                is_end_date=is_end_date,
-                oos_start_date=oos_start_date,
-                oos_end_date=oos_end_date,
-                best_combo={},
-                is_summary={},
-                oos_summary={"num_trades": 0},
-                oos_equity_curve=[],
-                stability_tag="no_is_trades",
-                is_combo_count=0,
-                is_timed_out=is_timed_out,
-                is_combos_total=total_combos_per_window,
-                low_trades_is=False,
-                skipped_for_no_is_trades=True,
-            )
-            _serial_completed += 1
-            _fire_progress(_serial_completed)
-            continue
-
-        # Pick IS winner
-        is_combos.sort(key=lambda x: x[1].get(metric, 0), reverse=True)
-        best_combo, best_is_summary = is_combos[0]
-
-        # Low-trades IS check
-        if best_is_summary.get("num_trades", 0) < min_trades_is:
-            low_trades_is = True
-            stability_tag = "low_trades_is"
-        else:
-            low_trades_is = False
-            all_sharpes = [s.get("sharpe_ratio", 0.0) for _, s in is_combos]
-            q75 = float(np.percentile(all_sharpes, 75))
-            neighbor_keys = _get_neighbor_keys(best_combo, params)
-            neighbor_results = [
-                s for c, s in is_combos if _combo_key(c) in neighbor_keys
-            ]
-            if len(neighbor_results) == 0:
-                stability_tag = "spike"
-            else:
-                top_q_neighbors = sum(
-                    1 for s in neighbor_results
-                    if s.get("sharpe_ratio", 0.0) >= q75
-                )
-                stability_tag = (
-                    "stable_plateau"
-                    if top_q_neighbors / len(neighbor_results) >= _STABILITY_THRESHOLD
-                    else "spike"
-                )
-
-        # OOS evaluation
-        oos_req = base.model_copy(
-            update={"start": oos_start_date, "end": oos_end_date}
-        )
-        for path, value in best_combo.items():
-            oos_req = _apply_param(oos_req, path, value)
-
-        try:
-            oos_result = _oos_run_backtest(
-                oos_req, df=oos_df, include_spy_correlation=False
-            )
-        except HTTPException as exc:
-            if exc.status_code >= 500:
-                raise
-            logger.warning(
-                "WFA window %d OOS skipped (4xx): %s", w_idx, exc.detail
-            )
-            oos_result = {"summary": {"num_trades": 0}, "equity_curve": []}
-        except Exception as exc:
-            logger.warning("WFA window %d OOS raised: %s", w_idx, exc)
-            oos_result = {"summary": {"num_trades": 0}, "equity_curve": []}
-
-        if (
-            oos_result["summary"].get("num_trades", 0) == 0
-            and stability_tag != "low_trades_is"
-        ):
-            stability_tag = "no_oos_trades"
-
-        results[w_idx] = WindowOutput(
+        out = _run_window_core(
             window_index=w_idx,
+            is_df=is_df,
+            oos_df=oos_df,
             is_start_date=is_start_date,
             is_end_date=is_end_date,
             oos_start_date=oos_start_date,
             oos_end_date=oos_end_date,
-            best_combo=best_combo,
-            is_summary=best_is_summary,
-            oos_summary=oos_result["summary"],
-            oos_equity_curve=oos_result.get("equity_curve", []),
-            stability_tag=stability_tag,
-            is_combo_count=len(is_combos),
-            is_timed_out=is_timed_out,
-            is_combos_total=total_combos_per_window,
-            low_trades_is=low_trades_is,
-            skipped_for_no_is_trades=False,
+            base=base,
+            params=params,
+            interval=interval,
+            metric=metric,
+            min_trades_is=min_trades_is,
+            remaining_budget=remaining_budget,
+            total_combos_per_window=total_combos_per_window,
+            run_grid_fn=run_grid,
+            run_backtest_fn=_oos_run_backtest,
+            combo_key_fn=_combo_key,
+            get_neighbor_keys_fn=_get_neighbor_keys,
+            apply_param_fn=_apply_param,
+            stability_threshold=_STABILITY_THRESHOLD,
         )
+
+        # Outer loop concerns: propagate is_timed_out → timed_out.  Record the
+        # window and `continue`; the loop-top deadline check is the canonical
+        # termination point — we don't introduce a new exit point here.  Three
+        # is_timed_out cases land here: biased_partial (subset of combos), zero
+        # combos (skipped_for_no_is_trades), and full grid finished exactly at
+        # the deadline boundary (normal WindowOutput with is_timed_out=True).
+        # All three are stored identically; original serial code did the same.
+        if out.is_timed_out:
+            timed_out = True
+        results[w_idx] = out
         _serial_completed += 1
         _fire_progress(_serial_completed)
 
     return results, timed_out
-

@@ -232,6 +232,26 @@ export interface MonteCarloResult {
   ruin_probability: number
 }
 
+/** Canonical shape of run_backtest()["summary"] — mirrors backend BacktestSummary in routes/walk_forward.py. */
+export interface BacktestSummary {
+  num_trades: number
+  sharpe_ratio: number | null
+  total_return_pct: number
+  win_rate_pct: number
+  max_drawdown_pct: number
+  final_value: number
+  initial_capital?: number
+  buy_hold_return_pct?: number
+  // edge_stats fields
+  gross_profit?: number
+  gross_loss?: number
+  ev_per_trade?: number | null
+  profit_factor?: number | null
+  // spy correlation fields
+  beta?: number | null
+  r_squared?: number | null
+}
+
 export interface BacktestResult {
   summary: {
     initial_capital: number

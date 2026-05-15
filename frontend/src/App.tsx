@@ -136,6 +136,10 @@ export default function App() {
   useEffect(() => {
     if (backtestResult && lastRequest) {
       try {
+        // Persist the FULL request — downstream consumers (WFA / Optimizer panels)
+        // re-send lastRequest to the backend and need every field, not just the
+        // 17 used by requestSignature(). The signature is the read predicate,
+        // not a storage projection.
         localStorage.setItem(BACKTEST_CACHE_KEY, JSON.stringify({ result: backtestResult, request: lastRequest }))
       } catch {} // Quota exceeded — silently skip
     } else {

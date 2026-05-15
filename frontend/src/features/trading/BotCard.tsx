@@ -592,7 +592,7 @@ export default function BotCard({
           {summary.backtest_summary && (
             <div style={{ display: 'flex', gap: 12, fontSize: 11, color: '#666' }}>
               {(() => {
-                const s = summary.backtest_summary as Record<string, number | null>
+                const s = summary.backtest_summary
                 return <>
                   <span>BT Return: <span style={{ color: '#aaa' }}>{s.total_return_pct != null ? s.total_return_pct.toFixed(1) : '—'}%</span></span>
                   <span>Sharpe: <span style={{ color: '#aaa' }}>{s.sharpe_ratio != null ? s.sharpe_ratio.toFixed(2) : '—'}</span></span>

@@ -1,4 +1,5 @@
-import type { Rule, TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, RegimeConfig, BacktestResult } from './strategy'
+import type { Rule, TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, RegimeConfig, BacktestResult, BacktestSummary } from './strategy'
+export type { BacktestSummary }
 
 export interface BotConfig {
   bot_id: string
@@ -70,7 +71,7 @@ export interface BotSummary {
   status: string
   trades_count: number
   total_pnl: number
-  backtest_summary: Record<string, number> | null
+  backtest_summary: BacktestSummary | null
   data_source?: string
   avg_cost_bps?: number | null
   has_position?: boolean

@@ -6,6 +6,21 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-15
 
+### F173 + F189 + F190 architecture refactor bundle (orchestrator workflow, Tier B+)
+
+- **F173** `wfa_pool.py` cleanup — three parts shipped: (a) precise type annotations on `run_windows_parallel` and `_run_windows_serial`; (b) `_WorkerArgs(NamedTuple)` replaces the 11-element positional worker-args tuple; (c) `_run_window_core` helper extracts ~155 lines of IS-winner-selection + stability-tagging + OOS-evaluation that were duplicated near-verbatim across the multiprocessing worker and the serial path. The duplication is what produced F166 C-01 P0 (biased-partial drop logic in only one path) — that class of bug is now structurally impossible. Helper takes all callables positionally (`run_grid_fn`, `run_backtest_fn`, `combo_key_fn`, `get_neighbor_keys_fn`, `apply_param_fn`) so the spawn-context worker can resolve them locally without pickling closures. Net wfa_pool.py: 610 → 593 lines.
+- **F189** `requestSignature` write/read asymmetry — extracted typed `CacheKey` interface (17 fields, each typed via `StrategyRequest['ticker']`-style lookups) + `cacheWriteKey(req): CacheKey` projection; `requestSignature(req): string` now defined as `JSON.stringify(cacheWriteKey(req))`. Single source of truth for the field list. 7 new unit tests in `requestSignature.test.ts`.
+- **F190** `BacktestSummary` consolidated to `shared/types/strategy.ts`; `BotSummary.backtest_summary` retyped from `Record<string, number> | null` to `BacktestSummary | null`; F181's `Record<string, number | null>` cast removed from `BotCard.tsx`.
+- **Review tier B+ (3 personas, parallel — correctness, kieran-typescript, adversarial)** — picked adversarial specifically because wfa_pool already produced a P0; warranted by risk receipt, not item count.
+  - **P0 correctness C-01 (0.88)** — F189 initial implementation persisted `cacheWriteKey(lastRequest)` instead of the full request. The cache is re-read into `lastRequest` state and passed to `WalkForwardPanel` / `OptimizerPanel` as the backend request body — stripping it dropped `initial_capital`, `position_size`, `source`, `slippage_bps`, `per_share_rate`, `min_per_order`, `borrow_rate_annual`, `stop_loss`, `trailing_stop`, `dynamic_sizing`, `skip_after_stop`, `trading_hours`, `direction` after every page reload, silently substituting Pydantic defaults. Fix: write side stores the full request; only the comparison predicate uses the projection.
+  - **P1 kieran-typescript K1 (0.88)** — F189 initial impl widened `requestSignature` to accept `Record<string, unknown>` to support both shapes, defeating the structural-enforcement goal. Fixed by typing `cacheWriteKey` to return a named `CacheKey` interface and having `requestSignature` call it internally — no widening needed.
+  - **P2 correctness C-02 / adversarial ADV-1 (0.82)** — F173 serial path replaced original `continue` with literal `break` after a timed-out non-biased-partial window. Functionally equivalent given run_grid's clock alignment with the outer loop, but defensive-mirroring of the original is preferred. Collapsed the three is_timed_out branches (biased_partial / zero combos / full grid at deadline) into a single `continue`-style path; the loop-top deadline check remains the canonical termination signal.
+  - **Debunked**: adversarial ADV-2 (`skipped_for_no_is_trades` semantics) — original always set the flag when `len==0` regardless of `is_timed_out`; helper preserves that exactly. Pre-existing 11 frontend test failures (`WalkForwardPanel.test.tsx` baseURL infra) confirmed pre-existing on clean main, not caused by this bundle.
+- **Surfaced → TODO**: **[F204]** TS `BacktestSummary` requires fields that the Pydantic backend defaults — kieran-typescript K3 P3, file as hardening follow-up.
+- **Verification**: backend `pytest -q` 482/482; frontend `npm run build` clean; `requestSignature.test.ts` 7/7. Diff: 254+/214- across 8 files (mostly wfa_pool reshuffling, net -17 lines there).
+
+
+
 ### PR #35 morning calibration — F127 merged + skip-stubs closed
 
 - Two overnights (PR #36 / #37) skipped 2026-05-14 + 2026-05-15 because PR #35 (build 28, F127) was unreviewed since 2026-05-13. Backlog drained today: morning calibration on #35, squash-merge, close skip-stubs.

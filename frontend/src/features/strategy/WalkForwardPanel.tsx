@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { createChart, LineSeries, ColorType } from 'lightweight-charts'
 import type { IChartApi, UTCTimestamp, LineData, Time } from 'lightweight-charts'
-import type { StrategyRequest } from '../../shared/types'
+import type { StrategyRequest, BacktestSummary } from '../../shared/types'
 import { useRequestTimer } from '../../shared/hooks/useRequestTimer'
 import { apiErrorDetail } from '../../shared/utils/errors'
 import { api } from '../../api/client'
@@ -13,24 +13,7 @@ import { parseSseFrame } from './sseParser'
 // Inline types — match backend Pydantic models verbatim
 // ---------------------------------------------------------------------------
 
-interface BacktestSummary {
-  num_trades: number
-  sharpe_ratio: number | null
-  total_return_pct: number
-  win_rate_pct: number
-  max_drawdown_pct: number
-  final_value: number
-  initial_capital?: number
-  buy_hold_return_pct?: number
-  // edge_stats fields
-  gross_profit?: number
-  gross_loss?: number
-  ev_per_trade?: number | null
-  profit_factor?: number | null
-  // spy correlation
-  beta?: number | null
-  r_squared?: number | null
-}
+// BacktestSummary is now the canonical shared type from shared/types/strategy.ts
 
 interface WfaEquityPoint {
   time: string | number
