@@ -18,6 +18,12 @@ export function apiErrorDetail(e: unknown, fallback: string): string {
         })
         .join('; ')
     }
+    if (detail !== null && typeof detail === 'object' && !Array.isArray(detail)) {
+      const reason = (detail as { reason?: unknown }).reason
+      if (typeof reason === 'string' && reason) return reason
+      const error = (detail as { error?: unknown }).error
+      if (typeof error === 'string' && error) return error
+    }
     const message = (e as { message?: unknown }).message
     if (typeof message === 'string' && message) return message
   }

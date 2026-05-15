@@ -1,10 +1,11 @@
+import concurrent.futures
 import logging
 import math
 import os
 import time
 
 from fastapi import APIRouter, HTTPException
-from typing import Optional
+from typing import Literal, Optional
 import numpy as np
 import pandas as pd
 from datetime import date, timedelta
@@ -18,6 +19,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 DEFAULT_BATCH_DEADLINE_SECS: float = 30.0
+BATCH_ERROR_DEADLINE_EXCEEDED: str = "deadline exceeded"
+BATCH_ERROR_TIMED_OUT: str = "quick-backtest timed out"
+BATCH_ERROR_NO_DATA_PREFIX: str = "No data for "
+BATCH_ERROR_INTERNAL: str = "quick-backtest failed"
+
+
+def _monotonic() -> float:
+    """Thin wrapper around time.monotonic() — exists so tests can monkeypatch
+    bq_mod._monotonic without touching the global time module (which would
+    break concurrent.futures internals that also use time.monotonic)."""
+    return time.monotonic()
 
 
 def _get_batch_deadline_secs() -> float:
@@ -63,6 +75,7 @@ class QuickBacktestResult(BaseModel):
     signal_now: Optional[bool] = None
     last_signal_date: Optional[str] = None
     error: Optional[str] = None
+    error_code: Optional[Literal["deadline_exceeded", "timed_out", "no_data", "internal"]] = None
 
 
 class BatchQuickBacktestRequest(BaseModel):
@@ -118,10 +131,10 @@ def _run_quick(req: QuickBacktestRequest) -> QuickBacktestResult:
         df = _fetch(ticker, start_str, end_str, req.interval, source=source)
     except Exception:
         logger.exception("quick-backtest fetch failed for %s", ticker)
-        return QuickBacktestResult(ticker=ticker, error=f"No data for {ticker}")
+        return QuickBacktestResult(ticker=ticker, error=f"{BATCH_ERROR_NO_DATA_PREFIX}{ticker}", error_code="no_data")
 
     if df is None or len(df) < 2:
-        return QuickBacktestResult(ticker=ticker, error=f"No data for {ticker}")
+        return QuickBacktestResult(ticker=ticker, error=f"{BATCH_ERROR_NO_DATA_PREFIX}{ticker}", error_code="no_data")
 
     close = df["Close"]
     high = df["High"]
@@ -243,37 +256,61 @@ def quick_backtest(req: QuickBacktestRequest):
 def quick_backtest_batch(req: BatchQuickBacktestRequest):
     """Batch quick backtest over a list of symbols. Runs sequentially to respect rate limits.
 
-    Deadline is checked between symbols (``STRATEGYLAB_BATCH_DEADLINE_SECS``,
-    default 30s); a single slow ``_run_quick`` can still exceed it.
+    Deadline is enforced both between symbols and within each ``_run_quick``
+    call (``STRATEGYLAB_BATCH_DEADLINE_SECS``, default 30s). Each symbol is
+    run inside a ``ThreadPoolExecutor`` with a per-symbol timeout equal to the
+    remaining budget, so a single hung call cannot blow the overall deadline by
+    an unbounded amount.
+
+    If the configured budget has already elapsed before the first symbol is
+    reached, all symbols short-circuit to error='deadline exceeded' with no
+    ``_run_quick`` invocations.
     """
     results = []
-    deadline = time.monotonic() + _get_batch_deadline_secs()
+    deadline = _monotonic() + _get_batch_deadline_secs()
     deadline_hit = False
-    for symbol in req.symbols:
-        if deadline_hit or time.monotonic() >= deadline:
-            deadline_hit = True
-            results.append(QuickBacktestResult(ticker=symbol.upper(), error="deadline exceeded"))
-            continue
-        single_req = QuickBacktestRequest(
-            ticker=symbol,
-            interval=req.interval,
-            lookback_days=req.lookback_days,
-            buy_rules=req.buy_rules,
-            sell_rules=req.sell_rules,
-            buy_logic=req.buy_logic,
-            sell_logic=req.sell_logic,
-            direction=req.direction,
-            initial_capital=req.initial_capital,
-            stop_loss_pct=req.stop_loss_pct,
-            trailing_stop=req.trailing_stop,
-            source=req.source,
-        )
-        try:
-            result = _run_quick(single_req)
-        except ValueError as e:
-            result = QuickBacktestResult(ticker=symbol.upper(), error=str(e))
-        except Exception:
-            logger.exception("batch quick-backtest failed for %s", symbol)
-            result = QuickBacktestResult(ticker=symbol.upper(), error="quick-backtest failed")
-        results.append(result)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        for symbol in req.symbols:
+            if deadline_hit or _monotonic() >= deadline:
+                deadline_hit = True
+                results.append(QuickBacktestResult(
+                    ticker=symbol.upper(),
+                    error=BATCH_ERROR_DEADLINE_EXCEEDED,
+                    error_code="deadline_exceeded",
+                ))
+                continue
+            single_req = QuickBacktestRequest(
+                ticker=symbol,
+                interval=req.interval,
+                lookback_days=req.lookback_days,
+                buy_rules=req.buy_rules,
+                sell_rules=req.sell_rules,
+                buy_logic=req.buy_logic,
+                sell_logic=req.sell_logic,
+                direction=req.direction,
+                initial_capital=req.initial_capital,
+                stop_loss_pct=req.stop_loss_pct,
+                trailing_stop=req.trailing_stop,
+                source=req.source,
+            )
+            remaining = max(0.0, deadline - _monotonic())
+            try:
+                result = executor.submit(_run_quick, single_req).result(timeout=remaining)
+            except concurrent.futures.TimeoutError:
+                result = QuickBacktestResult(
+                    ticker=symbol.upper(),
+                    error=BATCH_ERROR_TIMED_OUT,
+                    error_code="timed_out",
+                )
+                deadline_hit = True
+            except ValueError as e:
+                result = QuickBacktestResult(ticker=symbol.upper(), error=str(e))
+            except Exception:
+                logger.exception("batch quick-backtest failed for %s", symbol)
+                result = QuickBacktestResult(
+                    ticker=symbol.upper(),
+                    error=BATCH_ERROR_INTERNAL,
+                    error_code="internal",
+                )
+            results.append(result)
     return {"results": results}

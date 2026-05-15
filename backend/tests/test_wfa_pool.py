@@ -295,6 +295,13 @@ class TestRunWindowsParallel:
         test for this contract is validated by test_progress_callback_fires_per_window
         (which confirms the parallel path returns results) + the code review noting
         that _process_window_in_worker contains identical biased_partial logic.
+
+        KNOWN COVERAGE GAP: parallel subprocess isolation prevents biased_partial injection.
+        This test exercises the serial path twice (serial-vs-serial); the parallel
+        path's biased_partial drop logic is covered structurally by F173's shared
+        _run_window_core helper, not by direct test. An end-to-end synthetic test
+        using an extremely short timeout to force the parallel path naturally is
+        filed as a follow-up.
         """
         from routes.wfa_pool import _run_windows_serial, WindowOutput
         import routes.wfa_pool as wfa_pool_mod

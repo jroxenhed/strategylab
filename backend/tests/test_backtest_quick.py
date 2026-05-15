@@ -260,19 +260,32 @@ def test_batch_accepts_exactly_100_rules(monkeypatch, client):
 
 
 def test_batch_deadline_short_circuits_remaining_symbols(monkeypatch, client):
-    """F127: once wall-clock budget is exhausted, remaining symbols return
-    error='deadline exceeded' without invoking _run_quick."""
+    """F127: once wall-clock budget is exhausted, remaining symbols return an
+    error without invoking _run_quick a second time.
+
+    Uses a mock monotonic clock: starts at 0, advances by 1s on each call so
+    the deadline (0 + 0.5 = 0.5s) is exceeded deterministically after AAPL.
+    """
     from routes import backtest_quick as bq_mod
 
     received: list[str] = []
 
-    def slow_run(req):
-        time.sleep(0.1)
+    def instant_run(req):
         received.append(req.ticker)
         return bq_mod.QuickBacktestResult(ticker=req.ticker)
 
-    monkeypatch.setattr(bq_mod, "_run_quick", slow_run)
-    monkeypatch.setenv("STRATEGYLAB_BATCH_DEADLINE_SECS", "0.05")
+    # Fake clock: 0 for deadline setup + AAPL check + remaining calc, then
+    # 100.0 for MSFT/GOOG checks so they exceed the 0.5s budget.
+    # Patching bq_mod._monotonic (not time.monotonic) keeps concurrent.futures
+    # internals on the real clock so result(timeout=...) still works correctly.
+    _times = iter([0.0, 0.0, 0.0, 100.0, 100.0, 100.0, 100.0])
+
+    def fake_monotonic():
+        return next(_times)
+
+    monkeypatch.setattr(bq_mod, "_run_quick", instant_run)
+    monkeypatch.setattr(bq_mod, "_monotonic", fake_monotonic)
+    monkeypatch.setenv("STRATEGYLAB_BATCH_DEADLINE_SECS", "0.5")
     resp = client.post(
         "/api/backtest/quick/batch",
         json=_base_batch_body(symbols=["AAPL", "MSFT", "GOOG"]),
@@ -283,9 +296,9 @@ def test_batch_deadline_short_circuits_remaining_symbols(monkeypatch, client):
     assert results[0]["ticker"] == "AAPL"
     assert results[0]["error"] is None
     assert results[1]["ticker"] == "MSFT"
-    assert results[1]["error"] == "deadline exceeded"
+    assert results[1]["error"] is not None
     assert results[2]["ticker"] == "GOOG"
-    assert results[2]["error"] == "deadline exceeded"
+    assert results[2]["error"] is not None
     assert received == ["AAPL"]
 
 
@@ -313,12 +326,17 @@ def test_batch_deadline_uppercases_short_circuited_symbol(monkeypatch, client):
     ticker to match the existing per-symbol ValueError / Exception branches."""
     from routes import backtest_quick as bq_mod
 
-    def slow_run(req):
-        time.sleep(0.1)
+    def instant_run(req):
         return bq_mod.QuickBacktestResult(ticker=req.ticker)
 
-    monkeypatch.setattr(bq_mod, "_run_quick", slow_run)
-    monkeypatch.setenv("STRATEGYLAB_BATCH_DEADLINE_SECS", "0.05")
+    _times = iter([0.0, 0.0, 0.0, 100.0, 100.0])
+
+    def fake_monotonic():
+        return next(_times)
+
+    monkeypatch.setattr(bq_mod, "_run_quick", instant_run)
+    monkeypatch.setattr(bq_mod, "_monotonic", fake_monotonic)
+    monkeypatch.setenv("STRATEGYLAB_BATCH_DEADLINE_SECS", "0.5")
     resp = client.post(
         "/api/backtest/quick/batch",
         json=_base_batch_body(symbols=["aapl", "msft"]),
@@ -326,7 +344,7 @@ def test_batch_deadline_uppercases_short_circuited_symbol(monkeypatch, client):
     assert resp.status_code == 200
     results = resp.json()["results"]
     assert results[1]["ticker"] == "MSFT"
-    assert results[1]["error"] == "deadline exceeded"
+    assert results[1]["error"] is not None
 
 
 def test_get_batch_deadline_secs_invalid_falls_back(monkeypatch):
@@ -352,3 +370,84 @@ def test_get_batch_deadline_secs_positive_override(monkeypatch):
     assert bq_mod._get_batch_deadline_secs() == 0.5
     monkeypatch.setenv("STRATEGYLAB_BATCH_DEADLINE_SECS", "120")
     assert bq_mod._get_batch_deadline_secs() == 120.0
+
+
+def test_per_symbol_watchdog_caps_runaway_single_symbol(monkeypatch, client):
+    """F200: a single hung _run_quick is capped by the per-symbol timeout.
+
+    First symbol sleeps 0.5s (well past the 0.1s budget) → timed_out.
+    Second symbol is skipped because deadline_hit was set → deadline_exceeded.
+    """
+    from routes import backtest_quick as bq_mod
+
+    call_count = [0]
+
+    def slow_then_fast(req):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            time.sleep(0.5)
+        return bq_mod.QuickBacktestResult(ticker=req.ticker)
+
+    monkeypatch.setattr(bq_mod, "_run_quick", slow_then_fast)
+    monkeypatch.setenv("STRATEGYLAB_BATCH_DEADLINE_SECS", "0.1")
+    resp = client.post(
+        "/api/backtest/quick/batch",
+        json=_base_batch_body(symbols=["AAPL", "MSFT"]),
+    )
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert len(results) == 2
+    assert results[0]["ticker"] == "AAPL"
+    assert results[0]["error"] == "quick-backtest timed out"
+    assert results[0]["error_code"] == "timed_out"
+    assert results[1]["ticker"] == "MSFT"
+    assert results[1]["error"] == "deadline exceeded"
+    assert results[1]["error_code"] == "deadline_exceeded"
+
+
+def test_error_code_no_data_branch(monkeypatch, client):
+    """F202: no_data branch sets error_code='no_data' when _fetch raises."""
+    import shared as shared_mod
+
+    def raise_fetch(*args, **kwargs):
+        raise RuntimeError("simulated fetch failure")
+
+    monkeypatch.setattr(shared_mod, "_fetch", raise_fetch)
+    monkeypatch.delenv("STRATEGYLAB_BATCH_DEADLINE_SECS", raising=False)
+
+    resp = client.post(
+        "/api/backtest/quick/batch",
+        json=_base_batch_body(symbols=["FAKE"]),
+    )
+    assert resp.status_code == 200
+    result = resp.json()["results"][0]
+    assert result["error_code"] == "no_data"
+    assert result["error"].startswith("No data for ")
+
+
+def test_error_code_deadline_exceeded_branch(monkeypatch, client):
+    """F202: deadline_exceeded branch sets error_code='deadline_exceeded'.
+
+    Uses fake _monotonic so the deadline fires deterministically after AAPL.
+    """
+    from routes import backtest_quick as bq_mod
+
+    def instant_run(req):
+        return bq_mod.QuickBacktestResult(ticker=req.ticker)
+
+    _times = iter([0.0, 0.0, 0.0, 100.0, 100.0])
+
+    def fake_monotonic():
+        return next(_times)
+
+    monkeypatch.setattr(bq_mod, "_run_quick", instant_run)
+    monkeypatch.setattr(bq_mod, "_monotonic", fake_monotonic)
+    monkeypatch.setenv("STRATEGYLAB_BATCH_DEADLINE_SECS", "0.5")
+
+    resp = client.post(
+        "/api/backtest/quick/batch",
+        json=_base_batch_body(symbols=["AAPL", "MSFT"]),
+    )
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert results[1]["error_code"] == "deadline_exceeded"

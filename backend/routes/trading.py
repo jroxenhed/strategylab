@@ -197,11 +197,24 @@ def place_sell(req: SellRequest):
     provider = get_trading_provider(req.broker)
     from fastapi import HTTPException as _HTTPException
 
+    # Determine position side so cancel and journal use the correct side strings
+    pos_is_short = False
+    try:
+        positions = provider.get_positions()
+        for pos in positions:
+            if pos["symbol"] == req.symbol.upper():
+                pos_is_short = pos["side"] == "short"
+                break
+    except Exception:
+        logger.exception("get_positions failed in /sell %s; defaulting to long", req.symbol)
+    cancel_side = "buy" if pos_is_short else "sell"
+    log_side = "cover" if pos_is_short else "sell"
+
     # Cancel pending stop-loss orders first
     try:
         open_orders = provider.get_orders("open", [req.symbol])
         for o in open_orders:
-            if o["side"] == "sell":
+            if o["side"] == cancel_side:
                 provider.cancel_order(o["id"])
     except Exception:
         logger.exception("cancel pending stop-loss failed before /sell %s", req.symbol)
@@ -213,7 +226,7 @@ def place_sell(req: SellRequest):
             raise _HTTPException(status_code=404, detail=f"No open position for {req.symbol}")
 
         fill_price, fill_qty = _wait_for_fill(provider, result.order_id) if result.order_id else (None, None)
-        _log_trade(req.symbol, "sell", fill_qty or 0, price=fill_price,
+        _log_trade(req.symbol, log_side, fill_qty or 0, price=fill_price,
                    source="manual", reason="manual")
         _clear_bot_entry_state(req.symbol)
         return {"symbol": req.symbol, "action": "position_closed",
@@ -227,7 +240,7 @@ def place_sell(req: SellRequest):
 
     fill_price, fill_qty = _wait_for_fill(provider, result.order_id)
 
-    _log_trade(req.symbol, "sell", fill_qty or req.qty, price=fill_price,
+    _log_trade(req.symbol, log_side, fill_qty or req.qty, price=fill_price,
                source="manual", reason="manual")
     _clear_bot_entry_state(req.symbol)
 
@@ -235,7 +248,7 @@ def place_sell(req: SellRequest):
         "order_id": result.order_id,
         "symbol": req.symbol,
         "qty": str(int(fill_qty or result.qty)),
-        "side": "sell",
+        "side": log_side,
         "status": "filled" if fill_price else result.status,
         "fill_price": fill_price,
     }

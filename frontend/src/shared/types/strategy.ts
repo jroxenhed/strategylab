@@ -234,12 +234,12 @@ export interface MonteCarloResult {
 
 /** Canonical shape of run_backtest()["summary"] — mirrors backend BacktestSummary in routes/walk_forward.py. */
 export interface BacktestSummary {
-  num_trades: number
+  num_trades: number | null
   sharpe_ratio: number | null
-  total_return_pct: number
-  win_rate_pct: number
-  max_drawdown_pct: number
-  final_value: number
+  total_return_pct: number | null
+  win_rate_pct: number | null
+  max_drawdown_pct: number | null
+  final_value: number | null
   initial_capital?: number
   buy_hold_return_pct?: number
   // edge_stats fields

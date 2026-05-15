@@ -212,6 +212,40 @@ describe('useInstanceIndicators', () => {
     const callBody = postSpy.mock.calls[0][1]
     expect(callBody).not.toHaveProperty('view_interval')
   })
+
+  /* ── F49 error-surfacing contract ────────────────────────────────── */
+
+  it('returns isError=true and non-empty errorMessage when query fails', async () => {
+    const instances = [
+      { id: 'rsi-1', type: 'rsi' as const, params: { period: 14 }, enabled: true, pane: 'sub' as const },
+    ]
+    postSpy.mockRejectedValueOnce(new Error('boom'))
+
+    const { result } = renderHook(
+      () => useInstanceIndicators('AAPL', '2024-01-01', '2024-01-31', '1d', instances),
+      { wrapper: createWrapper() },
+    )
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
+    expect(result.current.errorMessage).toBeTruthy()
+    expect(result.current.errorMessage).toContain('boom')
+  })
+
+  it('returns isError=false and falsy errorMessage while queries are loading', () => {
+    const instances = [
+      { id: 'rsi-1', type: 'rsi' as const, params: { period: 14 }, enabled: true, pane: 'sub' as const },
+    ]
+    // postSpy never resolves — query stays in loading state
+    postSpy.mockReturnValueOnce(new Promise(() => {}))
+
+    const { result } = renderHook(
+      () => useInstanceIndicators('AAPL', '2024-01-01', '2024-01-31', '1d', instances),
+      { wrapper: createWrapper() },
+    )
+
+    expect(result.current.isError).toBe(false)
+    expect(result.current.errorMessage).toBeFalsy()
+  })
 })
 
 /* ── useProviders ────────────────────────────────────────────────── */
