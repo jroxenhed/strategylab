@@ -27,14 +27,30 @@ export function generateInstanceId(type: IndicatorType): string {
   return `${type}-${crypto.randomUUID().slice(0, 8)}`
 }
 
+/**
+ * Default series color per type — must match the fallback used by the chart
+ * consumers (SubPane.tsx and Chart.tsx) so the sidebar color dot doesn't lie.
+ * Multi-line indicators (macd, adx, stoch, bb) have no single colour; they're
+ * absent from this map and from SUPPORTS_COLOR.
+ */
+export const DEFAULT_INDICATOR_COLOR: Partial<Record<IndicatorType, string>> = {
+  rsi: '#a371f7',  // SubPane SUB_COLORS[0]
+  atr: '#a371f7',
+  volume: '#a371f7',
+  ma:  '#f0883e',  // Chart.tsx EMA/MA fallback
+  vwap:'#ff9800',
+}
+
 export function createInstance(type: IndicatorType, overrides?: Partial<IndicatorInstance>): IndicatorInstance {
   const def = INDICATOR_DEFS[type]
+  const color = DEFAULT_INDICATOR_COLOR[type]
   return {
     id: generateInstanceId(type),
     type,
     params: { ...def.defaultParams },
     enabled: true,
     pane: def.pane,
+    ...(color ? { color } : {}),
     ...overrides,
   }
 }
@@ -135,5 +151,5 @@ export function paramSummary(inst: IndicatorInstance): string {
 
 export const DEFAULT_INDICATORS: IndicatorInstance[] = [
   { id: 'macd-1', type: 'macd', params: { fast: 12, slow: 26, signal: 9 }, enabled: true, pane: 'sub' },
-  { id: 'rsi-1', type: 'rsi', params: { period: 14, type: 'wilder' }, enabled: true, pane: 'sub' },
+  { id: 'rsi-1', type: 'rsi', params: { period: 14, type: 'wilder' }, enabled: true, pane: 'sub', color: DEFAULT_INDICATOR_COLOR.rsi },
 ]

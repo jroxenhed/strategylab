@@ -26,7 +26,10 @@ const PRESET_COLORS = [
   '#d946ef', // fuchsia-500
   '#ec4899', // pink-500
 ]
-const SUPPORTS_COLOR = new Set<IndicatorType>(['ma', 'rsi', 'atr', 'macd'])
+// Only single-line indicators expose a user-pickable color. Multi-line
+// indicators (macd, adx, stoch, bb) have fixed per-line colors that a single
+// inst.color can't represent.
+const SUPPORTS_COLOR = new Set<IndicatorType>(['ma', 'rsi', 'atr', 'volume', 'vwap'])
 
 function NumberParamInput({ field, value, onChange, onCommit }: {
   field: ParamFieldNumber
