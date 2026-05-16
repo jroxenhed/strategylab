@@ -59,7 +59,7 @@ function applyMigrations(strategies: SavedStrategy[]): SavedStrategy[] {
  */
 export async function loadSavedStrategies(): Promise<SavedStrategy[]> {
   try {
-    const resp = await fetch(`${API_BASE}/strategies`)
+    const resp = await fetch(`${API_BASE}/api/strategies`)
     if (resp.ok) {
       const data: SavedStrategy[] = await resp.json()
       // Mirror to localStorage as backup
@@ -85,7 +85,7 @@ export async function loadSavedStrategies(): Promise<SavedStrategy[]> {
 export async function saveSavedStrategies(strategies: SavedStrategy[]): Promise<void> {
   localStorage.setItem(SAVED_STRATEGIES_KEY, JSON.stringify(strategies))
   try {
-    await fetch(`${API_BASE}/strategies`, {
+    await fetch(`${API_BASE}/api/strategies`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(strategies),
