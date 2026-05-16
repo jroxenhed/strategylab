@@ -247,7 +247,7 @@ export default function Sidebar({
                 key={src}
                 onClick={() => available && onDataSourceChange(src)}
                 disabled={!available}
-                title={!available ? 'Set ALPACA_API_KEY in .env to enable' : undefined}
+                title={!available ? (src === 'ibkr' ? 'Set IBKR_HOST + IBKR_PORT in backend/.env and start IB Gateway' : 'Set ALPACA_API_KEY + ALPACA_SECRET_KEY in backend/.env to enable') : undefined}
                 style={{
                   flex: 1,
                   padding: '6px 0',

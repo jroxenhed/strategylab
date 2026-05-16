@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*224 / 257 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*228 / 257 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 - [F212](#f212) — [next] F210 inline-confirm browser smoke remains partially open [easy]
 
-## Open Work — 56 items
+## Open Work — 52 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -23,7 +23,7 @@ _(none open)_
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 15 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F216](#f216), [F245b](#f245b), [F246](#f246), [F248](#f248) |
 | [F · Hardening](#f-hardening) | Security, reliability, validation | 3 | [F187](#f187), [F211](#f211), [F220](#f220) |
-| [F · Polish](#f-polish) | UI, naming, dead code | 23 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217](#f217), [F231](#f231)–[F244](#f244), [F245a](#f245a), [F247a](#f247a), [F247b](#f247b) |
+| [F · Polish](#f-polish) | UI, naming, dead code | 19 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217](#f217), [F235](#f235)–[F244](#f244), [F245a](#f245a), [F247a](#f247a), [F247b](#f247b) |
 | [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 5 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219) |
 
 ## A — Charts & Indicators
@@ -182,10 +182,10 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f227"></a> **F227** Optimizer "Apply best to rules" + "Apply & Re-run" — buttons on winner/selected row. Add `applyParamPath(req, path, value)` resolver in `paramOptions.ts` next to `buildParamOptions` (single source of truth for path encoding). Mark strategy dirty after Apply. Disable both buttons during in-flight re-run. Extend to WFA winner row. See plan F-UX7. [medium] [polish] (resolved 2026-05-16)
 - [x] <a id="f228"></a> **F228** Chart `timeScale().fitContent()` on data refresh — fire only when `(ticker, interval, from, to)` actually changes (track in ref); NOT on every poll-driven refetch. Wrap in teardown-safety try/catch. See plan F-UX8. [easy] [polish] (resolved 2026-05-16)
 - [x] <a id="f230"></a> **F230** Results panel auto-scroll on completion — `panelRef.current?.scrollTo({top:0, behavior:'smooth'})` on backtest/optimizer/WFA result-updated effects. Plus `scrollbar-gutter: stable` for visible scrollbar hint. See plan F-UX10. [easy] [polish] (resolved 2026-05-16)
-- [ ] <a id="f231"></a> **F231** "Aggregate" header combobox — hide when redundant — only render when value differs from sidebar interval. Rename to `Aggregate ▾`, drop "View" prefix. See plan F-UX11. [easy] [polish]
-- [ ] <a id="f232"></a> **F232** Direction segmented control — `Long / Short / Both` above LONG/SHORT tabs. Long-only **hides** SHORT tab entirely (not dimmed). State lives in existing `direction` field — do NOT reuse `Rule.muted`. Toggle back restores rules intact. See plan F-UX12. [medium] [polish]
-- [ ] <a id="f233"></a> **F233** IBKR-disabled tooltip copy — change "Set ALPACA_API_KEY in .env to enable" → "Set `IBKR_HOST` + `IBKR_PORT` in `backend/.env` and start IB Gateway". One line. See plan F-UX13. [easy] [polish]
-- [ ] <a id="f234"></a> **F234** Right-side Settings — show effective per-direction values — `Effective: 2% (from global)` next to non-overridden per-direction fields; `Effective: 1.5% (long override)` when set. See plan F-UX14. [easy] [polish]
+- [x] <a id="f231"></a> **F231** "Aggregate" header combobox — hide when redundant — only render when value differs from sidebar interval. Rename to `Aggregate ▾`, drop "View" prefix. See plan F-UX11. [easy] [polish] (resolved 2026-05-16)
+- [x] <a id="f232"></a> **F232** Direction segmented control — `Long / Short / Both` above LONG/SHORT tabs. Long-only **hides** SHORT tab entirely (not dimmed). State lives in existing `direction` field — do NOT reuse `Rule.muted`. Toggle back restores rules intact. See plan F-UX12. [medium] [polish] (resolved 2026-05-16)
+- [x] <a id="f233"></a> **F233** IBKR-disabled tooltip copy — change "Set ALPACA_API_KEY in .env to enable" → "Set `IBKR_HOST` + `IBKR_PORT` in `backend/.env` and start IB Gateway". One line. See plan F-UX13. [easy] [polish] (resolved 2026-05-16)
+- [x] <a id="f234"></a> **F234** Right-side Settings — show effective per-direction values — `Effective: 2% (from global)` next to non-overridden per-direction fields; `Effective: 1.5% (long override)` when set. See plan F-UX14. [easy] [polish] (resolved 2026-05-16)
 - [ ] <a id="f235"></a> **F235** Sticky current-strategy metrics strip above tab bar — `RSI 35/65 daily · 17 trades · +412% · Sharpe 1.07 · MaxDD −36%`. Anchors orientation when 4 tabs deep in WFA. See plan F-UX15. [easy] [polish]
 - [ ] <a id="f236"></a> **F236** Two-param Optimizer heatmap — 6×6 Sharpe grid (cold→hot). Communicates plateau-vs-spike, not just peak value. See plan F-UX16. [medium] [polish]
 - [ ] <a id="f237"></a> **F237** Param picker `<optgroup>` per rule when >2 rules present — scales the dropdown beyond the current "Buy Rule 1 Threshold (RSI)" naming. See plan F-UX17. [easy] [polish]

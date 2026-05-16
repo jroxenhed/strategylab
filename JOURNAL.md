@@ -6,6 +6,14 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-16
 
+### Bundle D shipped — UX copy/controls bundle (F231–F234)
+
+- **[F231](TODO.md#f231)** Aggregate header combobox hide-when-redundant. When `viewInterval === interval`, only a compact `Aggregate ▾` button shows; clicking expands to the select with the base interval pre-selected (autoFocus opens the menu). Option labels dropped the "View " prefix — just `1D / 1W / 1M`. When aggregation is active, the select is prefixed with muted `Aggregate:` text. `App.tsx` only.
+- **[F232](TODO.md#f232)** Direction segmented control. Replaced the implicit `LONG | SHORT` button pair with a 3-way `LONG / SHORT / BOTH` control above the rule editor. Long/Short clear regime; Both enables regime and on first activation copies the current single rule set into `longBuyRules` so existing strategy migrates cleanly. Regime config button + summary row are hidden entirely when not in Both mode (was visible-but-toggleable). Confirmed in browser: clicking BOTH reveals REGIME RULES / LONG / SHORT tabs; clicking LONG hides them.
+- **[F233](TODO.md#f233)** IBKR tooltip copy fix. Disabled-button title is now per-source: `Set IBKR_HOST + IBKR_PORT in backend/.env and start IB Gateway` for IBKR, `Set ALPACA_API_KEY + ALPACA_SECRET_KEY in backend/.env to enable` for Alpaca. One line in `Sidebar.tsx`.
+- **[F234](TODO.md#f234)** Effective per-direction value labels. Six new "Effective: …" labels (Long Stop / Time Stop / Trailing + Short equivalents) inside the regime-mode Per-Direction section. Three new helpers (`effectiveStopLabel`, `effectiveTimeStopLabel`, `effectiveTrailingLabel`) resolve `(perDirValue || globalValue, source)` into text like `Effective: 2% (long override)` or `Effective: Off (from global)`. Read-only display — no state or payload changes.
+- Browser-verified all four items on `localhost:5173` after `npm run build` clean. 188/188 frontend tests pass. No backend changes.
+
 ### Bundle C shipped — UX workflow bundle (F227, F228, F229)
 
 - **[F229](TODO.md#f229)** MACD `is_above_signal` / `is_below_signal` state conditions added to `signal_engine.py` + RuleRow dropdown. Threshold-free, direction-agnostic. 8 new unit tests; 51/51 backend signal_engine tests pass.

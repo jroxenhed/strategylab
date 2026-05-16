@@ -118,6 +118,7 @@ export default function App() {
   const [chartEnabled, setChartEnabled] = useState(true)
   const [datePreset, setDatePreset] = useState<DatePreset>((saved?.datePreset as DatePreset) ?? 'Y')
   const [viewInterval, setViewInterval] = useState(saved?.viewInterval ?? interval)
+  const [isAggOpen, setIsAggOpen] = useState(false)
   const intervalRef = useRef(interval)
 
   useEffect(() => {
@@ -202,16 +203,29 @@ export default function App() {
                 {chartEnabled ? 'Disable Chart' : 'Enable Chart'}
               </button>
               {chartEnabled && viewIntervalOptions.length > 1 && (
-                <select
-                  value={viewInterval}
-                  onChange={e => setViewInterval(e.target.value)}
-                  style={{ background: '#21262d', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px', fontSize: 12 }}
-                  title="Chart display interval"
-                >
-                  {viewIntervalOptions.map(o => (
-                    <option key={o.value} value={o.value}>{o.value === interval ? o.label : `View ${o.label}`}</option>
-                  ))}
-                </select>
+                viewInterval === interval && !isAggOpen ? (
+                  <button
+                    onClick={() => setIsAggOpen(true)}
+                    style={{ background: 'none', border: '1px solid #30363d', borderRadius: 4, color: '#8b949e', cursor: 'pointer', fontSize: 11, padding: '2px 6px' }}
+                    title="Aggregate chart to a coarser interval"
+                  >Aggregate ▾</button>
+                ) : (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    {viewInterval !== interval && <span style={{ fontSize: 11, color: '#8b949e' }}>Aggregate:</span>}
+                    <select
+                      value={viewInterval}
+                      onChange={e => { setViewInterval(e.target.value); if (e.target.value === interval) setIsAggOpen(false); }}
+                      onBlur={() => { if (viewInterval === interval) setIsAggOpen(false); }}
+                      style={{ background: '#21262d', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px', fontSize: 12 }}
+                      title="Chart display interval"
+                      autoFocus={isAggOpen && viewInterval === interval}
+                    >
+                      {viewIntervalOptions.map(o => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </span>
+                )
               )}
             </>
           )}
