@@ -177,6 +177,9 @@ function encodeParam(mode: string, period?: number, type?: string, extra?: { std
   return undefined
 }
 
+// F246: HTF timeframe options available per-rule
+const HTF_TIMEFRAMES = ['15m', '30m', '1h', '4h', '1d', '1wk', '1mo'] as const
+
 export default function RuleRow({ rule, onChange, onDelete, onSweep }: { rule: Rule; onChange: (r: Rule) => void; onDelete: () => void; onSweep?: () => void }) {
   const muted = rule.muted ?? false
   const conditions = CONDITIONS[rule.indicator] || []
@@ -531,6 +534,31 @@ export default function RuleRow({ rule, onChange, onDelete, onSweep }: { rule: R
         <button onClick={onSweep} title="Sweep this value in Sensitivity tab"
           style={{ color: '#8b949e', padding: '4px 6px', cursor: 'pointer', background: 'transparent', border: 'none', lineHeight: 1 }}
         ><TrendingUp size={13} /></button>
+      )}
+      {/* F246: Per-rule HTF timeframe selector */}
+      {rule.timeframe ? (
+        <select
+          value={rule.timeframe}
+          onChange={e => {
+            const v = e.target.value
+            onChange({ ...rule, timeframe: v === 'base' ? null : v })
+          }}
+          title="Evaluate this rule on a higher timeframe"
+          style={{ ...styles.ruleSelect, fontSize: 10, color: '#f0883e', borderColor: '#f0883e44', paddingLeft: 4 }}
+        >
+          {HTF_TIMEFRAMES.map(tf => <option key={tf} value={tf}>{tf.toUpperCase()}</option>)}
+          <option value="base">Base TF</option>
+        </select>
+      ) : (
+        <button
+          onClick={() => onChange({ ...rule, timeframe: '1d' })}
+          title="Evaluate on a higher timeframe"
+          style={{
+            fontSize: 9, fontWeight: 600, padding: '2px 5px', borderRadius: 4,
+            border: '1px solid #30363d', background: 'transparent',
+            color: '#484f58', cursor: 'pointer', lineHeight: 1, whiteSpace: 'nowrap',
+          }}
+        >+HTF</button>
       )}
       <button
         onClick={() => onChange({ ...rule, visualize: !visualize })}

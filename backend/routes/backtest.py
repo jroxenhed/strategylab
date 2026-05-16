@@ -220,6 +220,100 @@ def _compute_spy_correlation(trades: list, start: str, end: str) -> dict:
     }
 
 
+def _compute_htf_rule_mask(
+    rules: list,
+    logic: str,
+    ticker: str,
+    start: str,
+    end: str,
+    htf_interval: str,
+    base_index: "pd.DatetimeIndex",
+    source: str,
+) -> "pd.Series":
+    """F246: Evaluate `rules` on HTF bars and forward-fill the boolean mask to base_index.
+
+    Returns a boolean pd.Series aligned to base_index.
+    - If HTF data is empty (e.g. interval clamp), logs a warning and returns all-False (gate closed).
+    - Anti-lookahead: align_htf_to_ltf shifts HTF by 1 bar before aligning to LTF.
+    """
+    from indicators import compute_instance, OHLCVSeries as _OHLCVSeries  # local import avoids circular dep
+
+    lookback = max((htf_lookback_days(r.indicator, r.params or {}) for r in rules), default=20)
+    htf_start = (datetime.fromisoformat(start) - timedelta(days=lookback)).strftime("%Y-%m-%d")
+    htf_df = fetch_higher_tf(ticker, htf_start, end, htf_interval, source=source)
+
+    if htf_df.empty:
+        logger.warning("F246: empty HTF data for interval=%s — treating HTF rules as False", htf_interval)
+        return pd.Series([False] * len(base_index), index=base_index, dtype=bool)
+
+    htf_close = htf_df["Close"]
+    htf_high = htf_df["High"]
+    htf_low = htf_df["Low"]
+    htf_vol = htf_df["Volume"] if "Volume" in htf_df.columns else htf_df["Close"] * 0
+
+    htf_indicators = compute_indicators(htf_close, high=htf_high, low=htf_low, volume=htf_vol, rules=rules)
+
+    raw_values = [
+        eval_rules(rules, logic, htf_indicators, i)
+        for i in range(len(htf_df))
+    ]
+    raw_bool = pd.Series(raw_values, index=htf_df.index, dtype=bool)
+
+    aligned = align_htf_to_ltf(raw_bool.astype(float), base_index)
+    return aligned.fillna(0).astype(bool)
+
+
+def _apply_htf_rules(
+    base_rules: list,
+    logic: str,
+    ticker: str,
+    start: str,
+    end: str,
+    base_index: "pd.DatetimeIndex",
+    source: str,
+    base_indicators: dict,
+) -> "pd.Series":
+    """F246: Partition rules by timeframe, evaluate HTF partitions, AND all masks together.
+
+    Rules with timeframe=None are evaluated per-bar in the main loop (existing behavior).
+    Rules with a non-None timeframe are pre-evaluated here into an aligned boolean mask.
+
+    Returns a pd.Series[bool] of shape (len(base_index),) — the combined HTF gate.
+    A True value means ALL htf-timeframed rules fired at that bar.
+    When no rule has a non-None timeframe, returns all-True (gate always open).
+    """
+    # Group rules by their timeframe value (skip None — those stay in the main loop)
+    from itertools import groupby
+
+    htf_rules_by_tf: dict[str, list] = {}
+    for r in base_rules:
+        if r.timeframe is not None and not r.muted:
+            tf = r.timeframe
+            htf_rules_by_tf.setdefault(tf, [])
+            htf_rules_by_tf[tf].append(r)
+
+    if not htf_rules_by_tf:
+        # No HTF rules — gate is always open (all True)
+        return pd.Series([True] * len(base_index), index=base_index, dtype=bool)
+
+    # Start with all-True and AND each HTF partition's mask in
+    combined = pd.Series([True] * len(base_index), index=base_index, dtype=bool)
+    for tf, tf_rules in htf_rules_by_tf.items():
+        mask = _compute_htf_rule_mask(
+            rules=tf_rules,
+            logic=logic,
+            ticker=ticker,
+            start=start,
+            end=end,
+            htf_interval=tf,
+            base_index=base_index,
+            source=source,
+        )
+        combined = combined & mask
+
+    return combined
+
+
 def _compute_regime_series(req: StrategyRequest, ltf_df: pd.DataFrame) -> "pd.Series | None":
     """Compute per-bar regime_active boolean from RegimeConfig.
 
@@ -371,6 +465,36 @@ def run_backtest(
             short_sell_rules = []
 
         indicators = compute_indicators(close, high=high, low=low, volume=volume, rules=all_rules, cache=indicator_cache)
+
+        # F246: Base-TF filtered rule lists — HTF rules (timeframe != None) are excluded from
+        # per-bar eval_rules() because they are pre-evaluated over HTF bars and gated via mask.
+        # Keeping them in the per-bar call would evaluate them on base-TF indicators (wrong data).
+        def _base_tf_only(rules):
+            return [r for r in rules if r.timeframe is None]
+
+        buy_rules_base = _base_tf_only(buy_rules)
+        sell_rules_base = _base_tf_only(sell_rules)
+        long_buy_rules_base = _base_tf_only(long_buy_rules)
+        long_sell_rules_base = _base_tf_only(long_sell_rules)
+        short_buy_rules_base = _base_tf_only(short_buy_rules)
+        short_sell_rules_base = _base_tf_only(short_sell_rules)
+
+        # F246: Pre-compute HTF rule masks for buy/sell rule sets.
+        # Rules with timeframe=None stay in the main loop (existing behavior).
+        # Rules with a non-None timeframe are evaluated over HTF bars, aligned to base_index,
+        # and stored as pre-computed boolean Series to gate each bar's buy/sell decision.
+        _htf_kwargs = dict(
+            ticker=req.ticker, start=req.start, end=req.end,
+            base_index=df.index, source=req.source,
+            base_indicators=indicators,
+        )
+        htf_buy_mask = _apply_htf_rules(buy_rules, req.buy_logic, **_htf_kwargs)
+        htf_sell_mask = _apply_htf_rules(sell_rules, req.sell_logic, **_htf_kwargs)
+        if b23_mode:
+            htf_long_buy_mask = _apply_htf_rules(long_buy_rules, req.long_buy_logic or 'AND', **_htf_kwargs)
+            htf_long_sell_mask = _apply_htf_rules(long_sell_rules, req.long_sell_logic or 'AND', **_htf_kwargs)
+            htf_short_buy_mask = _apply_htf_rules(short_buy_rules, req.short_buy_logic or 'AND', **_htf_kwargs)
+            htf_short_sell_mask = _apply_htf_rules(short_sell_rules, req.short_sell_logic or 'AND', **_htf_kwargs)
 
         # Simulate
         capital = req.initial_capital
@@ -598,14 +722,17 @@ def run_backtest(
 
             if b23_mode:
                 if curr_regime_active:
-                    active_buy = long_buy_rules
+                    active_buy = long_buy_rules_base
                     active_buy_logic = req.long_buy_logic
+                    htf_buy_gate = bool(htf_long_buy_mask.iloc[i])
                 else:
-                    active_buy = short_buy_rules
+                    active_buy = short_buy_rules_base
                     active_buy_logic = req.short_buy_logic
-                buy_fires = position == 0 and hour_ok and eval_rules(active_buy, active_buy_logic, indicators, i)
+                    htf_buy_gate = bool(htf_short_buy_mask.iloc[i])
+                buy_fires = position == 0 and hour_ok and htf_buy_gate and eval_rules(active_buy, active_buy_logic, indicators, i)
             else:
-                buy_fires = position == 0 and hour_ok and regime_ok and eval_rules(buy_rules, req.buy_logic, indicators, i)
+                htf_buy_gate = bool(htf_buy_mask.iloc[i])
+                buy_fires = position == 0 and hour_ok and regime_ok and htf_buy_gate and eval_rules(buy_rules_base, req.buy_logic, indicators, i)
             if b23_mode:
                 sr_key = 'long' if curr_regime_active else 'short'
                 if buy_fires and skip_remaining_by_dir[sr_key] > 0:
@@ -743,11 +870,13 @@ def run_backtest(
                 else:
                     exit_price = raw_exit * (1 - drag)
                 if b23_mode and position_direction is not None:
-                    active_sell = long_sell_rules if position_direction == 'long' else short_sell_rules
+                    active_sell = long_sell_rules_base if position_direction == 'long' else short_sell_rules_base
                     active_sell_logic = req.long_sell_logic if position_direction == 'long' else req.short_sell_logic
-                    sell_fired = eval_rules(active_sell, active_sell_logic, indicators, i) if active_sell else False
+                    htf_sell_gate = bool((htf_long_sell_mask if position_direction == 'long' else htf_short_sell_mask).iloc[i])
+                    sell_fired = htf_sell_gate and (eval_rules(active_sell, active_sell_logic, indicators, i) if active_sell else False)
                 else:
-                    sell_fired = eval_rules(sell_rules, req.sell_logic, indicators, i)
+                    htf_sell_gate = bool(htf_sell_mask.iloc[i])
+                    sell_fired = htf_sell_gate and eval_rules(sell_rules_base, req.sell_logic, indicators, i)
                 display_sell_rules = active_sell if b23_mode and position_direction is not None else sell_rules
                 if stop_hit or trail_hit or time_stop_hit or sell_fired:
                     exit_slippage = abs(position * (raw_exit - exit_price))

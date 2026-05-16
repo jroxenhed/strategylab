@@ -295,7 +295,20 @@ def _setup_walk_forward(
     # ------------------------------------------------------------------
     # FETCH BARS
     # ------------------------------------------------------------------
-    base = req.base.model_copy(deep=True, update={"regime": None})
+    # F246: Strip regime AND per-rule timeframes — HTF lookback would clip yfinance intraday
+    # limits at window boundaries, same constraint as regime. Strip timeframe from all rule lists.
+    def _strip_timeframes(rules):
+        return [r.model_copy(update={"timeframe": None}) for r in (rules or [])]
+
+    base_raw = req.base.model_copy(deep=True, update={"regime": None})
+    base = base_raw.model_copy(update={
+        "buy_rules": _strip_timeframes(base_raw.buy_rules),
+        "sell_rules": _strip_timeframes(base_raw.sell_rules),
+        "long_buy_rules": _strip_timeframes(base_raw.long_buy_rules),
+        "long_sell_rules": _strip_timeframes(base_raw.long_sell_rules),
+        "short_buy_rules": _strip_timeframes(base_raw.short_buy_rules),
+        "short_sell_rules": _strip_timeframes(base_raw.short_sell_rules),
+    })
     df = _fetch(base.ticker, base.start, base.end, base.interval, source=base.source)
     total_bars = len(df)
     min_required = req.is_bars + req.oos_bars + req.gap_bars

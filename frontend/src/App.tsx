@@ -22,6 +22,7 @@ type AppTab = 'chart' | 'trading' | 'discovery'
 
 const STORAGE_KEY = 'strategylab-settings'
 const BACKTEST_CACHE_KEY = 'strategylab-last-backtest'
+const CHART_COLLAPSED_KEY = 'strategylab-chart-collapsed'
 const EMPTY_OHLCV: never[] = []
 const today = new Date().toISOString().slice(0, 10)
 const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -116,6 +117,10 @@ export default function App() {
   // F227 — ref into StrategyBuilder for Apply-from-Optimizer/WFA
   const strategyBuilderRef = useRef<StrategyBuilderHandle>(null)
   const [chartEnabled, setChartEnabled] = useState(true)
+  // F248 — collapsible chart panel; persisted to localStorage
+  const [chartCollapsed, setChartCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem(CHART_COLLAPSED_KEY) === 'true' } catch { return false }
+  })
   // F244 — narrow rails below 1440 px (evaluated once on mount; viewport changes during use are rare)
   const narrowRails = useMemo(() => window.innerWidth < 1440, [])
   const [datePreset, setDatePreset] = useState<DatePreset>((saved?.datePreset as DatePreset) ?? 'Y')
@@ -151,6 +156,10 @@ export default function App() {
       localStorage.removeItem(BACKTEST_CACHE_KEY)
     }
   }, [backtestResult, lastRequest])
+
+  useEffect(() => {
+    try { localStorage.setItem(CHART_COLLAPSED_KEY, String(chartCollapsed)) } catch {}
+  }, [chartCollapsed])
 
   const chartInterval = chartEnabled ? viewInterval : interval
   const { data: ohlcv = EMPTY_OHLCV, isLoading: ohlcvLoading, isFetching: ohlcvFetching, isError: ohlcvError, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, chartInterval, dataSource, extendedHours)
@@ -203,6 +212,14 @@ export default function App() {
               </button>
               <button onClick={() => setChartEnabled(c => !c)} style={{ ...styles.chartToggleBtn, opacity: chartEnabled ? 0.5 : 1 }}>
                 {chartEnabled ? 'Disable Chart' : 'Enable Chart'}
+              </button>
+              <button
+                onClick={() => setChartCollapsed(c => !c)}
+                style={styles.chevronBtn}
+                title={chartCollapsed ? 'Expand chart' : 'Collapse chart'}
+                aria-label={chartCollapsed ? 'Expand chart' : 'Collapse chart'}
+              >
+                {chartCollapsed ? '▴' : '▾'}
               </button>
               {/* F235 — sticky metrics strip after button cluster */}
               {backtestResult && (() => {
@@ -286,9 +303,9 @@ export default function App() {
               <div style={{ height: '100%', overflow: 'hidden' }}>
                 <Group orientation="vertical" style={{ height: '100%' }}>
 
-                  {/* CHART */}
+                  {/* CHART — F248: display:none when collapsed keeps charts mounted (lw-charts v5 teardown trap) */}
                   <Panel defaultSize="50%" minSize="15%">
-                    <div className="panel-fill">
+                    <div className="panel-fill" style={chartCollapsed ? { display: 'none' } : undefined}>
                       {!chartEnabled ? (
                         <div style={styles.chartDisabled}>
                           <span style={{ color: '#8b949e', fontSize: 12 }}>Chart disabled</span>
@@ -472,6 +489,7 @@ const styles: Record<string, React.CSSProperties> = {
   empty: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 14 },
   chartDisabled: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12 },
   chartToggleBtn: { fontSize: 11, padding: '3px 10px', borderRadius: 4, background: '#21262d', color: '#8b949e', border: '1px solid #30363d', cursor: 'pointer' },
+  chevronBtn: { fontSize: 14, width: 14, height: 14, lineHeight: '14px', padding: 0, background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
   rightPanel: {
     height: '100%',
     display: 'flex',

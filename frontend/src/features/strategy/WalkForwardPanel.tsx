@@ -982,6 +982,11 @@ export default function WalkForwardPanel({ lastRequest, onApplyParams, onRunBack
         </span>
       </div>
 
+      {/* F246: HTF notice — same constraint as regime */}
+      <div style={{ fontSize: 11, color: '#6e7681', marginTop: 4, marginBottom: 4 }}>
+        Multi-timeframe rules are disabled in walk-forward — same constraint as regime.
+      </div>
+
       {/* ─── Error ──────────────────────────────────────────────── */}
       {error && (
         <div style={{ color: '#ef5350', fontSize: 12, padding: '6px 0' }}>{error}</div>
