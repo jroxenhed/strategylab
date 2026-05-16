@@ -215,11 +215,11 @@ export default function App() {
               </button>
               <button
                 onClick={() => setChartCollapsed(c => !c)}
-                style={styles.chevronBtn}
-                title={chartCollapsed ? 'Expand chart' : 'Collapse chart'}
-                aria-label={chartCollapsed ? 'Expand chart' : 'Collapse chart'}
+                style={{ ...styles.chartToggleBtn, opacity: chartCollapsed ? 1 : 0.5 }}
+                title={chartCollapsed ? 'Expand chart panel' : 'Collapse chart panel'}
+                aria-label={chartCollapsed ? 'Expand chart panel' : 'Collapse chart panel'}
               >
-                {chartCollapsed ? '▴' : '▾'}
+                {chartCollapsed ? '▸ Show Chart' : '◂ Hide Chart'}
               </button>
               {/* F235 — sticky metrics strip after button cluster */}
               {backtestResult && (() => {
