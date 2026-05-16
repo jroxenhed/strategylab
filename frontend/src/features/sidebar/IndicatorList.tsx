@@ -128,11 +128,25 @@ function ColorPicker({ color, onSelect }: { color: string; onSelect: (c: string)
 
 export default function IndicatorList({ indicators, onChange }: IndicatorListProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [colorPickerId, setColorPickerId] = useState<string | null>(null)
+  const colorPopoverRef = useRef<HTMLDivElement>(null)
   const [showAddMenu, setShowAddMenu] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
   const dragIdRef = useRef<string | null>(null)
   const [dragOverId, setDragOverId] = useState<string | null>(null)
+
+  // Close color popover on outside click
+  useEffect(() => {
+    if (!colorPickerId) return
+    function handle(e: MouseEvent) {
+      if (colorPopoverRef.current && !colorPopoverRef.current.contains(e.target as Node)) {
+        setColorPickerId(null)
+      }
+    }
+    document.addEventListener('mousedown', handle)
+    return () => document.removeEventListener('mousedown', handle)
+  }, [colorPickerId])
 
   useEffect(() => () => clearTimeout(debounceRef.current), [])
 
@@ -245,7 +259,8 @@ export default function IndicatorList({ indicators, onChange }: IndicatorListPro
         const def = INDICATOR_DEFS[inst.type]
         const isExpanded = expandedId === inst.id
         const summary = paramSummary(inst)
-        const hasSettings = def.paramFields.length > 0 || SUPPORTS_COLOR.has(inst.type) || def.pane === 'main'
+        // Color is in its own popover now — only count params/main-pane TF for expand.
+        const hasSettings = def.paramFields.length > 0 || def.pane === 'main'
 
         return (
           <div
@@ -265,6 +280,7 @@ export default function IndicatorList({ indicators, onChange }: IndicatorListPro
                 ? '1px solid var(--accent-primary)'
                 : isExpanded ? '1px solid var(--border-light)' : '1px solid transparent',
               outline: 'none',
+              position: 'relative',
             }}
           >
             {/* (b) Collapsed row: single-line summary "RSI · 14 · Wilder ▾" at font-size 11 (lines 113–145) */}
@@ -283,14 +299,6 @@ export default function IndicatorList({ indicators, onChange }: IndicatorListPro
               >
                 ⋮⋮
               </span>
-              {/* Color swatch dot — replaces checkbox-only color hint in collapsed state */}
-              {SUPPORTS_COLOR.has(inst.type) && (
-                <span style={{
-                  width: 8, height: 8, borderRadius: '50%',
-                  background: inst.color ?? PRESET_COLORS[0],
-                  flexShrink: 0,
-                }} />
-              )}
               <input
                 type="checkbox"
                 checked={inst.enabled}
@@ -306,6 +314,22 @@ export default function IndicatorList({ indicators, onChange }: IndicatorListPro
               }}>
                 {def.label}{summary ? ` · ${summary}` : ''}
               </span>
+              {/* Color swatch — popover trigger; sits right-of-params, left-of-chevron/✕ */}
+              {SUPPORTS_COLOR.has(inst.type) && (
+                <span
+                  onClick={e => {
+                    e.stopPropagation()
+                    setColorPickerId(colorPickerId === inst.id ? null : inst.id)
+                  }}
+                  style={{
+                    width: 12, height: 12, borderRadius: '50%',
+                    background: inst.color ?? PRESET_COLORS[0],
+                    flexShrink: 0, cursor: 'pointer',
+                    border: '1px solid var(--border-light)',
+                  }}
+                  title="Pick color"
+                />
+              )}
               {hasSettings && (
                 <span style={{ fontSize: 9, color: 'var(--text-muted)', flexShrink: 0 }}>
                   {isExpanded ? '▴' : '▾'}
@@ -319,6 +343,31 @@ export default function IndicatorList({ indicators, onChange }: IndicatorListPro
                 ✕
               </span>
             </div>
+
+            {/* Color popover — anchored to the row, opens to the right */}
+            {colorPickerId === inst.id && SUPPORTS_COLOR.has(inst.type) && (
+              <div
+                ref={colorPopoverRef}
+                onClick={e => e.stopPropagation()}
+                style={{
+                  position: 'absolute', zIndex: 100,
+                  marginTop: 4, padding: 8,
+                  background: 'var(--bg-panel)',
+                  border: '1px solid var(--border-strong)',
+                  borderRadius: 6,
+                  boxShadow: 'var(--shadow-md)',
+                  right: 8,
+                }}
+              >
+                <ColorPicker
+                  color={inst.color ?? PRESET_COLORS[0]}
+                  onSelect={c => {
+                    onChange(prev => prev.map(i => i.id === inst.id ? { ...i, color: c } : i))
+                    setColorPickerId(null)
+                  }}
+                />
+              </div>
+            )}
 
             {isExpanded && hasSettings && (
               <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -340,12 +389,6 @@ export default function IndicatorList({ indicators, onChange }: IndicatorListPro
                       <option value="1wk">1W</option>
                     </select>
                   </div>
-                )}
-                {SUPPORTS_COLOR.has(inst.type) && (
-                  <ColorPicker
-                    color={inst.color ?? PRESET_COLORS[0]}
-                    onSelect={c => onChange(prev => prev.map(i => i.id === inst.id ? { ...i, color: c } : i))}
-                  />
                 )}
                 {def.paramFields.map(field => {
                   if (field.kind === 'select') {
