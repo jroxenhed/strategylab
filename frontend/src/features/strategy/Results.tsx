@@ -190,7 +190,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
   useEffect(() => {
     if (activeTab !== 'equity' || bucket !== null || !chartRef.current || equity_curve.length === 0) return
     const chart = createChart(chartRef.current, {
-      height: chartRef.current.clientHeight || 185,
+      autoSize: true,
       layout: { background: { type: ColorType.Solid, color: '#0d1117' }, textColor: '#8b949e' },
       grid: { vertLines: { color: '#1c2128' }, horzLines: { color: '#1c2128' } },
       timeScale: { borderColor: '#30363d', timeVisible: true },
@@ -433,10 +433,6 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       mainChart.subscribeCrosshairMove(onMainCrosshairMove)
     }
 
-    const ro = new ResizeObserver(() => {
-      if (chartRef.current) chart.applyOptions({ width: chartRef.current.clientWidth, height: chartRef.current.clientHeight })
-    })
-    ro.observe(chartRef.current)
     return () => {
       if (syncWidthTimer !== null) clearTimeout(syncWidthTimer)
       // mainChart may already be destroyed if Chart unmounted first (e.g. on
@@ -450,7 +446,6 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
         } catch { /* chart already removed */ }
       }
       chart.remove()
-      ro.disconnect()
     }
   }, [activeTab, bucket, equity_curve, summary.total_return_pct, mainChart, showBaseline, result.baseline_curve, logScale, viewInterval, backtestInterval, tzMode, mainTimestamps])
 

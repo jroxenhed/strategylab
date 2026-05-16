@@ -35,6 +35,37 @@ Tasks to skip even if tagged `[next]`:
 
 ## Last Run
 
+**Date:** 2026-05-16 (build 29 — overnight)
+**Branch:** `claude/dazzling-hawking-Wm5im`
+
+**Shipped (1 item, Tier A):**
+- **F220** [easy] [hardening] Sweep the three remaining v4 ResizeObserver + applyOptions chart instances → `autoSize: true`. `MiniSparkline.tsx` (drop RO + applyOptions; outer container retains explicit `height` prop), `PerformanceComparison.tsx` (drop RO + add explicit `height: 200` on container div since chart no longer carries it), `Results.tsx` equity chart (drop RO; user-resizable `resize: vertical` container's dynamic height now flows through autoSize). Grep verified: zero `new ResizeObserver` callsites remain anywhere in `frontend/src/`.
+
+**Review:** Tier A per F136 — orchestrator verification only. AST/import N/A (no Python change). Frontend `npm run build` clean. `vitest run` 238/238 pass (unchanged from baseline). `bin/preview-smoke.sh` pass. Grep verification: 0 v4 RO+applyOptions instances. Diff +7 / -27 across 3 `.tsx` files; no contract surface.
+
+**Visual verification:** Not browser-verified — `chrome-devtools-mcp` is not available in the routine env (codified env limitation, multiple builder runs). Migration is mechanically identical to today's MacroEquityChart fix in the post-merge interactive session and to F218's main-Chart/SubPane pattern, both browser-verified. Flagged in PR description for morning reviewer.
+
+**Deferred → TODO (2 new items, F249-F250):**
+- **F249** [next] [easy] [hardening] migrate the last two `createChart` callers (`StrategyComparison.tsx`, `WalkForwardPanel.tsx`) — static `height: NNN` with no RO at all. Not the F218 trap (no feedback loop), just no resize tracking. Single-line edits per file.
+- **F250** [easy] [polish] MiniSparkline lost the resize-time `fitContent()` call when its RO was removed. Acceptable today (data updates re-call fitContent + scroll/scale are disabled). If users notice clipping, add a minimal RO that calls `fitContent()` only — NEVER `applyOptions` (F218 trap).
+
+**Builder env notes:**
+1. `chrome-devtools-mcp` unavailable in this routine env — same gap that's blocked F210/F212 inline-confirm verification across multiple sessions. Migration was static-grep + build/test + preview verified; matches the canonical F218 pattern in the codebase.
+2. Pre-commit hook + `bin/sync-todo-index.py` ran cleanly. Setup `bash bin/install-hooks.sh` succeeded.
+3. Main was clean (`git pull --ff-only` ok — no force-update this run). No open builder PRs.
+4. F212 [next] remains open — same root cause as before (bot-related sites need running paper-trading bot + chrome-devtools-mcp).
+
+**Next up:**
+- **F249** [next] [easy] [hardening] mechanical follow-up to F220 — the last two `createChart` callers without resize tracking.
+- **F212** [next] [easy] [polish] [testing] F210 inline-confirm browser smoke. Blocked on chrome-devtools-mcp + paper trading.
+- **F217** [easy] [polish] TradeJournal "Last N" should surface unloaded count — clear two-file backend+frontend contract.
+- **F216** [easy] [arch] Extend single-owner polling pattern to positions/orders/account in `useTradingQueries.ts`.
+- **A8** off-screen downsampling — chart perf at wide zoom [medium].
+
+**Previous run:** 2026-05-13 PR (build 28 — F127 batch wall-clock deadline).
+
+## Build 28 Run
+
 **Date:** 2026-05-13 (build 28 — overnight)
 **Branch:** `claude/jolly-babbage-X7mDA`
 

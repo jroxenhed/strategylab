@@ -147,7 +147,7 @@ function EquityChart({ result }: { result: PerformanceResponse }) {
     if (!containerRef.current || !hasData) return
 
     const chart = createChart(containerRef.current, {
-      height: 200,
+      autoSize: true,
       layout: { background: { type: ColorType.Solid, color: '#0d1117' }, textColor: '#8b949e' },
       grid: { vertLines: { color: '#1c2128' }, horzLines: { color: '#1c2128' } },
       timeScale: { borderColor: '#1c2128', timeVisible: false },
@@ -172,12 +172,7 @@ function EquityChart({ result }: { result: PerformanceResponse }) {
 
     chart.timeScale().fitContent()
 
-    const ro = new ResizeObserver(() => {
-      if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth })
-    })
-    ro.observe(containerRef.current)
-
-    return () => { chart.remove(); ro.disconnect() }
+    return () => { chart.remove() }
   }, [result])
 
   if (!hasData) return null
@@ -189,7 +184,7 @@ function EquityChart({ result }: { result: PerformanceResponse }) {
         {backtestCurve.length > 0 && <span style={{ color: '#58a6ff', marginLeft: 12 }}>— Backtest</span>}
         {paperCurve.length > 0 && <span style={{ color: '#26a641', marginLeft: 12 }}>— Paper</span>}
       </div>
-      <div ref={containerRef} style={{ width: '100%', borderRadius: 4, overflow: 'hidden' }} />
+      <div ref={containerRef} style={{ width: '100%', height: 200, borderRadius: 4, overflow: 'hidden' }} />
     </div>
   )
 }
