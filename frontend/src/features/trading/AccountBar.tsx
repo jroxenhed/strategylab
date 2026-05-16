@@ -9,9 +9,9 @@ export default function AccountBar() {
   if (isLoading || !account) return <div style={styles.bar}><span style={{ color: '#8b949e' }}>Loading account...</span></div>
 
   const metrics = [
-    { label: 'Equity', value: `$${account.equity.toLocaleString(undefined, { minimumFractionDigits: 2 })}` },
-    { label: 'Cash', value: `$${account.cash.toLocaleString(undefined, { minimumFractionDigits: 2 })}` },
-    { label: 'Buying Power', value: `$${account.buying_power.toLocaleString(undefined, { minimumFractionDigits: 2 })}` },
+    { label: 'Equity', value: `$${account.equity.toLocaleString('en-US', { minimumFractionDigits: 2 })}` },
+    { label: 'Cash', value: `$${account.cash.toLocaleString('en-US', { minimumFractionDigits: 2 })}` },
+    { label: 'Buying Power', value: `$${account.buying_power.toLocaleString('en-US', { minimumFractionDigits: 2 })}` },
     { label: 'Day Trades', value: account.day_trade_count },
   ]
 
