@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useSearch } from '../../shared/hooks/useOHLCV'
 import { api } from '../../api/client'
 import {
   loadWatchlist,
@@ -80,6 +81,14 @@ export default function WatchlistPanel({
   const [addInputValue, setAddInputValue] = useState('')
   const addInputRef = useRef<HTMLInputElement>(null)
 
+  // Search-dropdown state for single-token add
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const [selectedIndex, setSelectedIndex] = useState(0)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+  const isSingleToken = !addInputValue.includes(',')
+  const { data: searchResults } = useSearch(isSingleToken ? addInputValue : '')
+  const dropdownVisible = showSuggestions && isSingleToken && !!searchResults && searchResults.length > 0
+
   // Drag-over tracking: { groupId: string | null (ungrouped), index: number }
   const [dragOver, setDragOver] = useState<{ groupId: string | null; index: number } | null>(null)
   const dragSrcRef = useRef<DragSource | null>(null)
@@ -102,6 +111,17 @@ export default function WatchlistPanel({
   useEffect(() => {
     if (showAddInput) addInputRef.current?.focus()
   }, [showAddInput])
+
+  // Outside-click closes the suggestions dropdown
+  useEffect(() => {
+    function handleMouseDown(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false)
+      }
+    }
+    document.addEventListener('mousedown', handleMouseDown)
+    return () => document.removeEventListener('mousedown', handleMouseDown)
+  }, [])
 
   // Fetch quotes for all watchlist symbols
   const fetchQuotes = useCallback(async () => {
@@ -156,6 +176,17 @@ export default function WatchlistPanel({
         ),
       }
     })
+  }, [])
+
+  /** Add a single ticker (from dropdown selection) with dedupe. */
+  const addSingleTicker = useCallback((sym: string) => {
+    const upper = sym.toUpperCase()
+    setState(prev => {
+      const exists = allTickers(prev).some(t => t.toUpperCase() === upper)
+      return exists ? prev : { ...prev, ungrouped: [...prev.ungrouped, upper] }
+    })
+    setAddInputValue('')
+    setShowSuggestions(false)
   }, [])
 
   /** Commit the bulk-add input: parse, dedupe, append to ungrouped. */
@@ -462,21 +493,60 @@ export default function WatchlistPanel({
         </div>
       </div>
 
-      {/* Bulk-add input row */}
+      {/* Bulk-add / search input row */}
       {showAddInput && (
         <div style={styles.addInputRow}>
-          <input
-            ref={addInputRef}
-            value={addInputValue}
-            onChange={e => setAddInputValue(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') { e.preventDefault(); commitAddInput() }
-              if (e.key === 'Escape') { setShowAddInput(false); setAddInputValue('') }
-            }}
-            onBlur={commitAddInput}
-            placeholder="e.g. AAPL, MSFT, GOOGL"
-            style={styles.addInput}
-          />
+          <div style={{ position: 'relative' }} ref={dropdownRef}>
+            <input
+              ref={addInputRef}
+              value={addInputValue}
+              onChange={e => {
+                setAddInputValue(e.target.value)
+                setShowSuggestions(true)
+                setSelectedIndex(0)
+              }}
+              onKeyDown={e => {
+                if (dropdownVisible) {
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault()
+                    setSelectedIndex(i => Math.min(i + 1, (searchResults?.length ?? 1) - 1))
+                    return
+                  }
+                  if (e.key === 'ArrowUp') {
+                    e.preventDefault()
+                    setSelectedIndex(i => Math.max(i - 1, 0))
+                    return
+                  }
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    const hit = searchResults?.[selectedIndex]
+                    if (hit) { addSingleTicker(hit.symbol); return }
+                  }
+                }
+                if (e.key === 'Enter') { e.preventDefault(); commitAddInput() }
+                if (e.key === 'Escape') { setShowAddInput(false); setAddInputValue(''); setShowSuggestions(false) }
+              }}
+              onBlur={commitAddInput}
+              onFocus={() => { if (addInputValue) setShowSuggestions(true) }}
+              placeholder="e.g. AAPL, MSFT, GOOGL"
+              style={styles.addInput}
+            />
+            {dropdownVisible && (
+              <div style={styles.addDropdown}>
+                {(searchResults as any[]).map((r: any, i: number) => (
+                  <div
+                    key={r.symbol}
+                    style={{ ...styles.addDropdownItem, backgroundColor: i === selectedIndex ? 'var(--bg-panel-hover)' : 'transparent' }}
+                    onMouseEnter={() => setSelectedIndex(i)}
+                    onMouseDown={e => { e.preventDefault(); addSingleTicker(r.symbol) }}
+                  >
+                    <span style={{ fontWeight: 600, color: 'var(--accent-primary)' }}>{r.symbol}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -672,6 +742,27 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     padding: '3px 6px',
     outline: 'none',
+  },
+  addDropdown: {
+    position: 'absolute' as const,
+    top: 'calc(100% + 2px)',
+    left: 0,
+    right: 0,
+    background: 'var(--bg-panel)',
+    border: '1px solid var(--border-light)',
+    borderRadius: 'var(--radius-md)',
+    zIndex: 200,
+    maxHeight: 200,
+    overflowY: 'auto' as const,
+    boxShadow: 'var(--shadow-md)',
+  },
+  addDropdownItem: {
+    padding: '7px 10px',
+    cursor: 'pointer',
+    display: 'flex' as const,
+    alignItems: 'center' as const,
+    fontSize: 12,
+    borderBottom: '1px solid var(--border-light)',
   },
   list: {
     flex: 1,
