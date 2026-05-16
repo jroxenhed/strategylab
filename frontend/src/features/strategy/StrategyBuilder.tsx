@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { Plus, Play } from 'lucide-react'
+import { Plus, Play, ChevronDown, ChevronUp } from 'lucide-react'
 import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, SavedStrategy, RegimeConfig } from '../../shared/types'
-import RuleRow, { emptyRule, validateRules } from './RuleRow'
+import RuleRow, { emptyRule, validateRules, NEEDS_VALUE, NEEDS_PARAM } from './RuleRow'
 import { hasAnyInvalidRule } from './ruleValidation'
 import { api } from '../../api/client'
 import { useSlippage } from '../../shared/hooks/useSlippage'
@@ -104,6 +104,11 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     indicator_params: { period: 200, type: 'sma' }, condition: 'above', min_bars: 3,
     on_flip: 'close_only',
   })
+  // F226: rule editor collapse state
+  const [ruleEditorCollapsed, setRuleEditorCollapsed] = useState(false)
+  const [userHasManuallyToggled, setUserHasManuallyToggled] = useState(false)
+  const [lastRunRulesSignature, setLastRunRulesSignature] = useState<string | null>(null)
+
   const [debug, setDebug] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -503,6 +508,14 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         } : {}),
       }
       const { data } = await api.post('/api/backtest', req)
+      // F226: compute dirty state — rules have changed since last run if signature differs
+      const currentSig = JSON.stringify({ buyRules, sellRules, longBuyRules, longSellRules, shortBuyRules, shortSellRules, regimeBuyRules })
+      const isDirty = lastRunRulesSignature !== null && lastRunRulesSignature !== currentSig
+      setLastRunRulesSignature(currentSig)
+      // Auto-collapse on first result per page load, if user hasn't manually toggled and rules aren't dirty
+      if (!userHasManuallyToggled && !isDirty) {
+        setRuleEditorCollapsed(true)
+      }
       onResult(data, req)
     } catch (e) {
       setError(apiErrorDetail(e, 'Backtest failed'))
@@ -845,6 +858,38 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
     </div>
   )
 
+  // F226: helper to build chip summary text for collapsed rule editor
+  function buildRuleChip(): string {
+    const activeRules = regimeEnabled
+      ? (activeRuleTab === 'long' ? [...longBuyRules, ...longSellRules]
+        : activeRuleTab === 'short' ? [...shortBuyRules, ...shortSellRules]
+        : regimeBuyRules)
+      : [...buyRules, ...sellRules]
+
+    function isIncomplete(r: Rule): boolean {
+      if (!r.indicator) return true
+      const hasRefParam = (r.param && r.param !== '' && r.param !== 'signal')
+        || (NEEDS_PARAM[r.indicator]?.includes(r.condition ?? ''))
+      const needsValue = NEEDS_VALUE.includes(r.condition ?? '') && !hasRefParam
+      return needsValue && (typeof r.value !== 'number' || isNaN(r.value as number))
+    }
+
+    const complete = activeRules.filter(r => r.indicator && !isIncomplete(r))
+    const incompleteCount = activeRules.filter(r => r.indicator && isIncomplete(r)).length
+
+    const parts = complete.map(r => {
+      const cond = r.condition ?? ''
+      const condLabel = cond.replace(/_/g, ' ')
+      return `${r.indicator.toUpperCase()} ${condLabel}${typeof r.value === 'number' && !isNaN(r.value) ? ' ' + r.value : ''}`
+    })
+
+    let text = parts.join(', ')
+    if (incompleteCount > 0) {
+      text += (text ? ', ' : '') + `… (${incompleteCount} incomplete rule${incompleteCount > 1 ? 's' : ''})`
+    }
+    return text || 'No rules configured'
+  }
+
   // ─── Main render ───────────────────────────────────────────────────────────
   return (
     <>
@@ -1038,26 +1083,41 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
           )}
         </div>
 
-        {/* B28/B23: tab selector for regime / long / short / single rule sets */}
-        {regimeEnabled && (
-          <div style={{ display: 'flex', gap: 4, padding: '6px 16px 0', borderBottom: '1px solid #21262d' }}>
-            {(['regime', 'long', 'short'] as const).map(tab => (
-              <button key={tab} onClick={() => setActiveRuleTab(tab)}
-                style={{
-                  fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, border: 'none',
-                  cursor: 'pointer', textTransform: 'uppercase',
-                  background: activeRuleTab === tab ? '#1a2a3a' : '#161b22',
-                  color: activeRuleTab === tab
-                    ? (tab === 'long' ? '#3fb950' : tab === 'short' ? '#f85149' : '#58a6ff')
-                    : '#555',
-                }}>
-                {tab === 'long' ? '▲ Long' : tab === 'short' ? '▼ Short' : tab === 'regime' ? 'Regime Rules' : 'Single'}
-              </button>
-            ))}
-          </div>
-        )}
+        {/* F226: chevron + collapsed chip bar */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 16px 0', borderBottom: ruleEditorCollapsed ? '1px solid #21262d' : 'none' }}>
+          {/* B28/B23: tab selector for regime / long / short / single rule sets — only when expanded */}
+          {regimeEnabled && !ruleEditorCollapsed && (
+            <div style={{ display: 'flex', gap: 4 }}>
+              {(['regime', 'long', 'short'] as const).map(tab => (
+                <button key={tab} onClick={() => setActiveRuleTab(tab)}
+                  style={{
+                    fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, border: 'none',
+                    cursor: 'pointer', textTransform: 'uppercase',
+                    background: activeRuleTab === tab ? '#1a2a3a' : '#161b22',
+                    color: activeRuleTab === tab
+                      ? (tab === 'long' ? '#3fb950' : tab === 'short' ? '#f85149' : '#58a6ff')
+                      : '#555',
+                  }}>
+                  {tab === 'long' ? '▲ Long' : tab === 'short' ? '▼ Short' : tab === 'regime' ? 'Regime Rules' : 'Single'}
+                </button>
+              ))}
+            </div>
+          )}
+          {ruleEditorCollapsed && (
+            <span style={{ fontSize: 11, color: '#8b949e', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <span style={{ color: '#58a6ff', fontWeight: 600, marginRight: 4 }}>Rules:</span>{buildRuleChip()}
+            </span>
+          )}
+          <button
+            onClick={() => { setRuleEditorCollapsed(v => !v); setUserHasManuallyToggled(true) }}
+            title={ruleEditorCollapsed ? 'Expand rule editor' : 'Collapse rule editor'}
+            style={{ display: 'flex', alignItems: 'center', padding: '2px 6px', background: 'transparent', border: 'none', cursor: 'pointer', color: '#555', marginLeft: 'auto', flexShrink: 0 }}
+          >
+            {ruleEditorCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+          </button>
+        </div>
 
-        <div style={styles.panels}>
+        {!ruleEditorCollapsed && <div style={styles.panels}>
           {/* B28: Regime Rules panel */}
           {regimeEnabled && activeRuleTab === 'regime' && (
           <div style={styles.panel}>
@@ -1257,7 +1317,7 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
             ))}
           </div>
           </>)}
-        </div>
+        </div>}
 
         {regimeEnabled && regimeConfig.on_flip === 'close_and_reverse' && (!longBuyRules.some(r => r.indicator) || !shortBuyRules.some(r => r.indicator)) && (
           <div style={{ color: '#d29922', fontSize: 11, padding: '0 16px 4px' }}>
