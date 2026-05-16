@@ -13,57 +13,55 @@ export interface ParamOption {
 export function buildParamOptions(req: StrategyRequest, defaultSteps = 9): ParamOption[] {
   const opts: ParamOption[] = []
 
-  req.buy_rules.forEach((rule: Rule, i: number) => {
-    if (rule.value != null) {
-      opts.push({
-        path: `buy_rule_${i}_value`,
-        label: `Buy Rule ${i + 1} Threshold (${rule.indicator.toUpperCase()})`,
-        defaultMin: Math.max(1, (rule.value ?? 30) * 0.5),
-        defaultMax: (rule.value ?? 30) * 1.5,
-        defaultSteps, currentValue: rule.value,
-      })
-    }
-    if (rule.params) {
-      Object.entries(rule.params).forEach(([key, val]) => {
-        if (typeof val === 'number') {
-          opts.push({
-            path: `buy_rule_${i}_params_${key}`,
-            label: `Buy Rule ${i + 1} ${key} (${rule.indicator.toUpperCase()})`,
-            defaultMin: Math.max(1, Math.round(val * 0.5)),
-            defaultMax: Math.round(val * 2),
-            defaultSteps, currentValue: val,
-            isInteger: Number.isInteger(val),
-          })
-        }
-      })
-    }
-  })
+  // In regime mode the engine reads `long_*_rules` / `short_*_rules`; the bare
+  // `buy_rules` / `sell_rules` are populated for UI symmetry but not used by
+  // the backtest. Sweeping the bare lists yields zero variance (silent footgun)
+  // so we emit paths into the rule lists the engine actually consumes.
+  const regimeOn = req.regime?.enabled === true
+  type RuleListSpec = {
+    rules: Rule[]
+    pathPrefix: string  // e.g. "long_buy_rule" — singular_rule
+    labelPrefix: string // e.g. "Long Entry Rule"
+  }
+  const ruleLists: RuleListSpec[] = regimeOn
+    ? [
+        { rules: req.long_buy_rules  ?? [], pathPrefix: 'long_buy_rule',   labelPrefix: 'Long Entry Rule' },
+        { rules: req.long_sell_rules ?? [], pathPrefix: 'long_sell_rule',  labelPrefix: 'Long Exit Rule' },
+        { rules: req.short_buy_rules ?? [], pathPrefix: 'short_buy_rule',  labelPrefix: 'Short Entry Rule' },
+        { rules: req.short_sell_rules?? [], pathPrefix: 'short_sell_rule', labelPrefix: 'Short Exit Rule' },
+      ]
+    : [
+        { rules: req.buy_rules,  pathPrefix: 'buy_rule',  labelPrefix: 'Buy Rule' },
+        { rules: req.sell_rules, pathPrefix: 'sell_rule', labelPrefix: 'Sell Rule' },
+      ]
 
-  req.sell_rules.forEach((rule: Rule, i: number) => {
-    if (rule.value != null) {
-      opts.push({
-        path: `sell_rule_${i}_value`,
-        label: `Sell Rule ${i + 1} Threshold (${rule.indicator.toUpperCase()})`,
-        defaultMin: Math.max(1, (rule.value ?? 70) * 0.5),
-        defaultMax: (rule.value ?? 70) * 1.5,
-        defaultSteps, currentValue: rule.value,
-      })
-    }
-    if (rule.params) {
-      Object.entries(rule.params).forEach(([key, val]) => {
-        if (typeof val === 'number') {
-          opts.push({
-            path: `sell_rule_${i}_params_${key}`,
-            label: `Sell Rule ${i + 1} ${key} (${rule.indicator.toUpperCase()})`,
-            defaultMin: Math.max(1, Math.round(val * 0.5)),
-            defaultMax: Math.round(val * 2),
-            defaultSteps, currentValue: val,
-            isInteger: Number.isInteger(val),
-          })
-        }
-      })
-    }
-  })
+  for (const spec of ruleLists) {
+    spec.rules.forEach((rule: Rule, i: number) => {
+      if (rule.value != null) {
+        opts.push({
+          path: `${spec.pathPrefix}_${i}_value`,
+          label: `${spec.labelPrefix} ${i + 1} Threshold (${rule.indicator.toUpperCase()})`,
+          defaultMin: Math.max(1, (rule.value ?? 30) * 0.5),
+          defaultMax: (rule.value ?? 30) * 1.5,
+          defaultSteps, currentValue: rule.value,
+        })
+      }
+      if (rule.params) {
+        Object.entries(rule.params).forEach(([key, val]) => {
+          if (typeof val === 'number') {
+            opts.push({
+              path: `${spec.pathPrefix}_${i}_params_${key}`,
+              label: `${spec.labelPrefix} ${i + 1} ${key} (${rule.indicator.toUpperCase()})`,
+              defaultMin: Math.max(1, Math.round(val * 0.5)),
+              defaultMax: Math.round(val * 2),
+              defaultSteps, currentValue: val,
+              isInteger: Number.isInteger(val),
+            })
+          }
+        })
+      }
+    })
+  }
 
   if (req.stop_loss_pct != null) {
     opts.push({
@@ -105,39 +103,40 @@ export function buildParamOptions(req: StrategyRequest, defaultSteps = 9): Param
  *   slippage_bps                   → req.slippage_bps
  */
 export function applyParamPath(req: StrategyRequest, path: string, value: number): StrategyRequest {
-  // buy_rule_<i>_value or sell_rule_<i>_value
-  const ruleValueMatch = path.match(/^(buy|sell)_rule_(\d+)_value$/)
+  // (long|short)?(buy|sell)_rule_<i>_value
+  const ruleValueMatch = path.match(/^(long_|short_)?(buy|sell)_rule_(\d+)_value$/)
   if (ruleValueMatch) {
-    const side = ruleValueMatch[1] as 'buy' | 'sell'
-    const idx = parseInt(ruleValueMatch[2], 10)
-    const key = side === 'buy' ? 'buy_rules' : 'sell_rules'
-    const rules = req[key]
+    const prefix = ruleValueMatch[1] ?? ''        // 'long_' | 'short_' | ''
+    const side = ruleValueMatch[2] as 'buy' | 'sell'
+    const idx = parseInt(ruleValueMatch[3], 10)
+    const key = `${prefix}${side}_rules` as keyof StrategyRequest
+    const rules = (req[key] ?? []) as Rule[]
     if (idx < 0 || idx >= rules.length) return req
     return {
       ...req,
       [key]: rules.map((r, i) => i === idx ? { ...r, value } : r),
-    }
+    } as StrategyRequest
   }
 
-  // buy_rule_<i>_params_<key> or sell_rule_<i>_params_<key>
-  const ruleParamsMatch = path.match(/^(buy|sell)_rule_(\d+)_params_(.+)$/)
+  // (long|short)?(buy|sell)_rule_<i>_params_<key>
+  const ruleParamsMatch = path.match(/^(long_|short_)?(buy|sell)_rule_(\d+)_params_(.+)$/)
   if (ruleParamsMatch) {
-    const side = ruleParamsMatch[1] as 'buy' | 'sell'
-    const idx = parseInt(ruleParamsMatch[2], 10)
-    const paramKey = ruleParamsMatch[3]
-    const key = side === 'buy' ? 'buy_rules' : 'sell_rules'
-    const rules = req[key]
+    const prefix = ruleParamsMatch[1] ?? ''
+    const side = ruleParamsMatch[2] as 'buy' | 'sell'
+    const idx = parseInt(ruleParamsMatch[3], 10)
+    const paramKey = ruleParamsMatch[4]
+    const key = `${prefix}${side}_rules` as keyof StrategyRequest
+    const rules = (req[key] ?? []) as Rule[]
     if (idx < 0 || idx >= rules.length) return req
     const rule = rules[idx]
     const currentVal = rule.params?.[paramKey]
-    // Preserve integer vs float: if existing value is integer, round the new one.
     const finalVal = typeof currentVal === 'number' && Number.isInteger(currentVal) ? Math.round(value) : value
     return {
       ...req,
       [key]: rules.map((r, i) =>
         i === idx ? { ...r, params: { ...(r.params ?? {}), [paramKey]: finalVal } } : r
       ),
-    }
+    } as StrategyRequest
   }
 
   if (path === 'stop_loss_pct') {
@@ -174,12 +173,16 @@ export function groupParamOptions(opts: ParamOption[]): ParamGroup[] {
   const map = new Map<string, ParamOption[]>()
 
   const groupKey = (path: string): string => {
-    const buyMatch = path.match(/^buy_rule_(\d+)_/)
-    if (buyMatch) return `Buy Rule ${parseInt(buyMatch[1], 10) + 1}`
-    const sellMatch = path.match(/^sell_rule_(\d+)_/)
-    if (sellMatch) return `Sell Rule ${parseInt(sellMatch[1], 10) + 1}`
+    const m = path.match(/^(long_|short_)?(buy|sell)_rule_(\d+)_/)
+    if (m) {
+      const prefix = m[1] ?? ''
+      const dirLabel = prefix === 'long_' ? 'Long ' : prefix === 'short_' ? 'Short ' : ''
+      const sideLabel = m[2] === 'buy'
+        ? (prefix ? 'Entry' : 'Buy')
+        : (prefix ? 'Exit' : 'Sell')
+      return `${dirLabel}${sideLabel} Rule ${parseInt(m[3], 10) + 1}`
+    }
     if (path === 'slippage_bps' || path === 'borrow_rate_annual') return 'Costs'
-    // stop_loss_pct, trailing_stop_*, max_bars_held → Risk
     return 'Risk'
   }
 
@@ -197,6 +200,16 @@ export function groupParamOptions(opts: ParamOption[]): ParamGroup[] {
  * triggering optgroup rendering in the param selects.
  */
 export function shouldGroupParamOptions(req: StrategyRequest): boolean {
+  // In regime mode count the regime rule arrays (which the engine actually
+  // uses); otherwise fall back to the bare buy/sell pair.
+  if (req.regime?.enabled) {
+    const n =
+      (req.long_buy_rules?.length ?? 0) +
+      (req.long_sell_rules?.length ?? 0) +
+      (req.short_buy_rules?.length ?? 0) +
+      (req.short_sell_rules?.length ?? 0)
+    return n > 2
+  }
   return req.buy_rules.length + req.sell_rules.length > 2
 }
 

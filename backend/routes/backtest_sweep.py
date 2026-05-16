@@ -15,6 +15,7 @@ Supported param_path values:
   "sell_rule_{i}_params_{key}"   — named param (e.g. period) in sell rule at index i
 """
 
+import re
 from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -48,81 +49,59 @@ class SweepResponse(BaseModel):
     skipped: int
 
 
+_RULE_LIST_RE = re.compile(
+    r"^(long_|short_)?(buy|sell)_rule_(\d+)_(value|params_(.+))$"
+)
+
+
 def _apply_param(base: StrategyRequest, param_path: str, value: float) -> StrategyRequest:
-    """Return a deep copy of base with param_path set to value."""
+    """Return a deep copy of base with param_path set to value.
+
+    Rule paths accept an optional regime-mode prefix:
+      buy_rule_<i>_value                       — base.buy_rules[i].value
+      long_buy_rule_<i>_params_<key>           — base.long_buy_rules[i].params[key]
+      short_sell_rule_<i>_value                — base.short_sell_rules[i].value
+      …etc. The prefixed lists are what the engine consumes in regime mode;
+      the bare buy_rules/sell_rules are UI symmetry only.
+    """
     modified = base.model_copy(deep=True)
 
     if param_path == "stop_loss_pct":
-        modified = modified.model_copy(update={"stop_loss_pct": max(0.0, value)})
+        return modified.model_copy(update={"stop_loss_pct": max(0.0, value)})
 
-    elif param_path == "trailing_stop_value":
+    if param_path == "trailing_stop_value":
         if modified.trailing_stop is None:
             raise HTTPException(status_code=400, detail="trailing_stop is not configured in base request")
-        modified = modified.model_copy(
+        return modified.model_copy(
             update={"trailing_stop": modified.trailing_stop.model_copy(update={"value": max(0.0, value)})}
         )
 
-    elif param_path == "slippage_bps":
-        modified = modified.model_copy(update={"slippage_bps": max(0.0, value)})
+    if param_path == "slippage_bps":
+        return modified.model_copy(update={"slippage_bps": max(0.0, value)})
 
-    elif param_path.startswith("buy_rule_") and param_path.endswith("_value"):
-        try:
-            idx = int(param_path.split("_")[2])
-        except (IndexError, ValueError):
-            raise HTTPException(status_code=400, detail=f"Invalid param_path: {param_path}")
-        if idx < 0 or idx >= len(modified.buy_rules):
-            raise HTTPException(status_code=400, detail=f"buy_rule index {idx} out of range")
-        rules = list(modified.buy_rules)
-        rules[idx] = rules[idx].model_copy(update={"value": value})
-        modified = modified.model_copy(update={"buy_rules": rules})
+    m = _RULE_LIST_RE.match(param_path)
+    if m:
+        prefix = m.group(1) or ""        # 'long_' | 'short_' | ''
+        side = m.group(2)                # 'buy' | 'sell'
+        idx = int(m.group(3))
+        tail = m.group(4)                # 'value' | 'params_<key>'
+        field_name = f"{prefix}{side}_rules"
+        rules = getattr(modified, field_name, None)
+        if rules is None:
+            raise HTTPException(status_code=400, detail=f"{field_name} is not present on the request")
+        if idx < 0 or idx >= len(rules):
+            raise HTTPException(status_code=400, detail=f"{field_name} index {idx} out of range")
+        rules = list(rules)
+        if tail == "value":
+            rules[idx] = rules[idx].model_copy(update={"value": value})
+        else:
+            param_key = tail[len("params_"):]
+            existing_params = dict(rules[idx].params) if rules[idx].params else {}
+            existing_params[param_key] = int(round(value)) if value == int(value) else value
+            rules[idx] = rules[idx].model_copy(update={"params": existing_params})
+        return modified.model_copy(update={field_name: rules})
 
-    elif param_path.startswith("sell_rule_") and param_path.endswith("_value"):
-        try:
-            idx = int(param_path.split("_")[2])
-        except (IndexError, ValueError):
-            raise HTTPException(status_code=400, detail=f"Invalid param_path: {param_path}")
-        if idx < 0 or idx >= len(modified.sell_rules):
-            raise HTTPException(status_code=400, detail=f"sell_rule index {idx} out of range")
-        rules = list(modified.sell_rules)
-        rules[idx] = rules[idx].model_copy(update={"value": value})
-        modified = modified.model_copy(update={"sell_rules": rules})
-
-    elif param_path.startswith("buy_rule_") and "_params_" in param_path:
-        # e.g. "buy_rule_0_params_period" → parts = ["buy","rule","0","params","period"]
-        parts = param_path.split("_")
-        try:
-            idx = int(parts[2])
-            param_key = "_".join(parts[4:])  # supports multi-word keys like k_period
-        except (IndexError, ValueError):
-            raise HTTPException(status_code=400, detail=f"Invalid param_path: {param_path}")
-        if idx < 0 or idx >= len(modified.buy_rules):
-            raise HTTPException(status_code=400, detail=f"buy_rule index {idx} out of range")
-        rules = list(modified.buy_rules)
-        existing_params = dict(rules[idx].params) if rules[idx].params else {}
-        existing_params[param_key] = int(round(value)) if value == int(value) else value
-        rules[idx] = rules[idx].model_copy(update={"params": existing_params})
-        modified = modified.model_copy(update={"buy_rules": rules})
-
-    elif param_path.startswith("sell_rule_") and "_params_" in param_path:
-        # e.g. "sell_rule_0_params_period" → parts = ["sell","rule","0","params","period"]
-        parts = param_path.split("_")
-        try:
-            idx = int(parts[2])
-            param_key = "_".join(parts[4:])  # supports multi-word keys like k_period
-        except (IndexError, ValueError):
-            raise HTTPException(status_code=400, detail=f"Invalid param_path: {param_path}")
-        if idx < 0 or idx >= len(modified.sell_rules):
-            raise HTTPException(status_code=400, detail=f"sell_rule index {idx} out of range")
-        rules = list(modified.sell_rules)
-        existing_params = dict(rules[idx].params) if rules[idx].params else {}
-        existing_params[param_key] = int(round(value)) if value == int(value) else value
-        rules[idx] = rules[idx].model_copy(update={"params": existing_params})
-        modified = modified.model_copy(update={"sell_rules": rules})
-
-    else:
-        raise HTTPException(status_code=400, detail=f"Unsupported param_path: {param_path!r}")
-
-    return modified
+    raise HTTPException(status_code=400, detail=f"Unsupported param_path: {param_path!r}")
 
 
 @router.post("/api/backtest/sweep")
