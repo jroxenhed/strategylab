@@ -697,10 +697,10 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     preMaxLayoutRef.current = null
   }, [subPaneCount])
 
-  // minSize per panel index: main=20, each sub=5
+  // minSize per panel index: main=40% (F225), each sub=8% (~80px on a 1000px column)
   const panelMinSizes = useMemo(() => {
-    const mins = [20]
-    for (let i = 0; i < subPaneCount; i++) mins.push(5)
+    const mins = [40]
+    for (let i = 0; i < subPaneCount; i++) mins.push(8)
     return mins
   }, [subPaneCount])
 
@@ -745,7 +745,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   // main chart effect includes subPaneCount in its deps to recreate
   // the chart on the new DOM node.
   return (
-    <div style={{ height: '100%', width: '100%', overflow: 'hidden' }}>
+    <div style={{ height: '100%', width: '100%', overflow: 'auto' }}>
       <Group
         key={`chart-panes-${subPaneCount}`}
         {...{ ref: groupRef } as any}
@@ -755,7 +755,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         style={{ height: '100%' }}
       >
         {/* Main chart panel — always present */}
-        <Panel defaultSize={defaultSizes[0]} minSize={20}>
+        <Panel defaultSize={defaultSizes[0]} minSize={40}>
           <div
             style={{ position: 'relative', height: '100%', width: '100%' }}
             onDoubleClick={subPaneCount > 0 ? () => handlePaneDoubleClick(0) : undefined}
@@ -810,6 +810,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
             group={group}
             paneIndex={idx + 1}
             defaultSize={defaultSizes[idx + 1]}
+            minSize={panelMinSizes[idx + 1]}
             instanceData={instanceData}
             instanceLoading={instanceLoading}
             loadingByInstance={loadingByInstance}
@@ -833,12 +834,13 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
 
 // Extracted to avoid inline JSX fragments with Separator+Panel pairs
 function SubPanelEntry({
-  group, paneIndex, defaultSize, instanceData, instanceLoading, loadingByInstance, instanceError, instanceErrorMessage, onRetryIndicators, chartRef, candleSeriesRef,
+  group, paneIndex, defaultSize, minSize, instanceData, instanceLoading, loadingByInstance, instanceError, instanceErrorMessage, onRetryIndicators, chartRef, candleSeriesRef,
   paneRegistryRef, syncWidthsRef, subPaneMarkers, toET, tzMode, onDoubleClick,
 }: {
   group: { key: string; label: string; instances: IndicatorInstance[] }
   paneIndex: number
   defaultSize: number
+  minSize: number
   instanceData: Record<string, Record<string, { time: string; value: number | null }[]>>
   instanceLoading?: boolean
   loadingByInstance?: Record<string, boolean>
@@ -857,7 +859,7 @@ function SubPanelEntry({
   return (
     <>
       <Separator className="resize-handle-h" />
-      <Panel defaultSize={defaultSize} minSize={5}>
+      <Panel defaultSize={defaultSize} minSize={minSize}>
         <div
           style={{ height: '100%', width: '100%' }}
           onDoubleClick={() => onDoubleClick(paneIndex)}
