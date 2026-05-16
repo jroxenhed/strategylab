@@ -38,6 +38,11 @@ interface ChartProps {
   viewInterval: string
   backtestInterval: string
   onChartReady?: (chart: IChartApi | null) => void
+  /** Used to detect ticker/interval/date changes so fitContent fires on symbol switches but not on auto-refresh polls. */
+  ticker?: string
+  interval?: string
+  from?: string
+  to?: string
 }
 
 const CHART_BG = '#0d1117'
@@ -119,13 +124,16 @@ function buildMarkers(trades: Trade[], subPane = false) {
   })
 }
 
-export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, instanceLoading, loadingByInstance, instanceError, instanceErrorMessage, onRetryIndicators, trades, emaOverlays, ruleSignals, regimeSeries, viewInterval, backtestInterval, onChartReady }: ChartProps) {
+export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, instanceLoading, loadingByInstance, instanceError, instanceErrorMessage, onRetryIndicators, trades, emaOverlays, ruleSignals, regimeSeries, viewInterval, backtestInterval, onChartReady, ticker, interval, from, to }: ChartProps) {
   const [tzMode] = useTimezone()
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const candleSeriesRef = useRef<ISeriesApi<any> | null>(null)
   const syncWidthsRef = useRef<() => void>(() => {})
   const rangeRestoredRef = useRef(false)
+  /** Tracks the last (ticker, interval, from, to) tuple that triggered fitContent.
+   *  fitContent fires only when this tuple changes — not on auto-refresh polls. */
+  const lastFitParamsRef = useRef<string | null>(null)
   const onChartReadyRef = useRef(onChartReady)
   useEffect(() => { onChartReadyRef.current = onChartReady })
   const mainOverlaySeriesRef = useRef<Map<string, ISeriesApi<any>> | null>(null)
@@ -393,17 +401,23 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subPaneCount])
 
-  // Candle data + one-time range restore
-  const prevCandleDataRef = useRef(candleData)
+  // Candle data + range restore / fitContent on symbol/interval/date change.
+  // fitContent fires only when (ticker, interval, from, to) changes — not on
+  // auto-refresh polls that return new data arrays for the same query key.
   useEffect(() => {
     const series = candleSeriesRef.current
     const chart = chartRef.current
     if (!series || !chart || candleData.length === 0) return
     series.setData(candleData)
-    const dataChanged = prevCandleDataRef.current !== candleData
-    prevCandleDataRef.current = candleData
+
+    // Build the tuple key so we can detect actual query-param changes.
+    const fitKey = `${ticker ?? ''}|${interval ?? ''}|${from ?? ''}|${to ?? ''}`
+    const paramsChanged = lastFitParamsRef.current !== fitKey
+
     if (!rangeRestoredRef.current) {
+      // First load: restore saved range or fit.
       rangeRestoredRef.current = true
+      lastFitParamsRef.current = fitKey
       const savedRange = sessionStorage.getItem('strategylab-chart-range')
       if (savedRange) {
         try { chart.timeScale().setVisibleLogicalRange(JSON.parse(savedRange)) }
@@ -411,10 +425,16 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       } else {
         chart.timeScale().fitContent()
       }
-    } else if (dataChanged) {
-      chart.timeScale().fitContent()
+    } else if (paramsChanged) {
+      // Symbol/interval/date switched → fit all panes.
+      lastFitParamsRef.current = fitKey
+      try { const c = chartRef.current; if (c) c.timeScale().fitContent() } catch {}
+      for (const entry of paneRegistryRef.current.values()) {
+        try { const c = entry.chart; if (c) c.timeScale().fitContent() } catch {}
+      }
     }
-  }, [candleData, subPaneCount])
+    // else: auto-refresh poll for same params — preserve user zoom.
+  }, [candleData, subPaneCount, ticker, interval, from, to])
 
   // SPY overlay
   useEffect(() => {
