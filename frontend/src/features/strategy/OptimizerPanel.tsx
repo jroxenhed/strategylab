@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import type { StrategyRequest } from '../../shared/types'
 import { api } from '../../api/client'
 import { useRequestTimer } from '../../shared/hooks/useRequestTimer'
@@ -99,11 +99,21 @@ export default function OptimizerPanel({ lastRequest, onApplyParams, onRunBackte
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey])
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(storageKey, JSON.stringify({ metric, topN, paramRows }))
-    } catch { /* quota exceeded */ }
-  }, [storageKey, metric, topN, paramRows])
+  // Persist synchronously inside setters (see `persist` calls in setRow,
+  // setMetric/setTopN wrappers) rather than via a deps-tracked useEffect.
+  // The useEffect path lost writes when Run Backtest nukes backtestResult,
+  // unmounting Results (and OptimizerPanel with it) before the effect could
+  // commit the new paramRows to localStorage. setBacktestResult(null) + the
+  // unmount happen in the same render cycle as setParamRows.
+  const persist = useCallback(
+    (next: { metric?: string; topN?: string; paramRows?: (ParamRow | null)[] }) => {
+      try {
+        const merged = { metric, topN, paramRows, ...next }
+        localStorage.setItem(storageKey, JSON.stringify(merged))
+      } catch { /* quota exceeded */ }
+    },
+    [storageKey, metric, topN, paramRows],
+  )
 
   // Abort in-flight request on unmount (stale strategy context).
   useEffect(() => {
@@ -131,9 +141,22 @@ export default function OptimizerPanel({ lastRequest, onApplyParams, onRunBackte
       } else {
         next[i] = { ...(prev[i] ?? emptyRow()), ...update }
       }
+      // Persist synchronously so an immediately-following Run Backtest
+      // unmount can't drop the write.
+      persist({ paramRows: next })
       return next
     })
   }
+
+  const setMetricPersist = useCallback((m: string) => {
+    setMetric(m)
+    persist({ metric: m })
+  }, [persist])
+
+  const setTopNPersist = useCallback((t: string) => {
+    setTopN(t)
+    persist({ topN: t })
+  }, [persist])
 
   async function runOptimizer() {
     if (activeRows.length === 0 || loading) return
@@ -345,13 +368,13 @@ export default function OptimizerPanel({ lastRequest, onApplyParams, onRunBackte
       <div style={s.section}>
         <div className="strategy-control-row" style={{ flexWrap: 'wrap' }}>
           <span style={s.label}>Optimize for</span>
-          <select value={metric} onChange={e => setMetric(e.target.value)} className="wide-select" style={s.select}>
+          <select value={metric} onChange={e => setMetricPersist(e.target.value)} className="wide-select" style={s.select}>
             {METRICS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
           <span style={{ ...s.label, marginLeft: 16 }}>Show top</span>
           <input
             type="number" min={1} max={50} value={topN}
-            onChange={e => setTopN(e.target.value)}
+            onChange={e => setTopNPersist(e.target.value)}
             style={{ ...s.input, width: 50 }}
           />
         </div>
