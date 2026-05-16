@@ -5,7 +5,7 @@ import { isRuleInvalid } from './ruleValidation'
 export const INDICATORS = ['macd', 'rsi', 'price', 'ma', 'bb', 'atr', 'atr_pct', 'volume', 'stochastic', 'adx'] as const
 
 export const CONDITIONS: Record<string, string[]> = {
-  macd: ['crossover_up', 'crossover_down', 'crosses_above', 'crosses_below', 'above', 'below'],
+  macd: ['crossover_up', 'crossover_down', 'crosses_above', 'crosses_below', 'above', 'below', 'is_above_signal', 'is_below_signal'],
   rsi: ['above', 'below', 'crosses_above', 'crosses_below', 'turns_up_below', 'turns_down_above'],
   price: ['above', 'below', 'crosses_above', 'crosses_below', 'rising', 'falling'],
   ma: ['turns_up', 'turns_down', 'decelerating', 'accelerating', 'rising', 'falling',
@@ -25,6 +25,8 @@ export const CONDITION_LABELS: Record<string, string> = {
   crosses_below: 'Crosses below',
   above: 'Is above',
   below: 'Is below',
+  is_above_signal: 'Is above signal',
+  is_below_signal: 'Is below signal',
   turns_up_below: 'Turns up from below',
   turns_down_above: 'Turns down from above',
   rising: 'Is rising',

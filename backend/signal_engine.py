@@ -23,6 +23,7 @@ RuleCondition = Literal[
     "turns_up", "turns_down",
     "turns_up_below", "turns_down_above",
     "decelerating", "accelerating",
+    "is_above_signal", "is_below_signal",
 ]
 
 class Rule(BaseModel):
@@ -537,6 +538,16 @@ def eval_rule(rule: Rule, indicators: dict[str, pd.Series], i: int) -> bool:
         d_now = v_now - v_prev
         d_prev = v_prev - s.iloc[i - 2]
         return d_now - d_prev > 0
+    elif cond == "is_above_signal":
+        sig = indicators.get("signal")
+        if sig is None:
+            return False
+        return v_now > sig.iloc[i]
+    elif cond == "is_below_signal":
+        sig = indicators.get("signal")
+        if sig is None:
+            return False
+        return v_now < sig.iloc[i]
     return False
 
 

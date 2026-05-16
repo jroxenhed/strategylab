@@ -1,6 +1,6 @@
 import pytest
 import pandas as pd
-from signal_engine import Rule, migrate_rule, compute_indicators, resolve_series, resolve_ref, _clamp_lookback, eval_rule, _INDICATOR_FAMILY_CAP
+from signal_engine import Rule, migrate_rule, compute_indicators, resolve_series, resolve_ref, _clamp_lookback, eval_rule, eval_rules, _INDICATOR_FAMILY_CAP
 
 
 def test_rule_params_field_default_none():
@@ -389,3 +389,85 @@ def test_eval_rule_legacy_ema20_migrates_transparently():
     assert result_legacy == result_canonical, (
         f"Legacy ema20 rule ({result_legacy}) must match canonical ma rule ({result_canonical}) at bar {i}"
     )
+
+
+# ---------------------------------------------------------------------------
+# F229 — MACD is_above_signal / is_below_signal state conditions
+# ---------------------------------------------------------------------------
+
+def _macd_indicators(macd_vals: list[float], signal_vals: list[float]) -> dict:
+    """Build a minimal indicators dict with macd + signal series."""
+    return {
+        "macd": pd.Series(macd_vals, dtype=float),
+        "signal": pd.Series(signal_vals, dtype=float),
+    }
+
+
+def test_eval_rule_is_above_signal_basic():
+    """MACD is_above_signal: True when macd_line[i] > signal_line[i]."""
+    # macd: [1, 2, -1, 3], signal: [0, 1, 0, 4]
+    # i=1: macd=2 > signal=1 → True
+    # i=2: macd=-1 > signal=0 → False
+    # i=3: macd=3 > signal=4 → False
+    indicators = _macd_indicators([1, 2, -1, 3], [0, 1, 0, 4])
+    rule = Rule(indicator="macd", condition="is_above_signal")
+    assert eval_rule(rule, indicators, i=1) == True
+    assert eval_rule(rule, indicators, i=2) == False
+    assert eval_rule(rule, indicators, i=3) == False
+
+
+def test_eval_rule_is_below_signal_basic():
+    """MACD is_below_signal: True when macd_line[i] < signal_line[i]."""
+    # macd: [1, 2, -1, 3], signal: [0, 1, 0, 4]
+    # i=1: macd=2 < signal=1 → False
+    # i=2: macd=-1 < signal=0 → True
+    # i=3: macd=3 < signal=4 → True
+    indicators = _macd_indicators([1, 2, -1, 3], [0, 1, 0, 4])
+    rule = Rule(indicator="macd", condition="is_below_signal")
+    assert eval_rule(rule, indicators, i=1) == False
+    assert eval_rule(rule, indicators, i=2) == True
+    assert eval_rule(rule, indicators, i=3) == True
+
+
+def test_eval_rule_is_above_signal_equal_returns_false():
+    """Strict comparison: macd == signal should not count as above."""
+    indicators = _macd_indicators([5, 5], [5, 5])
+    rule = Rule(indicator="macd", condition="is_above_signal")
+    assert eval_rule(rule, indicators, i=1) == False
+
+
+def test_eval_rule_is_below_signal_equal_returns_false():
+    """Strict comparison: macd == signal should not count as below."""
+    indicators = _macd_indicators([5, 5], [5, 5])
+    rule = Rule(indicator="macd", condition="is_below_signal")
+    assert eval_rule(rule, indicators, i=1) == False
+
+
+def test_eval_rule_is_above_signal_guard_at_i0():
+    """i=0 guard: eval_rule returns False for i < 1 (same as all conditions)."""
+    indicators = _macd_indicators([2, 1], [1, 2])
+    rule = Rule(indicator="macd", condition="is_above_signal")
+    assert eval_rule(rule, indicators, i=0) is False
+
+
+def test_eval_rule_is_above_signal_no_signal_series():
+    """Returns False gracefully if signal series is missing from indicators dict."""
+    indicators = {"macd": pd.Series([1.0, 2.0])}
+    rule = Rule(indicator="macd", condition="is_above_signal")
+    assert eval_rule(rule, indicators, i=1) is False
+
+
+def test_eval_rule_is_above_signal_negated_via_eval_rules():
+    """Negated is_above_signal flips the result when evaluated via eval_rules."""
+    # macd=2 > signal=1 → base=True, negated by eval_rules → False
+    indicators = _macd_indicators([1, 2], [0, 1])
+    rule = Rule(indicator="macd", condition="is_above_signal", negated=True)
+    assert eval_rules([rule], "AND", indicators, i=1) is False
+
+
+def test_eval_rule_is_above_signal_ignores_value_field():
+    """Value field is irrelevant for is_above_signal — result depends only on macd vs signal."""
+    indicators = _macd_indicators([1, 3], [0, 1])
+    rule_no_value = Rule(indicator="macd", condition="is_above_signal")
+    rule_with_value = Rule(indicator="macd", condition="is_above_signal", value=99.0)
+    assert eval_rule(rule_no_value, indicators, i=1) == eval_rule(rule_with_value, indicators, i=1)
