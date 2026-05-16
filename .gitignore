@@ -14,7 +14,8 @@ frontend/dist/
 .DS_Store
 
 # Claude Code
-.claude/
+.claude/*
+!.claude/skills/
 
 # Compound engineering / skill artifacts (local session state)
 .context/
