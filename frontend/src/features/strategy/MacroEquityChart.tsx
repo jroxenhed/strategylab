@@ -19,7 +19,9 @@ export default function MacroEquityChart({ macroCurve, initialCapital, showBasel
     if (!containerRef.current || macroCurve.length === 0) return
 
     const chart = createChart(containerRef.current, {
-      height: containerRef.current.clientHeight || 250,
+      // lw-charts v5 autoSize — never pair with external ResizeObserver +
+      // applyOptions (F218 trap, see project_lwcharts_v5_autosize.md).
+      autoSize: true,
       layout: { background: { type: ColorType.Solid, color: '#0d1117' }, textColor: '#8b949e' },
       grid: { vertLines: { color: '#1c2128' }, horzLines: { color: '#1c2128' } },
       timeScale: { borderColor: '#30363d' },
@@ -219,20 +221,8 @@ export default function MacroEquityChart({ macroCurve, initialCapital, showBasel
       `
     })
 
-    // Resize observer
-    const ro = new ResizeObserver(() => {
-      if (containerRef.current) {
-        chart.applyOptions({
-          width: containerRef.current.clientWidth,
-          height: containerRef.current.clientHeight,
-        })
-      }
-    })
-    ro.observe(containerRef.current)
-
     return () => {
       chart.remove()
-      ro.disconnect()
     }
   }, [macroCurve, initialCapital, showBaseline, logScale, baselineCurve])
 
