@@ -78,7 +78,7 @@ export default function MonteCarloChart({ mcResult, initialCapital }: Props) {
         <div style={{ marginLeft: 'auto' }}>
           <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>Ruin probability</div>
           <div style={{ fontSize: 20, fontWeight: 700, color: ruinColor }}>{ruin_probability.toFixed(1)}%</div>
-          <div style={{ fontSize: 10, color: '#8b949e' }}>{num_simulations.toLocaleString()} simulations</div>
+          <div style={{ fontSize: 10, color: '#8b949e' }}>{num_simulations.toLocaleString('en-US')} simulations</div>
         </div>
       </div>
 

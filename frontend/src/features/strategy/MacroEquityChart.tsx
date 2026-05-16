@@ -209,10 +209,10 @@ export default function MacroEquityChart({ macroCurve, initialCapital, showBasel
       tooltip.style.top = `${param.point.y - 10}px`
       tooltip.innerHTML = `
         <div style="font-weight:600;margin-bottom:4px">${bucket.time}</div>
-        <div>Open: $${bucket.open.toLocaleString()}</div>
-        <div>Close: $${bucket.close.toLocaleString()}</div>
-        <div>High: $${bucket.high.toLocaleString()}</div>
-        <div>Low: $${bucket.low.toLocaleString()}</div>
+        <div>Open: $${bucket.open.toLocaleString('en-US')}</div>
+        <div>Close: $${bucket.close.toLocaleString('en-US')}</div>
+        <div>High: $${bucket.high.toLocaleString('en-US')}</div>
+        <div>Low: $${bucket.low.toLocaleString('en-US')}</div>
         <div style="color:${returnColor}">Return: ${Number(returnPct) > 0 ? '+' : ''}${returnPct}%</div>
         <div>DD: ${bucket.drawdown_pct.toFixed(2)}%</div>
         <div>Trades: ${bucket.trades.length}</div>

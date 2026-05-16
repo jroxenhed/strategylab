@@ -13,28 +13,6 @@ export interface ParamOption {
 export function buildParamOptions(req: StrategyRequest, defaultSteps = 9): ParamOption[] {
   const opts: ParamOption[] = []
 
-  if (req.stop_loss_pct != null) {
-    opts.push({
-      path: 'stop_loss_pct', label: 'Stop Loss %',
-      defaultMin: Math.max(0.1, req.stop_loss_pct * 0.3),
-      defaultMax: req.stop_loss_pct * 2,
-      defaultSteps, currentValue: req.stop_loss_pct,
-    })
-  }
-  if (req.trailing_stop?.value != null) {
-    opts.push({
-      path: 'trailing_stop_value', label: 'Trailing Stop Value',
-      defaultMin: Math.max(0.1, req.trailing_stop.value * 0.3),
-      defaultMax: req.trailing_stop.value * 2,
-      defaultSteps, currentValue: req.trailing_stop.value,
-    })
-  }
-  opts.push({
-    path: 'slippage_bps', label: 'Slippage (bps)',
-    defaultMin: 0, defaultMax: 20,
-    defaultSteps, currentValue: req.slippage_bps ?? 2,
-  })
-
   req.buy_rules.forEach((rule: Rule, i: number) => {
     if (rule.value != null) {
       opts.push({
@@ -85,6 +63,28 @@ export function buildParamOptions(req: StrategyRequest, defaultSteps = 9): Param
         }
       })
     }
+  })
+
+  if (req.stop_loss_pct != null) {
+    opts.push({
+      path: 'stop_loss_pct', label: 'Stop Loss %',
+      defaultMin: Math.max(0.1, req.stop_loss_pct * 0.3),
+      defaultMax: req.stop_loss_pct * 2,
+      defaultSteps, currentValue: req.stop_loss_pct,
+    })
+  }
+  if (req.trailing_stop?.value != null) {
+    opts.push({
+      path: 'trailing_stop_value', label: 'Trailing Stop Value',
+      defaultMin: Math.max(0.1, req.trailing_stop.value * 0.3),
+      defaultMax: req.trailing_stop.value * 2,
+      defaultSteps, currentValue: req.trailing_stop.value,
+    })
+  }
+  opts.push({
+    path: 'slippage_bps', label: 'Slippage (bps)',
+    defaultMin: 0, defaultMax: 20,
+    defaultSteps, currentValue: req.slippage_bps ?? 2,
   })
 
   return opts

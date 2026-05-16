@@ -548,7 +548,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
         <div style={styles.metricsGrid}>
           {[
             { label: 'Return', value: `${summary.total_return_pct > 0 ? '+' : ''}${summary.total_return_pct}%`, color: summary.total_return_pct >= 0 ? '#26a641' : '#f85149', primary: true },
-            { label: 'Final Value', value: `$${summary.final_value.toLocaleString()}`, color: '#e6edf3', primary: true },
+            { label: 'Final Value', value: `$${summary.final_value.toLocaleString('en-US')}`, color: '#e6edf3', primary: true },
             { label: 'B&H', value: `${summary.buy_hold_return_pct > 0 ? '+' : ''}${summary.buy_hold_return_pct}%`, color: summary.buy_hold_return_pct >= 0 ? '#26a641' : '#f85149', primary: false },
             { label: 'Alpha', value: `${(summary.total_return_pct - summary.buy_hold_return_pct) >= 0 ? '+' : ''}${(summary.total_return_pct - summary.buy_hold_return_pct).toFixed(1)}%`, color: (summary.total_return_pct - summary.buy_hold_return_pct) >= 0 ? '#26a641' : '#f85149', primary: false },
             { label: 'Trades', value: summary.num_trades, color: '#e6edf3', primary: false },
@@ -813,7 +813,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
 
       {activeTab === 'monte_carlo' && (
         <div style={{ padding: '0 16px 16px' }}>
-          {mcLoading && <div style={{ color: '#8b949e', fontSize: 12, padding: 16 }}>Running {(1000).toLocaleString()} simulations…</div>}
+          {mcLoading && <div style={{ color: '#8b949e', fontSize: 12, padding: 16 }}>Running {(1000).toLocaleString('en-US')} simulations…</div>}
           {!mcLoading && !mcResult && (
             <div style={{ padding: 16 }}>
               <button

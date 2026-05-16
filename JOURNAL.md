@@ -6,6 +6,14 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-16
 
+### Bundle A shipped — UX integrity bundle (F221–F224)
+
+- **[F221](TODO.md#f221)** `buildParamOptions` reordered so buy/sell rule thresholds come before stop/trailing/slippage; the `[0]` default in Optimizer/WFA now lands on a strategy param. 3 unit tests, all green.
+- **[F222](TODO.md#f222)** Intraday clamp chip in the sidebar — when yahoo + intraday interval + (To−From) > documented yfinance limit (1m=7d, 5/15/30m=60d, 1h=730d), an orange chip appears with effective range and a "Use effective range" button that updates React state via the prop setter (no DOM-mutation trap). Red error-form variant when `ohlcvError` fires on intraday. Browser-verified end-to-end: 2020-01-01 → 2026-05-15 on 1h triggers chip; button click syncs header range to 2024-05-16 → 2026-05-15.
+- **[F223](TODO.md#f223)** Frontend rule-threshold validation extracted to `features/strategy/ruleValidation.ts` (single source of truth, cross-references `backend/signal_engine.py` + `RuleRow.tsx`'s existing NEEDS_VALUE map). RuleRow shows red border + "Threshold required" message on invalid value. StrategyBuilder disables Run Backtest while any rule list (buy/sell/long-buy/long-sell/short-buy/short-sell/regime-buy) is in error state. 13 unit tests, all green.
+- **[F224](TODO.md#f224)** Locale-aware numeric formatting + parsing. Added `fmtNum` (Intl.NumberFormat en-US) and `parseNumeric` (strips currency + thousand seps, handles `.` and `,` decimals) in `shared/utils/format.ts`. Audited every `toLocaleString` in `frontend/src/`; fixed locale-ambiguous calls (no first arg) in AccountBar, Results, MonteCarloChart, MacroEquityChart to explicit `'en-US'`. Inputs intentionally untouched — they hold number-or-empty state serialised by React's `.toString()` (locale-agnostic). 11 unit tests.
+- Branch `bundle-a-ux-integrity-2026-05-16`, 4 commits, pushed. `npm run build` clean on each commit. Frontend test count went from 31 passing on main to 58 passing on branch (the 63 pre-existing jsdom env failures predate this work). New tests: 27 (3 + 0 + 13 + 11). Bundle B/C/D pending.
+
 ### UX walkthrough plan + 30 TODO items (F221–F248)
 
 - Read both 2026-05-15 UX walkthrough postmortems (`docs/postmortems/2026-05-15-ux-walkthrough.md` + `-quant-laptop.md`), consolidated into single ranked plan at `docs/plans/2026-05-16-ux-walkthrough-improvements.md`. 24 postmortem items + 4 user feature requests (indicator sidebar overhaul, multi-TF rules, watchlist groups+reorder+quick-add, collapsible chart panel).

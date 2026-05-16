@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { Plus, Play } from 'lucide-react'
 import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, SavedStrategy, RegimeConfig } from '../../shared/types'
 import RuleRow, { emptyRule, validateRules } from './RuleRow'
+import { hasAnyInvalidRule } from './ruleValidation'
 import { api } from '../../api/client'
 import { useSlippage } from '../../shared/hooks/useSlippage'
 import { apiErrorDetail } from '../../shared/utils/errors'
@@ -149,6 +150,15 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
   }, [slipInfo?.modeled_bps, slipInfo?.source, slippageSource])
 
   useEffect(() => { savedStrategiesRef.current = savedStrategies }, [savedStrategies])
+
+  // F-UX3: disable Run Backtest when any active rule is missing a required threshold value.
+  // Covers all rule lists: single-mode buy/sell, regime long/short variants, and regime filter rules.
+  const hasInvalidRules = hasAnyInvalidRule(
+    buyRules, sellRules,
+    longBuyRules, longSellRules,
+    shortBuyRules, shortSellRules,
+    regimeBuyRules,
+  )
 
   function currentSnapshot(name: string): SavedStrategy {
     const strategyType: SavedStrategy['strategyType'] =
@@ -1274,8 +1284,8 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '8px 16px' }}>
           <button
             onClick={runBacktest}
-            disabled={loading}
-            style={{ ...styles.runBtn, ...(loading ? { opacity: 0.6, cursor: 'not-allowed' } : {}) }}
+            disabled={loading || hasInvalidRules}
+            style={{ ...styles.runBtn, ...((loading || hasInvalidRules) ? { opacity: 0.6, cursor: 'not-allowed' } : {}) }}
           >
             {loading
               ? <><span style={styles.spinner} />{' Running...'}</>

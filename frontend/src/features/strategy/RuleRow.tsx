@@ -1,5 +1,6 @@
 import { Trash2, VolumeX, Volume2, Eye, TrendingUp } from 'lucide-react'
 import type { Rule } from '../../shared/types'
+import { isRuleInvalid } from './ruleValidation'
 
 export const INDICATORS = ['macd', 'rsi', 'price', 'ma', 'bb', 'atr', 'atr_pct', 'volume', 'stochastic', 'adx'] as const
 
@@ -182,6 +183,8 @@ export default function RuleRow({ rule, onChange, onDelete, onSweep }: { rule: R
   const forcedParam = NEEDS_PARAM[rule.indicator]?.includes(rule.condition)
   const needsValue = NEEDS_VALUE.includes(rule.condition) && !forcedParam && !hasParam
   const optionalValue = OPTIONAL_VALUE.includes(rule.condition)
+  // F-UX3: show red border when value is required but missing (muted rules are exempt)
+  const valueInvalid = needsValue && !muted && isRuleInvalid(rule)
   const negated = rule.negated ?? false
   const visualize = rule.visualize ?? false
 
@@ -474,13 +477,25 @@ export default function RuleRow({ rule, onChange, onDelete, onSweep }: { rule: R
         )
       })()}
       {needsValue && (
-        <input
-          type="number"
-          value={rule.value ?? ''}
-          onChange={e => onChange({ ...rule, value: parseFloat(e.target.value) })}
-          placeholder="Value"
-          style={{ ...styles.ruleSelect, width: 70 }}
-        />
+        <>
+          <input
+            type="number"
+            value={rule.value ?? ''}
+            onChange={e => onChange({ ...rule, value: parseFloat(e.target.value) })}
+            placeholder="Value"
+            style={{
+              ...styles.ruleSelect,
+              width: 70,
+              ...(valueInvalid ? { borderColor: 'var(--accent-red, #c33)' } : {}),
+            }}
+            title={valueInvalid ? `Threshold required for '${CONDITION_LABELS[rule.condition] || rule.condition}'` : undefined}
+          />
+          {valueInvalid && (
+            <span style={{ color: 'var(--accent-red, #c33)', fontSize: 11, whiteSpace: 'nowrap' }}>
+              Threshold required
+            </span>
+          )}
+        </>
       )}
       {optionalValue && (
         <>
