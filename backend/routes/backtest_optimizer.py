@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from models import StrategyRequest
 from routes.grid_runner import run_grid
+from shared import _fetch
 
 _TIMEOUT_SECS = 60
 
@@ -84,10 +85,26 @@ def optimize_backtest(req: OptimizeRequest) -> OptimizeResponse:
             detail=f"Too many combinations ({total_combos}). Max {_MAX_COMBOS}. Reduce values or param count.",
         )
 
+    # Pre-fetch the OHLCV slice ONCE and pass it through to every combo so
+    # run_backtest skips _fetch entirely (mirrors the WFA setup at
+    # routes/walk_forward.py:312). Without this, each combo paid a cache
+    # lookup + a defensive DataFrame copy per call — ~100ms × 100 = 10s
+    # on a 5-yr daily window. HTTPException surfacing data errors (e.g.
+    # 404 No data) is propagated unchanged.
+    df = _fetch(
+        req.base.ticker,
+        req.base.start,
+        req.base.end,
+        req.base.interval,
+        source=req.base.source,
+        extended_hours=req.base.extended_hours,
+    )
+
     grid_results, timed_out, skipped = run_grid(
         req.base,
         req.params,
         timeout_secs=_TIMEOUT_SECS,
+        df=df,
     )
 
     results: list[OptimizerCombo] = []

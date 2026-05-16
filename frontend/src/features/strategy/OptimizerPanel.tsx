@@ -459,13 +459,41 @@ export default function OptimizerPanel({ lastRequest, onApplyParams, onRunBackte
       )}
 
       {/* ─── Results ────────────────────────────────────────────────── */}
-      {result && !loading && (
+      {result && !loading && (() => {
+        // Detect "no variance" — all combos returned identical metric values.
+        // Happens when the swept params don't influence any trade decision
+        // (e.g. a rule that never fires in this data range).
+        const vals = result.results.map(r => r[metric as keyof typeof r] as number)
+        const noVariance =
+          result.results.length > 1 &&
+          vals.every(v => typeof v === 'number') &&
+          Math.max(...vals) - Math.min(...vals) < 1e-9
+        return (
         <div>
           <div style={{ fontSize: 12, color: '#8b949e', marginBottom: 8 }}>
             {result.completed} backtests complete
             {result.skipped > 0 && `, ${result.skipped} skipped`}
             {' · '}ranked by {METRICS.find(m => m.value === metric)?.label}
           </div>
+
+          {noVariance && (
+            <div
+              style={{
+                fontSize: 11, lineHeight: 1.5,
+                color: 'var(--accent-orange)',
+                background: 'rgba(245, 158, 11, 0.08)',
+                border: '1px solid rgba(245, 158, 11, 0.3)',
+                borderRadius: 6,
+                padding: '8px 10px',
+                marginBottom: 10,
+              }}
+            >
+              <strong>No variance.</strong> All {result.completed} combinations produced
+              the same {METRICS.find(m => m.value === metric)?.label.toLowerCase()}. The
+              swept parameters don't influence the trades for this strategy/data —
+              try a different parameter, a wider value range, or a different metric.
+            </div>
+          )}
 
           {/* ─── 2-param Sharpe heatmap (F236) ───────────────────────── */}
           {heatmapData && (
@@ -660,7 +688,8 @@ export default function OptimizerPanel({ lastRequest, onApplyParams, onRunBackte
             </div>
           )}
         </div>
-      )}
+        )
+      })()}
 
       {/* ─── Best params highlight + quick-apply buttons ────────────── */}
       {topResult && !loading && (
