@@ -73,7 +73,18 @@ Wraps the routine: find the overnight draft PR → static checks → optional br
    git checkout main && git pull
    ```
 
-8. **Report.** One paragraph: PR #, what shipped, build/test status, browser verification (or skip reason + one-line "static-verified only — <reason>"), merge confirmation.
+8. **Clean up dead branches.** Prune remote-tracking refs for branches deleted on the remote, then delete the matching locals (and any worktrees attached to them).
+   ```
+   git fetch --prune
+   git branch -vv | awk '/: gone]/ {print $1}'
+   ```
+   For each gone branch:
+   - If it has a worktree (`git worktree list` shows it), `git worktree remove <path>` first.
+   - `git branch -D <branch>` to delete the local ref.
+
+   Skip the current branch (always `main` at this point) and any branch the user has explicitly pinned. If nothing is gone, say so and move on — don't invent cleanup.
+
+9. **Report.** One paragraph: PR #, what shipped, build/test status, browser verification (or skip reason + one-line "static-verified only — <reason>"), merge confirmation.
 
 ## Stop conditions
 
