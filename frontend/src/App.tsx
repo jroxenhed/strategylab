@@ -301,11 +301,18 @@ export default function App() {
             {/* CENTER COLUMN */}
             <Panel defaultSize="66%" minSize="30%">
               <div style={{ height: '100%', overflow: 'hidden' }}>
-                <Group orientation="vertical" style={{ height: '100%' }}>
+                {/* F248: keying the Group on `chartCollapsed` forces a fresh
+                     layout when toggling — chart Panel + Separator are
+                     conditionally rendered, so collapsing actually frees
+                     vertical space for the Results pane below. React's
+                     unmount/remount of <Chart/> is the safe path (per the
+                     F-UX29-full notes in the plan); the inner autoSize
+                     teardown was hardened earlier. */}
+                <Group orientation="vertical" key={chartCollapsed ? 'rc-only' : 'split'} style={{ height: '100%' }}>
 
-                  {/* CHART — F248: display:none when collapsed keeps charts mounted (lw-charts v5 teardown trap) */}
+                  {!chartCollapsed && (<>
                   <Panel defaultSize="50%" minSize="15%">
-                    <div className="panel-fill" style={chartCollapsed ? { display: 'none' } : undefined}>
+                    <div className="panel-fill">
                       {!chartEnabled ? (
                         <div style={styles.chartDisabled}>
                           <span style={{ color: '#8b949e', fontSize: 12 }}>Chart disabled</span>
@@ -348,9 +355,10 @@ export default function App() {
                   </Panel>
 
                   <Separator className="resize-handle-h" />
+                  </>)}
 
                   {/* BOTTOM PANE: Strategy rules + Results */}
-                  <Panel defaultSize="50%" minSize="30%" collapsible>
+                  <Panel defaultSize={chartCollapsed ? '100%' : '50%'} minSize="30%" collapsible>
                     <div style={{ height: '100%', overflowY: 'auto', display: 'flex', flexDirection: 'column', background: 'var(--bg-main)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '4px 8px', borderBottom: '1px solid #21262d', background: '#0d1117', flexShrink: 0 }}>
                         <button
