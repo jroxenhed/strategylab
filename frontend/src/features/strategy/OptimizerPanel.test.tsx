@@ -161,7 +161,7 @@ describe('OptimizerPanel runOptimizer validation — ordered branches', () => {
     // defaultMax = NaN * 2 = NaN
     // We also set Min to '' (blank) in the UI — the default.
     const user = userEvent.setup()
-    renderPanel({ stop_loss_pct: NaN })
+    renderPanel({ stop_loss_pct: NaN, buy_rules: [], sell_rules: [] })
 
     // The first param in the list is "Stop Loss %" (since stop_loss_pct is set).
     // Select it in row 1's <select> — it should already be selected as first option.
@@ -180,7 +180,7 @@ describe('OptimizerPanel runOptimizer validation — ordered branches', () => {
    */
   it('branch 2: rejects blank Max when system default is NaN', async () => {
     const user = userEvent.setup()
-    renderPanel({ stop_loss_pct: NaN })
+    renderPanel({ stop_loss_pct: NaN, buy_rules: [], sell_rules: [] })
 
     // Fill Min manually so branch 1 is satisfied
     await setMinInput(user, '1')
@@ -228,7 +228,7 @@ describe('OptimizerPanel runOptimizer validation — ordered branches', () => {
     // Type a valid-looking but NaN-producing value into Min via blank+NaN-default
     // (JSDOM coerces type=number inputs, so this is the reachable path).
     const user = userEvent.setup()
-    renderPanel({ stop_loss_pct: NaN })
+    renderPanel({ stop_loss_pct: NaN, buy_rules: [], sell_rules: [] })
 
     // Leave Min blank (p.min='', defaultMin=NaN) — fires the NaN-min branch.
     // This is branch 1 text but exercises the same NaN-before-min>max invariant.
@@ -247,7 +247,7 @@ describe('OptimizerPanel runOptimizer validation — ordered branches', () => {
    */
   it('branch 4: rejects non-empty non-numeric Max', async () => {
     const user = userEvent.setup()
-    renderPanel({ stop_loss_pct: NaN })
+    renderPanel({ stop_loss_pct: NaN, buy_rules: [], sell_rules: [] })
 
     await setMinInput(user, '5')
     // Max is blank, defaultMax is NaN → branch 2 message
@@ -263,7 +263,7 @@ describe('OptimizerPanel runOptimizer validation — ordered branches', () => {
    */
   it('branch 5: rejects non-numeric Steps', async () => {
     const user = userEvent.setup()
-    renderPanel()
+    renderPanel({ buy_rules: [], sell_rules: [] })
 
     // slippage_bps is the first param (defaultMin=0, defaultMax=20, both finite).
     // Leave Min and Max blank (branches 1-4 all pass since defaults are finite).
@@ -280,7 +280,7 @@ describe('OptimizerPanel runOptimizer validation — ordered branches', () => {
    */
   it('branch 6: rejects Steps less than 2', async () => {
     const user = userEvent.setup()
-    renderPanel()
+    renderPanel({ buy_rules: [], sell_rules: [] })
 
     await setStepsInput(user, '1')
     await clickRunButton(user)
@@ -294,7 +294,7 @@ describe('OptimizerPanel runOptimizer validation — ordered branches', () => {
    */
   it('branch 7: rejects Min greater than Max', async () => {
     const user = userEvent.setup()
-    renderPanel()
+    renderPanel({ buy_rules: [], sell_rules: [] })
 
     await setMinInput(user, '15')
     await setMaxInput(user, '5')
@@ -351,7 +351,7 @@ describe('OptimizerPanel runOptimizer — NaN ordering invariant', () => {
   it('rejects NaN min with NaN error, not min>max error (ordering invariant)', async () => {
     const user = userEvent.setup()
     // stop_loss_pct=NaN → Stop Loss % param, defaultMin=NaN
-    renderPanel({ stop_loss_pct: NaN })
+    renderPanel({ stop_loss_pct: NaN, buy_rules: [], sell_rules: [] })
 
     // Leave everything at defaults (Min='', Max='' with NaN system defaults)
     await clickRunButton(user)
