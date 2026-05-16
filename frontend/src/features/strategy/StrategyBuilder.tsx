@@ -512,7 +512,11 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
   async function runBacktest() {
     setLoading(true)
     setError('')
-    onResult(null)
+    // Do NOT call onResult(null) here — it unmounts <Results> in App.tsx
+    // (conditional render on backtestResult), which unmounts every result
+    // sub-panel (Optimizer/WFA/Sensitivity) and drops their picked params
+    // mid-render before any sync save can commit. Keep the prior result
+    // visible; the new one replaces it on success.
     const validationError = validateRules(buyRules, 'BUY') || validateRules(sellRules, 'SELL')
     if (validationError) { setError(validationError); setLoading(false); return }
     try {

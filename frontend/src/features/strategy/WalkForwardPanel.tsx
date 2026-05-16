@@ -325,14 +325,19 @@ export default function WalkForwardPanel({ lastRequest, onApplyParams, onRunBack
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey])
 
-  // Save config whenever any field changes
-  useEffect(() => {
+  // Persist synchronously inside setters (see persist* wrappers below). The
+  // earlier useEffect-on-state approach lost writes when a re-run of the
+  // backtest unmounted the surrounding <Results> before the effect could
+  // commit the new state to localStorage.
+  const persist = (next: {
+    isBarStr?: string; oosBarStr?: string; gapBarStr?: string; stepBarStr?: string
+    expandTrain?: boolean; metric?: string; paramRows?: (ParamRow | null)[]
+  }) => {
     try {
-      localStorage.setItem(storageKey, JSON.stringify({
-        isBarStr, oosBarStr, gapBarStr, stepBarStr, expandTrain, metric, paramRows,
-      }))
+      const merged = { isBarStr, oosBarStr, gapBarStr, stepBarStr, expandTrain, metric, paramRows, ...next }
+      localStorage.setItem(storageKey, JSON.stringify(merged))
     } catch { /* quota exceeded — silently drop */ }
-  }, [storageKey, isBarStr, oosBarStr, gapBarStr, stepBarStr, expandTrain, metric, paramRows])
+  }
 
   // KT-2: Abort in-flight stream on unmount.
   useEffect(() => {
@@ -540,9 +545,17 @@ export default function WalkForwardPanel({ lastRequest, onApplyParams, onRunBack
       } else {
         next[i] = { ...(prev[i] ?? emptyRow()), ...update }
       }
+      persist({ paramRows: next })
       return next
     })
   }
+
+  const setIsBarStrPersist  = (v: string)  => { setIsBarStr(v);   persist({ isBarStr: v }) }
+  const setOosBarStrPersist = (v: string)  => { setOosBarStr(v);  persist({ oosBarStr: v }) }
+  const setGapBarStrPersist = (v: string)  => { setGapBarStr(v);  persist({ gapBarStr: v }) }
+  const setStepBarStrPersist= (v: string)  => { setStepBarStr(v); persist({ stepBarStr: v }) }
+  const setExpandTrainPersist=(v: boolean) => { setExpandTrain(v);persist({ expandTrain: v }) }
+  const setMetricPersist    = (v: string)  => { setMetric(v);     persist({ metric: v }) }
 
   async function runWalkForward() {
     const isN = parseInt(isBarStr)
@@ -767,7 +780,7 @@ export default function WalkForwardPanel({ lastRequest, onApplyParams, onRunBack
           <input
             type="number" min={1} max={10000}
             value={isBarStr}
-            onChange={e => setIsBarStr(e.target.value)}
+            onChange={e => setIsBarStrPersist(e.target.value)}
             placeholder="e.g. 252"
             style={s.input}
           />
@@ -775,7 +788,7 @@ export default function WalkForwardPanel({ lastRequest, onApplyParams, onRunBack
           <input
             type="number" min={1} max={10000}
             value={oosBarStr}
-            onChange={e => setOosBarStr(e.target.value)}
+            onChange={e => setOosBarStrPersist(e.target.value)}
             placeholder="e.g. 63"
             style={s.input}
           />
@@ -783,14 +796,14 @@ export default function WalkForwardPanel({ lastRequest, onApplyParams, onRunBack
           <input
             type="number" min={0} max={10000}
             value={gapBarStr}
-            onChange={e => setGapBarStr(e.target.value)}
+            onChange={e => setGapBarStrPersist(e.target.value)}
             style={{ ...s.input, width: 50 }}
           />
           <span style={s.label}>Step bars</span>
           <input
             type="number" min={1} max={10000}
             value={stepBarStr}
-            onChange={e => setStepBarStr(e.target.value)}
+            onChange={e => setStepBarStrPersist(e.target.value)}
             placeholder="= OOS"
             style={{ ...s.input, width: 70 }}
           />
@@ -800,12 +813,12 @@ export default function WalkForwardPanel({ lastRequest, onApplyParams, onRunBack
             <input
               type="checkbox"
               checked={expandTrain}
-              onChange={e => setExpandTrain(e.target.checked)}
+              onChange={e => setExpandTrainPersist(e.target.checked)}
             />
             Anchored (expanding IS)
           </label>
           <span style={{ ...s.label, marginLeft: 16 }}>Optimize for</span>
-          <select value={metric} onChange={e => setMetric(e.target.value)} style={s.select}>
+          <select value={metric} onChange={e => setMetricPersist(e.target.value)} style={s.select}>
             {METRICS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
         </div>

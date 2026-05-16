@@ -40,12 +40,36 @@ interface Props {
 export default function SensitivityPanel({ lastRequest, sweepInit, onSweepConsumed }: Props) {
   const paramOptions = useMemo(() => buildParamOptions(lastRequest), [lastRequest])
 
-  const [selectedPath, setSelectedPath] = useState<string>(paramOptions[0]?.path ?? '')
+  // Persist sweep inputs per (ticker, interval, source) so Run Backtest's
+  // unmount-of-Results doesn't drop the user's picked param + min/max/steps.
+  const storageKey = `strategylab-sensitivity-config-${lastRequest.ticker}-${lastRequest.interval}-${lastRequest.source ?? 'yahoo'}`
+  const initial = (() => {
+    try {
+      const raw = localStorage.getItem(storageKey)
+      if (raw) return JSON.parse(raw) as { selectedPath?: string; minVal?: string; maxVal?: string; steps?: string }
+    } catch { /* corrupt — ignore */ }
+    return null
+  })()
+  const validPaths = new Set(paramOptions.map(o => o.path))
+  const initialPath = initial?.selectedPath && validPaths.has(initial.selectedPath)
+    ? initial.selectedPath
+    : (paramOptions[0]?.path ?? '')
+
+  const [selectedPath, setSelectedPath] = useState<string>(initialPath)
   const selected = paramOptions.find(o => o.path === selectedPath)
 
-  const [minVal, setMinVal] = useState<string>('')
-  const [maxVal, setMaxVal] = useState<string>('')
-  const [steps, setSteps] = useState<string>('')
+  const [minVal, setMinVal] = useState<string>(initial?.minVal ?? '')
+  const [maxVal, setMaxVal] = useState<string>(initial?.maxVal ?? '')
+  const [steps, setSteps] = useState<string>(initial?.steps ?? '')
+
+  // Synchronous persist — see Optimizer/WFA panels for why useEffect-on-state
+  // loses writes when Results unmounts mid-cycle.
+  const persist = (next: { selectedPath?: string; minVal?: string; maxVal?: string; steps?: string }) => {
+    try {
+      const merged = { selectedPath, minVal, maxVal, steps, ...next }
+      localStorage.setItem(storageKey, JSON.stringify(merged))
+    } catch { /* quota — drop */ }
+  }
   const [loading, setLoading] = useState(false)
   const { elapsed: elapsedSec, final: finalSec } = useRequestTimer(loading)
   const [error, setError] = useState('')
@@ -72,11 +96,14 @@ export default function SensitivityPanel({ lastRequest, sweepInit, onSweepConsum
     }
     const center = sweepInit.centerVal
     const half = center === 0 ? 1 : Math.abs(center) * 0.5
+    const newMin = (center - half).toFixed(2)
+    const newMax = (center + half).toFixed(2)
     setSelectedPath(sweepInit.path)
-    setMinVal((center - half).toFixed(2))
-    setMaxVal((center + half).toFixed(2))
+    setMinVal(newMin)
+    setMaxVal(newMax)
     setSteps('9')
     setError('')
+    persist({ selectedPath: sweepInit.path, minVal: newMin, maxVal: newMax, steps: '9' })
     onSweepConsumed?.()
   }, [sweepInit])
 
@@ -95,6 +122,7 @@ export default function SensitivityPanel({ lastRequest, sweepInit, onSweepConsum
     setSteps('')
     setResults(null)
     setError('')
+    persist({ selectedPath: path, minVal: '', maxVal: '', steps: '' })
   }
 
   async function runSweep() {
@@ -185,7 +213,7 @@ export default function SensitivityPanel({ lastRequest, sweepInit, onSweepConsum
           type="number"
           value={minVal}
           placeholder={String(+(displayMin).toFixed(2))}
-          onChange={e => setMinVal(e.target.value)}
+          onChange={e => { setMinVal(e.target.value); persist({ minVal: e.target.value }) }}
           className="num-input"
           style={{ background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3 }}
         />
@@ -195,7 +223,7 @@ export default function SensitivityPanel({ lastRequest, sweepInit, onSweepConsum
           type="number"
           value={maxVal}
           placeholder={String(+(displayMax).toFixed(2))}
-          onChange={e => setMaxVal(e.target.value)}
+          onChange={e => { setMaxVal(e.target.value); persist({ maxVal: e.target.value }) }}
           className="num-input"
           style={{ background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3 }}
         />
@@ -207,7 +235,7 @@ export default function SensitivityPanel({ lastRequest, sweepInit, onSweepConsum
           max={25}
           value={steps}
           placeholder={String(displaySteps)}
-          onChange={e => setSteps(e.target.value)}
+          onChange={e => { setSteps(e.target.value); persist({ steps: e.target.value }) }}
           style={{ width: 56, background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3 }}
         />
 
