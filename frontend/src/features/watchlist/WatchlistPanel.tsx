@@ -6,7 +6,6 @@ import {
   saveWatchlist,
   dropDuplicate,
   genGroupId,
-  emptyState,
 } from './watchlistStorage'
 import type { WatchlistState, WatchlistGroup } from './watchlistStorage'
 
@@ -71,8 +70,14 @@ export default function WatchlistPanel({
   currentSymbol: string
   onSymbolClick: (symbol: string) => void
 }) {
-  const [state, setState] = useState<WatchlistState>(emptyState)
-  const [corruptBanner, setCorruptBanner] = useState(false)
+  // Lazy init from localStorage — if we used `useState(emptyState)` and loaded
+  // in a useEffect, the save-effect (deps: [state]) would fire on first render
+  // with the empty state and clobber the saved value before the load effect
+  // had a chance to setState. Vite HMR-triggered remounts hit this every save.
+  const initialLoad = useRef<{ state: WatchlistState; wasCorrupt: boolean } | null>(null)
+  if (initialLoad.current === null) initialLoad.current = loadWatchlist()
+  const [state, setState] = useState<WatchlistState>(initialLoad.current.state)
+  const [corruptBanner, setCorruptBanner] = useState(initialLoad.current.wasCorrupt)
   const [quotes, setQuotes] = useState<Map<string, Quote>>(new Map())
   const [hoveredSymbol, setHoveredSymbol] = useState<string | null>(null)
 
@@ -95,14 +100,8 @@ export default function WatchlistPanel({
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Load on mount
-  useEffect(() => {
-    const { state: loaded, wasCorrupt } = loadWatchlist()
-    setState(loaded)
-    if (wasCorrupt) setCorruptBanner(true)
-  }, [])
-
-  // Persist to localStorage whenever state changes
+  // Persist to localStorage whenever state changes. First fire on mount writes
+  // the loaded state back (no-op clobber — same bytes).
   useEffect(() => {
     saveWatchlist(state)
   }, [state])
