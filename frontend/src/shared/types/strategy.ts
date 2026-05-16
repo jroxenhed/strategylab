@@ -13,6 +13,8 @@ export interface Rule {
   negated?: boolean
   visualize?: boolean
   params?: Record<string, any>
+  /** F246: HTF timeframe for this rule. undefined/null = base TF. e.g. "1d", "1h", "4h". */
+  timeframe?: string | null
 }
 
 export interface TrailingStopConfig {

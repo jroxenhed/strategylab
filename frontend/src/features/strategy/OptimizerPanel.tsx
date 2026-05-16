@@ -3,7 +3,7 @@ import type { StrategyRequest } from '../../shared/types'
 import { api } from '../../api/client'
 import { useRequestTimer } from '../../shared/hooks/useRequestTimer'
 import { apiErrorDetail } from '../../shared/utils/errors'
-import { buildParamOptions, linspace, applyParamPath } from './paramOptions'
+import { buildParamOptions, linspace, applyParamPath, groupParamOptions, shouldGroupParamOptions } from './paramOptions'
 import type { ParamOption } from './paramOptions'
 
 interface OptimizerCombo {
@@ -51,6 +51,8 @@ interface Props {
 
 export default function OptimizerPanel({ lastRequest, onApplyParams, onRunBacktest }: Props) {
   const paramOptions = useMemo(() => buildParamOptions(lastRequest, 5), [lastRequest])
+  const useGroups = shouldGroupParamOptions(lastRequest)
+  const paramGroups = useMemo(() => groupParamOptions(paramOptions), [paramOptions])
 
   const emptyRow = (): ParamRow => ({ path: paramOptions[0]?.path ?? NONE_PATH, min: '', max: '', steps: '5' })
 
@@ -232,6 +234,98 @@ export default function OptimizerPanel({ lastRequest, onApplyParams, onRunBackte
     onRunBacktest()
   }
 
+  // ─── Heatmap helpers ──────────────────────────────────────────────────────
+
+  /**
+   * Returns an rgb() string for a sharpe value, interpolating across a
+   * 5-stop gradient: blue (cold/negative) → cyan → grey (≈0) → yellow → red (hot/high).
+   * min/max are the actual grid extents. If value is NaN, returns muted grey.
+   */
+  function sharpeColor(value: number, min: number, max: number): string {
+    if (!isFinite(value)) return '#2d333b'
+    // Normalize 0–1 across the grid range, but anchor the colour scale to
+    // absolute sharpe values so blue=negative and red=high are meaningful.
+    const absMin = Math.min(min, 0)
+    const absMax = Math.max(max, 0.01)
+    const lo = Math.min(absMin, -0.5)
+    const hi = Math.max(absMax, 1.5)
+    const t = Math.max(0, Math.min(1, (value - lo) / (hi - lo)))
+    // 5 stops: t=0 → blue, t=0.25 → cyan, t=0.5 → grey, t=0.75 → yellow, t=1 → red
+    const stops: [number, number, number][] = [
+      [30, 80, 220],   // blue
+      [30, 190, 210],  // cyan
+      [100, 110, 120], // grey
+      [220, 190, 40],  // yellow
+      [210, 50, 50],   // red
+    ]
+    const scaled = t * (stops.length - 1)
+    const lo_i = Math.floor(scaled)
+    const hi_i = Math.min(lo_i + 1, stops.length - 1)
+    const frac = scaled - lo_i
+    const r = Math.round(stops[lo_i][0] + frac * (stops[hi_i][0] - stops[lo_i][0]))
+    const g = Math.round(stops[lo_i][1] + frac * (stops[hi_i][1] - stops[lo_i][1]))
+    const b = Math.round(stops[lo_i][2] + frac * (stops[hi_i][2] - stops[lo_i][2]))
+    return `rgb(${r},${g},${b})`
+  }
+
+  /**
+   * Builds the 2D sharpe heatmap data when exactly 2 params were swept.
+   * Returns null when heatmap should not render.
+   */
+  const heatmapData = useMemo(() => {
+    if (!result || activeRows.length !== 2 || result.results.length < 2) return null
+    const [row1, row2] = activeRows
+    const path1 = row1.path
+    const path2 = row2.path
+    // Collect sorted unique values for each axis
+    const set1 = new Set<number>()
+    const set2 = new Set<number>()
+    for (const combo of result.results) {
+      const v1 = combo.param_values[path1]
+      const v2 = combo.param_values[path2]
+      if (v1 != null) set1.add(v1)
+      if (v2 != null) set2.add(v2)
+    }
+    let vals1 = [...set1].sort((a, b) => a - b)
+    let vals2 = [...set2].sort((a, b) => a - b)
+    if (vals1.length === 0 || vals2.length === 0) return null
+    // Cap at 8×8 (but skip if >8 — spec says render ≤8, skip if larger)
+    if (vals1.length > 8 || vals2.length > 8) return null
+    // Build lookup: (v1, v2) → sharpe
+    const lookup = new Map<string, number>()
+    for (const combo of result.results) {
+      const v1 = combo.param_values[path1]
+      const v2 = combo.param_values[path2]
+      if (v1 != null && v2 != null) {
+        lookup.set(`${v1}__${v2}`, combo.sharpe_ratio)
+      }
+    }
+    // Build grid[i][j] = sharpe for vals1[i], vals2[j]
+    const grid: (number | null)[][] = vals1.map(v1 =>
+      vals2.map(v2 => lookup.get(`${v1}__${v2}`) ?? null)
+    )
+    // Find min/max for colour scaling
+    const allVals = grid.flat().filter((v): v is number => v !== null && isFinite(v))
+    if (allVals.length === 0) return null
+    const gridMin = Math.min(...allVals)
+    const gridMax = Math.max(...allVals)
+    if (gridMin === gridMax) return null // all identical — skip
+    // Find peak
+    let peakV1 = vals1[0], peakV2 = vals2[0], peakSharpe = -Infinity
+    for (const combo of result.results) {
+      if (combo.sharpe_ratio > peakSharpe) {
+        peakSharpe = combo.sharpe_ratio
+        peakV1 = combo.param_values[path1]
+        peakV2 = combo.param_values[path2]
+      }
+    }
+    const opt1 = paramOptions.find((o: ParamOption) => o.path === path1)
+    const opt2 = paramOptions.find((o: ParamOption) => o.path === path2)
+    const isInt1 = opt1?.isInteger ?? false
+    const isInt2 = opt2?.isInteger ?? false
+    return { vals1, vals2, grid, gridMin, gridMax, peakV1, peakV2, peakSharpe, isInt1, isInt2, label1: opt1?.label ?? path1, label2: opt2?.label ?? path2 }
+  }, [result, activeRows, paramOptions])
+
   const colColor = (value: number, key: MetricKey) => {
     if (!result || result.results.length < 2) return '#e6edf3'
     const vals = result.results.map(r => r[key]).filter(v => typeof v === 'number')
@@ -249,9 +343,9 @@ export default function OptimizerPanel({ lastRequest, onApplyParams, onRunBackte
 
       {/* ─── Controls ───────────────────────────────────────────────── */}
       <div style={s.section}>
-        <div style={s.row}>
+        <div className="strategy-control-row" style={{ flexWrap: 'wrap' }}>
           <span style={s.label}>Optimize for</span>
-          <select value={metric} onChange={e => setMetric(e.target.value)} style={s.select}>
+          <select value={metric} onChange={e => setMetric(e.target.value)} className="wide-select" style={s.select}>
             {METRICS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>
           <span style={{ ...s.label, marginLeft: 16 }}>Show top</span>
@@ -270,18 +364,28 @@ export default function OptimizerPanel({ lastRequest, onApplyParams, onRunBackte
         const opt = isActive ? paramOptions.find((o: ParamOption) => o.path === row.path) : null
         return (
           <div key={i} style={{ ...s.section, opacity: i > 0 && !paramRows[i - 1] ? 0.4 : 1 }}>
-            <div style={s.row}>
+            <div className="strategy-control-row" style={{ flexWrap: 'wrap' }}>
               <span style={s.label}>Param {i + 1}</span>
               {isActive ? (
                 <>
                   <select
                     value={row.path}
                     onChange={e => setRow(i, { path: e.target.value, min: '', max: '', steps: '5' })}
+                    className="wide-select"
                     style={{ ...s.select, minWidth: 240 }}
                   >
-                    {paramOptions.map((o: ParamOption) => (
-                      <option key={o.path} value={o.path}>{o.label}</option>
-                    ))}
+                    {useGroups
+                      ? paramGroups.map(({ group, options }) => (
+                          <optgroup key={group} label={group}>
+                            {options.map((o: ParamOption) => (
+                              <option key={o.path} value={o.path}>{o.label}</option>
+                            ))}
+                          </optgroup>
+                        ))
+                      : paramOptions.map((o: ParamOption) => (
+                          <option key={o.path} value={o.path}>{o.label}</option>
+                        ))
+                    }
                   </select>
                   <span style={s.label}>Min</span>
                   <input
@@ -289,6 +393,7 @@ export default function OptimizerPanel({ lastRequest, onApplyParams, onRunBackte
                     placeholder={opt ? String(opt.defaultMin) : ''}
                     value={row.min}
                     onChange={e => setRow(i, { min: e.target.value })}
+                    className="num-input"
                     style={s.input}
                   />
                   <span style={s.label}>Max</span>
@@ -297,6 +402,7 @@ export default function OptimizerPanel({ lastRequest, onApplyParams, onRunBackte
                     placeholder={opt ? String(opt.defaultMax) : ''}
                     value={row.max}
                     onChange={e => setRow(i, { max: e.target.value })}
+                    className="num-input"
                     style={s.input}
                   />
                   <span style={s.label}>Steps</span>
@@ -360,6 +466,100 @@ export default function OptimizerPanel({ lastRequest, onApplyParams, onRunBackte
             {result.skipped > 0 && `, ${result.skipped} skipped`}
             {' · '}ranked by {METRICS.find(m => m.value === metric)?.label}
           </div>
+
+          {/* ─── 2-param Sharpe heatmap (F236) ───────────────────────── */}
+          {heatmapData && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: '#8b949e', marginBottom: 6 }}>
+                <span style={{ fontWeight: 600, color: '#e6edf3' }}>Heatmap (Sharpe)</span>
+                {' — peak: '}
+                <span style={{ color: '#8b949e' }}>{heatmapData.label1}=</span>
+                <span style={{ color: '#e6edf3', fontWeight: 600 }}>
+                  {heatmapData.isInt1 ? String(Math.round(heatmapData.peakV1)) : heatmapData.peakV1.toFixed(2)}
+                </span>
+                {', '}
+                <span style={{ color: '#8b949e' }}>{heatmapData.label2}=</span>
+                <span style={{ color: '#e6edf3', fontWeight: 600 }}>
+                  {heatmapData.isInt2 ? String(Math.round(heatmapData.peakV2)) : heatmapData.peakV2.toFixed(2)}
+                </span>
+                {', sharpe='}
+                <span style={{ color: '#26a69a', fontWeight: 600 }}>{heatmapData.peakSharpe.toFixed(2)}</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
+                {/* Y-axis: param1 labels (rows), rendered top-to-bottom matching grid row order */}
+                <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', paddingBottom: 20 }}>
+                  {heatmapData.vals1.map((v, i) => (
+                    <div
+                      key={i}
+                      style={{ height: 24, display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+                        fontSize: 9, color: '#8b949e', paddingRight: 4, whiteSpace: 'nowrap' }}
+                    >
+                      {heatmapData.isInt1 ? String(Math.round(v)) : v.toFixed(1)}
+                    </div>
+                  ))}
+                  {/* Y-axis label */}
+                  <div style={{ fontSize: 9, color: '#484f58', textAlign: 'right', paddingRight: 4, marginTop: 2 }}>
+                    {heatmapData.label1.length > 10 ? heatmapData.label1.slice(0, 9) + '…' : heatmapData.label1}
+                  </div>
+                </div>
+                {/* Grid + X-axis */}
+                <div>
+                  {/* Grid cells */}
+                  <div
+                    data-testid="sharpe-heatmap"
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: `repeat(${heatmapData.vals2.length}, 36px)`,
+                    }}
+                  >
+                    {heatmapData.grid.map((row, ri) =>
+                      row.map((sharpe, ci) => {
+                        const bg = sharpe !== null
+                          ? sharpeColor(sharpe, heatmapData.gridMin, heatmapData.gridMax)
+                          : '#161b22'
+                        const isPeak = sharpe !== null && sharpe === heatmapData.peakSharpe
+                        return (
+                          <div
+                            key={`${ri}-${ci}`}
+                            title={sharpe !== null ? `${heatmapData.label1}=${heatmapData.vals1[ri].toFixed(2)}, ${heatmapData.label2}=${heatmapData.vals2[ci].toFixed(2)}, sharpe=${sharpe.toFixed(3)}` : '—'}
+                            style={{
+                              width: 36, height: 24,
+                              background: bg,
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              fontSize: 8,
+                              color: sharpe !== null ? (isPeak ? '#fff' : 'rgba(255,255,255,0.75)') : '#484f58',
+                              fontWeight: isPeak ? 700 : 400,
+                              border: isPeak ? '1px solid rgba(255,255,255,0.5)' : '1px solid rgba(0,0,0,0.2)',
+                              boxSizing: 'border-box',
+                              cursor: 'default',
+                            }}
+                          >
+                            {sharpe !== null ? sharpe.toFixed(2) : ''}
+                          </div>
+                        )
+                      })
+                    )}
+                  </div>
+                  {/* X-axis labels (param2 values) */}
+                  <div style={{ display: 'flex' }}>
+                    {heatmapData.vals2.map((v, i) => (
+                      <div
+                        key={i}
+                        style={{ width: 36, fontSize: 9, color: '#8b949e', textAlign: 'center',
+                          paddingTop: 2, whiteSpace: 'nowrap', overflow: 'hidden' }}
+                      >
+                        {heatmapData.isInt2 ? String(Math.round(v)) : v.toFixed(1)}
+                      </div>
+                    ))}
+                  </div>
+                  {/* X-axis param name */}
+                  <div style={{ fontSize: 9, color: '#484f58', textAlign: 'center', marginTop: 1 }}>
+                    {heatmapData.label2.length > 20 ? heatmapData.label2.slice(0, 19) + '…' : heatmapData.label2}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {result.results.length === 0 ? (
             <div style={{ color: '#484f58', fontSize: 12 }}>No valid results — all combinations failed or were skipped.</div>

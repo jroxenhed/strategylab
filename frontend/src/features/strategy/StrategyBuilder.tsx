@@ -564,6 +564,43 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
     }
   }
 
+  // ─── F234: Effective-value helpers for per-direction regime labels ──────────
+  const effectiveStopLabel = (perDir: number | '', globalVal: number | '', side: 'long' | 'short'): string => {
+    if (perDir !== '') return `Effective: ${perDir}% (${side} override)`
+    if (globalVal !== '') return `Effective: ${globalVal}% (from global)`
+    return 'Effective: Off (from global)'
+  }
+
+  const effectiveTimeStopLabel = (perDir: number | '', globalVal: number | '', side: 'long' | 'short'): string => {
+    if (perDir !== '') return `Effective: ${perDir} bars (${side} override)`
+    if (globalVal !== '') return `Effective: ${globalVal} bars (from global)`
+    return 'Effective: Off (from global)'
+  }
+
+  const effectiveTrailingLabel = (
+    perDirEnabled: boolean,
+    perDirConfig: TrailingStopConfig,
+    globalEnabled: boolean,
+    globalConfig: TrailingStopConfig,
+    side: 'long' | 'short',
+    hasOverride: boolean
+  ): string => {
+    const enabled = hasOverride ? perDirEnabled : globalEnabled
+    const cfg = hasOverride ? perDirConfig : globalConfig
+    const source = hasOverride ? `${side} override` : 'from global'
+    if (!enabled) return `Effective: off (${source})`
+    const step = cfg.type === 'pct' ? `${cfg.value}% step` : `${cfg.value}× ATR`
+    const activation = cfg.activate_on_profit && cfg.activate_pct ? `, activates at +${cfg.activate_pct}%` : ''
+    return `Effective: on, ${step}${activation} (${source})`
+  }
+
+  const effectiveLabelStyle: React.CSSProperties = {
+    fontSize: 11,
+    color: 'var(--text-muted)',
+    marginTop: 2,
+    lineHeight: '1.3',
+  }
+
   // ─── Settings JSX (portaled into right panel or rendered inline) ────────────
   const settingsJSX = (
     <div style={styles.settingsPanelInner}>
@@ -575,7 +612,7 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
           <div style={styles.groupTitle}>Capital &amp; Fees</div>
           <div style={styles.settingsRow}>
             <label style={styles.settingsLabel}>Capital ($)</label>
-            <input type="number" value={capital} onChange={e => setCapital(+e.target.value)} style={styles.settingsInput} />
+            <input type="number" value={capital} min={0} onChange={e => setCapital(+e.target.value)} style={styles.settingsInput} />
           </div>
           <div style={styles.settingsRow}>
             <label style={styles.settingsLabel}>% of Capital</label>
@@ -682,11 +719,11 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
           <div style={styles.groupTitle}>Risk Management</div>
           <div style={styles.settingsRow}>
             <label style={styles.settingsLabel}>Stop Loss (%)</label>
-            <input type="number" value={stopLoss} step={0.5} min={0} placeholder="Off" onChange={e => setStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+            <input type="number" value={stopLoss} step={0.5} min={0} max={99} placeholder="Off" onChange={e => setStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
           </div>
           <div style={styles.settingsRow}>
             <label style={styles.settingsLabel}>Time Stop (bars)</label>
-            <input type="number" value={maxBarsHeld} step={1} min={1} placeholder="Off" onChange={e => setMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+            <input type="number" value={maxBarsHeld} step={1} min={1} max={10000} placeholder="Off" onChange={e => setMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
           </div>
           <div style={{ ...styles.settingsRow, marginTop: 4 }}>
             <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
@@ -719,7 +756,7 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
                   <input type="checkbox" checked={trailingConfig.activate_on_profit} onChange={e => setTrailingConfig(c => ({ ...c, activate_on_profit: e.target.checked }))} />
                   Activate after
                 </label>
-                <input type="number" value={trailingConfig.activate_pct} step={0.5} min={0} disabled={!trailingConfig.activate_on_profit} onChange={e => setTrailingConfig(c => ({ ...c, activate_pct: +e.target.value }))} style={{ ...styles.settingsInput, width: 48, opacity: trailingConfig.activate_on_profit ? 1 : 0.35 }} />
+                <input type="number" value={trailingConfig.activate_pct} step={0.5} min={0} max={100} disabled={!trailingConfig.activate_on_profit} onChange={e => setTrailingConfig(c => ({ ...c, activate_pct: +e.target.value }))} style={{ ...styles.settingsInput, width: 48, opacity: trailingConfig.activate_on_profit ? 1 : 0.35 }} />
                 <span style={{ fontSize: 11, color: '#8b949e' }}>% profit</span>
               </div>
             </div>
@@ -793,12 +830,14 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
             <div style={{ fontSize: 11, color: '#3fb950', fontWeight: 600, marginBottom: 4 }}>Long</div>
             <div style={styles.settingsRow}>
               <label style={styles.settingsLabel}>Stop Loss (%)</label>
-              <input type="number" value={longStopLoss} step={0.5} min={0} placeholder="global" onChange={e => setLongStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+              <input type="number" value={longStopLoss} step={0.5} min={0} max={99} placeholder="global" onChange={e => setLongStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
             </div>
+            <div style={effectiveLabelStyle}>{effectiveStopLabel(longStopLoss, stopLoss, 'long')}</div>
             <div style={styles.settingsRow}>
               <label style={styles.settingsLabel}>Time Stop (bars)</label>
-              <input type="number" value={longMaxBarsHeld} step={1} min={1} placeholder="global" onChange={e => setLongMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+              <input type="number" value={longMaxBarsHeld} step={1} min={1} max={10000} placeholder="global" onChange={e => setLongMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
             </div>
+            <div style={effectiveLabelStyle}>{effectiveTimeStopLabel(longMaxBarsHeld, maxBarsHeld, 'long')}</div>
             <div style={styles.settingsRow}>
               <label style={styles.settingsLabel}>Position Size (%)</label>
               <input type="number" value={longPosSize} step={1} min={1} max={100} onChange={e => setLongPosSize(+e.target.value)} style={styles.settingsInput} />
@@ -809,6 +848,7 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
                 Trailing Stop
               </label>
             </div>
+            <div style={effectiveLabelStyle}>{effectiveTrailingLabel(longTrailingEnabled, longTrailingConfig, trailingEnabled, trailingConfig, 'long', longTrailingEnabled)}</div>
             {longTrailingEnabled && (
               <div style={{ paddingLeft: 12, borderLeft: '2px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={styles.settingsRow}>
@@ -828,12 +868,14 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
             <div style={{ fontSize: 11, color: '#f85149', fontWeight: 600, marginTop: 12, marginBottom: 4 }}>Short</div>
             <div style={styles.settingsRow}>
               <label style={styles.settingsLabel}>Stop Loss (%)</label>
-              <input type="number" value={shortStopLoss} step={0.5} min={0} placeholder="global" onChange={e => setShortStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+              <input type="number" value={shortStopLoss} step={0.5} min={0} max={99} placeholder="global" onChange={e => setShortStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
             </div>
+            <div style={effectiveLabelStyle}>{effectiveStopLabel(shortStopLoss, stopLoss, 'short')}</div>
             <div style={styles.settingsRow}>
               <label style={styles.settingsLabel}>Time Stop (bars)</label>
-              <input type="number" value={shortMaxBarsHeld} step={1} min={1} placeholder="global" onChange={e => setShortMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+              <input type="number" value={shortMaxBarsHeld} step={1} min={1} max={10000} placeholder="global" onChange={e => setShortMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
             </div>
+            <div style={effectiveLabelStyle}>{effectiveTimeStopLabel(shortMaxBarsHeld, maxBarsHeld, 'short')}</div>
             <div style={styles.settingsRow}>
               <label style={styles.settingsLabel}>Position Size (%)</label>
               <input type="number" value={shortPosSize} step={1} min={1} max={100} onChange={e => setShortPosSize(+e.target.value)} style={styles.settingsInput} />
@@ -844,6 +886,7 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
                 Trailing Stop
               </label>
             </div>
+            <div style={effectiveLabelStyle}>{effectiveTrailingLabel(shortTrailingEnabled, shortTrailingConfig, trailingEnabled, trailingConfig, 'short', shortTrailingEnabled)}</div>
             {shortTrailingEnabled && (
               <div style={{ paddingLeft: 12, borderLeft: '2px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={styles.settingsRow}>
@@ -1044,28 +1087,47 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
           </div>,
           document.body
         )}
-        {!(regimeEnabled && regimeConfig.on_flip && regimeConfig.on_flip !== 'hold') && (
-          <div style={{ display: 'flex', gap: 4, marginBottom: 8, paddingLeft: 16 }}>
-            {(['long', 'short'] as const).map(d => (
+        <div style={{ display: 'flex', gap: 4, marginBottom: 8, paddingLeft: 16 }}>
+          {(['long', 'short', 'both'] as const).map(opt => {
+            const active = opt === 'both' ? regimeEnabled : (!regimeEnabled && direction === opt);
+            const activeColor = opt === 'long' ? '#26a69a' : opt === 'short' ? '#ef5350' : '#58a6ff';
+            const activeBg = opt === 'long' ? '#1a3a2a' : opt === 'short' ? '#3a1a1a' : '#1a2a3a';
+            return (
               <button
-                key={d}
-                onClick={() => setDirection(d)}
+                key={opt}
+                onClick={() => {
+                  if (opt === 'long') {
+                    setRegimeEnabled(false);
+                    setDirection('long');
+                  } else if (opt === 'short') {
+                    setRegimeEnabled(false);
+                    setDirection('short');
+                  } else {
+                    // Both — enable regime, preserve direction, copy rules on first enable
+                    if (!regimeEnabled) {
+                      setActiveRuleTab('regime');
+                      if (buyRules.length > 0 && buyRules.some(r => r.indicator) && !longBuyRules.some(r => r.indicator)) {
+                        setLongBuyRules([...buyRules]);
+                        setLongSellRules([...sellRules]);
+                        setLongBuyLogic(buyLogic);
+                        setLongSellLogic(sellLogic);
+                      }
+                    }
+                    setRegimeEnabled(true);
+                  }
+                }}
                 style={{
                   padding: '4px 12px', fontSize: 12, borderRadius: 4, border: 'none',
                   cursor: 'pointer', textTransform: 'uppercase', fontWeight: 600,
-                  background: direction === d
-                    ? (d === 'long' ? '#1a3a2a' : '#3a1a1a')
-                    : '#161b22',
-                  color: direction === d
-                    ? (d === 'long' ? '#26a69a' : '#ef5350')
-                    : '#666',
+                  background: active ? activeBg : '#161b22',
+                  color: active ? activeColor : '#666',
                 }}
               >
-                {d}
+                {opt}
               </button>
-            ))}
-          </div>
-        )}
+            );
+          })}
+        </div>
         {regimeEnabled && regimeConfig.on_flip && regimeConfig.on_flip !== 'hold' && (
           <div style={{ padding: '0 16px 6px', fontSize: 11, color: '#8b949e' }}>
             Direction: <span style={{ color: '#58a6ff' }}>{direction}</span> entry · {
@@ -1080,27 +1142,22 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
           </div>
         )}
 
-        {/* Regime filter */}
+        {/* Regime filter — only visible in Both mode */}
+        {regimeEnabled && (
         <div style={{ padding: '6px 16px 4px', borderBottom: '1px solid #21262d' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: regimeEnabled ? 8 : 0 }}>
             <button
-              onClick={() => setRegimeEnabled((v: boolean) => {
-                if (!v) {
-                  setActiveRuleTab('regime');
-                  if (buyRules.length > 0 && buyRules.some(r => r.indicator) && !longBuyRules.some(r => r.indicator)) {
-                    setLongBuyRules([...buyRules]);
-                    setLongSellRules([...sellRules]);
-                    setLongBuyLogic(buyLogic);
-                    setLongSellLogic(sellLogic);
-                  }
-                }
-                return !v;
-              })}
+              onClick={() => {
+                // In Both mode this button toggles regime config panel visibility;
+                // disabling regime here would conflict with the segmented control so we
+                // simply no-op the toggle to avoid double-duty confusion. The segmented
+                // control is the canonical way to leave Both mode.
+              }}
               style={{
                 fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, border: 'none',
-                cursor: 'pointer', textTransform: 'uppercase',
-                background: regimeEnabled ? '#1a2a3a' : '#161b22',
-                color: regimeEnabled ? '#58a6ff' : '#555',
+                cursor: 'default', textTransform: 'uppercase',
+                background: '#1a2a3a',
+                color: '#58a6ff',
               }}
             >
               Regime
@@ -1116,12 +1173,13 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
               </span>
             )}
           </div>
-          {regimeEnabled && !stopLoss && direction === 'long' && (
+          {!stopLoss && direction === 'long' && (
             <div style={{ paddingBottom: 6 }}>
               <span style={{ fontSize: 10, color: '#f0883e' }}>⚠ Add a stop-loss to limit open-position risk during flat periods</span>
             </div>
           )}
         </div>
+        )}
 
         {/* F226: chevron + collapsed chip bar */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 16px 0', borderBottom: ruleEditorCollapsed ? '1px solid #21262d' : 'none' }}>
@@ -1392,7 +1450,12 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
               : <><Play size={14} fill="currentColor" />{' Run Backtest'}</>}
           </button>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
-            <input type="checkbox" checked={debug} onChange={e => setDebug(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={debug}
+              onChange={e => setDebug(e.target.checked)}
+              title="Records every rule evaluation per bar — slower, useful for debugging missed signals."
+            />
             Enable Signal Trace tab
           </label>
           {error && <span style={{ color: 'var(--accent-red)', fontSize: 13, fontWeight: 500 }}>{error}</span>}

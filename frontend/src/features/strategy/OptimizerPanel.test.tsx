@@ -307,6 +307,112 @@ describe('OptimizerPanel runOptimizer validation — ordered branches', () => {
 })
 
 // ---------------------------------------------------------------------------
+// F236 — 2-param Sharpe heatmap smoke test
+// ---------------------------------------------------------------------------
+
+describe('OptimizerPanel — 2-param Sharpe heatmap (F236)', () => {
+
+  beforeEach(() => {
+    localStorage.clear()
+    mockApiPost.mockReset()
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+  })
+
+  /**
+   * Renders the panel with a mocked 2-param optimizer response and asserts
+   * that the heatmap container is present. Uses the `data-testid="sharpe-heatmap"`
+   * attribute added to the CSS grid wrapper in OptimizerPanel.
+   *
+   * The mock response has 4 combos (2×2 grid): buy_rule RSI value (30/40) ×
+   * slippage_bps (1/2). The panel must be in a state where activeRows has 2
+   * entries — we achieve this by seeding localStorage with a 2-param config.
+   */
+  it('renders heatmap container when 2-param sweep result is loaded', async () => {
+    const user = userEvent.setup()
+
+    // Build a strategy request with RSI buy rule (provides buy_rule_0_value param)
+    // and slippage_bps. Two params will be configured via localStorage seed.
+    const req = makeRequest()
+
+    // Seed localStorage with a 2-param config.
+    // Param paths use underscore convention: buy_rule_0_value, slippage_bps.
+    const storageKey = `strategylab-optimizer-config-AAPL-1d-yahoo`
+    localStorage.setItem(storageKey, JSON.stringify({
+      metric: 'sharpe_ratio',
+      topN: '10',
+      paramRows: [
+        { path: 'buy_rule_0_value', min: '25', max: '40', steps: '2' },
+        { path: 'slippage_bps', min: '1', max: '2', steps: '2' },
+        null,
+      ],
+    }))
+
+    // Mock the API to return a 2×2 grid result immediately
+    const mockResult = {
+      results: [
+        { param_values: { 'buy_rule_0_value': 25, 'slippage_bps': 1 }, num_trades: 10, total_return_pct: 20, sharpe_ratio: 1.5, win_rate_pct: 60, max_drawdown_pct: 10, ev_per_trade: 50 },
+        { param_values: { 'buy_rule_0_value': 25, 'slippage_bps': 2 }, num_trades: 8,  total_return_pct: 15, sharpe_ratio: 1.2, win_rate_pct: 55, max_drawdown_pct: 12, ev_per_trade: 40 },
+        { param_values: { 'buy_rule_0_value': 40, 'slippage_bps': 1 }, num_trades: 9,  total_return_pct: 18, sharpe_ratio: 1.3, win_rate_pct: 58, max_drawdown_pct: 11, ev_per_trade: 45 },
+        { param_values: { 'buy_rule_0_value': 40, 'slippage_bps': 2 }, num_trades: 7,  total_return_pct: 12, sharpe_ratio: 0.9, win_rate_pct: 50, max_drawdown_pct: 14, ev_per_trade: 30 },
+      ],
+      total_combos: 4,
+      completed: 4,
+      skipped: 0,
+      timed_out: false,
+    }
+    mockApiPost.mockResolvedValueOnce({ data: mockResult })
+
+    render(createElement(OptimizerPanel, { lastRequest: req }))
+
+    // Wait for localStorage restore useEffect to fire and the Param 2 select to appear.
+    // The effect runs async after mount; we wait until the remove (✕) button for param 2
+    // is visible, which confirms activeRows has 2 entries.
+    await screen.findByRole('button', { name: '✕' })
+
+    await clickRunButton(user)
+
+    // Wait for the heatmap to appear
+    const heatmap = await screen.findByTestId('sharpe-heatmap')
+    expect(heatmap).toBeInTheDocument()
+
+    // The grid should have 4 cells (2 vals1 × 2 vals2)
+    expect(heatmap.children).toHaveLength(4)
+  })
+
+  it('does NOT render heatmap for 1-param sweep', async () => {
+    const user = userEvent.setup()
+    const req = makeRequest()
+
+    // 1-param config (default — no seed needed)
+    const mockResult = {
+      results: [
+        { param_values: { 'slippage_bps': 0 }, num_trades: 10, total_return_pct: 20, sharpe_ratio: 1.5, win_rate_pct: 60, max_drawdown_pct: 10, ev_per_trade: 50 },
+        { param_values: { 'slippage_bps': 20 }, num_trades: 8, total_return_pct: 10, sharpe_ratio: 0.8, win_rate_pct: 50, max_drawdown_pct: 15, ev_per_trade: 20 },
+      ],
+      total_combos: 2,
+      completed: 2,
+      skipped: 0,
+      timed_out: false,
+    }
+    mockApiPost.mockResolvedValueOnce({ data: mockResult })
+
+    render(createElement(OptimizerPanel, { lastRequest: req }))
+    await clickRunButton(user)
+
+    // Wait for results to load (table should appear)
+    await screen.findByRole('table')
+
+    // Heatmap must NOT be present for a 1-param sweep
+    expect(screen.queryByTestId('sharpe-heatmap')).not.toBeInTheDocument()
+  })
+
+})
+
+// ---------------------------------------------------------------------------
 // Ordering invariant — the critical test
 // ---------------------------------------------------------------------------
 

@@ -156,6 +156,50 @@ export function applyParamPath(req: StrategyRequest, path: string, value: number
   return req
 }
 
+// ---------------------------------------------------------------------------
+// Grouped param options (F237)
+// ---------------------------------------------------------------------------
+
+export interface ParamGroup {
+  group: string
+  options: ParamOption[]
+}
+
+/**
+ * Groups a flat ParamOption[] by rule, returning an ordered list of groups.
+ * Group names: "Buy Rule 1", "Buy Rule 2", …, "Sell Rule 1", …, "Risk", "Costs".
+ * Internal order within each group is preserved.
+ */
+export function groupParamOptions(opts: ParamOption[]): ParamGroup[] {
+  const map = new Map<string, ParamOption[]>()
+
+  const groupKey = (path: string): string => {
+    const buyMatch = path.match(/^buy_rule_(\d+)_/)
+    if (buyMatch) return `Buy Rule ${parseInt(buyMatch[1], 10) + 1}`
+    const sellMatch = path.match(/^sell_rule_(\d+)_/)
+    if (sellMatch) return `Sell Rule ${parseInt(sellMatch[1], 10) + 1}`
+    if (path === 'slippage_bps' || path === 'borrow_rate_annual') return 'Costs'
+    // stop_loss_pct, trailing_stop_*, max_bars_held → Risk
+    return 'Risk'
+  }
+
+  for (const opt of opts) {
+    const key = groupKey(opt.path)
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(opt)
+  }
+
+  return Array.from(map.entries()).map(([group, options]) => ({ group, options }))
+}
+
+/**
+ * Returns true when the strategy has more than 2 rules total (buy + sell),
+ * triggering optgroup rendering in the param selects.
+ */
+export function shouldGroupParamOptions(req: StrategyRequest): boolean {
+  return req.buy_rules.length + req.sell_rules.length > 2
+}
+
 export function linspace(min: number, max: number, steps: number): number[] {
   if (steps <= 1) return [min]
   const out: number[] = []

@@ -167,54 +167,49 @@ export default function SensitivityPanel({ lastRequest, sweepInit, onSweepConsum
       </div>
 
       {/* Controls */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end', marginBottom: 12 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <label style={{ color: '#666', fontSize: 11 }}>Parameter</label>
-          <select
-            value={selectedPath}
-            onChange={e => handleParamChange(e.target.value)}
-            style={{ background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3, padding: '3px 6px', fontSize: 12 }}
-          >
-            {paramOptions.map(o => (
-              <option key={o.path} value={o.path}>{o.label} {o.currentValue != null ? `(now: ${o.currentValue})` : ''}</option>
-            ))}
-          </select>
-        </div>
+      <div className="strategy-control-row" style={{ flexWrap: 'wrap', marginBottom: 12 }}>
+        <label>Parameter</label>
+        <select
+          value={selectedPath}
+          onChange={e => handleParamChange(e.target.value)}
+          className="wide-select"
+          style={{ background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3 }}
+        >
+          {paramOptions.map(o => (
+            <option key={o.path} value={o.path}>{o.label} {o.currentValue != null ? `(now: ${o.currentValue})` : ''}</option>
+          ))}
+        </select>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <label style={{ color: '#666', fontSize: 11 }}>Min</label>
-          <input
-            type="number"
-            value={minVal}
-            placeholder={String(+(displayMin).toFixed(2))}
-            onChange={e => setMinVal(e.target.value)}
-            style={{ width: 72, background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3, padding: '3px 6px', fontSize: 12 }}
-          />
-        </div>
+        <label>Min</label>
+        <input
+          type="number"
+          value={minVal}
+          placeholder={String(+(displayMin).toFixed(2))}
+          onChange={e => setMinVal(e.target.value)}
+          className="num-input"
+          style={{ background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3 }}
+        />
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <label style={{ color: '#666', fontSize: 11 }}>Max</label>
-          <input
-            type="number"
-            value={maxVal}
-            placeholder={String(+(displayMax).toFixed(2))}
-            onChange={e => setMaxVal(e.target.value)}
-            style={{ width: 72, background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3, padding: '3px 6px', fontSize: 12 }}
-          />
-        </div>
+        <label>Max</label>
+        <input
+          type="number"
+          value={maxVal}
+          placeholder={String(+(displayMax).toFixed(2))}
+          onChange={e => setMaxVal(e.target.value)}
+          className="num-input"
+          style={{ background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3 }}
+        />
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <label style={{ color: '#666', fontSize: 11 }}>Steps</label>
-          <input
-            type="number"
-            min={2}
-            max={25}
-            value={steps}
-            placeholder={String(displaySteps)}
-            onChange={e => setSteps(e.target.value)}
-            style={{ width: 56, background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3, padding: '3px 6px', fontSize: 12 }}
-          />
-        </div>
+        <label>Steps</label>
+        <input
+          type="number"
+          min={2}
+          max={25}
+          value={steps}
+          placeholder={String(displaySteps)}
+          onChange={e => setSteps(e.target.value)}
+          style={{ width: 56, background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3 }}
+        />
 
         <button
           onClick={runSweep}

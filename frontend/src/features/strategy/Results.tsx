@@ -795,17 +795,17 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
               const totalSlip = (buy?.slippage ?? 0) + (sell.slippage ?? 0)
               const totalComm = (buy?.commission ?? 0) + (sell.commission ?? 0)
               return (
-                <div key={i} style={styles.tradeRow}>
+                <div key={i} style={{ ...styles.tradeRow, borderLeft: `3px solid ${color}` }}>
                   <span style={{ ...styles.tradeCell, width: 24, color: '#8b949e' }}>{i + 1}</span>
                   <span style={{ ...styles.tradeCell, width: 115, color: '#e5c07b' }}>{fmtDate(buy?.date)}</span>
                   <span style={{ ...styles.tradeCell, width: 65, color: '#e5c07b' }}>${buy?.price.toFixed(2)}</span>
                   <span style={{ ...styles.tradeCell, width: 115, color }}>{fmtDate(sell.date)}</span>
                   <span style={{ ...styles.tradeCell, width: 65, color }}>${sell.price.toFixed(2)}</span>
                   <span style={{ ...styles.tradeCell, width: 45, color: '#8b949e' }}>{sell.shares?.toFixed(1)}</span>
-                  <span style={{ ...styles.tradeCell, width: 60, color }}>
+                  <span style={{ ...styles.tradeCell, width: 60, color, fontWeight: 700 }}>
                     {win ? '+' : ''}{sell.pnl?.toFixed(2)}
                   </span>
-                  <span style={{ ...styles.tradeCell, width: 50, color }}>
+                  <span style={{ ...styles.tradeCell, width: 50, color, fontWeight: 700 }}>
                     {win ? '+' : ''}{sell.pnl_pct?.toFixed(2)}%
                   </span>
                   <span style={{ ...styles.tradeCell, width: 50, color: totalSlip > 0 ? '#f0883e' : '#484f58' }}>

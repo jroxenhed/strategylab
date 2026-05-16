@@ -36,6 +36,7 @@ class Rule(BaseModel):
     negated: bool = False
     visualize: bool = False
     params: Optional[dict] = None
+    timeframe: Optional[str] = None  # F246: None = base TF; e.g. "1d", "1h" = evaluate rule on HTF bars then align
 
 
 # F174: WORKER-SAFE — pure dict literal constants; no I/O or external state.

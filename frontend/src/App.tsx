@@ -22,6 +22,7 @@ type AppTab = 'chart' | 'trading' | 'discovery'
 
 const STORAGE_KEY = 'strategylab-settings'
 const BACKTEST_CACHE_KEY = 'strategylab-last-backtest'
+const CHART_COLLAPSED_KEY = 'strategylab-chart-collapsed'
 const EMPTY_OHLCV: never[] = []
 const today = new Date().toISOString().slice(0, 10)
 const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -116,8 +117,15 @@ export default function App() {
   // F227 — ref into StrategyBuilder for Apply-from-Optimizer/WFA
   const strategyBuilderRef = useRef<StrategyBuilderHandle>(null)
   const [chartEnabled, setChartEnabled] = useState(true)
+  // F248 — collapsible chart panel; persisted to localStorage
+  const [chartCollapsed, setChartCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem(CHART_COLLAPSED_KEY) === 'true' } catch { return false }
+  })
+  // F244 — narrow rails below 1440 px (evaluated once on mount; viewport changes during use are rare)
+  const narrowRails = useMemo(() => window.innerWidth < 1440, [])
   const [datePreset, setDatePreset] = useState<DatePreset>((saved?.datePreset as DatePreset) ?? 'Y')
   const [viewInterval, setViewInterval] = useState(saved?.viewInterval ?? interval)
+  const [isAggOpen, setIsAggOpen] = useState(false)
   const intervalRef = useRef(interval)
 
   useEffect(() => {
@@ -148,6 +156,10 @@ export default function App() {
       localStorage.removeItem(BACKTEST_CACHE_KEY)
     }
   }, [backtestResult, lastRequest])
+
+  useEffect(() => {
+    try { localStorage.setItem(CHART_COLLAPSED_KEY, String(chartCollapsed)) } catch {}
+  }, [chartCollapsed])
 
   const chartInterval = chartEnabled ? viewInterval : interval
   const { data: ohlcv = EMPTY_OHLCV, isLoading: ohlcvLoading, isFetching: ohlcvFetching, isError: ohlcvError, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, chartInterval, dataSource, extendedHours)
@@ -201,17 +213,51 @@ export default function App() {
               <button onClick={() => setChartEnabled(c => !c)} style={{ ...styles.chartToggleBtn, opacity: chartEnabled ? 0.5 : 1 }}>
                 {chartEnabled ? 'Disable Chart' : 'Enable Chart'}
               </button>
+              <button
+                onClick={() => setChartCollapsed(c => !c)}
+                style={styles.chevronBtn}
+                title={chartCollapsed ? 'Expand chart' : 'Collapse chart'}
+                aria-label={chartCollapsed ? 'Expand chart' : 'Collapse chart'}
+              >
+                {chartCollapsed ? '▴' : '▾'}
+              </button>
+              {/* F235 — sticky metrics strip after button cluster */}
+              {backtestResult && (() => {
+                const s = backtestResult.summary
+                const ret = s.total_return_pct != null ? (s.total_return_pct >= 0 ? '+' : '') + s.total_return_pct.toFixed(1) + '%' : '—'
+                const sharpe = s.sharpe_ratio != null ? s.sharpe_ratio.toFixed(2) : '—'
+                const dd = s.max_drawdown_pct != null ? '−' + Math.abs(s.max_drawdown_pct).toFixed(1) + '%' : '—'
+                const ntrades = s.num_trades ?? 0
+                return (
+                  <span style={styles.metricsStrip} title={`${ticker} ${interval} backtest summary`}>
+                    {ticker} {interval} · {ntrades} trade{ntrades !== 1 ? 's' : ''} · {ret} · Sharpe {sharpe} · MaxDD {dd}
+                  </span>
+                )
+              })()}
               {chartEnabled && viewIntervalOptions.length > 1 && (
-                <select
-                  value={viewInterval}
-                  onChange={e => setViewInterval(e.target.value)}
-                  style={{ background: '#21262d', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px', fontSize: 12 }}
-                  title="Chart display interval"
-                >
-                  {viewIntervalOptions.map(o => (
-                    <option key={o.value} value={o.value}>{o.value === interval ? o.label : `View ${o.label}`}</option>
-                  ))}
-                </select>
+                viewInterval === interval && !isAggOpen ? (
+                  <button
+                    onClick={() => setIsAggOpen(true)}
+                    style={{ background: 'none', border: '1px solid #30363d', borderRadius: 4, color: '#8b949e', cursor: 'pointer', fontSize: 11, padding: '2px 6px' }}
+                    title="Aggregate chart to a coarser interval"
+                  >Aggregate ▾</button>
+                ) : (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    {viewInterval !== interval && <span style={{ fontSize: 11, color: '#8b949e' }}>Aggregate:</span>}
+                    <select
+                      value={viewInterval}
+                      onChange={e => { setViewInterval(e.target.value); if (e.target.value === interval) setIsAggOpen(false); }}
+                      onBlur={() => { if (viewInterval === interval) setIsAggOpen(false); }}
+                      style={{ background: '#21262d', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px', fontSize: 12 }}
+                      title="Chart display interval"
+                      autoFocus={isAggOpen && viewInterval === interval}
+                    >
+                      {viewIntervalOptions.map(o => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </span>
+                )
               )}
             </>
           )}
@@ -224,7 +270,7 @@ export default function App() {
           <Group orientation="horizontal" style={{ height: '100%' }}>
 
             {/* LEFT SIDEBAR */}
-            <Panel defaultSize="14%" minSize="8%">
+            <Panel defaultSize={narrowRails ? '11%' : '14%'} minSize="8%">
               <Sidebar
                 ticker={ticker}
                 start={start}
@@ -257,9 +303,9 @@ export default function App() {
               <div style={{ height: '100%', overflow: 'hidden' }}>
                 <Group orientation="vertical" style={{ height: '100%' }}>
 
-                  {/* CHART */}
+                  {/* CHART — F248: display:none when collapsed keeps charts mounted (lw-charts v5 teardown trap) */}
                   <Panel defaultSize="50%" minSize="15%">
-                    <div className="panel-fill">
+                    <div className="panel-fill" style={chartCollapsed ? { display: 'none' } : undefined}>
                       {!chartEnabled ? (
                         <div style={styles.chartDisabled}>
                           <span style={{ color: '#8b949e', fontSize: 12 }}>Chart disabled</span>
@@ -388,7 +434,7 @@ export default function App() {
             <Separator className="resize-handle-v" />
 
             {/* RIGHT SIDEBAR: Watchlist + Settings */}
-            <Panel defaultSize="20%" minSize="12%" collapsible>
+            <Panel defaultSize={narrowRails ? '17%' : '20%'} minSize="12%" collapsible>
               <div style={styles.rightPanel}>
                 <Group orientation="vertical" style={{ height: '100%' }}>
                   <Panel defaultSize="30%" minSize="15%">
@@ -443,6 +489,7 @@ const styles: Record<string, React.CSSProperties> = {
   empty: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 14 },
   chartDisabled: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12 },
   chartToggleBtn: { fontSize: 11, padding: '3px 10px', borderRadius: 4, background: '#21262d', color: '#8b949e', border: '1px solid #30363d', cursor: 'pointer' },
+  chevronBtn: { fontSize: 14, width: 14, height: 14, lineHeight: '14px', padding: 0, background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
   rightPanel: {
     height: '100%',
     display: 'flex',
@@ -450,5 +497,10 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'var(--bg-main)',
     borderLeft: '1px solid var(--border-light)',
     overflow: 'hidden',
+  },
+  metricsStrip: {
+    fontSize: 11, color: 'var(--text-secondary)',
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+    padding: '0 6px', maxWidth: 380,
   },
 }

@@ -9,7 +9,23 @@ interface IndicatorListProps {
 
 const AVAILABLE_TYPES: IndicatorType[] = ['rsi', 'macd', 'bb', 'atr', 'ma', 'volume', 'stochastic', 'vwap', 'adx']
 
-const PRESET_COLORS = ['#f0883e', '#58a6ff', '#a371f7', '#3fb950', '#f85149', '#d2a8ff', '#79c0ff', '#ffa657', '#ff7b72', '#7ee787']
+// (a) PRESET_COLORS — 14 Tailwind 500-tone colors (lines 13–28)
+const PRESET_COLORS = [
+  '#ef4444', // red-500
+  '#f97316', // orange-500
+  '#f59e0b', // amber-500
+  '#eab308', // yellow-500
+  '#84cc16', // lime-500
+  '#22c55e', // green-500
+  '#10b981', // emerald-500
+  '#14b8a6', // teal-500
+  '#06b6d4', // cyan-500
+  '#0ea5e9', // sky-500
+  '#3b82f6', // blue-500
+  '#8b5cf6', // violet-500
+  '#d946ef', // fuchsia-500
+  '#ec4899', // pink-500
+]
 const SUPPORTS_COLOR = new Set<IndicatorType>(['ma', 'rsi', 'atr', 'macd'])
 
 function NumberParamInput({ field, value, onChange, onCommit }: {
@@ -53,11 +69,70 @@ function NumberParamInput({ field, value, onChange, onCommit }: {
   )
 }
 
+// (c) ColorPicker — preset swatches + custom hex input (lines 72–108)
+function ColorPicker({ color, onSelect }: { color: string; onSelect: (c: string) => void }) {
+  const [draft, setDraft] = useState(color)
+  const [invalid, setInvalid] = useState(false)
+
+  // Keep draft in sync when color changes externally (e.g. another picker click)
+  useEffect(() => { setDraft(color); setInvalid(false) }, [color])
+
+  const HEX_RE = /^#[0-9a-fA-F]{6}$/
+
+  function commitDraft(v: string) {
+    const trimmed = v.trim()
+    if (HEX_RE.test(trimmed)) {
+      setInvalid(false)
+      onSelect(trimmed.toLowerCase())
+    } else {
+      // Revert draft to last valid color
+      setInvalid(true)
+      setTimeout(() => { setDraft(color); setInvalid(false) }, 800)
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 10, color: 'var(--text-muted)', minWidth: 40 }}>Color</span>
+      {PRESET_COLORS.map(c => (
+        <span
+          key={c}
+          onClick={() => onSelect(c)}
+          style={{
+            width: 13, height: 13, borderRadius: '50%', background: c, cursor: 'pointer',
+            border: color === c ? '2px solid var(--text-primary)' : '2px solid transparent',
+            flexShrink: 0,
+          }}
+        />
+      ))}
+      {/* Custom hex input — 6-char wide, validates on blur */}
+      <input
+        type="text"
+        value={draft}
+        maxLength={7}
+        onChange={e => { setDraft(e.target.value); setInvalid(false) }}
+        onBlur={() => commitDraft(draft)}
+        onKeyDown={e => { if (e.key === 'Enter') commitDraft(draft) }}
+        title="Custom hex color (#rrggbb)"
+        style={{
+          width: 52, fontSize: 10, padding: '1px 4px',
+          background: 'var(--bg-main)',
+          border: `1px solid ${invalid ? '#ef4444' : 'var(--border-light)'}`,
+          borderRadius: 3, color: 'var(--text-primary)',
+          fontFamily: 'monospace',
+        }}
+      />
+    </div>
+  )
+}
+
 export default function IndicatorList({ indicators, onChange }: IndicatorListProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [showAddMenu, setShowAddMenu] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const dragIdRef = useRef<string | null>(null)
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
 
   useEffect(() => () => clearTimeout(debounceRef.current), [])
 
@@ -89,6 +164,41 @@ export default function IndicatorList({ indicators, onChange }: IndicatorListPro
   function addIndicator(type: IndicatorType) {
     onChange(prev => [...prev, createInstance(type)])
     setShowAddMenu(false)
+  }
+
+  function handleDragStart(id: string) {
+    dragIdRef.current = id
+  }
+
+  function handleDragOver(e: React.DragEvent, id: string) {
+    e.preventDefault()
+    setDragOverId(id)
+  }
+
+  function handleDrop(e: React.DragEvent, targetId: string) {
+    e.preventDefault()
+    const sourceId = dragIdRef.current
+    if (!sourceId || sourceId === targetId) {
+      setDragOverId(null)
+      dragIdRef.current = null
+      return
+    }
+    onChange(prev => {
+      const from = prev.findIndex(i => i.id === sourceId)
+      const to = prev.findIndex(i => i.id === targetId)
+      if (from === -1 || to === -1) return prev
+      const next = [...prev]
+      const [moved] = next.splice(from, 1)
+      next.splice(to, 0, moved)
+      return next
+    })
+    setDragOverId(null)
+    dragIdRef.current = null
+  }
+
+  function handleDragEnd() {
+    setDragOverId(null)
+    dragIdRef.current = null
   }
 
   return (
@@ -135,46 +245,83 @@ export default function IndicatorList({ indicators, onChange }: IndicatorListPro
         const def = INDICATOR_DEFS[inst.type]
         const isExpanded = expandedId === inst.id
         const summary = paramSummary(inst)
+        const hasSettings = def.paramFields.length > 0 || SUPPORTS_COLOR.has(inst.type) || def.pane === 'main'
 
         return (
-          <div key={inst.id} style={{
-            background: 'var(--bg-input)', borderRadius: 6, padding: '8px 10px',
-            marginBottom: 6,
-            border: isExpanded ? '1px solid var(--border-light)' : '1px solid transparent',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div
+            key={inst.id}
+            draggable
+            onDragStart={() => handleDragStart(inst.id)}
+            onDragOver={e => handleDragOver(e, inst.id)}
+            onDrop={e => handleDrop(e, inst.id)}
+            onDragEnd={handleDragEnd}
+            style={{
+              background: dragOverId === inst.id ? 'var(--bg-panel-hover)' : 'var(--bg-input)',
+              borderRadius: 6,
+              // (b) Denser collapsed row — 4px vertical padding → ≤24px total row height (lines 108–111)
+              padding: isExpanded ? '6px 10px' : '3px 8px',
+              marginBottom: 4,
+              border: dragOverId === inst.id
+                ? '1px solid var(--accent-primary)'
+                : isExpanded ? '1px solid var(--border-light)' : '1px solid transparent',
+              outline: 'none',
+            }}
+          >
+            {/* (b) Collapsed row: single-line summary "RSI · 14 · Wilder ▾" at font-size 11 (lines 113–145) */}
+            <div
+              style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 18, cursor: hasSettings ? 'pointer' : 'default' }}
+              onClick={() => hasSettings && setExpandedId(isExpanded ? null : inst.id)}
+            >
+              {/* Drag handle — initiates drag, does not toggle expand */}
+              <span
+                onMouseDown={e => e.stopPropagation()}
+                style={{
+                  cursor: 'grab', color: 'var(--text-muted)', fontSize: 11,
+                  flexShrink: 0, userSelect: 'none', lineHeight: 1,
+                }}
+                title="Drag to reorder"
+              >
+                ⋮⋮
+              </span>
+              {/* Color swatch dot — replaces checkbox-only color hint in collapsed state */}
+              {SUPPORTS_COLOR.has(inst.type) && (
+                <span style={{
+                  width: 8, height: 8, borderRadius: '50%',
+                  background: inst.color ?? PRESET_COLORS[0],
+                  flexShrink: 0,
+                }} />
+              )}
               <input
                 type="checkbox"
                 checked={inst.enabled}
-                onChange={() => toggle(inst.id)}
-                style={{ accentColor: inst.color ?? 'var(--accent-primary)', margin: 0 }}
+                onChange={e => { e.stopPropagation(); toggle(inst.id) }}
+                onClick={e => e.stopPropagation()}
+                style={{ accentColor: inst.color ?? 'var(--accent-primary)', margin: 0, width: 11, height: 11 }}
               />
-              <span style={{ flex: 1, fontSize: 12, color: inst.enabled ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                {def.label}
+              {/* Label + summary in one truncated line */}
+              <span style={{
+                flex: 1, fontSize: 11, lineHeight: '16px',
+                color: inst.enabled ? 'var(--text-primary)' : 'var(--text-muted)',
+                overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
+              }}>
+                {def.label}{summary ? ` · ${summary}` : ''}
               </span>
-              {summary && (
-                <span style={{ fontSize: 10, color: 'var(--text-muted)', marginRight: 4 }}>{summary}</span>
-              )}
-              {(def.paramFields.length > 0 || SUPPORTS_COLOR.has(inst.type) || def.pane === 'main') && (
-                <span
-                  onClick={() => setExpandedId(isExpanded ? null : inst.id)}
-                  style={{ cursor: 'pointer', color: isExpanded ? 'var(--accent-primary)' : 'var(--text-muted)', fontSize: 13 }}
-                  title="Settings"
-                >
-                  ⚙
+              {hasSettings && (
+                <span style={{ fontSize: 9, color: 'var(--text-muted)', flexShrink: 0 }}>
+                  {isExpanded ? '▴' : '▾'}
                 </span>
               )}
               <span
-                onClick={() => remove(inst.id)}
-                style={{ cursor: 'pointer', color: 'var(--text-muted)', fontSize: 11 }}
+                onClick={e => { e.stopPropagation(); remove(inst.id) }}
+                style={{ cursor: 'pointer', color: 'var(--text-muted)', fontSize: 10, flexShrink: 0 }}
                 title="Remove"
               >
                 ✕
               </span>
             </div>
 
-            {isExpanded && (def.paramFields.length > 0 || SUPPORTS_COLOR.has(inst.type) || def.pane === 'main') && (
-              <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {isExpanded && hasSettings && (
+              <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {def.pane === 'main' && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontSize: 10, color: 'var(--text-muted)', minWidth: 40 }}>TF</span>
@@ -195,20 +342,10 @@ export default function IndicatorList({ indicators, onChange }: IndicatorListPro
                   </div>
                 )}
                 {SUPPORTS_COLOR.has(inst.type) && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: 10, color: 'var(--text-muted)', minWidth: 40 }}>Color</span>
-                    {PRESET_COLORS.map(c => (
-                      <span
-                        key={c}
-                        onClick={() => onChange(prev => prev.map(i => i.id === inst.id ? { ...i, color: c } : i))}
-                        style={{
-                          width: 14, height: 14, borderRadius: '50%', background: c, cursor: 'pointer',
-                          border: (inst.color ?? PRESET_COLORS[0]) === c ? '2px solid var(--text-primary)' : '2px solid transparent',
-                          flexShrink: 0,
-                        }}
-                      />
-                    ))}
-                  </div>
+                  <ColorPicker
+                    color={inst.color ?? PRESET_COLORS[0]}
+                    onSelect={c => onChange(prev => prev.map(i => i.id === inst.id ? { ...i, color: c } : i))}
+                  />
                 )}
                 {def.paramFields.map(field => {
                   if (field.kind === 'select') {
