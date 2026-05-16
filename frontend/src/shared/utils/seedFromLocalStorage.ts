@@ -13,28 +13,37 @@
 import { WATCHLIST_KEY } from '../../features/watchlist/watchlistStorage'
 import { SAVED_STRATEGIES_KEY } from '../../features/strategy/savedStrategies'
 
-const SEED_ATTEMPTED_KEY = 'strategylab-seed-attempted'
+// Version-suffixed key so this deploy retries any browser whose previous
+// `strategylab-seed-attempted` flag was set by the broken (wrong-URL) build.
+const SEED_ATTEMPTED_KEY = 'strategylab-seed-attempted-v2'
 
 const API_BASE = (import.meta as any).env?.VITE_API_URL as string || 'http://localhost:8000'
 
 export async function seedFromLocalStorageIfAny(): Promise<void> {
+  // The /seed endpoints are server-idempotent (only write when empty). We run
+  // the seed unconditionally until BOTH server stores acknowledge a 200
+  // response — only then mark seed-attempted. This protects against an
+  // earlier broken build that set the flag before any successful POST.
   if (localStorage.getItem(SEED_ATTEMPTED_KEY) === '1') return
-
-  // Mark attempted before the async work so a crash/reload doesn't retry
-  localStorage.setItem(SEED_ATTEMPTED_KEY, '1')
 
   const watchlistRaw = localStorage.getItem(WATCHLIST_KEY)
   const strategiesRaw = localStorage.getItem(SAVED_STRATEGIES_KEY)
 
-  if (!watchlistRaw && !strategiesRaw) return
+  if (!watchlistRaw && !strategiesRaw) {
+    // Nothing to seed — mark attempted and exit
+    localStorage.setItem(SEED_ATTEMPTED_KEY, '1')
+    return
+  }
 
   let watchlistSeeded = false
   let strategiesSeeded = false
+  let watchlistAck = !watchlistRaw // treat absence as already-acked
+  let strategiesAck = !strategiesRaw
 
   if (watchlistRaw) {
     try {
       const state = JSON.parse(watchlistRaw)
-      const resp = await fetch(`${API_BASE}/watchlist/seed`, {
+      const resp = await fetch(`${API_BASE}/api/trading/watchlist/seed`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(state),
@@ -42,16 +51,17 @@ export async function seedFromLocalStorageIfAny(): Promise<void> {
       if (resp.ok) {
         const result: { seeded: boolean } = await resp.json()
         if (result.seeded) watchlistSeeded = true
+        watchlistAck = true
       }
     } catch {
-      // Network failure — skip silently
+      // Network failure — skip silently; flag remains unset → retry next load
     }
   }
 
   if (strategiesRaw) {
     try {
       const list = JSON.parse(strategiesRaw)
-      const resp = await fetch(`${API_BASE}/strategies/seed`, {
+      const resp = await fetch(`${API_BASE}/api/strategies/seed`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(list),
@@ -59,10 +69,18 @@ export async function seedFromLocalStorageIfAny(): Promise<void> {
       if (resp.ok) {
         const result: { seeded: boolean } = await resp.json()
         if (result.seeded) strategiesSeeded = true
+        strategiesAck = true
       }
     } catch {
-      // Network failure — skip silently
+      // Network failure — skip silently; flag remains unset → retry next load
     }
+  }
+
+  // Mark attempted only when both endpoints responded successfully — otherwise
+  // a transient network failure (or a wrong-URL deploy) would permanently
+  // block the migration.
+  if (watchlistAck && strategiesAck) {
+    localStorage.setItem(SEED_ATTEMPTED_KEY, '1')
   }
 
   if (watchlistSeeded || strategiesSeeded) {
