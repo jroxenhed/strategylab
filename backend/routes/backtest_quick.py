@@ -141,8 +141,11 @@ def _run_quick(req: QuickBacktestRequest) -> QuickBacktestResult:
     low = df["Low"]
     volume = df["Volume"] if "Volume" in df.columns else None
 
-    buy_rules = [migrate_rule(r) for r in req.buy_rules]
-    sell_rules = [migrate_rule(r) for r in req.sell_rules]
+    # F246: HTF rules not supported in quick backtest — strip timeframe so
+    # callers get base-TF semantics consistently instead of silent drop.
+    # Mirrors the WFA strip pattern in routes/walk_forward.py.
+    buy_rules = [migrate_rule(r).model_copy(update={"timeframe": None}) for r in req.buy_rules]
+    sell_rules = [migrate_rule(r).model_copy(update={"timeframe": None}) for r in req.sell_rules]
     all_rules = buy_rules + sell_rules
     indicators = compute_indicators(close, high=high, low=low, volume=volume, rules=all_rules)
 
