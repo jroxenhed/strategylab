@@ -90,6 +90,72 @@ export function buildParamOptions(req: StrategyRequest, defaultSteps = 9): Param
   return opts
 }
 
+/**
+ * Apply a single optimizer param-path write to a StrategyRequest, returning a
+ * new request object (immutable update). Mirrors the path encoding used by
+ * buildParamOptions so the read/write pair stays colocated.
+ *
+ * Supported paths:
+ *   buy_rule_${i}_value            → req.buy_rules[i].value
+ *   buy_rule_${i}_params_${key}    → req.buy_rules[i].params[key]
+ *   sell_rule_${i}_value           → req.sell_rules[i].value
+ *   sell_rule_${i}_params_${key}   → req.sell_rules[i].params[key]
+ *   stop_loss_pct                  → req.stop_loss_pct
+ *   trailing_stop_value            → req.trailing_stop.value (other fields preserved)
+ *   slippage_bps                   → req.slippage_bps
+ */
+export function applyParamPath(req: StrategyRequest, path: string, value: number): StrategyRequest {
+  // buy_rule_<i>_value or sell_rule_<i>_value
+  const ruleValueMatch = path.match(/^(buy|sell)_rule_(\d+)_value$/)
+  if (ruleValueMatch) {
+    const side = ruleValueMatch[1] as 'buy' | 'sell'
+    const idx = parseInt(ruleValueMatch[2], 10)
+    const key = side === 'buy' ? 'buy_rules' : 'sell_rules'
+    const rules = req[key]
+    if (idx < 0 || idx >= rules.length) return req
+    return {
+      ...req,
+      [key]: rules.map((r, i) => i === idx ? { ...r, value } : r),
+    }
+  }
+
+  // buy_rule_<i>_params_<key> or sell_rule_<i>_params_<key>
+  const ruleParamsMatch = path.match(/^(buy|sell)_rule_(\d+)_params_(.+)$/)
+  if (ruleParamsMatch) {
+    const side = ruleParamsMatch[1] as 'buy' | 'sell'
+    const idx = parseInt(ruleParamsMatch[2], 10)
+    const paramKey = ruleParamsMatch[3]
+    const key = side === 'buy' ? 'buy_rules' : 'sell_rules'
+    const rules = req[key]
+    if (idx < 0 || idx >= rules.length) return req
+    const rule = rules[idx]
+    const currentVal = rule.params?.[paramKey]
+    // Preserve integer vs float: if existing value is integer, round the new one.
+    const finalVal = typeof currentVal === 'number' && Number.isInteger(currentVal) ? Math.round(value) : value
+    return {
+      ...req,
+      [key]: rules.map((r, i) =>
+        i === idx ? { ...r, params: { ...(r.params ?? {}), [paramKey]: finalVal } } : r
+      ),
+    }
+  }
+
+  if (path === 'stop_loss_pct') {
+    return { ...req, stop_loss_pct: value }
+  }
+
+  if (path === 'trailing_stop_value') {
+    if (!req.trailing_stop) return req
+    return { ...req, trailing_stop: { ...req.trailing_stop, value } }
+  }
+
+  if (path === 'slippage_bps') {
+    return { ...req, slippage_bps: value }
+  }
+
+  return req
+}
+
 export function linspace(min: number, max: number, steps: number): number[] {
   if (steps <= 1) return [min]
   const out: number[] = []

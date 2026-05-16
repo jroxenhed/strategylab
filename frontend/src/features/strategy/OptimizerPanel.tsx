@@ -3,7 +3,7 @@ import type { StrategyRequest } from '../../shared/types'
 import { api } from '../../api/client'
 import { useRequestTimer } from '../../shared/hooks/useRequestTimer'
 import { apiErrorDetail } from '../../shared/utils/errors'
-import { buildParamOptions, linspace } from './paramOptions'
+import { buildParamOptions, linspace, applyParamPath } from './paramOptions'
 import type { ParamOption } from './paramOptions'
 
 interface OptimizerCombo {
@@ -45,9 +45,11 @@ const NONE_PATH = ''
 
 interface Props {
   lastRequest: StrategyRequest
+  onApplyParams?: (updatedReq: StrategyRequest) => void
+  onRunBacktest?: () => void
 }
 
-export default function OptimizerPanel({ lastRequest }: Props) {
+export default function OptimizerPanel({ lastRequest, onApplyParams, onRunBacktest }: Props) {
   const paramOptions = useMemo(() => buildParamOptions(lastRequest, 5), [lastRequest])
 
   const emptyRow = (): ParamRow => ({ path: paramOptions[0]?.path ?? NONE_PATH, min: '', max: '', steps: '5' })
@@ -59,6 +61,7 @@ export default function OptimizerPanel({ lastRequest }: Props) {
   const { elapsed: elapsedSec, final: finalSec } = useRequestTimer(loading)
   const [error, setError] = useState('')
   const [result, setResult] = useState<OptimizeResponse | null>(null)
+  const [selectedRowIdx, setSelectedRowIdx] = useState<number | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
 
   // Persist input config per (ticker, interval, source). Survives tab switches
@@ -194,6 +197,7 @@ export default function OptimizerPanel({ lastRequest }: Props) {
         top_n: Math.max(1, parseInt(topN) || 10),
       }, { signal: controller.signal })
       setResult(data)
+      setSelectedRowIdx(null)
     } catch (e: unknown) {
       // Ignore abort errors from strategy-context change or unmount.
       const err = e as { name?: string; code?: string }
@@ -206,6 +210,27 @@ export default function OptimizerPanel({ lastRequest }: Props) {
   }
 
   const topResult = result?.results[0]
+
+  /** Build an updated StrategyRequest with all param values from the given combo row applied. */
+  function buildAppliedReq(combo: OptimizerCombo): StrategyRequest {
+    let req = lastRequest
+    for (const p of activeRows) {
+      const val = combo.param_values[p.path]
+      if (val != null) req = applyParamPath(req, p.path, val)
+    }
+    return req
+  }
+
+  function handleApply(combo: OptimizerCombo) {
+    if (!onApplyParams) return
+    onApplyParams(buildAppliedReq(combo))
+  }
+
+  function handleApplyAndRun(combo: OptimizerCombo) {
+    if (!onApplyParams || !onRunBacktest) return
+    onApplyParams(buildAppliedReq(combo))
+    onRunBacktest()
+  }
 
   const colColor = (value: number, key: MetricKey) => {
     if (!result || result.results.length < 2) return '#e6edf3'
@@ -354,15 +379,22 @@ export default function OptimizerPanel({ lastRequest }: Props) {
                     <th style={{ ...s.th, color: metric === 'win_rate_pct' ? '#58a6ff' : undefined }}>Win %</th>
                     <th style={s.th}>Max DD %</th>
                     <th style={s.th}>EV/Trade</th>
+                    {onApplyParams && <th style={s.th}>Apply</th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {result.results.map((combo, i) => (
+                  {result.results.map((combo, i) => {
+                    const isSelected = selectedRowIdx === i
+                    return (
                     <tr
                       key={i}
+                      onClick={() => setSelectedRowIdx(i === selectedRowIdx ? null : i)}
                       style={{
                         borderBottom: '1px solid #161b22',
-                        background: i === 0 ? 'rgba(88, 166, 255, 0.05)' : 'transparent',
+                        background: isSelected
+                          ? 'rgba(88, 166, 255, 0.12)'
+                          : i === 0 ? 'rgba(88, 166, 255, 0.05)' : 'transparent',
+                        cursor: onApplyParams ? 'pointer' : undefined,
                       }}
                     >
                       <td style={{ ...s.td, color: '#8b949e' }}>{i + 1}</td>
@@ -389,8 +421,33 @@ export default function OptimizerPanel({ lastRequest }: Props) {
                       <td style={{ ...s.td, color: combo.ev_per_trade != null && combo.ev_per_trade >= 0 ? '#26a69a' : '#ef5350' }}>
                         {combo.ev_per_trade != null ? `$${combo.ev_per_trade.toFixed(2)}` : '—'}
                       </td>
+                      {onApplyParams && (
+                        <td style={{ ...s.td, whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
+                          {isSelected && (
+                            <span style={{ display: 'inline-flex', gap: 4 }}>
+                              <button
+                                disabled={loading}
+                                onClick={() => handleApply(combo)}
+                                style={{ ...s.applyBtn, opacity: loading ? 0.5 : 1 }}
+                              >
+                                Apply to rules
+                              </button>
+                              {onRunBacktest && (
+                                <button
+                                  disabled={loading}
+                                  onClick={() => handleApplyAndRun(combo)}
+                                  style={{ ...s.applyBtn, opacity: loading ? 0.5 : 1 }}
+                                >
+                                  Apply &amp; Re-run
+                                </button>
+                              )}
+                            </span>
+                          )}
+                        </td>
+                      )}
                     </tr>
-                  ))}
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -405,30 +462,52 @@ export default function OptimizerPanel({ lastRequest }: Props) {
         </div>
       )}
 
-      {/* ─── Best params highlight ───────────────────────────────────── */}
+      {/* ─── Best params highlight + quick-apply buttons ────────────── */}
       {topResult && !loading && (
-        <div style={{ marginTop: 12, padding: '8px 12px', background: 'rgba(88,166,255,0.06)', borderRadius: 4, border: '1px solid rgba(88,166,255,0.15)', fontSize: 12 }}>
-          <span style={{ color: '#8b949e' }}>Best combo: </span>
-          {activeRows.map((p, i) => {
-            const opt = paramOptions.find((o: ParamOption) => o.path === p.path)
-            const val = topResult.param_values[p.path]
-            const formatted = opt?.isInteger ? String(Math.round(val)) : val?.toFixed(2)
-            return (
-              <span key={p.path}>
-                {i > 0 && <span style={{ color: '#484f58' }}> · </span>}
-                <span style={{ color: '#8b949e' }}>{opt?.label ?? p.path}: </span>
-                <span style={{ color: '#e6edf3', fontWeight: 600 }}>{formatted}</span>
-              </span>
-            )
-          })}
-          <span style={{ color: '#484f58' }}> → </span>
-          <span style={{ color: '#8b949e' }}>Sharpe: </span>
-          <span style={{ color: '#26a69a', fontWeight: 600 }}>{topResult.sharpe_ratio.toFixed(3)}</span>
-          <span style={{ color: '#484f58' }}>, </span>
-          <span style={{ color: '#8b949e' }}>Return: </span>
-          <span style={{ color: topResult.total_return_pct >= 0 ? '#26a69a' : '#ef5350', fontWeight: 600 }}>
-            {topResult.total_return_pct >= 0 ? '+' : ''}{topResult.total_return_pct.toFixed(2)}%
+        <div style={{ marginTop: 12, padding: '8px 12px', background: 'rgba(88,166,255,0.06)', borderRadius: 4, border: '1px solid rgba(88,166,255,0.15)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span>
+            <span style={{ color: '#8b949e' }}>Best combo: </span>
+            {activeRows.map((p, i) => {
+              const opt = paramOptions.find((o: ParamOption) => o.path === p.path)
+              const val = topResult.param_values[p.path]
+              const formatted = opt?.isInteger ? String(Math.round(val)) : val?.toFixed(2)
+              return (
+                <span key={p.path}>
+                  {i > 0 && <span style={{ color: '#484f58' }}> · </span>}
+                  <span style={{ color: '#8b949e' }}>{opt?.label ?? p.path}: </span>
+                  <span style={{ color: '#e6edf3', fontWeight: 600 }}>{formatted}</span>
+                </span>
+              )
+            })}
+            <span style={{ color: '#484f58' }}> → </span>
+            <span style={{ color: '#8b949e' }}>Sharpe: </span>
+            <span style={{ color: '#26a69a', fontWeight: 600 }}>{topResult.sharpe_ratio.toFixed(3)}</span>
+            <span style={{ color: '#484f58' }}>, </span>
+            <span style={{ color: '#8b949e' }}>Return: </span>
+            <span style={{ color: topResult.total_return_pct >= 0 ? '#26a69a' : '#ef5350', fontWeight: 600 }}>
+              {topResult.total_return_pct >= 0 ? '+' : ''}{topResult.total_return_pct.toFixed(2)}%
+            </span>
           </span>
+          {onApplyParams && (
+            <span style={{ display: 'inline-flex', gap: 6, marginLeft: 4 }}>
+              <button
+                disabled={loading}
+                onClick={() => handleApply(topResult)}
+                style={{ ...s.applyBtn, opacity: loading ? 0.5 : 1 }}
+              >
+                Apply to rules
+              </button>
+              {onRunBacktest && (
+                <button
+                  disabled={loading}
+                  onClick={() => handleApplyAndRun(topResult)}
+                  style={{ ...s.applyBtn, opacity: loading ? 0.5 : 1 }}
+                >
+                  Apply &amp; Re-run
+                </button>
+              )}
+            </span>
+          )}
         </div>
       )}
     </div>
@@ -465,6 +544,11 @@ const s: Record<string, React.CSSProperties> = {
   removeBtn: {
     fontSize: 11, padding: '2px 6px', borderRadius: 4, cursor: 'pointer',
     background: 'transparent', color: '#8b949e', border: 'none',
+  },
+  applyBtn: {
+    fontSize: 11, padding: '3px 8px', borderRadius: 4, cursor: 'pointer',
+    background: '#1a3a2a', color: '#3fb950', border: '1px solid #238636',
+    fontWeight: 600, whiteSpace: 'nowrap' as const,
   },
   th: {
     textAlign: 'left' as const, padding: '4px 8px',

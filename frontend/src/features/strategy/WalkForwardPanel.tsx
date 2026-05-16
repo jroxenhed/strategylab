@@ -5,7 +5,7 @@ import type { StrategyRequest, BacktestSummary } from '../../shared/types'
 import { useRequestTimer } from '../../shared/hooks/useRequestTimer'
 import { apiErrorDetail } from '../../shared/utils/errors'
 import { api } from '../../api/client'
-import { buildParamOptions, linspace } from './paramOptions'
+import { buildParamOptions, linspace, applyParamPath } from './paramOptions'
 import type { ParamOption } from './paramOptions'
 import { parseSseFrame } from './sseParser'
 
@@ -80,6 +80,8 @@ const NONE_PATH = ''
 
 interface Props {
   lastRequest: StrategyRequest
+  onApplyParams?: (updatedReq: StrategyRequest) => void
+  onRunBacktest?: () => void
 }
 
 // ---------------------------------------------------------------------------
@@ -246,7 +248,7 @@ function StitchedEquityChart({ data }: { data: WfaEquityPoint[] }) {
 // Main component
 // ---------------------------------------------------------------------------
 
-export default function WalkForwardPanel({ lastRequest }: Props) {
+export default function WalkForwardPanel({ lastRequest, onApplyParams, onRunBacktest }: Props) {
   const paramOptions = useMemo(() => buildParamOptions(lastRequest, 5), [lastRequest])
 
   const emptyRow = (): ParamRow => ({ path: paramOptions[0]?.path ?? NONE_PATH, min: '', max: '', steps: '5' })
@@ -262,6 +264,7 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
   const { elapsed: elapsedSec, final: finalSec } = useRequestTimer(loading)
   const [error, setError] = useState('')
   const [result, setResult] = useState<WalkForwardResponse | null>(null)
+  const [selectedWindowIdx, setSelectedWindowIdx] = useState<number | null>(null)
   const [progress, setProgress] = useState<{ completed: number; total: number } | null>(null)
   // KT-2: AbortController ref for cancelling the fetch on unmount or user cancel.
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -732,6 +735,26 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
     return '#ef5350'
   }
 
+  /** Build an updated StrategyRequest with the best_params from a WFA window applied. */
+  function buildAppliedReqFromWindow(window: WindowResult): StrategyRequest {
+    let req = lastRequest
+    for (const [path, val] of Object.entries(window.best_params)) {
+      req = applyParamPath(req, path, val)
+    }
+    return req
+  }
+
+  function handleApply(window: WindowResult) {
+    if (!onApplyParams) return
+    onApplyParams(buildAppliedReqFromWindow(window))
+  }
+
+  function handleApplyAndRun(window: WindowResult) {
+    if (!onApplyParams || !onRunBacktest) return
+    onApplyParams(buildAppliedReqFromWindow(window))
+    onRunBacktest()
+  }
+
   return (
     <div style={{ width: '100%' }}>
 
@@ -1035,11 +1058,22 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
                   <th style={s.th}>OOS Sharpe</th>
                   <th style={s.th}>OOS Return %</th>
                   <th style={s.th}>OOS Trades</th>
+                  {onApplyParams && <th style={s.th}>Apply</th>}
                 </tr>
               </thead>
               <tbody>
-                {result.windows.map(w => (
-                  <tr key={w.window_index} style={{ borderBottom: '1px solid #161b22' }}>
+                {result.windows.map(w => {
+                  const isSelected = selectedWindowIdx === w.window_index
+                  return (
+                  <tr
+                    key={w.window_index}
+                    onClick={() => setSelectedWindowIdx(w.window_index === selectedWindowIdx ? null : w.window_index)}
+                    style={{
+                      borderBottom: '1px solid #161b22',
+                      background: isSelected ? 'rgba(88, 166, 255, 0.12)' : 'transparent',
+                      cursor: onApplyParams ? 'pointer' : undefined,
+                    }}
+                  >
                     <td style={{ ...s.td, color: '#8b949e' }}>{w.window_index + 1}</td>
                     {/* Fix 5: Verdict badge in second column */}
                     <td style={s.td}><StabilityBadge tag={w.stability_tag} /></td>
@@ -1066,8 +1100,33 @@ export default function WalkForwardPanel({ lastRequest }: Props) {
                         : '—'}
                     </td>
                     <td style={s.td}>{w.oos_metrics.num_trades ?? 0}</td>
+                    {onApplyParams && (
+                      <td style={{ ...s.td, whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
+                        {isSelected && (
+                          <span style={{ display: 'inline-flex', gap: 4 }}>
+                            <button
+                              disabled={loading}
+                              onClick={() => handleApply(w)}
+                              style={{ ...s.applyBtn, opacity: loading ? 0.5 : 1 }}
+                            >
+                              Apply to rules
+                            </button>
+                            {onRunBacktest && (
+                              <button
+                                disabled={loading}
+                                onClick={() => handleApplyAndRun(w)}
+                                style={{ ...s.applyBtn, opacity: loading ? 0.5 : 1 }}
+                              >
+                                Apply &amp; Re-run
+                              </button>
+                            )}
+                          </span>
+                        )}
+                      </td>
+                    )}
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -1144,6 +1203,11 @@ const s: Record<string, React.CSSProperties> = {
   cancelBtn: {
     fontSize: 12, padding: '5px 14px', borderRadius: 4, cursor: 'pointer',
     background: 'transparent', color: '#8b949e', border: '1px solid #30363d',
+  },
+  applyBtn: {
+    fontSize: 11, padding: '3px 8px', borderRadius: 4, cursor: 'pointer',
+    background: '#1a3a2a', color: '#3fb950', border: '1px solid #238636',
+    fontWeight: 600, whiteSpace: 'nowrap' as const,
   },
   table: {
     borderCollapse: 'collapse', fontSize: 11, width: '100%',

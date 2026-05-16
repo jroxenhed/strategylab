@@ -9,7 +9,7 @@ import { getCoarserIntervals } from './shared/utils/intervals'
 import Sidebar from './features/sidebar/Sidebar'
 import Chart from './features/chart/Chart'
 import ChartSkeleton from './features/chart/ChartSkeleton'
-import StrategyBuilder from './features/strategy/StrategyBuilder'
+import StrategyBuilder, { type StrategyBuilderHandle } from './features/strategy/StrategyBuilder'
 import Results, { type ResultsTab } from './features/strategy/Results'
 import StrategyComparison from './features/strategy/StrategyComparison'
 import PaperTrading from './features/trading/PaperTrading'
@@ -113,6 +113,8 @@ export default function App() {
     return s === 'chart' || s === 'trading' || s === 'discovery' ? s : 'chart'
   })
   const [mainChart, setMainChart] = useState<IChartApi | null>(null)
+  // F227 — ref into StrategyBuilder for Apply-from-Optimizer/WFA
+  const strategyBuilderRef = useRef<StrategyBuilderHandle>(null)
   const [chartEnabled, setChartEnabled] = useState(true)
   const [datePreset, setDatePreset] = useState<DatePreset>((saved?.datePreset as DatePreset) ?? 'Y')
   const [viewInterval, setViewInterval] = useState(saved?.viewInterval ?? interval)
@@ -284,6 +286,10 @@ export default function App() {
                           viewInterval={viewInterval}
                           backtestInterval={interval}
                           onChartReady={setMainChart}
+                          ticker={ticker}
+                          interval={chartInterval}
+                          from={start}
+                          to={end}
                         />
                       ) : (ohlcvLoading || ohlcvFetching) ? (
                         <ChartSkeleton ticker={ticker} />
@@ -327,6 +333,7 @@ export default function App() {
                       ) : (
                         <>
                           <StrategyBuilder
+                            ref={strategyBuilderRef}
                             ticker={ticker}
                             start={start}
                             end={end}
@@ -361,6 +368,12 @@ export default function App() {
                               sweepInit={sweepInit}
                               onSweepConsumed={() => setSweepInit(null)}
                               mainTimestamps={mainTimestamps}
+                              onApplyParams={(updatedReq) => {
+                                strategyBuilderRef.current?.applyStrategyRequest(updatedReq)
+                              }}
+                              onRunBacktest={() => {
+                                strategyBuilderRef.current?.triggerRun()
+                              }}
                             />
                           )}
                         </>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useImperativeHandle, forwardRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Plus, Play, ChevronDown, ChevronUp } from 'lucide-react'
 import type { Rule, StrategyRequest, BacktestResult, DataSource, TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, SavedStrategy, RegimeConfig } from '../../shared/types'
@@ -22,6 +22,13 @@ interface Props {
   extendedHours?: boolean
 }
 
+export interface StrategyBuilderHandle {
+  /** Apply an optimizer/WFA result to the current rule state. */
+  applyStrategyRequest(req: StrategyRequest): void
+  /** Trigger a backtest run — same as clicking the Run button. */
+  triggerRun(): void
+}
+
 const STRATEGY_STORAGE_KEY = 'strategylab-strategy'
 
 function loadStrategy() {
@@ -39,7 +46,7 @@ function persistSavedStrategies(strategies: SavedStrategy[]) {
   localStorage.setItem(_SAVED_KEY, JSON.stringify(strategies))
 }
 
-export default function StrategyBuilder({ ticker, start, end, interval, onResult, onSweep, dataSource, settingsPortalId, extendedHours }: Props) {
+const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function StrategyBuilder({ ticker, start, end, interval, onResult, onSweep, dataSource, settingsPortalId, extendedHours }: Props, ref) {
   const saved = useState(() => loadStrategy())[0]
 
   useEffect(() => {
@@ -440,6 +447,39 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
       shortTrailingEnabled, shortTrailingConfig,
       longMaxBarsHeld, shortMaxBarsHeld,
       longPosSize, shortPosSize])
+
+  // F227 — expose applyStrategyRequest + triggerRun to parent (App.tsx → Optimizer/WFA Apply buttons).
+  useImperativeHandle(ref, () => ({
+    applyStrategyRequest(req: StrategyRequest) {
+      // Merge only value + params from the optimizer result into the StrategyBuilder's
+      // current rule arrays. indicator/condition/muted/negated stay as the user left them.
+      // This preserves any rule edits the user made after the last backtest run.
+      setBuyRules(prev => prev.map((cur, i) => {
+        const src = req.buy_rules[i]
+        if (!src) return cur
+        return {
+          ...cur,
+          ...(src.value != null ? { value: src.value } : {}),
+          ...(src.params != null ? { params: src.params } : {}),
+        }
+      }))
+      setSellRules(prev => prev.map((cur, i) => {
+        const src = req.sell_rules[i]
+        if (!src) return cur
+        return {
+          ...cur,
+          ...(src.value != null ? { value: src.value } : {}),
+          ...(src.params != null ? { params: src.params } : {}),
+        }
+      }))
+      if (req.stop_loss_pct != null) setStopLoss(req.stop_loss_pct)
+      if (req.trailing_stop != null) setTrailingConfig(req.trailing_stop)
+      if (req.slippage_bps != null) setSlippageBps(req.slippage_bps)
+    },
+    triggerRun() {
+      runBacktestRef.current()
+    },
+  }), [])  // stable — all writes go through setters which are stable refs
 
   // B32 — Cmd/Ctrl+Enter triggers Run Backtest globally.
   // runBacktestRef keeps the listener bound once while always invoking the
@@ -1360,7 +1400,9 @@ export default function StrategyBuilder({ ticker, start, end, interval, onResult
       </div>
     </>
   )
-}
+})
+
+export default StrategyBuilder
 
 const styles: Record<string, React.CSSProperties> = {
   container: { background: 'var(--bg-main)', borderTop: '1px solid var(--border-light)', paddingTop: 12, paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 },

@@ -92,6 +92,8 @@ interface Props {
   sweepInit?: { path: string; centerVal: number } | null
   onSweepConsumed?: () => void
   mainTimestamps?: (string | number)[]
+  onApplyParams?: (updatedReq: StrategyRequest) => void
+  onRunBacktest?: () => void
 }
 
 function autoDefaultBucket(equityLength: number): string {
@@ -101,7 +103,7 @@ function autoDefaultBucket(equityLength: number): string {
   return 'M'
 }
 
-export default function Results({ result, mainChart, activeTab, onTabChange, bucket, onBucketChange, lastRequest, showBaseline, onShowBaselineChange, logScale, onLogScaleChange, viewInterval, backtestInterval, sweepInit, onSweepConsumed, mainTimestamps }: Props) {
+export default function Results({ result, mainChart, activeTab, onTabChange, bucket, onBucketChange, lastRequest, showBaseline, onShowBaselineChange, logScale, onLogScaleChange, viewInterval, backtestInterval, sweepInit, onSweepConsumed, mainTimestamps, onApplyParams, onRunBacktest }: Props) {
   const { summary, trades, equity_curve, signal_trace } = result
   const [tzMode] = useTimezone()
   const chartRef = useRef<HTMLDivElement>(null)
@@ -865,13 +867,13 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
 
       {lastRequest && (
         <div style={{ padding: '0 16px 16px', display: activeTab === 'optimizer' ? undefined : 'none' }}>
-          <OptimizerPanel lastRequest={lastRequest} />
+          <OptimizerPanel lastRequest={lastRequest} onApplyParams={onApplyParams} onRunBacktest={onRunBacktest} />
         </div>
       )}
 
       {lastRequest && (
         <div style={{ padding: '0 16px 16px', display: activeTab === 'walk_forward' ? undefined : 'none' }}>
-          <WalkForwardPanel lastRequest={lastRequest} />
+          <WalkForwardPanel lastRequest={lastRequest} onApplyParams={onApplyParams} onRunBacktest={onRunBacktest} />
         </div>
       )}
 
