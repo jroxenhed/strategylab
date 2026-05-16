@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*214 / 257 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*218 / 257 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -10,13 +10,9 @@ _(none open)_
 
 ## Up Next
 
-- [F221](#f221) — [next] Optimizer/WFA Param 1 default [easy]
-- [F222](#f222) — [next] Surface intraday date-range clamp in UI [medium]
-- [F223](#f223) — [next] Zero-trade / unparseable-threshold rule validation [easy]
-- [F224](#f224) — [next] Slippage input [easy]
 - [F212](#f212) — [next] F210 inline-confirm browser smoke remains partially open [easy]
 
-## Open Work — 66 items
+## Open Work — 62 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -26,7 +22,7 @@ _(none open)_
 | [D](#d-bots-live-trading) | Bots (live trading) | 1 | [D24b](#d24b) |
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 16 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F216](#f216), [F229](#f229), [F245b](#f245b), [F246](#f246), [F248](#f248) |
-| [F · Hardening](#f-hardening) | Security, reliability, validation | 7 | [F187](#f187), [F211](#f211), [F220](#f220)–[F224](#f224) |
+| [F · Hardening](#f-hardening) | Security, reliability, validation | 3 | [F187](#f187), [F211](#f211), [F220](#f220) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 28 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217](#f217), [F225](#f225)–[F228](#f228), [F230](#f230)–[F244](#f244), [F245a](#f245a), [F247a](#f247a), [F247b](#f247b) |
 | [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 5 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219) |
 
@@ -161,10 +157,10 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f214"></a> **F214** Manual close attribution — `/api/trading/sell` was logging journal rows with `broker=None`, no `bot_id`, and the frontend P&L pairing skipped any non-`bot` source so manual closes of a bot's position showed `—` for broker, P&L, and Gain%, AND the bot card / portfolio card never credited the realized P&L. Fixed end-to-end: (a) `routes/trading.py` `/sell` now resolves `broker = req.broker or get_active_broker()`, looks up the owning bot via new `_find_owning_bot(symbol, direction)` helper (regime/bidirectional bots match either side), and passes `broker=` + `bot_id=` + `direction=` to `_log_trade`; `/buy` also tags broker. (b) `journal.py compute_realized_pnl` now accepts trades when `bot_id` matches the requested bot regardless of `source`, so manual exits credit the bot's P&L (flows to bot card via next `bot_runner._tick`). (c) `frontend/.../TradeJournal.tsx` pairing loop dropped the `t.source !== 'bot'` gate, so manual exits paired with bot entries display green/red P&L + Gain% and the win/loss row tint applies. (d) `bin/backfill-manual-trades.py` one-shot script backfills existing rows: walks the journal chronologically, pairs each manual SELL/COVER with the most-recent unconsumed entry on the same `(symbol, direction)`, copies that entry's `bot_id` onto the exit, and sets `broker="alpaca"` (the only historical broker) on any manual row missing it. Backed up `trade_journal.json.bak` before write; on the live journal: 8 manual rows broker-backfilled, 4 of those bot_id-tagged (the other 4 had no preceding bot entry to pair with). (added 2026-05-15) (resolved 2026-05-15) [medium] [hardening] (added 2026-05-15)
 - [x] <a id="f218"></a> **F218** Chart perpetual repaint loop — user spotted naked-eye flicker in main chart + ghosted/duplicated axis labels and B/S markers on MACD/RSI panes in a phone-camera long-exposure photo (invisible to crisp screenshots). Browser-instrumented via chrome-devtools-mcp: `requestAnimationFrame` was scheduled **120/sec sustained while idle**, `getContext` called **~1320/sec**, canvas attributes mutating **120/sec** between two fixed sizes (1298×94.375 ↔ 1304×100.625) every frame. Three parallel ce:review agents (performance + julik-frontend-races + correctness) all confirmed at conf ≥0.90: external `ResizeObserver` in `Chart.tsx:371` and `SubPane.tsx:172` calling `chart.applyOptions({width, height})` was a leftover v4 pattern that **fights lightweight-charts v5's internal RO-based auto-sizing** — the two would never agree on the canonical canvas size (DPR fractional pixels), producing a stable two-state oscillation at frame rate. First fix attempt (rAF-batch the RO + skip-if-same) made it WORSE (240→480 rAF/s, 5040 mutations/2s) because rAF deferral retimes the oscillator into a two-frame cycle rather than breaking it. Real fix (~10 lines, two files): `autoSize: true` in `chartOptions`, drop explicit `height` from both `createChart()` calls, delete both external `new ResizeObserver(...)` blocks. **After:** rAF/getContext/mutations all = **0/sec** while idle. CPU usage drop noticed in Activity Monitor. Three-pane sync, crosshair, syncWidths, regime bg, markers all intact. (added 2026-05-15) (resolved 2026-05-15) [medium] [hardening]
 - [ ] <a id="f220"></a> **F220** Sweep remaining lightweight-charts callsites for v4-pattern `ResizeObserver + applyOptions({width, height})` — F218 fixed the main `Chart.tsx`/`SubPane.tsx` pair, but bot card sparklines and any other chart instances (Discovery? equity curve overlay?) may carry the same dead pattern. Grep for `new ResizeObserver` and `applyOptions.*width.*height` across `frontend/src/` — for each hit, either migrate to `autoSize: true` (preferred, matches F218) or document why the explicit RO is intentional. Each instance left unfixed is a potential ~60Hz CPU sink that compounds with bot count. [easy] [hardening] (added 2026-05-15)
-- [ ] <a id="f221"></a> **F221** [next] Optimizer/WFA Param 1 default — reorder `buildParamOptions` in `frontend/src/features/strategy/paramOptions.ts` so buy/sell rule thresholds come before cost params. Today defaults to `Slippage (bps)` → first-time users "discover" 0 bps is best. See plan F-UX1 in `docs/plans/2026-05-16-ux-walkthrough-improvements.md`. [easy] [hardening]
-- [ ] <a id="f222"></a> **F222** [next] Surface intraday date-range clamp in UI — chip near From/To inputs shows effective range when interval limit kicks in. Frontend-only v1; computed from interval-limit constants. Click "Use effective range" must update React state via the onBlur fiber-call (commit-on-blur trap). See plan F-UX2. [medium] [hardening]
-- [ ] <a id="f223"></a> **F223** [next] Zero-trade / unparseable-threshold rule validation — frontend red-border guard on RuleRow when condition needs a threshold and value is blank/NaN. Disable Run while invalid. Whitelist threshold-free conditions (`crosses_above`, `turns_up`, etc). See plan F-UX3. [easy] [hardening]
-- [ ] <a id="f224"></a> **F224** [next] Slippage input — locale-aware parse — format with `Intl.NumberFormat('en-US', …)` (not `toLocaleString`); strip non-`[0-9.]` before `parseFloat`. Audit all empirical-float inputs (grep `toLocaleString`). Today sends NaN under sv-SE locale. See plan F-UX4. [easy] [hardening]
+- [x] <a id="f221"></a> **F221** Optimizer/WFA Param 1 default — reorder `buildParamOptions` in `frontend/src/features/strategy/paramOptions.ts` so buy/sell rule thresholds come before cost params. Today defaults to `Slippage (bps)` → first-time users "discover" 0 bps is best. See plan F-UX1 in `docs/plans/2026-05-16-ux-walkthrough-improvements.md`. [easy] [hardening] (resolved 2026-05-16)
+- [x] <a id="f222"></a> **F222** Surface intraday date-range clamp in UI — chip near From/To inputs shows effective range when interval limit kicks in. Frontend-only v1; computed from interval-limit constants. Click "Use effective range" must update React state via the onBlur fiber-call (commit-on-blur trap). See plan F-UX2. [medium] [hardening] (resolved 2026-05-16)
+- [x] <a id="f223"></a> **F223** Zero-trade / unparseable-threshold rule validation — frontend red-border guard on RuleRow when condition needs a threshold and value is blank/NaN. Disable Run while invalid. Whitelist threshold-free conditions (`crosses_above`, `turns_up`, etc). See plan F-UX3. [easy] [hardening] (resolved 2026-05-16)
+- [x] <a id="f224"></a> **F224** Slippage input — locale-aware parse — format with `Intl.NumberFormat('en-US', …)` (not `toLocaleString`); strip non-`[0-9.]` before `parseFloat`. Audit all empirical-float inputs (grep `toLocaleString`). Today sends NaN under sv-SE locale. See plan F-UX4. [easy] [hardening] (resolved 2026-05-16)
 
 ### F · Polish
 - [ ] <a id="f34"></a> **F34** 118+ hardcoded hex colors while CSS variables exist — theme change requires touching dozens of files. Migrate Results.tsx and BotCard.tsx to use --bg-*, --accent-*, --text-* variables. [medium] [polish]
