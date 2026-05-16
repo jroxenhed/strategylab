@@ -6,6 +6,13 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-16
 
+### Overnight build 29 — Tier A: F220 lightweight-charts autoSize sweep
+
+- **[F220](TODO.md#f220)** Migrated the three remaining `createChart` instances still on the v4 `new ResizeObserver(...) + chart.applyOptions({width, height})` pattern that F218 fixed in main `Chart.tsx`/`SubPane.tsx` and the post-merge session fixed in `MacroEquityChart.tsx`. Each is now `autoSize: true` with the RO block deleted: `frontend/src/features/trading/MiniSparkline.tsx` (bot card sparklines — outer `<div>` already has the `height` prop on its style), `frontend/src/features/discovery/PerformanceComparison.tsx` (added explicit `height: 200` to the container div since the chart no longer carries it), `frontend/src/features/strategy/Results.tsx` equity-curve chart (user-resizable container retains its `resize: vertical` + 250-px default — `autoSize: true` tracks the dynamic height without needing the explicit `clientHeight || 185` poll on mount). Grep confirms zero `new ResizeObserver` instances remain anywhere in `frontend/src/`. The two static-height-without-RO holdouts (`StrategyComparison.tsx`, `WalkForwardPanel.tsx`) are out of F220's scope — they don't have the F218 trap, they just don't resize — filed as [F249](TODO.md#f249).
+- **Tier A** per F136 — no personas. Verification: `npm run build` clean, `vitest run` 238/238 pass (unchanged), `bin/preview-smoke.sh` pass, grep verifies zero v4 RO+applyOptions instances. Browser verification: chrome-devtools-mcp unavailable in routine env (codified gap, multiple builds running) — flagged in PR. Diff +7 / -27 across 3 files, all `.tsx`, no contract surface.
+- Deferred → TODO (2 new items, F249/F250): **[F249](TODO.md#f249)** [next][easy][hardening] migrate the remaining two static-height `createChart` callers (`StrategyComparison.tsx`, `WalkForwardPanel.tsx`) to `autoSize: true` for consistency. **[F250](TODO.md#f250)** [easy][polish] MiniSparkline lost the resize-time `fitContent()` from the RO removal — acceptable today (data updates re-call fitContent, scroll/scale disabled) but documented in case users notice sparkline clipping after bot column resizes; fix path is a minimal RO that calls `fitContent()` only (NOT `applyOptions` — that's the F218 trap).
+- Branch: `claude/dazzling-hawking-Wm5im`.
+
 ### Post-merge interactive session — UX bug-fixes + server-side persistence
 
 Long interactive session against `main` after Bundles D/E/F merged. User drove the loop, I shipped fixes one-by-one. 19 commits total; highlights:

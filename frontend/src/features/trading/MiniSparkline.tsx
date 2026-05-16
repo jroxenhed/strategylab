@@ -71,12 +71,12 @@ export default function MiniSparkline({ equityData, alignedRange, height = 60 }:
     tooltip.style.top = `${Math.max(0, param.point.y - 28)}px`
   }, [])
 
-  // Mount once: create chart + series + ResizeObserver.
+  // Mount once: create chart + series. autoSize observes the container — never
+  // pair with an external ResizeObserver + applyOptions (F218 trap).
   useEffect(() => {
     if (!ref.current) return
     const chart = createChart(ref.current, {
-      width: ref.current.clientWidth,
-      height,
+      autoSize: true,
       layout: { background: { color: 'transparent' }, textColor: '#aaa' },
       grid: { vertLines: { visible: false }, horzLines: { visible: false } },
       leftPriceScale: { visible: false },
@@ -114,17 +114,7 @@ export default function MiniSparkline({ equityData, alignedRange, height = 60 }:
 
     chart.subscribeCrosshairMove(handleCrosshairMove)
 
-    const ro = new ResizeObserver(() => {
-      const el = ref.current
-      const c = chartRef.current
-      if (!el || !c) return
-      c.applyOptions({ width: el.clientWidth })
-      try { c.timeScale().fitContent() } catch {}
-    })
-    ro.observe(ref.current)
-
     return () => {
-      ro.disconnect()
       chart.unsubscribeCrosshairMove(handleCrosshairMove)
       chart.remove()
       chartRef.current = null
