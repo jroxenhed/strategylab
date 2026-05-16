@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSearch } from '../../shared/hooks/useOHLCV'
 import { api } from '../../api/client'
 import {
@@ -6,8 +7,11 @@ import {
   saveWatchlist,
   dropDuplicate,
   genGroupId,
+  emptyState,
 } from './watchlistStorage'
 import type { WatchlistState, WatchlistGroup } from './watchlistStorage'
+
+const WATCHLIST_QUERY_KEY = ['watchlist'] as const
 
 const POLL_INTERVAL = 30_000 // 30 seconds
 
@@ -70,14 +74,35 @@ export default function WatchlistPanel({
   currentSymbol: string
   onSymbolClick: (symbol: string) => void
 }) {
-  // Lazy init from localStorage — if we used `useState(emptyState)` and loaded
-  // in a useEffect, the save-effect (deps: [state]) would fire on first render
-  // with the empty state and clobber the saved value before the load effect
-  // had a chance to setState. Vite HMR-triggered remounts hit this every save.
-  const initialLoad = useRef<{ state: WatchlistState; wasCorrupt: boolean } | null>(null)
-  if (initialLoad.current === null) initialLoad.current = loadWatchlist()
-  const [state, setState] = useState<WatchlistState>(initialLoad.current.state)
-  const [corruptBanner, setCorruptBanner] = useState(initialLoad.current.wasCorrupt)
+  const qc = useQueryClient()
+
+  // Load watchlist from the backend (with localStorage fallback inside loadWatchlist).
+  const { data: loadResult, isLoading: watchlistLoading } = useQuery({
+    queryKey: WATCHLIST_QUERY_KEY,
+    queryFn: loadWatchlist,
+    staleTime: 60_000,
+  })
+
+  const [state, setState] = useState<WatchlistState>(emptyState())
+  const [corruptBanner, setCorruptBanner] = useState(false)
+
+  // Sync query result into local state once loaded
+  useEffect(() => {
+    if (loadResult) {
+      setState(loadResult.state)
+      if (loadResult.wasCorrupt) setCorruptBanner(true)
+    }
+  }, [loadResult])
+
+  // Debounce ref for save mutations
+  const saveDebouncerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const saveMutation = useMutation({
+    mutationFn: saveWatchlist,
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: WATCHLIST_QUERY_KEY })
+    },
+  })
   const [quotes, setQuotes] = useState<Map<string, Quote>>(new Map())
   const [hoveredSymbol, setHoveredSymbol] = useState<string | null>(null)
 
@@ -100,10 +125,23 @@ export default function WatchlistPanel({
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Persist to localStorage whenever state changes. First fire on mount writes
-  // the loaded state back (no-op clobber — same bytes).
+  // Debounced save: 500 ms after the last state mutation, push to backend.
+  // Skips the initial emptyState mount (state is populated by the query effect).
+  const isInitialMount = useRef(true)
   useEffect(() => {
-    saveWatchlist(state)
+    if (isInitialMount.current) {
+      // Don't save emptyState on first render — wait for query to settle
+      if (state.ungrouped.length === 0 && state.groups.length === 0) return
+      isInitialMount.current = false
+    }
+    if (saveDebouncerRef.current) clearTimeout(saveDebouncerRef.current)
+    saveDebouncerRef.current = setTimeout(() => {
+      saveMutation.mutate(state)
+    }, 500)
+    return () => {
+      if (saveDebouncerRef.current) clearTimeout(saveDebouncerRef.current)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state])
 
   // Focus add input when shown
@@ -450,6 +488,19 @@ export default function WatchlistPanel({
   // ---------------------------------------------------------------------------
 
   const isEmpty = state.ungrouped.length === 0 && state.groups.length === 0
+
+  if (watchlistLoading) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.header}>
+          <span style={styles.title}>Watchlist</span>
+        </div>
+        <div style={{ padding: '12px 10px', color: 'var(--text-muted)', fontSize: 12 }}>
+          Loading…
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div style={styles.container}>

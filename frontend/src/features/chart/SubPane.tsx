@@ -29,6 +29,7 @@ interface SubPaneProps {
   error?: boolean
   errorMessage?: string | null
   onRetry?: () => void
+  showTimeAxis?: boolean
 }
 
 const CHART_BG = '#0d1117'
@@ -40,20 +41,11 @@ const DOWN = '#f85149'
 
 const SUB_COLORS = ['#a371f7', '#58a6ff', '#f0883e', '#e8ab6a', '#56d4c4', '#f85149']
 
-const chartOptions = {
-  autoSize: true,
-  layout: { background: { type: ColorType.Solid, color: CHART_BG }, textColor: TEXT },
-  grid: { vertLines: { color: GRID }, horzLines: { color: GRID } },
-  crosshair: { mode: 1 as const },
-  timeScale: { borderColor: GRID, timeVisible: true },
-  rightPriceScale: { borderColor: GRID },
-  leftPriceScale: { visible: false, borderColor: GRID },
-}
-
 export default function SubPane({
   paneKey, instances, instanceData, mainChartRef, mainSeriesRef,
   paneRegistryRef, syncWidthsRef,
   markers, toET, label, tzMode, loading, error, errorMessage, onRetry,
+  showTimeAxis = true,
 }: SubPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -79,7 +71,15 @@ export default function SubPane({
   useEffect(() => {
     if (!containerRef.current || instances.length === 0) return
 
-    const chart = createChart(containerRef.current, chartOptions)
+    const chart = createChart(containerRef.current, {
+      autoSize: true,
+      layout: { background: { type: ColorType.Solid, color: CHART_BG }, textColor: TEXT },
+      grid: { vertLines: { color: GRID }, horzLines: { color: GRID } },
+      crosshair: { mode: 1 as const },
+      timeScale: { borderColor: GRID, timeVisible: true, visible: showTimeAxis },
+      rightPriceScale: { borderColor: GRID },
+      leftPriceScale: { visible: false, borderColor: GRID },
+    })
     chartRef.current = chart
     const seriesMap = new Map<string, ISeriesApi<any>>()
     let firstSeries: ISeriesApi<any> | null = null
@@ -180,8 +180,14 @@ export default function SubPane({
       try { chart.remove() } catch {}
       syncWidthsRef.current()
     }
-  }, [paneKey, instancesKey, indicatorType, toET])
+  }, [paneKey, instancesKey, indicatorType, toET, showTimeAxis])
   // mainChartRef, mainSeriesRef, paneRegistryRef, syncWidthsRef are stable refs — excluded from deps
+
+  // Dynamic time-axis visibility: when showTimeAxis flips (sub-pane count changes)
+  // update the already-mounted chart without tearing it down.
+  useEffect(() => {
+    try { chartRef.current?.timeScale().applyOptions({ visible: showTimeAxis }) } catch {}
+  }, [showTimeAxis])
 
   useEffect(() => {
     const sMap = seriesMapRef.current

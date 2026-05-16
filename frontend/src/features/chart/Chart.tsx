@@ -54,12 +54,11 @@ const DOWN = '#f85149'
 // Distinct from trade green/red; indexed by rule_index mod length
 const RULE_SIGNAL_COLORS = ['#58a6ff', '#d2a8ff', '#f0883e', '#56d364', '#e5534b', '#768390', '#f778ba', '#a5d6ff']
 
-const chartOptions = {
+const chartOptionsBase = {
   autoSize: true,
   layout: { background: { type: ColorType.Solid, color: CHART_BG }, textColor: TEXT },
   grid: { vertLines: { color: GRID }, horzLines: { color: GRID } },
   crosshair: { mode: 1 as const },
-  timeScale: { borderColor: GRID, timeVisible: true },
   rightPriceScale: { borderColor: GRID },
   leftPriceScale: { visible: false, borderColor: GRID },
 }
@@ -293,7 +292,11 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   useEffect(() => {
     if (!containerRef.current) return
 
-    const chart = createChart(containerRef.current, chartOptions)
+    const showMainTimeAxis = subPaneCount === 0
+    const chart = createChart(containerRef.current, {
+      ...chartOptionsBase,
+      timeScale: { borderColor: GRID, timeVisible: true, visible: showMainTimeAxis },
+    })
     chartRef.current = chart
     onChartReadyRef.current?.(chart)
 
@@ -829,6 +832,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
             key={group.key}
             group={group}
             paneIndex={idx + 1}
+            isLastPane={idx === subPaneGroups.length - 1}
             defaultSize={defaultSizes[idx + 1]}
             minSize={panelMinSizes[idx + 1]}
             instanceData={instanceData}
@@ -854,11 +858,12 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
 
 // Extracted to avoid inline JSX fragments with Separator+Panel pairs
 function SubPanelEntry({
-  group, paneIndex, defaultSize, minSize, instanceData, instanceLoading, loadingByInstance, instanceError, instanceErrorMessage, onRetryIndicators, chartRef, candleSeriesRef,
+  group, paneIndex, isLastPane, defaultSize, minSize, instanceData, instanceLoading, loadingByInstance, instanceError, instanceErrorMessage, onRetryIndicators, chartRef, candleSeriesRef,
   paneRegistryRef, syncWidthsRef, subPaneMarkers, toET, tzMode, onDoubleClick,
 }: {
   group: { key: string; label: string; instances: IndicatorInstance[] }
   paneIndex: number
+  isLastPane: boolean
   defaultSize: number
   minSize: number
   instanceData: Record<string, Record<string, { time: string; value: number | null }[]>>
@@ -904,6 +909,7 @@ function SubPanelEntry({
             toET={toET}
             label={group.label}
             tzMode={tzMode}
+            showTimeAxis={isLastPane}
           />
         </div>
       </Panel>

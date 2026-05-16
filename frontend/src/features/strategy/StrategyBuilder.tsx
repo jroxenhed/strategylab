@@ -8,7 +8,7 @@ import { api } from '../../api/client'
 import { useSlippage } from '../../shared/hooks/useSlippage'
 import { apiErrorDetail } from '../../shared/utils/errors'
 
-import { migrateRule, loadSavedStrategies, SAVED_STRATEGIES_KEY as _SAVED_KEY } from './savedStrategies'
+import { migrateRule, loadSavedStrategies, saveSavedStrategies } from './savedStrategies'
 
 interface Props {
   ticker: string
@@ -43,7 +43,7 @@ function loadStrategy() {
 }
 
 function persistSavedStrategies(strategies: SavedStrategy[]) {
-  localStorage.setItem(_SAVED_KEY, JSON.stringify(strategies))
+  saveSavedStrategies(strategies)
 }
 
 const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function StrategyBuilder({ ticker, start, end, interval, onResult, onSweep, dataSource, settingsPortalId, extendedHours }: Props, ref) {
@@ -122,7 +122,7 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
   const [migrationNotice, setMigrationNotice] = useState<string | null>(null)
   const [renameError, setRenameError] = useState<string | null>(null)
   const [importConfirm, setImportConfirm] = useState<{ destCount: number; sourceName: string; tab: 'regime' | 'long' | 'short'; migratedBuy: Rule[]; migratedSell: Rule[] } | null>(null)
-  const [savedStrategies, setSavedStrategies] = useState<SavedStrategy[]>(loadSavedStrategies)
+  const [savedStrategies, setSavedStrategies] = useState<SavedStrategy[]>([])
   const [activeStrategyName, setActiveStrategyName] = useState<string | null>(null)
   const [showSaveAs, setShowSaveAs] = useState(false)
   const [saveAsName, setSaveAsName] = useState('')
@@ -134,6 +134,15 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
   // (not a stale closure snapshot) — otherwise a concurrent save during the 5s undo window
   // is silently overwritten when the timer persists.
   const savedStrategiesRef = useRef<SavedStrategy[]>(savedStrategies)
+  // Load saved strategies from backend (with localStorage fallback) on mount
+  useEffect(() => {
+    let cancelled = false
+    loadSavedStrategies().then(strategies => {
+      if (!cancelled) setSavedStrategies(strategies)
+    })
+    return () => { cancelled = true }
+  }, [])
+
   // P1b: clear interval on unmount to prevent state updates on unmounted component
   useEffect(() => () => {
     if (pendingDeleteTimerRef.current !== null) clearInterval(pendingDeleteTimerRef.current)

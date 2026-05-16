@@ -1,4 +1,4 @@
-"""Tests for POST /api/trading/watchlist — covers F69 length caps and F52 atomic writes."""
+"""Tests for /api/trading/watchlist and /api/strategies endpoints."""
 from sys import path as sys_path
 from os.path import dirname, abspath
 sys_path.insert(0, dirname(dirname(abspath(__file__))))
@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from main import app
 from routes import trading as trading_mod
+import routes.strategies as strategies_mod
 from routes.trading import ScanRequest, PerformanceRequest
 from tests.conftest import _STUB_RULE  # noqa: F401 — canonical stub (F142)
 
@@ -28,53 +29,91 @@ def tolerant_client():
         yield c
 
 
+# ---------------------------------------------------------------------------
+# Watchlist tests — new schema (groups + ungrouped)
+# ---------------------------------------------------------------------------
+
+_WATCHLIST_PAYLOAD = {
+    "groups": [
+        {"id": "g1", "name": "Tech", "tickers": ["AAPL", "MSFT"], "collapsed": False}
+    ],
+    "ungrouped": ["TSLA", "NVDA"],
+}
+
+
 def test_watchlist_round_trip(client, tmp_path, monkeypatch):
-    """POST a small symbol list → response matches post-validated (stripped, uppercased) input
-    and on-disk JSON equals {symbols: [...]}.
-    """
+    """POST new-schema watchlist → response matches and on-disk JSON is new shape."""
     watchlist_file = tmp_path / "watchlist.json"
     monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", watchlist_file)
 
-    symbols = ["aapl", "msft", "spy"]
-    resp = client.post("/api/trading/watchlist", json={"symbols": symbols})
+    resp = client.post("/api/trading/watchlist", json=_WATCHLIST_PAYLOAD)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["symbols"] == ["AAPL", "MSFT", "SPY"]
+    assert body["groups"][0]["tickers"] == ["AAPL", "MSFT"]
+    assert body["ungrouped"] == ["TSLA", "NVDA"]
 
     on_disk = json.loads(watchlist_file.read_text())
-    assert on_disk == {"symbols": ["AAPL", "MSFT", "SPY"]}
+    assert on_disk["groups"][0]["id"] == "g1"
+    assert on_disk["ungrouped"] == ["TSLA", "NVDA"]
 
 
-def test_watchlist_validation_caps_length(client, tmp_path, monkeypatch):
-    """POST a list of 501 symbols → 422 Unprocessable Entity with custom error message."""
-    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", tmp_path / "watchlist.json")
+def test_watchlist_get_missing_file_returns_empty(client, tmp_path, monkeypatch):
+    """GET /watchlist when file doesn't exist → {groups: [], ungrouped: []}."""
+    watchlist_file = tmp_path / "watchlist_missing.json"
+    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", watchlist_file)
 
-    symbols = [f"SYM{i}" for i in range(501)]
-    resp = client.post("/api/trading/watchlist", json={"symbols": symbols})
-    assert resp.status_code == 422
-    # Verify the custom validator error message is returned, not Pydantic's generic 'too_long'.
-    # If Field(max_length=500) were re-introduced, it would fire first and produce a
-    # generic 'too_long' error type, which would NOT contain this text — catching the regression.
-    body = resp.json()
-    detail_str = str(body.get("detail", ""))
-    assert "too many symbols" in detail_str
-
-
-def test_watchlist_validation_per_symbol_length(client, tmp_path, monkeypatch):
-    """POST a symbol longer than 20 chars → 422 Unprocessable Entity."""
-    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", tmp_path / "watchlist.json")
-
-    resp = client.post("/api/trading/watchlist", json={"symbols": ["A" * 21]})
-    assert resp.status_code == 422
-
-
-def test_watchlist_strips_and_uppercases(client, tmp_path, monkeypatch):
-    """POST symbols with whitespace and empty string → stripped, uppercased, empties filtered."""
-    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", tmp_path / "watchlist.json")
-
-    resp = client.post("/api/trading/watchlist", json={"symbols": ["  spy  ", "qqq", ""]})
+    resp = client.get("/api/trading/watchlist")
     assert resp.status_code == 200
-    assert resp.json()["symbols"] == ["SPY", "QQQ"]
+    body = resp.json()
+    assert body == {"groups": [], "ungrouped": []}
+
+
+def test_watchlist_get_legacy_migration(client, tmp_path, monkeypatch):
+    """GET /watchlist on legacy {symbols: [...]} file → migrated shape + file rewritten."""
+    watchlist_file = tmp_path / "watchlist.json"
+    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", watchlist_file)
+    watchlist_file.write_text(json.dumps({"symbols": ["AAPL", "TSLA"]}))
+
+    resp = client.get("/api/trading/watchlist")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["groups"] == []
+    assert body["ungrouped"] == ["AAPL", "TSLA"]
+
+    # File must be rewritten in new shape
+    on_disk = json.loads(watchlist_file.read_text())
+    assert "symbols" not in on_disk
+    assert on_disk["ungrouped"] == ["AAPL", "TSLA"]
+
+
+def test_watchlist_post_dedup_across_groups_and_ungrouped(client, tmp_path, monkeypatch):
+    """POST with duplicate tickers → first occurrence wins, dedup enforced across groups + ungrouped."""
+    watchlist_file = tmp_path / "watchlist.json"
+    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", watchlist_file)
+
+    payload = {
+        "groups": [
+            {"id": "g1", "name": "A", "tickers": ["AAPL", "MSFT"], "collapsed": False},
+            {"id": "g2", "name": "B", "tickers": ["AAPL", "GOOG"], "collapsed": False},  # AAPL dup
+        ],
+        "ungrouped": ["MSFT", "TSLA"],  # MSFT dup
+    }
+    resp = client.post("/api/trading/watchlist", json=payload)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "AAPL" in body["groups"][0]["tickers"]
+    assert "AAPL" not in body["groups"][1]["tickers"]  # deduped from g2
+    assert "MSFT" in body["groups"][0]["tickers"]
+    assert "MSFT" not in body["ungrouped"]              # deduped from ungrouped
+    assert "TSLA" in body["ungrouped"]
+
+
+def test_watchlist_post_ticker_too_long(client, tmp_path, monkeypatch):
+    """POST ticker >10 chars → 422."""
+    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", tmp_path / "watchlist.json")
+    payload = {"groups": [], "ungrouped": ["A" * 11]}
+    resp = client.post("/api/trading/watchlist", json=payload)
+    assert resp.status_code == 422
 
 
 def test_watchlist_cleanup_on_replace_failure(tolerant_client, tmp_path, monkeypatch):
@@ -82,16 +121,15 @@ def test_watchlist_cleanup_on_replace_failure(tolerant_client, tmp_path, monkeyp
     watchlist_file = tmp_path / "watchlist.json"
     monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", watchlist_file)
 
-    # Pre-create watchlist with known content
-    watchlist_file.write_text(json.dumps({"symbols": ["ORIG"]}))
+    # Pre-create watchlist with known new-schema content
+    watchlist_file.write_text(json.dumps({"groups": [], "ungrouped": ["ORIG"]}))
 
     def _boom(*a, **k):
         raise OSError("disk full")
 
     monkeypatch.setattr(trading_mod.os, "replace", _boom)
 
-    resp = tolerant_client.post("/api/trading/watchlist", json={"symbols": ["AAPL"]})
-    # Route raises → FastAPI returns 500
+    resp = tolerant_client.post("/api/trading/watchlist", json=_WATCHLIST_PAYLOAD)
     assert resp.status_code == 500
 
     # No .tmp files should remain
@@ -99,62 +137,128 @@ def test_watchlist_cleanup_on_replace_failure(tolerant_client, tmp_path, monkeyp
     assert tmp_files == [], f"Leftover .tmp files: {tmp_files}"
 
     # Pre-existing watchlist file must be unchanged
-    assert json.loads(watchlist_file.read_text()) == {"symbols": ["ORIG"]}
+    assert json.loads(watchlist_file.read_text())["ungrouped"] == ["ORIG"]
 
 
-def test_watchlist_validation_exactly_500_symbols(client, tmp_path, monkeypatch):
-    """Boundary: 500 symbols (at the cap) is accepted."""
+def test_watchlist_seed_writes_when_empty(client, tmp_path, monkeypatch):
+    """POST /watchlist/seed on empty/missing file → {seeded: true}."""
     monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", tmp_path / "watchlist.json")
-    symbols = [f"S{i}" for i in range(500)]
-    resp = client.post("/api/trading/watchlist", json={"symbols": symbols})
+
+    resp = client.post("/api/trading/watchlist/seed", json=_WATCHLIST_PAYLOAD)
     assert resp.status_code == 200
-    assert len(resp.json()["symbols"]) == 500
+    assert resp.json() == {"seeded": True}
 
 
-def test_watchlist_validation_exactly_20_char_symbol(client, tmp_path, monkeypatch):
-    """Boundary: 20-character symbol (at the cap) is accepted."""
-    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", tmp_path / "watchlist.json")
-    resp = client.post("/api/trading/watchlist", json={"symbols": ["A" * 20]})
-    assert resp.status_code == 200
-    assert resp.json()["symbols"] == ["A" * 20]
-
-
-@pytest.mark.parametrize("empty", [[], [""], ["   "], ["", "  ", "\t"]])
-def test_watchlist_rejects_all_empty_symbols(client, tmp_path, monkeypatch, empty):
-    """F104: harmonize empty-list-after-strip with BatchQuickBacktestRequest (F91).
-
-    Closes F87 — pre-F104 POST {symbols: []} or {symbols: ["", "  "]} silently
-    returned 200 and overwrote the on-disk watchlist with []. Now 422; wiping
-    the watchlist requires an explicit DELETE (not yet wired) or a non-empty
-    POST first.
-    """
+def test_watchlist_seed_skips_when_populated(client, tmp_path, monkeypatch):
+    """POST /watchlist/seed when file has data → {seeded: false, reason: already_populated}."""
     watchlist_file = tmp_path / "watchlist.json"
     monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", watchlist_file)
+    watchlist_file.write_text(json.dumps({"groups": [], "ungrouped": ["AAPL"]}))
 
-    # Pre-seed so we can prove the on-disk file is unchanged after the 422.
-    watchlist_file.write_text(json.dumps({"symbols": ["ORIG"]}))
+    resp = client.post("/api/trading/watchlist/seed", json=_WATCHLIST_PAYLOAD)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["seeded"] is False
+    assert body["reason"] == "already_populated"
 
-    resp = client.post("/api/trading/watchlist", json={"symbols": empty})
+
+# ---------------------------------------------------------------------------
+# Strategies tests
+# ---------------------------------------------------------------------------
+
+_STRAT_A = {"name": "RSI Strategy", "ticker": "AAPL", "interval": "1d", "buyRules": [], "sellRules": []}
+_STRAT_B = {"name": "EMA Cross", "ticker": "MSFT", "interval": "1h", "buyRules": [], "sellRules": []}
+
+
+def test_strategies_get_empty(client, tmp_path, monkeypatch):
+    """GET /strategies when file is missing → []."""
+    strategies_file = tmp_path / "saved_strategies.json"
+    monkeypatch.setattr(strategies_mod, "STRATEGIES_PATH", strategies_file)
+
+    resp = client.get("/api/strategies")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_strategies_put_round_trip(client, tmp_path, monkeypatch):
+    """PUT /strategies → 200, file written, GET returns same list."""
+    strategies_file = tmp_path / "saved_strategies.json"
+    monkeypatch.setattr(strategies_mod, "STRATEGIES_PATH", strategies_file)
+
+    resp = client.put("/api/strategies", json=[_STRAT_A, _STRAT_B])
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 2
+    assert body[0]["name"] == "RSI Strategy"
+    assert body[1]["name"] == "EMA Cross"
+
+    on_disk = json.loads(strategies_file.read_text())
+    assert len(on_disk) == 2
+
+
+def test_strategies_delete_existing(client, tmp_path, monkeypatch):
+    """DELETE /strategies/{name} removes the named strategy, returns updated list."""
+    strategies_file = tmp_path / "saved_strategies.json"
+    monkeypatch.setattr(strategies_mod, "STRATEGIES_PATH", strategies_file)
+    strategies_file.write_text(json.dumps([_STRAT_A, _STRAT_B]))
+
+    resp = client.delete("/api/strategies/RSI%20Strategy")  # URL-encoded space
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["name"] == "EMA Cross"
+
+
+def test_strategies_delete_missing(client, tmp_path, monkeypatch):
+    """DELETE /strategies/{name} on nonexistent name → 404."""
+    strategies_file = tmp_path / "saved_strategies.json"
+    monkeypatch.setattr(strategies_mod, "STRATEGIES_PATH", strategies_file)
+    strategies_file.write_text(json.dumps([_STRAT_A]))
+
+    resp = client.delete("/api/strategies/Nonexistent")
+    assert resp.status_code == 404
+
+
+def test_strategies_seed_writes_when_empty(client, tmp_path, monkeypatch):
+    """POST /strategies/seed on empty file → {seeded: true}."""
+    strategies_file = tmp_path / "saved_strategies.json"
+    monkeypatch.setattr(strategies_mod, "STRATEGIES_PATH", strategies_file)
+
+    resp = client.post("/api/strategies/seed", json=[_STRAT_A])
+    assert resp.status_code == 200
+    assert resp.json() == {"seeded": True}
+    assert json.loads(strategies_file.read_text()) == [_STRAT_A]
+
+
+def test_strategies_seed_skips_when_populated(client, tmp_path, monkeypatch):
+    """POST /strategies/seed when file has data → {seeded: false, reason: already_populated}."""
+    strategies_file = tmp_path / "saved_strategies.json"
+    monkeypatch.setattr(strategies_mod, "STRATEGIES_PATH", strategies_file)
+    strategies_file.write_text(json.dumps([_STRAT_A]))
+
+    resp = client.post("/api/strategies/seed", json=[_STRAT_B])
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["seeded"] is False
+    assert body["reason"] == "already_populated"
+    # Original data must be untouched
+    assert json.loads(strategies_file.read_text()) == [_STRAT_A]
+
+
+def test_strategies_put_invalid_item_not_dict(client, tmp_path, monkeypatch):
+    """PUT /strategies with a non-dict item → 422."""
+    monkeypatch.setattr(strategies_mod, "STRATEGIES_PATH", tmp_path / "saved_strategies.json")
+
+    resp = client.put("/api/strategies", json=[{"name": "valid"}, "not_a_dict"])
     assert resp.status_code == 422
-    # On-disk content must NOT have been silently overwritten.
-    assert json.loads(watchlist_file.read_text()) == {"symbols": ["ORIG"]}
 
 
-@pytest.mark.parametrize("empty", [[], [""], ["   "], ["", "  ", "\t"]])
-def test_watchlist_422_does_not_create_file_when_absent(client, tmp_path, monkeypatch, empty):
-    """F134: F104 sibling — when no watchlist file exists, a 422 must not
-    accidentally create an empty one via partial path traversal in a future
-    refactor. Pins that the validator rejects BEFORE any disk write.
-    """
-    watchlist_file = tmp_path / "watchlist.json"
-    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", watchlist_file)
-    assert not watchlist_file.exists(), "fixture must start clean"
+def test_strategies_put_missing_name(client, tmp_path, monkeypatch):
+    """PUT /strategies with item missing 'name' → 422."""
+    monkeypatch.setattr(strategies_mod, "STRATEGIES_PATH", tmp_path / "saved_strategies.json")
 
-    resp = client.post("/api/trading/watchlist", json={"symbols": empty})
+    resp = client.put("/api/strategies", json=[{"ticker": "AAPL"}])
     assert resp.status_code == 422
-    assert not watchlist_file.exists(), (
-        "422 path must not touch disk — would regress to F87 silent-wipe class"
-    )
 
 
 def test_watchlist_validation_rejects_invalid_chars(client, tmp_path, monkeypatch):
@@ -170,7 +274,7 @@ def test_watchlist_validation_rejects_invalid_chars(client, tmp_path, monkeypatc
     """
     monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", tmp_path / "watchlist.json")
     for bad in ["AAPL;evil", "AAPL\nevil", "AAPL evil", "AA@PL"]:
-        resp = client.post("/api/trading/watchlist", json={"symbols": [bad]})
+        resp = client.post("/api/trading/watchlist", json={"groups": [], "ungrouped": [bad]})
         assert resp.status_code == 422, f"expected 422 for {bad!r}, got {resp.status_code}"
 
 

@@ -118,44 +118,15 @@ export function migrateLegacy(legacy: string[]): WatchlistState {
 }
 
 // ---------------------------------------------------------------------------
-// Load / Save
+// Internal parse helper (shared by load + fallback paths)
 // ---------------------------------------------------------------------------
 
 /**
- * loadWatchlist — reads from localStorage, migrates if needed, returns state.
- *
- * Return object:
- *   { state: WatchlistState, wasCorrupt: boolean }
- *
- * `wasCorrupt` is true when JSON.parse failed or the value was unrecognizable.
- * On corruption the returned state is emptyState().
+ * parseWatchlistPayload — validates and normalises a raw JSON value into
+ * WatchlistState. Used by both the API response parser and the localStorage
+ * fallback path. Returns null when the shape is unrecognisable.
  */
-export function loadWatchlist(): LoadResult {
-  const raw = localStorage.getItem(WATCHLIST_KEY)
-  if (!raw) {
-    return { state: emptyState(), wasCorrupt: false }
-  }
-
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    // Corrupt JSON — reset and surface toast
-    return { state: emptyState(), wasCorrupt: true }
-  }
-
-  // Old format: top-level array of strings
-  if (Array.isArray(parsed)) {
-    if (parsed.every(x => typeof x === 'string')) {
-      const migrated = migrateLegacy(parsed as string[])
-      // Persist migrated shape immediately
-      saveWatchlist(migrated)
-      return { state: migrated, wasCorrupt: false }
-    }
-    // Array but not strings — treat as corrupt
-    return { state: emptyState(), wasCorrupt: true }
-  }
-
+export function parseWatchlistPayload(parsed: unknown): WatchlistState | null {
   // New format: object with groups + ungrouped
   if (
     parsed !== null &&
@@ -168,7 +139,6 @@ export function loadWatchlist(): LoadResult {
   ) {
     const raw = parsed as { groups: unknown[]; ungrouped: unknown[] }
 
-    // Validate groups shape
     const groups: WatchlistGroup[] = []
     for (const g of raw.groups) {
       if (
@@ -193,17 +163,86 @@ export function loadWatchlist(): LoadResult {
       (t): t is string => typeof t === 'string'
     )
 
-    const state = dropDuplicate({ groups, ungrouped })
-    return { state, wasCorrupt: false }
+    return dropDuplicate({ groups, ungrouped })
   }
 
-  // Unrecognizable format
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Load / Save
+// ---------------------------------------------------------------------------
+
+const API_BASE = (import.meta as any).env?.VITE_API_URL as string || 'http://localhost:8000'
+
+/**
+ * loadWatchlist — fetches from the backend API, falls back to localStorage
+ * on network failure, returns state.
+ *
+ * Return object:
+ *   { state: WatchlistState, wasCorrupt: boolean }
+ *
+ * `wasCorrupt` is true only when every source fails or returns unrecognisable
+ * data. On corruption the returned state is emptyState().
+ */
+export async function loadWatchlist(): Promise<LoadResult> {
+  try {
+    const resp = await fetch(`${API_BASE}/watchlist`)
+    if (resp.ok) {
+      const data: unknown = await resp.json()
+      const state = parseWatchlistPayload(data)
+      if (state) {
+        // Mirror to localStorage as a local backup
+        localStorage.setItem(WATCHLIST_KEY, JSON.stringify(state))
+        return { state, wasCorrupt: false }
+      }
+    }
+  } catch {
+    // Network failure — fall through to localStorage fallback
+  }
+
+  // localStorage fallback
+  const raw = localStorage.getItem(WATCHLIST_KEY)
+  if (!raw) {
+    return { state: emptyState(), wasCorrupt: false }
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { state: emptyState(), wasCorrupt: true }
+  }
+
+  // Legacy flat array
+  if (Array.isArray(parsed)) {
+    if (parsed.every(x => typeof x === 'string')) {
+      const migrated = migrateLegacy(parsed as string[])
+      return { state: migrated, wasCorrupt: false }
+    }
+    return { state: emptyState(), wasCorrupt: true }
+  }
+
+  const state = parseWatchlistPayload(parsed)
+  if (state) return { state, wasCorrupt: false }
+
   return { state: emptyState(), wasCorrupt: true }
 }
 
 /**
- * saveWatchlist — persists the current state to localStorage.
+ * saveWatchlist — POSTs the current state to the backend API and mirrors
+ * to localStorage as a local backup.
  */
-export function saveWatchlist(state: WatchlistState): void {
+export async function saveWatchlist(state: WatchlistState): Promise<void> {
+  // Always write local mirror so the fallback path has fresh data
   localStorage.setItem(WATCHLIST_KEY, JSON.stringify(state))
+  try {
+    await fetch(`${API_BASE}/watchlist`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state),
+    })
+  } catch {
+    // Network failure — local mirror is the backup; suppress silently
+  }
 }

@@ -44,10 +44,16 @@ export default function StrategyComparison({ ticker, start, end, interval, dataS
   const chartRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    const refresh = () => setStrategies(loadSavedStrategies())
+    let cancelled = false
+    const refresh = () => {
+      loadSavedStrategies().then(s => { if (!cancelled) setStrategies(s) })
+    }
     refresh()
     window.addEventListener('focus', refresh)
-    return () => window.removeEventListener('focus', refresh)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', refresh)
+    }
   }, [])
 
   // Build + teardown chart whenever results or normalize mode changes

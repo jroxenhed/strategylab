@@ -64,39 +64,47 @@ class ScanRequest(BaseModel):
         return list(dict.fromkeys(v))
 
 
-class WatchlistRequest(BaseModel):
-    # F145: SymbolList = list[SymbolField] — per-element normalize+regex runs
-    # in SymbolField. The mode='before' validator below pre-cleans the raw
-    # input (cap + drop empties + reject-all-empty) so empty/whitespace
-    # entries don't trip SymbolField's strict "must not be empty" guard.
-    # The mode='after' dedup runs on normalized output. min_length=1 surfaces
-    # the non-empty constraint in OpenAPI (mirrors F91 batch pattern).
-    symbols: SymbolList = Field(min_length=1)
+def _normalize_ticker_list(v) -> list:
+    """Normalize a list of ticker strings: strip, uppercase, validate chars and length.
 
-    @field_validator('symbols', mode='before')
-    @classmethod
-    def _cap_and_drop_empty(cls, v):
-        # List-level cap stays inline so the custom error message survives any
-        # future Field(max_length=...) drift (test_watchlist_validation_caps_length).
-        if not isinstance(v, list):
-            return v  # let Pydantic raise the type-level error
-        if len(v) > 500:
-            raise ValueError(f"too many symbols (max 500, got {len(v)})")
-        # Drop empty/whitespace-only entries silently — pre-existing F69 behavior.
-        # Non-empty entries flow into SymbolField for strict normalize+regex.
-        cleaned = [s for s in v if not (isinstance(s, str) and not s.strip())]
-        if not cleaned:
-            # F104: reject all-empty-after-strip to match BatchQuickBacktestRequest
-            # (F91). Closes F87 silent-wipe of watchlist.json.
-            raise ValueError("symbols must contain at least one non-empty entry")
-        return cleaned
+    Silently drops empty/whitespace entries. Raises ValueError for entries
+    with invalid characters (outside [A-Z0-9.-]) or exceeding 10 chars.
+    Reuses normalize_symbol for character validation (F38/F85 log-injection guard).
+    """
+    if not isinstance(v, list):
+        return v
+    result = []
+    for t in v:
+        if not isinstance(t, str) or not t.strip():
+            continue
+        # normalize_symbol raises ValueError on invalid chars — propagates as 422
+        normalized = normalize_symbol(t)
+        if len(normalized) > 10:
+            raise ValueError(f"ticker too long: {normalized!r} (max 10 chars)")
+        result.append(normalized)
+    return result
 
-    @field_validator('symbols', mode='after')
+
+class WatchlistGroup(BaseModel):
+    id: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=80)
+    tickers: list[str] = Field(default_factory=list, max_length=200)
+    collapsed: bool = False
+
+    @field_validator('tickers', mode='before')
     @classmethod
-    def _dedup_symbols(cls, v: list[str]) -> list[str]:
-        # F93: dedup post-normalize, preserve first-occurrence order. Prevents
-        # 500 duplicate "AAPL" entries from amplifying scanner backtests 500x.
-        return list(dict.fromkeys(v))
+    def _normalize_tickers(cls, v):
+        return _normalize_ticker_list(v)
+
+
+class WatchlistState(BaseModel):
+    groups: list[WatchlistGroup] = Field(default_factory=list, max_length=50)
+    ungrouped: list[str] = Field(default_factory=list, max_length=500)
+
+    @field_validator('ungrouped', mode='before')
+    @classmethod
+    def _normalize_ungrouped(cls, v):
+        return _normalize_ticker_list(v)
 
 
 @router.get("/account")
@@ -510,29 +518,99 @@ def get_journal(symbol: Optional[str] = None, broker: str = "all", limit: Option
     return {"trades": trades}
 
 
+def _empty_watchlist_state() -> dict:
+    return {"groups": [], "ungrouped": []}
+
+
+def _read_watchlist_raw() -> dict:
+    """Read watchlist.json, auto-migrating legacy {symbols: [...]} shape.
+
+    Returns a dict with keys 'groups' and 'ungrouped'. Migrates and persists
+    the new shape on first read if legacy format is detected. On corrupt JSON,
+    logs a warning, backs up the file, and returns empty state.
+    """
+    if not WATCHLIST_PATH.exists():
+        return _empty_watchlist_state()
+    try:
+        data = json.loads(WATCHLIST_PATH.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("watchlist.json is unparseable (%s); backing up and returning empty state", exc)
+        bak_path = WATCHLIST_PATH.with_suffix(".json.bak")
+        try:
+            import shutil
+            shutil.copy2(str(WATCHLIST_PATH), str(bak_path))
+        except OSError as bak_exc:
+            logger.warning("could not create watchlist backup: %s", bak_exc)
+        atomic_write_text(WATCHLIST_PATH, json.dumps(_empty_watchlist_state(), indent=2))
+        return _empty_watchlist_state()
+
+    # Legacy migration: {symbols: [...]} → new schema
+    if "symbols" in data and "groups" not in data:
+        symbols = data.get("symbols", [])
+        migrated = {"groups": [], "ungrouped": [s for s in symbols if isinstance(s, str) and s.strip()]}
+        logger.info("watchlist.json: migrated legacy shape (%d symbols → ungrouped)", len(migrated["ungrouped"]))
+        atomic_write_text(WATCHLIST_PATH, json.dumps(migrated, indent=2))
+        return migrated
+
+    return data
+
+
+def _dedup_watchlist(state: WatchlistState) -> WatchlistState:
+    """Deduplicate tickers across groups + ungrouped, first occurrence wins.
+
+    Processes groups in declaration order then ungrouped. Case-insensitive
+    comparison; canonical form is whatever was in the payload (already
+    normalized to uppercase by field_validator).
+    """
+    seen: set[str] = set()
+    new_groups = []
+    for group in state.groups:
+        deduped = []
+        for t in group.tickers:
+            key = t.upper()
+            if key not in seen:
+                seen.add(key)
+                deduped.append(t)
+        new_groups.append(WatchlistGroup(
+            id=group.id,
+            name=group.name,
+            tickers=deduped,
+            collapsed=group.collapsed,
+        ))
+    new_ungrouped = []
+    for t in state.ungrouped:
+        key = t.upper()
+        if key not in seen:
+            seen.add(key)
+            new_ungrouped.append(t)
+    return WatchlistState(groups=new_groups, ungrouped=new_ungrouped)
+
+
 @router.get("/watchlist")
 def get_watchlist():
-    if not WATCHLIST_PATH.exists():
-        return {"symbols": []}
-    raw = json.loads(WATCHLIST_PATH.read_text()).get("symbols", [])
-    cleaned: list[str] = []
-    dropped = 0
-    for sym in raw:
-        if not isinstance(sym, str) or not sym.strip():
-            dropped += 1
-            continue
-        try:
-            cleaned.append(normalize_symbol(sym))
-        except ValueError:
-            dropped += 1
-    cleaned = list(dict.fromkeys(cleaned))  # F93 dedup pattern
-    if dropped:
-        logger.warning("watchlist read-time filter dropped %d invalid entries", dropped)
-    return {"symbols": cleaned}
+    return _read_watchlist_raw()
 
 
 @router.post("/watchlist")
-def save_watchlist(req: WatchlistRequest):
-    content = json.dumps({"symbols": req.symbols}, indent=2)
+def save_watchlist(req: WatchlistState):
+    deduped = _dedup_watchlist(req)
+    content = json.dumps(deduped.model_dump(), indent=2)
     atomic_write_text(WATCHLIST_PATH, content)
-    return {"symbols": req.symbols}
+    return deduped.model_dump()
+
+
+@router.post("/watchlist/seed")
+def seed_watchlist(req: WatchlistState):
+    """Idempotent first-time sync from browser localStorage.
+
+    Only writes if the on-disk file is currently empty or missing.
+    Returns {seeded: true} if written, {seeded: false, reason: "already_populated"} otherwise.
+    """
+    existing = _read_watchlist_raw()
+    has_data = bool(existing.get("groups")) or bool(existing.get("ungrouped"))
+    if has_data:
+        return {"seeded": False, "reason": "already_populated"}
+    deduped = _dedup_watchlist(req)
+    content = json.dumps(deduped.model_dump(), indent=2)
+    atomic_write_text(WATCHLIST_PATH, content)
+    return {"seeded": True}

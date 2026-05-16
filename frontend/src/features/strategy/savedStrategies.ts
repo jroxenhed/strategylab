@@ -34,24 +34,63 @@ export function migrateRule(rule: Rule): Rule {
   return migrated
 }
 
-export function loadSavedStrategies(): SavedStrategy[] {
+const API_BASE = (import.meta as any).env?.VITE_API_URL as string || 'http://localhost:8000'
+
+function applyMigrations(strategies: SavedStrategy[]): SavedStrategy[] {
+  for (const s of strategies) {
+    if (s.buyRules) s.buyRules = s.buyRules.map(migrateRule)
+    if (s.sellRules) s.sellRules = s.sellRules.map(migrateRule)
+    if (!s.strategyType) {
+      if (s.regime?.enabled === true) {
+        s.strategyType = 'regime'
+      } else if (s.direction === 'short') {
+        s.strategyType = 'short'
+      } else {
+        s.strategyType = 'long'
+      }
+    }
+  }
+  return strategies
+}
+
+/**
+ * loadSavedStrategies — fetches from the backend API, falls back to
+ * localStorage on network failure.
+ */
+export async function loadSavedStrategies(): Promise<SavedStrategy[]> {
+  try {
+    const resp = await fetch(`${API_BASE}/strategies`)
+    if (resp.ok) {
+      const data: SavedStrategy[] = await resp.json()
+      // Mirror to localStorage as backup
+      localStorage.setItem(SAVED_STRATEGIES_KEY, JSON.stringify(data))
+      return applyMigrations(data)
+    }
+  } catch {
+    // Network failure — fall through to localStorage fallback
+  }
+
   try {
     const raw = localStorage.getItem(SAVED_STRATEGIES_KEY)
     if (!raw) return []
     const strategies: SavedStrategy[] = JSON.parse(raw)
-    for (const s of strategies) {
-      if (s.buyRules) s.buyRules = s.buyRules.map(migrateRule)
-      if (s.sellRules) s.sellRules = s.sellRules.map(migrateRule)
-      if (!s.strategyType) {
-        if (s.regime?.enabled === true) {
-          s.strategyType = 'regime'
-        } else if (s.direction === 'short') {
-          s.strategyType = 'short'
-        } else {
-          s.strategyType = 'long'
-        }
-      }
-    }
-    return strategies
+    return applyMigrations(strategies)
   } catch { return [] }
+}
+
+/**
+ * saveSavedStrategies — PUTs the full list to the backend API and mirrors
+ * to localStorage.
+ */
+export async function saveSavedStrategies(strategies: SavedStrategy[]): Promise<void> {
+  localStorage.setItem(SAVED_STRATEGIES_KEY, JSON.stringify(strategies))
+  try {
+    await fetch(`${API_BASE}/strategies`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(strategies),
+    })
+  } catch {
+    // Network failure — local mirror preserved
+  }
 }

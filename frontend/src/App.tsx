@@ -16,6 +16,7 @@ import PaperTrading from './features/trading/PaperTrading'
 import Discovery from './features/discovery/Discovery'
 import WatchlistPanel from './features/watchlist/WatchlistPanel'
 import { useTimezone, tzLabel } from './shared/utils/time'
+import { seedFromLocalStorageIfAny } from './shared/utils/seedFromLocalStorage'
 
 type AppTab = 'chart' | 'trading' | 'discovery'
 
@@ -127,6 +128,12 @@ export default function App() {
   const [viewInterval, setViewInterval] = useState(saved?.viewInterval ?? interval)
   const [isAggOpen, setIsAggOpen] = useState(false)
   const intervalRef = useRef(interval)
+
+  // One-shot: push any pre-existing localStorage data to the backend seed
+  // endpoints (no-op if the server already has data). Runs before other queries.
+  useEffect(() => {
+    seedFromLocalStorageIfAny()
+  }, [])
 
   useEffect(() => {
     if (interval !== intervalRef.current) {
