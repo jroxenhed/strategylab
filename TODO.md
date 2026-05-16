@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*218 / 257 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*221 / 257 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 - [F212](#f212) — [next] F210 inline-confirm browser smoke remains partially open [easy]
 
-## Open Work — 62 items
+## Open Work — 59 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -23,7 +23,7 @@ _(none open)_
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 16 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F216](#f216), [F229](#f229), [F245b](#f245b), [F246](#f246), [F248](#f248) |
 | [F · Hardening](#f-hardening) | Security, reliability, validation | 3 | [F187](#f187), [F211](#f211), [F220](#f220) |
-| [F · Polish](#f-polish) | UI, naming, dead code | 28 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217](#f217), [F225](#f225)–[F228](#f228), [F230](#f230)–[F244](#f244), [F245a](#f245a), [F247a](#f247a), [F247b](#f247b) |
+| [F · Polish](#f-polish) | UI, naming, dead code | 25 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217](#f217), [F227](#f227)–[F228](#f228), [F231](#f231)–[F244](#f244), [F245a](#f245a), [F247a](#f247a), [F247b](#f247b) |
 | [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 5 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219) |
 
 ## A — Charts & Indicators
@@ -177,11 +177,11 @@ Own multi-session research project. Needs its own design work before implementat
 - [ ] <a id="f212"></a> **F212** [next] F210 inline-confirm browser smoke remains partially open — F208 (Retry button a11y) browser-verified 2026-05-15 via chrome-devtools-mcp (XHR-patched indicator failure → Retry button surfaces, `tabIndex=0`, `pointerEvents=auto`, focus+Enter fires 4 indicator XHRs across MACD+RSI subpanes; screenshot at `docs/screenshots/f208-retry-button.png`). F210's 6-site walk-through was not completed in-session — the bot-related sites (BotControlCenter Stop+Close, BotCard menu Reset P&L, BotCard expanded Reset P&L) need a running bot with open positions and aren't reachable from a cold dev server. The 3 StrategyBuilder sites (commission-migration notice, rename-conflict, import-replace) are reachable via localStorage seeding but were deferred. Tackle either via paper-trading session or via headless saved-strategy seeding for the 3 StrategyBuilder sites. [easy] [polish] [testing]
 - [x] <a id="f213"></a> **F213** Trades-table sorting promoted from a dropdown (C26) to click-to-sort column headers. 12 sortable columns (`#`, Entry date, Entry $, Exit date, Exit $, Shares, P&L, Return, Slip, Comm, Borrow, Exit type). Three-state cycle: click → asc ↑, click again → desc ↓, third click → clear (back to chronological). Cross-column switching resets to asc on the new column. Active column rendered in `--text-primary` colour with the directional arrow; inactive columns stay muted. Comparators handle date strings + unix-int intraday timestamps + pair-sum costs (slip/comm aggregate buy+sell legs via the sell→buy index map). Persistence key migrated from `strategylab-trades-sort-mode` (old SortMode enum) to `strategylab-trades-sort` (new `{col, dir}` JSON). Tooltip on the header row documents the cycle. Browser-verified end-to-end: asc/desc/clear transitions, cross-column switch, localStorage round-trip; screenshot at `docs/screenshots/trades-sort-click-headers.png`. (added 2026-05-15) (resolved 2026-05-15) [easy] [polish]
 - [ ] <a id="f217"></a> **F217** TradeJournal "Last N" dropdown should surface the unloaded count — F215 added the limit selector but the user can't tell at a glance whether their selection is truncating the history (e.g. with 542 trades and `Last 200`, 342 trades aren't visible). Two options: (a) the existing `count` chip after "Trade Journal" already shows `trades.length` from the limited fetch — change the label to `200 of 542` when limited, plain `542` when "All", which means the endpoint also needs to return the unbounded total (cheap: add `total: int` to the journal response alongside `trades: list`). (b) cheaper fallback if backend change is unwanted: just add a small "(showing last 200)" hint next to the dropdown when limited. Pick (a) — it's the right shape long-term and a 1-field response addition. [easy] [polish] (added 2026-05-15)
-- [ ] <a id="f225"></a> **F225** Chart pane min-height — main candle pane gets `min-height: 40%`; sub-panes share remainder with `min-height: 80px`. Repro: 5 indicators (BB+MACD+RSI+ADX+Stoch) crushes candles to ~50px. **DO NOT add ResizeObserver** (F218 trap) — route through existing `onLayout` debounced path. Verify combined with F226. See plan F-UX5. [medium] [polish]
-- [ ] <a id="f226"></a> **F226** Collapse rule editor after first backtest run — auto-collapse once per page-load when `result != null` AND user hasn't manually toggled AND editor isn't dirty. Chip text omits incomplete rules. Verify combined with F225. See plan F-UX6. [medium] [polish]
+- [x] <a id="f225"></a> **F225** Chart pane min-height — main candle pane gets `min-height: 40%`; sub-panes share remainder with `min-height: 80px`. Repro: 5 indicators (BB+MACD+RSI+ADX+Stoch) crushes candles to ~50px. **DO NOT add ResizeObserver** (F218 trap) — route through existing `onLayout` debounced path. Verify combined with F226. See plan F-UX5. [medium] [polish] (resolved 2026-05-16)
+- [x] <a id="f226"></a> **F226** Collapse rule editor after first backtest run — auto-collapse once per page-load when `result != null` AND user hasn't manually toggled AND editor isn't dirty. Chip text omits incomplete rules. Verify combined with F225. See plan F-UX6. [medium] [polish] (resolved 2026-05-16)
 - [ ] <a id="f227"></a> **F227** Optimizer "Apply best to rules" + "Apply & Re-run" — buttons on winner/selected row. Add `applyParamPath(req, path, value)` resolver in `paramOptions.ts` next to `buildParamOptions` (single source of truth for path encoding). Mark strategy dirty after Apply. Disable both buttons during in-flight re-run. Extend to WFA winner row. See plan F-UX7. [medium] [polish]
 - [ ] <a id="f228"></a> **F228** Chart `timeScale().fitContent()` on data refresh — fire only when `(ticker, interval, from, to)` actually changes (track in ref); NOT on every poll-driven refetch. Wrap in teardown-safety try/catch. See plan F-UX8. [easy] [polish]
-- [ ] <a id="f230"></a> **F230** Results panel auto-scroll on completion — `panelRef.current?.scrollTo({top:0, behavior:'smooth'})` on backtest/optimizer/WFA result-updated effects. Plus `scrollbar-gutter: stable` for visible scrollbar hint. See plan F-UX10. [easy] [polish]
+- [x] <a id="f230"></a> **F230** Results panel auto-scroll on completion — `panelRef.current?.scrollTo({top:0, behavior:'smooth'})` on backtest/optimizer/WFA result-updated effects. Plus `scrollbar-gutter: stable` for visible scrollbar hint. See plan F-UX10. [easy] [polish] (resolved 2026-05-16)
 - [ ] <a id="f231"></a> **F231** "Aggregate" header combobox — hide when redundant — only render when value differs from sidebar interval. Rename to `Aggregate ▾`, drop "View" prefix. See plan F-UX11. [easy] [polish]
 - [ ] <a id="f232"></a> **F232** Direction segmented control — `Long / Short / Both` above LONG/SHORT tabs. Long-only **hides** SHORT tab entirely (not dimmed). State lives in existing `direction` field — do NOT reuse `Rule.muted`. Toggle back restores rules intact. See plan F-UX12. [medium] [polish]
 - [ ] <a id="f233"></a> **F233** IBKR-disabled tooltip copy — change "Set ALPACA_API_KEY in .env to enable" → "Set `IBKR_HOST` + `IBKR_PORT` in `backend/.env` and start IB Gateway". One line. See plan F-UX13. [easy] [polish]

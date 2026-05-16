@@ -48,11 +48,15 @@ body {
 
 #root { height: 100vh; display: flex; flex-direction: column; }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+/* Scrollbar — F230 bumped 6→8px; reserves gutter so the bar is visibly hinted */
+::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: var(--bg-main); }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* F230: results panel scrollers reserve gutter so content doesn't jump
+   when scrollbar appears, and the bar is consistently visible. */
+.results-scroller { scrollbar-gutter: stable; }
 
 /* Globals */
 button { 

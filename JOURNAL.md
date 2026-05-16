@@ -6,6 +6,14 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-16
 
+### Bundle B shipped — UX layout bundle (F225, F226, F230)
+
+- **[F225](TODO.md#f225)** Chart pane min-height: main candle `minSize={40}` + sub-panes `minSize={8}` (~50 px on a 500 px column, ~80 px on taller). No ResizeObserver added — react-resizable-panels enforces minSize internally. Outer wrapper switched `overflow: hidden` → `auto` so 5+ sub-panes scroll instead of crushing.
+- **[F226](TODO.md#f226)** Rule editor auto-collapse on first backtest result: tracks `userHasManuallyToggled` (one-shot per page load) + `lastRunRulesSignature` (dirty bit) — skipped when user is mid-edit. Chip summary uses `NEEDS_VALUE`/`NEEDS_PARAM` from RuleRow (shared with F223's `isRuleInvalid`) to filter incomplete rules, appending `… (N incomplete rule)`. Chevron toggles in place; same DOM element so chip text updates without flicker.
+- **[F230](TODO.md#f230)** Results panel auto-scroll on each new result. `containerRef` on Results outer; useEffect on `summary` identity walks every overflow-auto descendant and snaps `scrollTop = 0`. CSS: scrollbar 6 → 8 px + `scrollbar-gutter: stable` on `.results-scroller` for stable content width.
+- Browser-verified combined (F225 + F226 + F230) on a 5-indicator strategy (MACD, RSI, BB, ADX, Stoch, daily, 2024-01-01 → 2026-05-15): 521 px chart column with main candle pinned at 203 px (39 %, minSize floor active), rule editor auto-collapses on first run showing chip "Rules: MACD above 0", results pane gets the full 521 px counterpart — well above the 400 px target. Chevron toggle re-expands editor cleanly; subsequent run while open does not re-collapse.
+- Branch `bundle-b-ux-layout-2026-05-16`, 3 commits, pushed. `npm run build` clean on each commit. All 153 existing tests pass.
+
 ### Bundle A shipped — UX integrity bundle (F221–F224)
 
 - **[F221](TODO.md#f221)** `buildParamOptions` reordered so buy/sell rule thresholds come before stop/trailing/slippage; the `[0]` default in Optimizer/WFA now lands on a strategy param. 3 unit tests, all green.

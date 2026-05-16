@@ -105,7 +105,21 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
   const { summary, trades, equity_curve, signal_trace } = result
   const [tzMode] = useTimezone()
   const chartRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
   const sells = trades.filter(t => t.type === 'sell' || t.type === 'cover')
+
+  // F230: when a new backtest result lands, snap every overflow-auto scroller
+  // inside the Results panel back to the top so the headline is immediately
+  // visible. summary identity is the result-changed signal.
+  useEffect(() => {
+    const root = containerRef.current
+    if (!root) return
+    root.scrollTop = 0
+    root.querySelectorAll<HTMLElement>('*').forEach(el => {
+      const o = getComputedStyle(el).overflowY
+      if (o === 'auto' || o === 'scroll') el.scrollTop = 0
+    })
+  }, [summary])
   const { data: macroData, isLoading: macroLoading } = useMacro(lastRequest, bucket)
 
   const [mcResult, setMcResult] = useState<MonteCarloResult | null>(null)
@@ -450,7 +464,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
   }, [activeTab])
 
   return (
-    <div style={styles.container}>
+    <div ref={containerRef} className="results-scroller" style={styles.container}>
       <div style={{ ...styles.tabBar, flexWrap: 'nowrap', overflowX: 'auto' }}>
         <div style={{ display: 'flex', flexWrap: 'nowrap' }}>
           {(['summary', 'equity', 'trades',
