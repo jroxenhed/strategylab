@@ -612,7 +612,7 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
           <div style={styles.groupTitle}>Capital &amp; Fees</div>
           <div style={styles.settingsRow}>
             <label style={styles.settingsLabel}>Capital ($)</label>
-            <input type="number" value={capital} onChange={e => setCapital(+e.target.value)} style={styles.settingsInput} />
+            <input type="number" value={capital} min={0} onChange={e => setCapital(+e.target.value)} style={styles.settingsInput} />
           </div>
           <div style={styles.settingsRow}>
             <label style={styles.settingsLabel}>% of Capital</label>
@@ -719,11 +719,11 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
           <div style={styles.groupTitle}>Risk Management</div>
           <div style={styles.settingsRow}>
             <label style={styles.settingsLabel}>Stop Loss (%)</label>
-            <input type="number" value={stopLoss} step={0.5} min={0} placeholder="Off" onChange={e => setStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+            <input type="number" value={stopLoss} step={0.5} min={0} max={99} placeholder="Off" onChange={e => setStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
           </div>
           <div style={styles.settingsRow}>
             <label style={styles.settingsLabel}>Time Stop (bars)</label>
-            <input type="number" value={maxBarsHeld} step={1} min={1} placeholder="Off" onChange={e => setMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+            <input type="number" value={maxBarsHeld} step={1} min={1} max={10000} placeholder="Off" onChange={e => setMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
           </div>
           <div style={{ ...styles.settingsRow, marginTop: 4 }}>
             <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
@@ -756,7 +756,7 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
                   <input type="checkbox" checked={trailingConfig.activate_on_profit} onChange={e => setTrailingConfig(c => ({ ...c, activate_on_profit: e.target.checked }))} />
                   Activate after
                 </label>
-                <input type="number" value={trailingConfig.activate_pct} step={0.5} min={0} disabled={!trailingConfig.activate_on_profit} onChange={e => setTrailingConfig(c => ({ ...c, activate_pct: +e.target.value }))} style={{ ...styles.settingsInput, width: 48, opacity: trailingConfig.activate_on_profit ? 1 : 0.35 }} />
+                <input type="number" value={trailingConfig.activate_pct} step={0.5} min={0} max={100} disabled={!trailingConfig.activate_on_profit} onChange={e => setTrailingConfig(c => ({ ...c, activate_pct: +e.target.value }))} style={{ ...styles.settingsInput, width: 48, opacity: trailingConfig.activate_on_profit ? 1 : 0.35 }} />
                 <span style={{ fontSize: 11, color: '#8b949e' }}>% profit</span>
               </div>
             </div>
@@ -830,12 +830,12 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
             <div style={{ fontSize: 11, color: '#3fb950', fontWeight: 600, marginBottom: 4 }}>Long</div>
             <div style={styles.settingsRow}>
               <label style={styles.settingsLabel}>Stop Loss (%)</label>
-              <input type="number" value={longStopLoss} step={0.5} min={0} placeholder="global" onChange={e => setLongStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+              <input type="number" value={longStopLoss} step={0.5} min={0} max={99} placeholder="global" onChange={e => setLongStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
             </div>
             <div style={effectiveLabelStyle}>{effectiveStopLabel(longStopLoss, stopLoss, 'long')}</div>
             <div style={styles.settingsRow}>
               <label style={styles.settingsLabel}>Time Stop (bars)</label>
-              <input type="number" value={longMaxBarsHeld} step={1} min={1} placeholder="global" onChange={e => setLongMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+              <input type="number" value={longMaxBarsHeld} step={1} min={1} max={10000} placeholder="global" onChange={e => setLongMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
             </div>
             <div style={effectiveLabelStyle}>{effectiveTimeStopLabel(longMaxBarsHeld, maxBarsHeld, 'long')}</div>
             <div style={styles.settingsRow}>
@@ -868,12 +868,12 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
             <div style={{ fontSize: 11, color: '#f85149', fontWeight: 600, marginTop: 12, marginBottom: 4 }}>Short</div>
             <div style={styles.settingsRow}>
               <label style={styles.settingsLabel}>Stop Loss (%)</label>
-              <input type="number" value={shortStopLoss} step={0.5} min={0} placeholder="global" onChange={e => setShortStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+              <input type="number" value={shortStopLoss} step={0.5} min={0} max={99} placeholder="global" onChange={e => setShortStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
             </div>
             <div style={effectiveLabelStyle}>{effectiveStopLabel(shortStopLoss, stopLoss, 'short')}</div>
             <div style={styles.settingsRow}>
               <label style={styles.settingsLabel}>Time Stop (bars)</label>
-              <input type="number" value={shortMaxBarsHeld} step={1} min={1} placeholder="global" onChange={e => setShortMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+              <input type="number" value={shortMaxBarsHeld} step={1} min={1} max={10000} placeholder="global" onChange={e => setShortMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
             </div>
             <div style={effectiveLabelStyle}>{effectiveTimeStopLabel(shortMaxBarsHeld, maxBarsHeld, 'short')}</div>
             <div style={styles.settingsRow}>
@@ -1450,7 +1450,12 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
               : <><Play size={14} fill="currentColor" />{' Run Backtest'}</>}
           </button>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer' }}>
-            <input type="checkbox" checked={debug} onChange={e => setDebug(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={debug}
+              onChange={e => setDebug(e.target.checked)}
+              title="Records every rule evaluation per bar — slower, useful for debugging missed signals."
+            />
             Enable Signal Trace tab
           </label>
           {error && <span style={{ color: 'var(--accent-red)', fontSize: 13, fontWeight: 500 }}>{error}</span>}

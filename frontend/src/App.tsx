@@ -116,6 +116,8 @@ export default function App() {
   // F227 — ref into StrategyBuilder for Apply-from-Optimizer/WFA
   const strategyBuilderRef = useRef<StrategyBuilderHandle>(null)
   const [chartEnabled, setChartEnabled] = useState(true)
+  // F244 — narrow rails below 1440 px (evaluated once on mount; viewport changes during use are rare)
+  const narrowRails = useMemo(() => window.innerWidth < 1440, [])
   const [datePreset, setDatePreset] = useState<DatePreset>((saved?.datePreset as DatePreset) ?? 'Y')
   const [viewInterval, setViewInterval] = useState(saved?.viewInterval ?? interval)
   const [isAggOpen, setIsAggOpen] = useState(false)
@@ -202,6 +204,19 @@ export default function App() {
               <button onClick={() => setChartEnabled(c => !c)} style={{ ...styles.chartToggleBtn, opacity: chartEnabled ? 0.5 : 1 }}>
                 {chartEnabled ? 'Disable Chart' : 'Enable Chart'}
               </button>
+              {/* F235 — sticky metrics strip after button cluster */}
+              {backtestResult && (() => {
+                const s = backtestResult.summary
+                const ret = s.total_return_pct != null ? (s.total_return_pct >= 0 ? '+' : '') + s.total_return_pct.toFixed(1) + '%' : '—'
+                const sharpe = s.sharpe_ratio != null ? s.sharpe_ratio.toFixed(2) : '—'
+                const dd = s.max_drawdown_pct != null ? '−' + Math.abs(s.max_drawdown_pct).toFixed(1) + '%' : '—'
+                const ntrades = s.num_trades ?? 0
+                return (
+                  <span style={styles.metricsStrip} title={`${ticker} ${interval} backtest summary`}>
+                    {ticker} {interval} · {ntrades} trade{ntrades !== 1 ? 's' : ''} · {ret} · Sharpe {sharpe} · MaxDD {dd}
+                  </span>
+                )
+              })()}
               {chartEnabled && viewIntervalOptions.length > 1 && (
                 viewInterval === interval && !isAggOpen ? (
                   <button
@@ -238,7 +253,7 @@ export default function App() {
           <Group orientation="horizontal" style={{ height: '100%' }}>
 
             {/* LEFT SIDEBAR */}
-            <Panel defaultSize="14%" minSize="8%">
+            <Panel defaultSize={narrowRails ? '11%' : '14%'} minSize="8%">
               <Sidebar
                 ticker={ticker}
                 start={start}
@@ -402,7 +417,7 @@ export default function App() {
             <Separator className="resize-handle-v" />
 
             {/* RIGHT SIDEBAR: Watchlist + Settings */}
-            <Panel defaultSize="20%" minSize="12%" collapsible>
+            <Panel defaultSize={narrowRails ? '17%' : '20%'} minSize="12%" collapsible>
               <div style={styles.rightPanel}>
                 <Group orientation="vertical" style={{ height: '100%' }}>
                   <Panel defaultSize="30%" minSize="15%">
@@ -464,5 +479,10 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'var(--bg-main)',
     borderLeft: '1px solid var(--border-light)',
     overflow: 'hidden',
+  },
+  metricsStrip: {
+    fontSize: 11, color: 'var(--text-secondary)',
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+    padding: '0 6px', maxWidth: 380,
   },
 }

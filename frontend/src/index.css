@@ -162,6 +162,35 @@ input[type="checkbox"] {
   background: #21262d;
   width: 100%;
 }
+
+/* ── Shared control-row classes (F243) ─────────────────────────────────────
+   Used by SensitivityPanel, OptimizerPanel, and WalkForwardPanel to
+   standardise the param-picker + min/max/steps row layout.
+   Only structural/cosmetic properties live here; loading state, conditional
+   colors, and non-row elements keep their inline styles.
+   ───────────────────────────────────────────────────────────────────────── */
+.strategy-control-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.strategy-control-row label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-width: 60px;
+}
+.strategy-control-row select,
+.strategy-control-row input {
+  font-size: 12px;
+  padding: 4px 6px;
+}
+.strategy-control-row .num-input {
+  width: 70px;
+}
+.strategy-control-row .wide-select {
+  min-width: 180px;
+}
 .chart-skeleton-label {
   font-size: 11px;
   color: var(--text-muted);

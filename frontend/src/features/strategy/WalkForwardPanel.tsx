@@ -5,7 +5,7 @@ import type { StrategyRequest, BacktestSummary } from '../../shared/types'
 import { useRequestTimer } from '../../shared/hooks/useRequestTimer'
 import { apiErrorDetail } from '../../shared/utils/errors'
 import { api } from '../../api/client'
-import { buildParamOptions, linspace, applyParamPath } from './paramOptions'
+import { buildParamOptions, linspace, applyParamPath, groupParamOptions, shouldGroupParamOptions } from './paramOptions'
 import type { ParamOption } from './paramOptions'
 import { parseSseFrame } from './sseParser'
 
@@ -250,6 +250,8 @@ function StitchedEquityChart({ data }: { data: WfaEquityPoint[] }) {
 
 export default function WalkForwardPanel({ lastRequest, onApplyParams, onRunBacktest }: Props) {
   const paramOptions = useMemo(() => buildParamOptions(lastRequest, 5), [lastRequest])
+  const useGroups = shouldGroupParamOptions(lastRequest)
+  const paramGroups = useMemo(() => groupParamOptions(paramOptions), [paramOptions])
 
   const emptyRow = (): ParamRow => ({ path: paramOptions[0]?.path ?? NONE_PATH, min: '', max: '', steps: '5' })
 
@@ -763,7 +765,7 @@ export default function WalkForwardPanel({ lastRequest, onApplyParams, onRunBack
         <div style={s.row}>
           <span style={s.label}>IS bars</span>
           <input
-            type="number" min={1}
+            type="number" min={1} max={10000}
             value={isBarStr}
             onChange={e => setIsBarStr(e.target.value)}
             placeholder="e.g. 252"
@@ -771,7 +773,7 @@ export default function WalkForwardPanel({ lastRequest, onApplyParams, onRunBack
           />
           <span style={s.label}>OOS bars</span>
           <input
-            type="number" min={1}
+            type="number" min={1} max={10000}
             value={oosBarStr}
             onChange={e => setOosBarStr(e.target.value)}
             placeholder="e.g. 63"
@@ -779,14 +781,14 @@ export default function WalkForwardPanel({ lastRequest, onApplyParams, onRunBack
           />
           <span style={s.label}>Gap bars</span>
           <input
-            type="number" min={0}
+            type="number" min={0} max={10000}
             value={gapBarStr}
             onChange={e => setGapBarStr(e.target.value)}
             style={{ ...s.input, width: 50 }}
           />
           <span style={s.label}>Step bars</span>
           <input
-            type="number" min={1}
+            type="number" min={1} max={10000}
             value={stepBarStr}
             onChange={e => setStepBarStr(e.target.value)}
             placeholder="= OOS"
@@ -816,18 +818,28 @@ export default function WalkForwardPanel({ lastRequest, onApplyParams, onRunBack
         const opt = isActive ? paramOptions.find((o: ParamOption) => o.path === row.path) : null
         return (
           <div key={i} style={{ ...s.section, opacity: i > 0 && !paramRows[i - 1] ? 0.4 : 1 }}>
-            <div style={s.row}>
+            <div className="strategy-control-row" style={{ flexWrap: 'wrap' }}>
               <span style={s.label}>Param {i + 1}</span>
               {isActive ? (
                 <>
                   <select
                     value={row.path}
                     onChange={e => setRow(i, { path: e.target.value, min: '', max: '', steps: '5' })}
+                    className="wide-select"
                     style={{ ...s.select, minWidth: 240 }}
                   >
-                    {paramOptions.map((o: ParamOption) => (
-                      <option key={o.path} value={o.path}>{o.label}</option>
-                    ))}
+                    {useGroups
+                      ? paramGroups.map(({ group, options }) => (
+                          <optgroup key={group} label={group}>
+                            {options.map((o: ParamOption) => (
+                              <option key={o.path} value={o.path}>{o.label}</option>
+                            ))}
+                          </optgroup>
+                        ))
+                      : paramOptions.map((o: ParamOption) => (
+                          <option key={o.path} value={o.path}>{o.label}</option>
+                        ))
+                    }
                   </select>
                   <span style={s.label}>Min</span>
                   <input
@@ -835,6 +847,7 @@ export default function WalkForwardPanel({ lastRequest, onApplyParams, onRunBack
                     placeholder={opt ? String(opt.defaultMin) : ''}
                     value={row.min}
                     onChange={e => setRow(i, { min: e.target.value })}
+                    className="num-input"
                     style={s.input}
                   />
                   <span style={s.label}>Max</span>
@@ -843,6 +856,7 @@ export default function WalkForwardPanel({ lastRequest, onApplyParams, onRunBack
                     placeholder={opt ? String(opt.defaultMax) : ''}
                     value={row.max}
                     onChange={e => setRow(i, { max: e.target.value })}
+                    className="num-input"
                     style={s.input}
                   />
                   <span style={s.label}>Steps</span>

@@ -6,6 +6,20 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-05-16
 
+### Bundle E shipped — UX polish bundle (F235–F244)
+
+- **[F235](TODO.md#f235)** Sticky strategy-metrics strip in header (renders after backtest completes on Chart tab). Format: `MSFT 1d · 7 trades · +8.2% · Sharpe 0.34 · MaxDD −14.8%`. Ticker+interval used as label since strategy name lives in StrategyBuilder. `App.tsx` only.
+- **[F236](TODO.md#f236)** Two-param Optimizer Sharpe heatmap. `OptimizerPanel.tsx` adds `sharpeColor` helper (5-stop blue→cyan→grey→yellow→red gradient anchored to absolute scale lo=min(-0.5,gridMin)/hi=max(1.5,gridMax)) + `heatmapData` useMemo that builds a 2D grid from the 2-param `result.results`. CSS-grid render of 36×24px cells with peak highlighted (white border + bold). Hidden for 1-param sweeps and grids >8×8. 2 new vitest cases.
+- **[F237](TODO.md#f237)** Param-picker `<optgroup>` per rule when >2 rules. New helpers `groupParamOptions` + `shouldGroupParamOptions` in `paramOptions.ts` group paths by prefix (Buy Rule N+1 / Sell Rule N+1 / Risk / Costs). OptimizerPanel + WalkForwardPanel wrap their `<select>` with optgroups when grouping is active; flat render otherwise. 10 new unit tests.
+- **[F238](TODO.md#f238)** Tooltip on Enable Signal Trace checkbox: "Records every rule evaluation per bar — slower, useful for debugging missed signals." (Found the checkbox in StrategyBuilder.tsx, not App.tsx — one-line title attribute.)
+- **[F239](TODO.md#f239)** `aria-valuemax="0"` audit. Replaced misleading defaults on 12 numeric inputs across StrategyBuilder + WalkForwardPanel — Stop Loss → max=99, Time Stop / WFA window inputs → max=10000, Trailing activate_pct → max=100. Confirmed in browser: Stop Loss now reads valuemax=99, Time Stop valuemax=10000.
+- **[F240](TODO.md#f240)** `react-resizable-panels` console hygiene. No-op for App.tsx (zero `autoSaveId` / `onLayout` there); the existing config in Chart.tsx is correct.
+- **[F241](TODO.md#f241)** Trades-table P&L visual emphasis. 3px left-border per trade row (red for loss, green for win) + `fontWeight: 700` on $ and % P&L cells. `Results.tsx` only. Browser-verified: 7 rows with `border-left: 3px solid` in the expected colors, 14 bold P&L cells.
+- **[F242](TODO.md#f242)** Discovery tab placeholder + 2-col widget layout. Below the existing scanner/perf-compare components, a new "Preview only — scanner coming soon" section with three placeholder cards (Today's movers / Volume leaders / Breakout candidates) in `grid-template-columns: 1fr 1fr`. Browser-verified all three card titles render.
+- **[F243](TODO.md#f243)** Standardised Sensitivity / Optimizer / WFA control rows via 5 shared CSS classes in `index.css` (`.strategy-control-row`, label, select/input, `.num-input`, `.wide-select`). All three panels replaced inline structural styles with class names; non-cosmetic styles (loading state, conditional colors) kept inline. No shared component — abstraction not earned per scope review.
+- **[F244](TODO.md#f244)** Default-viewport rails narrower below 1440 px. `useMemo(() => window.innerWidth < 1440, [])` toggles left sidebar 14%→11% and right settings 20%→17% on mount.
+- Branch `bundle-d-remaining-2026-05-16`. 200/200 frontend tests pass (10 new); `npm run build` clean.
+
 ### Bundle D shipped — UX copy/controls bundle (F231–F234)
 
 - **[F231](TODO.md#f231)** Aggregate header combobox hide-when-redundant. When `viewInterval === interval`, only a compact `Aggregate ▾` button shows; clicking expands to the select with the base interval pre-selected (autoFocus opens the menu). Option labels dropped the "View " prefix — just `1D / 1W / 1M`. When aggregation is active, the select is prefixed with muted `Aggregate:` text. `App.tsx` only.
