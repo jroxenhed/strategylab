@@ -41,6 +41,39 @@ In rough order of importance:
    - **Wrangle nodes (separate node type)** — pure code, no curated UI, parameters auto-synthesized by scanning `chf()` / `chi()` / `chs()` / `chv()` / `chb()` calls in the code body. The escape hatch when the built-in library doesn't cover what the user wants to express. Spawning a wrangle is rare but unblocks everything.
    - **Cross-node parameter references** work from any of B, C, or wrangle contexts: `ch("../rsi_1/period")` reads another node's param, `ch("../entry/signal")` reads its output. Same path syntax Houdini uses.
 
+## Hierarchical Path Structure (The Foundational Model)
+
+A point I missed in earlier drafts but is load-bearing for the whole architecture: **nodes live in a file/folder hierarchy, not a flat list with parent pointers**. This is how Houdini gets so much mileage out of a single mechanism — it's the namespace, the navigation model, and the reference system all in one.
+
+**What this means concretely:**
+
+- Every node has a path like `/long_leg/regime/spy_sma`. Not a UUID; a meaningful position in a tree.
+- A **network** (sub-graph, output group, the canvas itself) is a node that contains other nodes — i.e. a directory. Networks are themselves first-class nodes; "node" and "network" are the same kind of thing at different recursion depths.
+- The canvas root is `/`. Drilling into a sub-graph or an output group is navigating into a sub-directory. A breadcrumb at the top of the canvas (`/ > long_leg > regime`) shows your current location.
+- References use paths: relative (`../regime/spy_sma_slope`), absolute (`/shared/spread_calc/output`), and same-directory (`./threshold` or just `threshold`).
+- Renaming a node renames a path. Existing references break unless the system follows the rename (Houdini does — references update automatically. We should too, with an explicit "show broken references" UI for the cases we miss).
+
+**The mechanisms this unifies:**
+
+1. **Sub-graphs (Goal #4)** become trivial: a sub-graph IS a network at some path. There's no special "HDA-ness" data structure. Saving a sub-graph means copying a subtree out and giving it a name in the palette. Instancing means cloning the subtree at a new path.
+
+2. **Multi-output groups (T4)** become natural: each output group is a sub-directory. `/long_leg/entry`, `/long_leg/exit`, `/short_leg/entry`, `/short_leg/exit`. Shared upstream computation lives at `/shared/regime/...` and is referenced by both legs via `../shared/regime/spy_sma_slope` or absolute `/shared/...`. The "shared upstream runs once" property falls out of the evaluator visiting each path once.
+
+3. **`ch()` references** (Path 2/3/4 code contexts) are exactly Houdini's `ch()` — they take a path string, resolve it against the calling node's location, return the value. No second reference system to invent.
+
+4. **Channel-style cross-node refs** (`ch("../rsi_1/period")`) collapse into "ordinary path resolution." Reading another node's parameter vs reading another node's output is the same mechanism, distinguished by trailing path component (`/period` vs `/output` or no trailing component).
+
+5. **Storage format** is a tree, not a list. The graph serializes as nested JSON objects matching the path hierarchy. This is meaningfully more legible than a flat node-list with parent-id pointers, and it diffs better in git.
+
+**Implications for the rest of the design:**
+
+- Node IDs are paths, not UUIDs. Stability matters: rename = path change = follow refs.
+- The wrangle/code-block `chf("threshold")` lookups are scoped to the calling node's own directory by default. To read another node's param, write the path: `chf("../regime/threshold")`.
+- Sub-graphs with promoted parameters expose those params at the sub-graph's root path. From outside, `ch("./momentum_confirm/lookback")` reads the promoted param. From inside the sub-graph, `chf("../lookback")` reads the same value (relative to a node one level deep).
+- The palette doesn't need a separate "saved sub-graphs" concept distinct from "built-in nodes" — both are just networks-with-a-name available to drop into a path.
+
+**Where this is most useful:** when the graph gets non-trivial. A 30-node single-strategy graph organized as `/regime/...`, `/entry_logic/...`, `/exit_logic/...`, `/sizing/...` is dramatically more readable than 30 nodes in a flat canvas. The hierarchy IS the high-level structure of the strategy.
+
 ## Node Categories (First-Class UX Concept)
 
 Nodes have a **category** as a first-class property. Categories are visible in the palette (grouped sections), on the canvas (color coding on the node header), and on the wire handles (distinct colors per data type). This isn't decoration — it's how users navigate a growing library and read a graph at a glance. Houdini does this aggressively (SOPs/DOPs/CHOPs/COPs network-level, plus category coloring within each), and it's a big part of why dense graphs stay legible.
