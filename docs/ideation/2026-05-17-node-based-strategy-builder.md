@@ -74,6 +74,65 @@ A point I missed in earlier drafts but is load-bearing for the whole architectur
 
 **Where this is most useful:** when the graph gets non-trivial. A 30-node single-strategy graph organized as `/regime/...`, `/entry_logic/...`, `/exit_logic/...`, `/sizing/...` is dramatically more readable than 30 nodes in a flat canvas. The hierarchy IS the high-level structure of the strategy.
 
+## Geometry-Stream Data Model (Foundational, Not Yet Committed)
+
+User flagged this as worth thinking about (2026-05-17) but didn't commit to applying it yet. Capturing here because if we adopt it, several pieces of the current design collapse into one mechanism — and if we don't, we should know what we're choosing against.
+
+### The Houdini Pattern
+
+Houdini has ONE universal data type — the geometry stream — that flows through every wire between nodes. The stream carries:
+
+- **Points** — positional samples with arbitrary typed attributes (`@P` position, `@Cd` color, `@v` velocity, plus any user attribute).
+- **Primitives** — higher-level structures (polygons, curves, volumes) that reference points and carry their own attributes.
+- **Vertices** — point-usage-within-primitive, with their own attributes (typically UVs).
+- **Detail** — global attributes on the whole stream (one value, not per-element).
+
+Attributes are typed (float, int, vector, vector4, matrix, string), stored columnar (SoA) for cache locality, and accessible by name from any node. A "Smooth" node smooths whatever attribute you point it at — there is no "Smooth RSI" node and "Smooth Volume" node. There's one Smooth node operating on whichever attribute you select.
+
+### The Trading Mapping
+
+The cleanest analogue I can see:
+
+- **Points = bars.** Each bar is a point in time with built-in attributes (`@open`, `@high`, `@low`, `@close`, `@volume`, `@time`, `@index`) and any user-added attributes (`@rsi_14`, `@macd_signal`, `@my_custom_score`).
+- **Primitives = trades, sessions, regime periods, patterns.** A trade primitive "owns" the bars from entry to exit and carries `@entry_price`, `@exit_price`, `@pnl`, `@duration`, `@mfe`, `@mae`, `@r`. A session primitive owns ~390 1m bars. A "double top" pattern primitive owns the span from first peak to second peak. A regime-up primitive owns all bars where the regime condition held.
+- **Detail = strategy-level scalars.** Total PnL, win rate, profit factor, current drawdown, exposure.
+- **Vertices** don't have an obvious trading analogue — likely unused, or repurposed for something like "leg of a multi-leg position."
+
+### What This Would Collapse in the Current Design
+
+1. **Wire typing disappears.** All wires carry "bar streams." No more `series:float` vs `series:bool` vs `scalar:float` typing on handles. Compatibility is enforced by *attribute requirements*: a Crossover node declares "I require attributes `a` and `b` to be present and numeric"; an error surfaces at edit time if upstream doesn't provide them. This is significantly more flexible than fixed handle types — and matches how Houdini graphs feel: you wire things and they Just Work because everyone speaks the same data format.
+
+2. **Multi-output handles on Ticker dissolve.** Ticker doesn't have "Open / High / Low / Close / Volume" output handles. It writes those five attributes onto a stream and emits one wire. Downstream nodes read whichever attributes they need by name. Cleaner schema, easier extension (Ticker can add `@bid`, `@ask`, `@spread` without breaking existing wires).
+
+3. **Indicator nodes become attribute writers.** RSI reads `@close` and writes `@rsi` (or `@rsi_<period>`) onto the stream. The output wire carries the same stream as the input wire, just with one more attribute. This dramatically reduces visual clutter on dense graphs — you don't need a wire-per-indicator, you have one trunk wire that picks up attributes as it flows downstream. (Optionally, you *can* fork the wire when you want to inspect intermediates, but the default flow is linear and gathering.)
+
+4. **Multi-ticker handling has two clean answers.** Either (a) attribute namespacing on one stream — Ticker(SPY) writes `@spy_close`, `@spy_volume`, etc. — or (b) multiple parallel streams merged with a `Merge` node. Houdini uses option (b) and it works very well. Either approach is dramatically cleaner than inventing a multi-input-handle node model.
+
+5. **Trades and metrics become node-graph composable.** Today's backtester is a black box: bars in, trade list + metrics out. With primitives on the stream, a "Backtest" node outputs a stream where points are bars *and* primitives are completed trades. Downstream a "Per-Trade Stats" node reads trade primitives and writes detail attributes (Sharpe, profit factor). A "Drawdown" node reads the bar series and writes a `@drawdown` attribute per bar plus a `max_drawdown` detail. The whole post-backtest analysis pipeline becomes graph composition — including being able to insert custom analysis between "backtest produces trades" and "metrics are computed."
+
+6. **Time-frame agnosticism.** A "Momentum Confirm" sub-graph that reads `@close` and writes `@momentum_signal` works at any timeframe, on any symbol. There's nothing in the sub-graph tied to a specific timeframe or symbol because the stream is just "whatever bars you fed in."
+
+### What This Would Cost
+
+1. **Higher learning curve up front.** Houdini's geometry model is famously powerful but takes time to internalize — "everything is attributes" is a paradigm shift from "every value has a wire." Users coming from the rule builder will need to grok the attribute model.
+
+2. **Less type safety at the wire level.** Today's "incompatible types" wire-time rejection is replaced by attribute-presence checks at edit time. This is more flexible but means more error states to surface in UI ("RSI requires `@close`, but upstream stream doesn't carry it"). Houdini's UX for this is good but took decades to refine.
+
+3. **Implementation: pandas DataFrame as the natural carrier.** The stream is essentially a DataFrame where columns are attributes, rows are bars, plus a separate trades table (primitives) and a dict of scalars (detail). This is pleasant to implement in Python — pandas is already the spine of the backend. But it does mean *every wire* is a DataFrame, not a Series, which slightly changes the evaluator's hot path.
+
+4. **Memory.** Streams gather attributes as they flow downstream. A 30-node graph might accumulate 50+ columns. Houdini handles this via copy-on-write attribute storage; we'd need similar (probably easy with pandas + careful copying) to avoid quadratic memory growth.
+
+### Recommendation
+
+Do not commit yet, but **lean toward adopting this**. Reasons:
+
+- It collapses three currently-separate concerns (handle typing, multi-output schema, trade-list+metric computation) into one mechanism.
+- It matches the language the backend already speaks (pandas DataFrame).
+- It unlocks composable post-backtest analysis as a graph workflow, which is a meaningful capability we don't have today.
+- The cost is mostly in UX polish around attribute-presence errors, not in fundamental implementation complexity.
+
+If we adopt it, the decision affects T1 (the viewer's wire representation) — so it's worth deciding before T1 ships rather than after.
+
 ## Node Categories (First-Class UX Concept)
 
 Nodes have a **category** as a first-class property. Categories are visible in the palette (grouped sections), on the canvas (color coding on the node header), and on the wire handles (distinct colors per data type). This isn't decoration — it's how users navigate a growing library and read a graph at a glance. Houdini does this aggressively (SOPs/DOPs/CHOPs/COPs network-level, plus category coloring within each), and it's a big part of why dense graphs stay legible.
