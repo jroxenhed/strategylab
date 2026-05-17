@@ -20,6 +20,28 @@ The practical implication for design decisions, including ones we haven't reache
 
 This principle bounds scope as much as it directs it. We're not building a perfect Houdini clone — that would take 30 years. We're building the slice of Houdini's data-flow model that applies to procedural trading-strategy authoring, and only that slice. Features that exist in Houdini but don't have a clear trading-domain payoff (geometry transforms, volume rendering, character rigging) don't enter scope just because they exist there.
 
+## Kernel vs Domain: An Architectural Discipline
+
+What we are actually building, looked at honestly, is a **procedural data-flow kernel**. A stream of records with named typed attributes, hierarchical paths, node-based transformations, primitives as higher-level groupings, detail as global scalars, code-with-auto-promoted-parameters as an authoring layer. None of that is intrinsically about trading. The same kernel could express:
+
+- Audio / DSP pipelines (Max/MSP and Pure Data already are this, in a different idiom)
+- Image and video processing (Nuke, Substance Designer — same lineage)
+- Sensor / IoT analytics
+- ML preprocessing and feature-engineering pipelines
+- Bioinformatics workflows
+- Anything that's "records flowing through transformations, with grouping and aggregation."
+
+Trading is V1's vehicle, not the kernel's identity. We picked it because it's the user's domain and the rule builder's pain is concrete. The fact that the same architecture would serve a half-dozen other domains is evidence that the abstractions are at the right level — domain-specific abstractions don't generalize.
+
+**The architectural rule that falls out:** maintain a clean kernel/domain separation from day one, even while only the trading domain exists.
+
+- **Kernel layer** (domain-agnostic): the stream type, attribute system, path/network model, node base class, evaluator, channel functions, wrangle runtime, sub-graph mechanics, palette/category infrastructure.
+- **Domain layer** (trading-specific): built-in node implementations (RSI, MACD, Crossover, Ticker), output terminals (Entry/Exit/Position-Size/Stop-Loss), category definitions, the `sl` helper module, attribute conventions (`@close`, `@volume`, etc.), backtest semantics, bot-runner integration.
+
+Concretely, the kernel does not know what `@close` is. The kernel does not know what an "Entry" terminal means. Domain-layer code defines those; kernel-layer code just sees "a stream with some attributes" and "a terminal node with some attributes flowing into it." If we ever wanted to build a non-trading application on the same kernel, we'd add a new domain layer alongside the trading one, not fork the kernel.
+
+This is not scope creep — we're not building any other domains. It's discipline: writing the abstractions so they don't *prevent* other domains, because that's the same discipline that keeps them clean for trading too. Domain-specific shortcuts taken in the kernel are the failure mode that turns a 10-year platform into a 2-year platform.
+
 ## Goals (in priority order)
 
 1. **Authoring feels good** for new strategies — the user prefers the node graph over the rule builder for non-trivial work.
