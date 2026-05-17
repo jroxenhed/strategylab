@@ -80,6 +80,14 @@ A point I missed in earlier drafts but is load-bearing for the whole architectur
 
 User flagged this as worth thinking about (2026-05-17) but didn't commit to applying it yet. Capturing here because if we adopt it, several pieces of the current design collapse into one mechanism — and if we don't, we should know what we're choosing against.
 
+### Why the Universal Stream (Not Typed Handles)
+
+Most node editors fail at scale because every node declares its own typed inputs and outputs. An RSI node has an "RSI Output" type, a MACD node has a "MACD Output" type, and wiring them together requires adapters, type coercion, or merge primitives. Every new indicator multiplies the number of valid handle combinations. The type system grows quadratically with the node library, and new built-in nodes are expensive because their handle types have to interop with everything that came before.
+
+Houdini avoided this by making the wire type universal. A SOP doesn't have a "vector output" — it has "geometry that happens to have a `@normal` attribute on its points." Two arbitrary SOPs always wire together; what matters is whether the downstream node knows how to read the attributes the upstream node wrote. The type system moves from "handles" to "attribute names + types on a shared stream." New indicators don't expand a combinatorial compatibility matrix; they just add a column.
+
+That's the structural reason this maps well to trading: the same forces are at work. An indicator library that grows over time will accumulate handle types unless we deliberately collapse the wire to one universal type. Doing it now (before T1 ships) is cheap; retrofitting later is the kind of migration that breaks every existing strategy.
+
 ### The Houdini Pattern
 
 Houdini has ONE universal data type — the geometry stream — that flows through every wire between nodes. The stream carries:
@@ -112,11 +120,15 @@ The cleanest analogue I can see:
 
 5. **Trades and metrics become node-graph composable.** Today's backtester is a black box: bars in, trade list + metrics out. With primitives on the stream, a "Backtest" node outputs a stream where points are bars *and* primitives are completed trades. Downstream a "Per-Trade Stats" node reads trade primitives and writes detail attributes (Sharpe, profit factor). A "Drawdown" node reads the bar series and writes a `@drawdown` attribute per bar plus a `max_drawdown` detail. The whole post-backtest analysis pipeline becomes graph composition — including being able to insert custom analysis between "backtest produces trades" and "metrics are computed."
 
+   Said more sharply: **the metrics dictionary stops existing as an output type.** Today the backtester returns a `{sharpe, sortino, max_dd, ...}` dict. Under the stream model, metrics are just the read side of the same data model the backtest writes to — they're detail attributes a downstream node either consumed or didn't. Want a metric the backtester doesn't natively produce (regime-conditional Sharpe, exposure-adjusted return, custom drawdown windowing)? Drop the nodes that compute it. The "available metrics" list isn't enumerated in backend code anymore; it's whatever nodes are wired into the graph downstream of Backtest.
+
 6. **Time-frame agnosticism.** A "Momentum Confirm" sub-graph that reads `@close` and writes `@momentum_signal` works at any timeframe, on any symbol. There's nothing in the sub-graph tied to a specific timeframe or symbol because the stream is just "whatever bars you fed in."
 
 7. **Sub-graph interface becomes declarative.** A sub-graph documents itself as `reads: [@close, @volume]; writes: [@momentum_signal]`. Any context that provides those reads can use the sub-graph; any caller that needs the writes consumes them. This replaces the "promoted parameters at the boundary" mental model with something closer to a function signature — and it makes the palette searchable by "which sub-graphs write `@signal`" or "which built-ins read `@volume`."
 
 8. **Every wire becomes a debug surface.** Click any wire on the canvas → see the current DataFrame at that point in the flow: which columns exist, what values they hold, which upstream node added each column. The current backtester has zero introspection between "submit strategy" and "metrics dict appears." With the stream model, observability is free and per-wire. This is the single biggest UX win that falls out without being designed.
+
+9. **The code paths (2, 3, 4) simplify.** Per-parameter code, per-node code blocks, and Wrangle nodes don't need a special typed I/O API. They get the stream as input, read columns by name (`stream['close']` or `chf("threshold")` for a parameter), write columns back. The mental model for users is identical across the three code paths — always "read attributes, compute, write attributes." This removes a category of confusion that would exist if each path had its own typed-I/O surface.
 
 ### What This Would Cost
 
