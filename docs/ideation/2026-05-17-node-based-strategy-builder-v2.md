@@ -10,6 +10,16 @@ A **procedural strategies platform that expresses itself through a node editor.*
 
 The motivation: the rule builder works, but each new feature (NOT, slope conditions, regime filter, parameter sprawl) makes each rule row denser. The form is starting to hide the strategy. The user is a long-time Houdini user and recognizes both the symptoms (single-paradigm exhaustion) and a known cure (procedural data flow as the organizing principle).
 
+## Guiding Principle: Houdini Is the North Star
+
+> "Good artists borrow. Great artists steal." — apocryphally Picasso, definitely the policy here.
+
+**SideFX Houdini's data flow and structure is the ultimate model to mirror.** Every architectural decision in this doc — universal stream as wire type, hierarchical paths, attributes on points/primitives/detail, channel references, wrangles auto-promoting parameters, code as an optional layer over a curated node library — comes from 30+ years of refinement on procedural node graphs. We are not inventing a paradigm; we are translating a mature one to a different problem domain.
+
+The practical implication for design decisions, including ones we haven't reached yet: **when uncertain, look at how Houdini does it.** That tiebreaker has earned more credibility than any first-principles reasoning we'd do from scratch. We diverge from Houdini deliberately and explicitly (with the reason recorded), not by accident or convenience. Drift toward "but trading is different" framings should be treated with suspicion — almost every "trading is different" objection we've raised in this conversation has dissolved on second look (e.g. multi-output graphs handle pair trading without needing a trading-specific abstraction).
+
+This principle bounds scope as much as it directs it. We're not building a perfect Houdini clone — that would take 30 years. We're building the slice of Houdini's data-flow model that applies to procedural trading-strategy authoring, and only that slice. Features that exist in Houdini but don't have a clear trading-domain payoff (geometry transforms, volume rendering, character rigging) don't enter scope just because they exist there.
+
 ## Goals (in priority order)
 
 1. **Authoring feels good** for new strategies — the user prefers the node graph over the rule builder for non-trivial work.
