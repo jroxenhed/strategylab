@@ -6,6 +6,8 @@
 
 ## The Pitch
 
+**Reframe (as of the third refinement pass):** this is not a node editor for trading strategies. This is a **procedural strategies platform** that happens to express itself through a node editor. The distinction matters because the architectural decisions follow from "procedural data flow" thinking (universal stream, attributes, primitives), not from "diagram of rules" thinking. Different category of tool.
+
 A node-graph authoring surface for trading strategies, modeled on Houdini and Nuke. A strategy becomes a single legible spatial artifact instead of a stack of dense form rows. The current rule builder stays untouched; the node editor is a new strategy *type* with its own evaluator that lives alongside.
 
 ## Why This Idea Now
@@ -112,6 +114,10 @@ The cleanest analogue I can see:
 
 6. **Time-frame agnosticism.** A "Momentum Confirm" sub-graph that reads `@close` and writes `@momentum_signal` works at any timeframe, on any symbol. There's nothing in the sub-graph tied to a specific timeframe or symbol because the stream is just "whatever bars you fed in."
 
+7. **Sub-graph interface becomes declarative.** A sub-graph documents itself as `reads: [@close, @volume]; writes: [@momentum_signal]`. Any context that provides those reads can use the sub-graph; any caller that needs the writes consumes them. This replaces the "promoted parameters at the boundary" mental model with something closer to a function signature — and it makes the palette searchable by "which sub-graphs write `@signal`" or "which built-ins read `@volume`."
+
+8. **Every wire becomes a debug surface.** Click any wire on the canvas → see the current DataFrame at that point in the flow: which columns exist, what values they hold, which upstream node added each column. The current backtester has zero introspection between "submit strategy" and "metrics dict appears." With the stream model, observability is free and per-wire. This is the single biggest UX win that falls out without being designed.
+
 ### What This Would Cost
 
 1. **Higher learning curve up front.** Houdini's geometry model is famously powerful but takes time to internalize — "everything is attributes" is a paradigm shift from "every value has a wire." Users coming from the rule builder will need to grok the attribute model.
@@ -120,7 +126,7 @@ The cleanest analogue I can see:
 
 3. **Implementation: pandas DataFrame as the natural carrier.** The stream is essentially a DataFrame where columns are attributes, rows are bars, plus a separate trades table (primitives) and a dict of scalars (detail). This is pleasant to implement in Python — pandas is already the spine of the backend. But it does mean *every wire* is a DataFrame, not a Series, which slightly changes the evaluator's hot path.
 
-4. **Memory.** Streams gather attributes as they flow downstream. A 30-node graph might accumulate 50+ columns. Houdini handles this via copy-on-write attribute storage; we'd need similar (probably easy with pandas + careful copying) to avoid quadratic memory growth.
+4. **Memory + performance.** Streams gather attributes as they flow downstream. A 30-node graph over 5 years of 1-minute bars (~500k rows) accumulating 50+ columns is a lot of data if each node naively copies the DataFrame. Houdini handles this with aggressive memory sharing, copy-on-write attribute storage, and lazy computation — the same techniques apply here. Concrete implementation pattern: wrap the DataFrame in a lightweight "stream" object with copy-on-write semantics, where nodes that only *add* columns share the underlying storage with their inputs and only nodes that *modify* existing columns trigger a copy. Pandas' BlockManager already does column-level sharing under the hood; we mostly need to avoid unnecessary `.copy()` calls in node implementations and not let the evaluator's hot path materialize intermediate DataFrames it doesn't need. This is real engineering work, not a free property — but it's known-solved-elsewhere engineering, not novel research.
 
 ### Recommendation
 
@@ -331,7 +337,7 @@ You'll know the feature is succeeding when:
 
 ## Recommended Tiered Rollout
 
-1. **T1 — Read-only viewer (~1–2 weeks).** Auto-render existing rule strategies as a node graph. No editing. Pure validation that spatial layout actually helps.
+1. **T1 — Read-only viewer (~1–2 weeks).** Auto-render existing rule strategies as a node graph. No editing. Pure validation that spatial layout actually helps. **Important UX direction (added in third refinement pass):** the viewer should render the stream-attribute model explicitly — wires labeled with the attributes they carry (`@close`, then `@close + @rsi`, then `@close + @rsi + @entry_signal`), nodes labeled with reads/writes, so the data model becomes visible from a user's very first exposure to it. Documentation about the attribute model is much less effective than seeing it. T1's value is not just "is spatial layout legible" but "does the geometry-stream paradigm become intuitive from one look at a real strategy."
 2. **T2 — Editable canvas with current primitives + backtest + live trading (~3–4 weeks).** Authoring works end-to-end with the same primitives the rule builder has. Output terminals: entry + exit only, sizing/stops still in sidebar. Bot runner can execute a graph strategy.
 3. **T3 — Reusable sub-graphs (~2 weeks).** Save/instantiate named blocks with exposed parameters. This is where the paradigm starts to beat the rule builder.
 4. **T4 — Unified lifecycle (~2 weeks).** Sizing and stop-loss become output terminals on the canvas. Sidebar config for these collapses or disappears for graph strategies.
