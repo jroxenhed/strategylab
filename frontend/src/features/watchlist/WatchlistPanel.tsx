@@ -44,14 +44,17 @@ function allTickers(state: WatchlistState): string[] {
 // Drag data helpers
 // ---------------------------------------------------------------------------
 
-/** Drag source identifies where a ticker came from. */
-interface DragSource {
+/** One ticker's origin within the watchlist. */
+interface TickerDragItem {
   ticker: string
   /** null = ungrouped */
   groupId: string | null
   /** index within the source list */
   index: number
 }
+
+/** Drag source: one or more tickers being dragged together. */
+type DragSource = TickerDragItem[]
 
 const DRAG_KEY = 'watchlist-drag'
 const GROUP_DRAG_KEY = 'watchlist-group-drag'
@@ -136,6 +139,10 @@ export default function WatchlistPanel({
   // Drag-over tracking: { groupId: string | null (ungrouped), index: number }
   const [dragOver, setDragOver] = useState<{ groupId: string | null; index: number } | null>(null)
   const dragSrcRef = useRef<DragSource | null>(null)
+  // Multi-select state: which tickers are currently selected
+  const [selectedSymbols, setSelectedSymbols] = useState<Set<string>>(new Set())
+  // Anchor for shift+click range selection
+  const [lastClickedSymbol, setLastClickedSymbol] = useState<string | null>(null)
   // Ticker-dragged-over-group-header: highlights the header as a drop zone (appends to group)
   const [tickerOverHeaderId, setTickerOverHeaderId] = useState<string | null>(null)
   // Group-reorder drag state
@@ -312,19 +319,74 @@ export default function WatchlistPanel({
   // Drag handlers (extended for cross-group moves)
   // ---------------------------------------------------------------------------
 
+  /** Walk the watchlist in display order; used for shift+click ranges and multi-drag. */
+  const flattenInDisplayOrder = useCallback((s: WatchlistState): TickerDragItem[] => {
+    const out: TickerDragItem[] = []
+    s.groups.forEach(g => {
+      if (g.collapsed) return
+      g.tickers.forEach((t, i) => out.push({ ticker: t, groupId: g.id, index: i }))
+    })
+    s.ungrouped.forEach((t, i) => out.push({ ticker: t, groupId: null, index: i }))
+    return out
+  }, [])
+
   const handleDragStart = useCallback((
     ticker: string,
     groupId: string | null,
     index: number,
     e: React.DragEvent,
   ) => {
-    const src: DragSource = { ticker, groupId, index }
+    // If the dragged ticker is part of the current multi-selection, drag all selected.
+    // Otherwise drag just this one (without altering the selection).
+    let src: DragSource
+    if (selectedSymbols.size > 1 && selectedSymbols.has(ticker)) {
+      const flat = flattenInDisplayOrder(state)
+      src = flat.filter(item => selectedSymbols.has(item.ticker))
+      // Fallback safety: if filter dropped the dragged ticker (e.g. inside a collapsed group), include it explicitly.
+      if (!src.some(it => it.ticker === ticker)) {
+        src.push({ ticker, groupId, index })
+      }
+    } else {
+      src = [{ ticker, groupId, index }]
+    }
     dragSrcRef.current = src
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData(DRAG_KEY, encodeDrag(src))
-    // Firefox fallback
-    e.dataTransfer.setData('text/plain', ticker)
-  }, [])
+    e.dataTransfer.setData('text/plain', src.map(it => it.ticker).join(','))
+  }, [selectedSymbols, state, flattenInDisplayOrder])
+
+  const handleRowClick = useCallback((sym: string, e: React.MouseEvent) => {
+    const isMeta = e.metaKey || e.ctrlKey
+    const isShift = e.shiftKey
+    if (isShift && lastClickedSymbol) {
+      const flat = flattenInDisplayOrder(state)
+      const aIdx = flat.findIndex(it => it.ticker === lastClickedSymbol)
+      const bIdx = flat.findIndex(it => it.ticker === sym)
+      if (aIdx >= 0 && bIdx >= 0) {
+        const [lo, hi] = aIdx < bIdx ? [aIdx, bIdx] : [bIdx, aIdx]
+        const next = new Set<string>()
+        for (let i = lo; i <= hi; i++) next.add(flat[i].ticker)
+        setSelectedSymbols(next)
+      }
+      // Shift+click doesn't navigate or change anchor.
+      return
+    }
+    if (isMeta) {
+      setSelectedSymbols(prev => {
+        const next = new Set(prev)
+        if (next.has(sym)) next.delete(sym)
+        else next.add(sym)
+        return next
+      })
+      setLastClickedSymbol(sym)
+      // Meta+click doesn't navigate.
+      return
+    }
+    // Plain click: navigate, single-select, set anchor.
+    onSymbolClick(sym)
+    setSelectedSymbols(new Set([sym]))
+    setLastClickedSymbol(sym)
+  }, [lastClickedSymbol, state, flattenInDisplayOrder, onSymbolClick])
 
   const handleDragOver = useCallback((
     groupId: string | null,
@@ -352,37 +414,37 @@ export default function WatchlistPanel({
     const src: DragSource | null = rawData ? decodeDrag(rawData) : dragSrcRef.current
     dragSrcRef.current = null
 
-    if (!src) return
+    if (!src || src.length === 0) return
 
-    const { ticker, groupId: srcGroupId, index: srcIndex } = src
-
-    // Same list, same position — no-op
-    if (srcGroupId === targetGroupId && srcIndex === targetIndex) return
+    // Single-item no-op: same list, same position
+    if (src.length === 1 && src[0].groupId === targetGroupId && src[0].index === targetIndex) return
 
     setState(prev => {
-      // Remove from source
-      let next: WatchlistState
-      if (srcGroupId === null) {
-        next = { ...prev, ungrouped: prev.ungrouped.filter((_, i) => i !== srcIndex) }
-      } else {
-        next = {
-          ...prev,
-          groups: prev.groups.map(g =>
-            g.id === srcGroupId
-              ? { ...g, tickers: g.tickers.filter((_, i) => i !== srcIndex) }
-              : g
-          ),
-        }
+      // Build a set of tickers being moved for fast lookup during removal
+      const movingTickers = new Set(src.map(it => it.ticker))
+
+      // Remove all source items from their lists
+      let next: WatchlistState = {
+        ...prev,
+        ungrouped: prev.ungrouped.filter(t => !movingTickers.has(t)),
+        groups: prev.groups.map(g => ({
+          ...g,
+          tickers: g.tickers.filter(t => !movingTickers.has(t)),
+        })),
       }
 
-      // Insert into target
+      // Adjust target index: subtract count of source items that originated
+      // in the target list at indices strictly less than the original target.
+      const removedBeforeTarget = src.filter(
+        it => it.groupId === targetGroupId && it.index < targetIndex
+      ).length
+      const adjustedTargetIndex = targetIndex - removedBeforeTarget
+
+      // Insert all moved tickers (in original source order) at the adjusted target index
+      const movedInOrder = src.map(it => it.ticker)
       if (targetGroupId === null) {
         const arr = [...next.ungrouped]
-        // Adjust targetIndex if moving within the same list
-        const insertAt = srcGroupId === null && srcIndex < targetIndex
-          ? targetIndex - 1
-          : targetIndex
-        arr.splice(insertAt, 0, ticker)
+        arr.splice(adjustedTargetIndex, 0, ...movedInOrder)
         next = { ...next, ungrouped: arr }
       } else {
         next = {
@@ -390,17 +452,17 @@ export default function WatchlistPanel({
           groups: next.groups.map(g => {
             if (g.id !== targetGroupId) return g
             const arr = [...g.tickers]
-            const insertAt = srcGroupId === targetGroupId && srcIndex < targetIndex
-              ? targetIndex - 1
-              : targetIndex
-            arr.splice(insertAt, 0, ticker)
+            arr.splice(adjustedTargetIndex, 0, ...movedInOrder)
             return { ...g, tickers: arr }
           }),
         }
       }
 
-      // Enforce uniqueness: winner is the target location
-      return dropDuplicate(next, ticker, targetGroupId)
+      // Enforce uniqueness for each moved ticker; winner is the target location.
+      for (const t of movedInOrder) {
+        next = dropDuplicate(next, t, targetGroupId)
+      }
+      return next
     })
   }, [])
 
@@ -519,12 +581,23 @@ export default function WatchlistPanel({
     const isActive = sym === currentSymbol.toUpperCase()
     const isHovered = hoveredSymbol === sym
     const isDragOver = dragOver?.groupId === groupId && dragOver.index === index
+    const isSelected = selectedSymbols.has(sym)
     const changePct = q?.change_pct ?? 0
     const changeColor =
       changePct > 0 ? 'var(--accent-green)'
       : changePct < 0 ? 'var(--accent-red)'
       : 'var(--text-muted)'
     const changePrefix = changePct > 0 ? '+' : ''
+
+    const background = isDragOver
+      ? 'var(--accent-primary-dim, rgba(99,102,241,0.15))'
+      : isSelected
+        ? 'rgba(99,102,241,0.22)'
+        : isActive
+          ? 'var(--bg-panel-hover)'
+          : isHovered
+            ? 'var(--bg-input)'
+            : 'transparent'
 
     return (
       <div
@@ -537,17 +610,11 @@ export default function WatchlistPanel({
         onDragEnd={handleDragEnd}
         style={{
           ...styles.row,
-          background: isDragOver
-            ? 'var(--accent-primary-dim, rgba(99,102,241,0.15))'
-            : isActive
-              ? 'var(--bg-panel-hover)'
-              : isHovered
-                ? 'var(--bg-input)'
-                : 'transparent',
+          background,
           borderTop: isDragOver ? '2px solid var(--accent-primary)' : '2px solid transparent',
           cursor: 'grab',
         }}
-        onClick={() => onSymbolClick(sym)}
+        onClick={e => handleRowClick(sym, e)}
         onMouseEnter={() => setHoveredSymbol(sym)}
         onMouseLeave={() => setHoveredSymbol(null)}
       >
