@@ -151,6 +151,9 @@ export default function WatchlistPanel({
   // Group selection (mutually exclusive with ticker selection)
   const [selectedGroupIds, setSelectedGroupIds] = useState<Set<string>>(new Set())
   const [lastClickedGroupId, setLastClickedGroupId] = useState<string | null>(null)
+  // When non-null, the group with this ID should mount its name editor in edit mode.
+  // Set by addGroup; consumed once by GroupNameEditor's initial state.
+  const [pendingEditGroupId, setPendingEditGroupId] = useState<string | null>(null)
   // Ticker-dragged-over-group-header: highlights the header as a drop zone (appends to group)
   const [tickerOverHeaderId, setTickerOverHeaderId] = useState<string | null>(null)
   // Group-reorder drag state
@@ -278,18 +281,44 @@ export default function WatchlistPanel({
 
   // Group management
   const addGroup = useCallback(() => {
+    const newId = genGroupId()
     setState(prev => {
       const n = prev.groups.length + 1
       const name = `Group ${n}`
+
+      // If tickers are selected, move them into the new group (in display order).
+      let next: WatchlistState = prev
+      let tickers: string[] = []
+      if (selectedSymbols.size > 0) {
+        const inOrder: string[] = []
+        prev.groups.forEach(g => g.tickers.forEach(t => {
+          if (selectedSymbols.has(t)) inOrder.push(t)
+        }))
+        prev.ungrouped.forEach(t => {
+          if (selectedSymbols.has(t)) inOrder.push(t)
+        })
+        tickers = inOrder
+        next = {
+          ungrouped: prev.ungrouped.filter(t => !selectedSymbols.has(t)),
+          groups: prev.groups.map(g => ({
+            ...g,
+            tickers: g.tickers.filter(t => !selectedSymbols.has(t)),
+          })),
+        }
+      }
+
       const newGroup: WatchlistGroup = {
-        id: genGroupId(),
+        id: newId,
         name,
-        tickers: [],
+        tickers,
         collapsed: false,
       }
-      return { ...prev, groups: [...prev.groups, newGroup] }
+      return { ...next, groups: [...next.groups, newGroup] }
     })
-  }, [])
+    setPendingEditGroupId(newId)
+    setSelectedSymbols(new Set())
+    setSelectedGroupIds(new Set())
+  }, [selectedSymbols])
 
   const removeGroup = useCallback((groupId: string) => {
     setState(prev => {
@@ -901,6 +930,7 @@ export default function WatchlistPanel({
                 <GroupNameEditor
                   name={group.name}
                   onRename={name => renameGroup(group.id, name)}
+                  startInEditMode={pendingEditGroupId === group.id}
                 />
                 <span style={styles.groupCount}>({group.tickers.length})</span>
                 <button
@@ -954,13 +984,27 @@ export default function WatchlistPanel({
 // Inline group name editor (click-to-edit)
 // ---------------------------------------------------------------------------
 
-function GroupNameEditor({ name, onRename }: { name: string; onRename: (n: string) => void }) {
-  const [editing, setEditing] = useState(false)
+function GroupNameEditor({
+  name,
+  onRename,
+  startInEditMode,
+}: {
+  name: string
+  onRename: (n: string) => void
+  startInEditMode?: boolean
+}) {
+  const [editing, setEditing] = useState(!!startInEditMode)
   const [value, setValue] = useState(name)
   const ref = useRef<HTMLInputElement>(null)
 
   useEffect(() => { setValue(name) }, [name])
-  useEffect(() => { if (editing) ref.current?.select() }, [editing])
+  useEffect(() => {
+    if (editing) {
+      ref.current?.focus()
+      ref.current?.select()
+      ref.current?.scrollIntoView({ block: 'nearest' })
+    }
+  }, [editing])
 
   const commit = () => {
     const trimmed = value.trim()
