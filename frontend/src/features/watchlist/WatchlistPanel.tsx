@@ -54,12 +54,26 @@ interface DragSource {
 }
 
 const DRAG_KEY = 'watchlist-drag'
+const GROUP_DRAG_KEY = 'watchlist-group-drag'
 
 function encodeDrag(src: DragSource): string {
   return JSON.stringify(src)
 }
 
 function decodeDrag(raw: string): DragSource | null {
+  try { return JSON.parse(raw) } catch { return null }
+}
+
+interface GroupDragSource {
+  groupId: string
+  index: number
+}
+
+function encodeGroupDrag(src: GroupDragSource): string {
+  return JSON.stringify(src)
+}
+
+function decodeGroupDrag(raw: string): GroupDragSource | null {
   try { return JSON.parse(raw) } catch { return null }
 }
 
@@ -122,6 +136,12 @@ export default function WatchlistPanel({
   // Drag-over tracking: { groupId: string | null (ungrouped), index: number }
   const [dragOver, setDragOver] = useState<{ groupId: string | null; index: number } | null>(null)
   const dragSrcRef = useRef<DragSource | null>(null)
+  // Ticker-dragged-over-group-header: highlights the header as a drop zone (appends to group)
+  const [tickerOverHeaderId, setTickerOverHeaderId] = useState<string | null>(null)
+  // Group-reorder drag state
+  const groupDragSrcRef = useRef<GroupDragSource | null>(null)
+  // 'tail' is the drop zone after the last group
+  const [groupDragOverId, setGroupDragOverId] = useState<string | 'tail' | null>(null)
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -390,6 +410,103 @@ export default function WatchlistPanel({
   }, [])
 
   // ---------------------------------------------------------------------------
+  // Group-header drop: ticker-onto-header (append to group) OR group-reorder
+  // ---------------------------------------------------------------------------
+
+  const handleHeaderDragOver = useCallback((targetGroupId: string, e: React.DragEvent) => {
+    const types = e.dataTransfer.types
+    if (types.includes(GROUP_DRAG_KEY)) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      setGroupDragOverId(targetGroupId)
+      setTickerOverHeaderId(null)
+    } else if (types.includes(DRAG_KEY)) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      setTickerOverHeaderId(targetGroupId)
+      setGroupDragOverId(null)
+    }
+  }, [])
+
+  const handleHeaderDragLeave = useCallback(() => {
+    setTickerOverHeaderId(null)
+    setGroupDragOverId(null)
+  }, [])
+
+  const handleHeaderDrop = useCallback((
+    targetGroupId: string,
+    groupTickersLength: number,
+    e: React.DragEvent,
+  ) => {
+    e.preventDefault()
+    setTickerOverHeaderId(null)
+    setGroupDragOverId(null)
+
+    // Prefer group-reorder if present
+    const groupRaw = e.dataTransfer.getData(GROUP_DRAG_KEY)
+    if (groupRaw || groupDragSrcRef.current) {
+      const src = groupRaw ? decodeGroupDrag(groupRaw) : groupDragSrcRef.current
+      groupDragSrcRef.current = null
+      if (!src || src.groupId === targetGroupId) return
+      setState(prev => {
+        const fromIdx = prev.groups.findIndex(g => g.id === src.groupId)
+        const toIdx = prev.groups.findIndex(g => g.id === targetGroupId)
+        if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return prev
+        const arr = [...prev.groups]
+        const [moved] = arr.splice(fromIdx, 1)
+        const insertAt = fromIdx < toIdx ? toIdx - 1 : toIdx
+        arr.splice(insertAt, 0, moved)
+        return { ...prev, groups: arr }
+      })
+      return
+    }
+
+    // Otherwise, ticker drop on header → append to this group
+    handleDrop(targetGroupId, groupTickersLength, e)
+  }, [handleDrop])
+
+  const handleGroupDragStart = useCallback((
+    groupId: string,
+    index: number,
+    e: React.DragEvent,
+  ) => {
+    const src: GroupDragSource = { groupId, index }
+    groupDragSrcRef.current = src
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData(GROUP_DRAG_KEY, encodeGroupDrag(src))
+    e.dataTransfer.setData('text/plain', `group:${groupId}`)
+  }, [])
+
+  const handleGroupDragEnd = useCallback(() => {
+    groupDragSrcRef.current = null
+    setGroupDragOverId(null)
+  }, [])
+
+  const handleGroupTailDragOver = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes(GROUP_DRAG_KEY)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    setGroupDragOverId('tail')
+  }, [])
+
+  const handleGroupTailDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setGroupDragOverId(null)
+    const raw = e.dataTransfer.getData(GROUP_DRAG_KEY)
+    const src = raw ? decodeGroupDrag(raw) : groupDragSrcRef.current
+    groupDragSrcRef.current = null
+    if (!src) return
+    setState(prev => {
+      const fromIdx = prev.groups.findIndex(g => g.id === src.groupId)
+      if (fromIdx < 0 || fromIdx === prev.groups.length - 1) return prev
+      const arr = [...prev.groups]
+      const [moved] = arr.splice(fromIdx, 1)
+      arr.push(moved)
+      return { ...prev, groups: arr }
+    })
+  }, [])
+
+  // ---------------------------------------------------------------------------
   // Render helpers
   // ---------------------------------------------------------------------------
 
@@ -609,48 +726,88 @@ export default function WatchlistPanel({
         )}
 
         {/* Groups */}
-        {state.groups.map(group => (
-          <div key={group.id} style={styles.groupContainer}>
-            {/* Group header row */}
-            <div style={styles.groupHeader}>
-              <button
-                style={styles.collapseBtn}
-                onClick={() => toggleCollapse(group.id)}
-                title={group.collapsed ? 'Expand group' : 'Collapse group'}
+        {state.groups.map((group, groupIdx) => {
+          const isTickerOver = tickerOverHeaderId === group.id
+          const isReorderTarget = groupDragOverId === group.id
+          return (
+            <div key={group.id} style={styles.groupContainer}>
+              {/* Group header row */}
+              <div
+                style={{
+                  ...styles.groupHeader,
+                  background: isTickerOver
+                    ? 'var(--accent-primary-bg, rgba(99,102,241,0.18))'
+                    : styles.groupHeader.background,
+                  borderTop: isReorderTarget
+                    ? '2px solid var(--accent-primary)'
+                    : '2px solid transparent',
+                }}
+                onDragOver={e => handleHeaderDragOver(group.id, e)}
+                onDragLeave={handleHeaderDragLeave}
+                onDrop={e => handleHeaderDrop(group.id, group.tickers.length, e)}
               >
-                <span style={{
-                  display: 'inline-block',
-                  transform: group.collapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
-                  transition: 'transform 0.15s',
-                  fontSize: 10,
-                  lineHeight: 1,
-                }}>▼</span>
-              </button>
-              <GroupNameEditor
-                name={group.name}
-                onRename={name => renameGroup(group.id, name)}
-              />
-              <span style={styles.groupCount}>({group.tickers.length})</span>
-              <button
-                style={styles.removeGroupBtn}
-                onClick={() => removeGroup(group.id)}
-                title={`Remove group "${group.name}" (tickers move to ungrouped)`}
-              >
-                ×
-              </button>
-            </div>
-
-            {/* Group tickers */}
-            {!group.collapsed && (
-              <div style={styles.groupTickers}>
-                {group.tickers.map((sym, i) =>
-                  renderTicker(sym, group.id, i)
-                )}
-                {renderAppendDropZone(group.id, group.tickers.length)}
+                <span
+                  style={styles.groupDragHandle}
+                  draggable
+                  onDragStart={e => handleGroupDragStart(group.id, groupIdx, e)}
+                  onDragEnd={handleGroupDragEnd}
+                  title="Drag to reorder group"
+                  aria-hidden
+                >⋮⋮</span>
+                <button
+                  style={styles.collapseBtn}
+                  onClick={() => toggleCollapse(group.id)}
+                  title={group.collapsed ? 'Expand group' : 'Collapse group'}
+                >
+                  <span style={{
+                    display: 'inline-block',
+                    transform: group.collapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
+                    transition: 'transform 0.15s',
+                    fontSize: 10,
+                    lineHeight: 1,
+                  }}>▼</span>
+                </button>
+                <GroupNameEditor
+                  name={group.name}
+                  onRename={name => renameGroup(group.id, name)}
+                />
+                <span style={styles.groupCount}>({group.tickers.length})</span>
+                <button
+                  style={styles.removeGroupBtn}
+                  onClick={() => removeGroup(group.id)}
+                  title={`Remove group "${group.name}" (tickers move to ungrouped)`}
+                >
+                  ×
+                </button>
               </div>
-            )}
-          </div>
-        ))}
+
+              {/* Group tickers */}
+              {!group.collapsed && (
+                <div style={styles.groupTickers}>
+                  {group.tickers.map((sym, i) =>
+                    renderTicker(sym, group.id, i)
+                  )}
+                  {renderAppendDropZone(group.id, group.tickers.length)}
+                </div>
+              )}
+            </div>
+          )
+        })}
+
+        {/* Tail drop zone for reordering a group to the end */}
+        {state.groups.length > 1 && (
+          <div
+            style={{
+              ...styles.groupTailZone,
+              borderTop: groupDragOverId === 'tail'
+                ? '2px solid var(--accent-primary)'
+                : '2px solid transparent',
+            }}
+            onDragOver={handleGroupTailDragOver}
+            onDragLeave={handleHeaderDragLeave}
+            onDrop={handleGroupTailDrop}
+          />
+        )}
 
         {/* Ungrouped tickers */}
         {state.ungrouped.map((sym, i) =>
@@ -832,11 +989,22 @@ const styles: Record<string, React.CSSProperties> = {
   groupHeader: {
     display: 'flex',
     alignItems: 'center',
-    padding: '3px 6px 3px 4px',
+    padding: '5px 6px 5px 4px',
     gap: 4,
     background: 'var(--bg-input, rgba(255,255,255,0.04))',
     cursor: 'default',
     userSelect: 'none' as const,
+    transition: 'background 0.1s, border-top 0.1s',
+  },
+  groupDragHandle: {
+    fontSize: 10,
+    color: 'var(--text-muted)',
+    opacity: 0.5,
+    letterSpacing: '-2px',
+    lineHeight: 1,
+    cursor: 'grab',
+    padding: '0 2px',
+    flexShrink: 0,
   },
   collapseBtn: {
     background: 'none',
@@ -850,9 +1018,9 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
   },
   groupName: {
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: 600,
-    color: 'var(--text-secondary)',
+    color: 'var(--text-primary)',
     flex: 1,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -861,7 +1029,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   groupNameInput: {
     flex: 1,
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: 600,
     background: 'var(--bg-surface)',
     border: '1px solid var(--accent-primary)',
@@ -872,9 +1040,13 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
   },
   groupCount: {
-    fontSize: 10,
+    fontSize: 11,
     color: 'var(--text-muted)',
     flexShrink: 0,
+  },
+  groupTailZone: {
+    height: 8,
+    transition: 'border-top 0.1s',
   },
   removeGroupBtn: {
     background: 'none',
