@@ -1061,7 +1061,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
   },
   groupTickers: {
-    paddingLeft: 8,
+    paddingLeft: 20,
   },
   appendZone: {
     height: 6,
