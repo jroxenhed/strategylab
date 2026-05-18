@@ -67,17 +67,22 @@ function decodeDrag(raw: string): DragSource | null {
   try { return JSON.parse(raw) } catch { return null }
 }
 
-interface GroupDragSource {
+interface GroupDragItem {
   groupId: string
   index: number
 }
+
+type GroupDragSource = GroupDragItem[]
 
 function encodeGroupDrag(src: GroupDragSource): string {
   return JSON.stringify(src)
 }
 
 function decodeGroupDrag(raw: string): GroupDragSource | null {
-  try { return JSON.parse(raw) } catch { return null }
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : null
+  } catch { return null }
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +148,9 @@ export default function WatchlistPanel({
   const [selectedSymbols, setSelectedSymbols] = useState<Set<string>>(new Set())
   // Anchor for shift+click range selection
   const [lastClickedSymbol, setLastClickedSymbol] = useState<string | null>(null)
+  // Group selection (mutually exclusive with ticker selection)
+  const [selectedGroupIds, setSelectedGroupIds] = useState<Set<string>>(new Set())
+  const [lastClickedGroupId, setLastClickedGroupId] = useState<string | null>(null)
   // Ticker-dragged-over-group-header: highlights the header as a drop zone (appends to group)
   const [tickerOverHeaderId, setTickerOverHeaderId] = useState<string | null>(null)
   // Group-reorder drag state
@@ -386,7 +394,43 @@ export default function WatchlistPanel({
     onSymbolClick(sym)
     setSelectedSymbols(new Set([sym]))
     setLastClickedSymbol(sym)
+    setSelectedGroupIds(new Set())
   }, [lastClickedSymbol, state, flattenInDisplayOrder, onSymbolClick])
+
+  const handleHeaderClick = useCallback((groupId: string, e: React.MouseEvent) => {
+    // Skip select when click landed on an interactive child (collapse button, ×, rename input).
+    const target = e.target as HTMLElement | null
+    if (target?.closest('button, input')) return
+
+    const isMeta = e.metaKey || e.ctrlKey
+    const isShift = e.shiftKey
+
+    if (isShift && lastClickedGroupId) {
+      const ids = state.groups.map(g => g.id)
+      const aIdx = ids.indexOf(lastClickedGroupId)
+      const bIdx = ids.indexOf(groupId)
+      if (aIdx >= 0 && bIdx >= 0) {
+        const [lo, hi] = aIdx < bIdx ? [aIdx, bIdx] : [bIdx, aIdx]
+        setSelectedGroupIds(new Set(ids.slice(lo, hi + 1)))
+        setSelectedSymbols(new Set())
+      }
+      return
+    }
+    if (isMeta) {
+      setSelectedGroupIds(prev => {
+        const next = new Set(prev)
+        if (next.has(groupId)) next.delete(groupId)
+        else next.add(groupId)
+        return next
+      })
+      setLastClickedGroupId(groupId)
+      setSelectedSymbols(new Set())
+      return
+    }
+    setSelectedGroupIds(new Set([groupId]))
+    setLastClickedGroupId(groupId)
+    setSelectedSymbols(new Set())
+  }, [lastClickedGroupId, state.groups])
 
   const handleDragOver = useCallback((
     groupId: string | null,
@@ -509,15 +553,18 @@ export default function WatchlistPanel({
     if (groupRaw || groupDragSrcRef.current) {
       const src = groupRaw ? decodeGroupDrag(groupRaw) : groupDragSrcRef.current
       groupDragSrcRef.current = null
-      if (!src || src.groupId === targetGroupId) return
+      if (!src || src.length === 0) return
+      // No-op: dropping on a group that's part of the source
+      if (src.some(it => it.groupId === targetGroupId)) return
       setState(prev => {
-        const fromIdx = prev.groups.findIndex(g => g.id === src.groupId)
-        const toIdx = prev.groups.findIndex(g => g.id === targetGroupId)
-        if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return prev
-        const arr = [...prev.groups]
-        const [moved] = arr.splice(fromIdx, 1)
-        const insertAt = fromIdx < toIdx ? toIdx - 1 : toIdx
-        arr.splice(insertAt, 0, moved)
+        const movingIds = new Set(src.map(it => it.groupId))
+        // Preserve display order of moved groups (use prev's order, not src's; equal in normal flow but safer)
+        const moved = prev.groups.filter(g => movingIds.has(g.id))
+        const remaining = prev.groups.filter(g => !movingIds.has(g.id))
+        const toIdx = remaining.findIndex(g => g.id === targetGroupId)
+        if (toIdx < 0 || moved.length === 0) return prev
+        const arr = [...remaining]
+        arr.splice(toIdx, 0, ...moved)
         return { ...prev, groups: arr }
       })
       return
@@ -532,12 +579,26 @@ export default function WatchlistPanel({
     index: number,
     e: React.DragEvent,
   ) => {
-    const src: GroupDragSource = { groupId, index }
+    // Don't start a drag if the user grabbed an interactive child (button / input).
+    const target = e.target as HTMLElement | null
+    if (target?.closest('button, input')) {
+      e.preventDefault()
+      return
+    }
+    // Multi-drag if this group is part of a >1 selection; otherwise solo drag (selection unchanged).
+    let src: GroupDragSource
+    if (selectedGroupIds.size > 1 && selectedGroupIds.has(groupId)) {
+      src = state.groups
+        .map((g, i): GroupDragItem => ({ groupId: g.id, index: i }))
+        .filter(it => selectedGroupIds.has(it.groupId))
+    } else {
+      src = [{ groupId, index }]
+    }
     groupDragSrcRef.current = src
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData(GROUP_DRAG_KEY, encodeGroupDrag(src))
-    e.dataTransfer.setData('text/plain', `group:${groupId}`)
-  }, [])
+    e.dataTransfer.setData('text/plain', src.map(it => `group:${it.groupId}`).join(','))
+  }, [selectedGroupIds, state.groups])
 
   const handleGroupDragEnd = useCallback(() => {
     groupDragSrcRef.current = null
@@ -557,13 +618,15 @@ export default function WatchlistPanel({
     const raw = e.dataTransfer.getData(GROUP_DRAG_KEY)
     const src = raw ? decodeGroupDrag(raw) : groupDragSrcRef.current
     groupDragSrcRef.current = null
-    if (!src) return
+    if (!src || src.length === 0) return
     setState(prev => {
-      const fromIdx = prev.groups.findIndex(g => g.id === src.groupId)
-      if (fromIdx < 0 || fromIdx === prev.groups.length - 1) return prev
-      const arr = [...prev.groups]
-      const [moved] = arr.splice(fromIdx, 1)
-      arr.push(moved)
+      const movingIds = new Set(src.map(it => it.groupId))
+      const moved = prev.groups.filter(g => movingIds.has(g.id))
+      const remaining = prev.groups.filter(g => !movingIds.has(g.id))
+      if (moved.length === 0) return prev
+      // No-op if moved groups are already the tail in their current relative order.
+      const arr = [...remaining, ...moved]
+      if (arr.every((g, i) => prev.groups[i]?.id === g.id)) return prev
       return { ...prev, groups: arr }
     })
   }, [])
@@ -796,31 +859,32 @@ export default function WatchlistPanel({
         {state.groups.map((group, groupIdx) => {
           const isTickerOver = tickerOverHeaderId === group.id
           const isReorderTarget = groupDragOverId === group.id
+          const isSelected = selectedGroupIds.has(group.id)
+          const headerBg = isTickerOver
+            ? 'var(--accent-primary-bg, rgba(99,102,241,0.18))'
+            : isSelected
+              ? 'rgba(99,102,241,0.22)'
+              : styles.groupHeader.background
           return (
             <div key={group.id} style={styles.groupContainer}>
-              {/* Group header row */}
+              {/* Group header row — draggable, selectable */}
               <div
-                style={{
-                  ...styles.groupHeader,
-                  background: isTickerOver
-                    ? 'var(--accent-primary-bg, rgba(99,102,241,0.18))'
-                    : styles.groupHeader.background,
-                  borderTop: isReorderTarget
-                    ? '2px solid var(--accent-primary)'
-                    : '2px solid transparent',
-                }}
+                draggable
+                onDragStart={e => handleGroupDragStart(group.id, groupIdx, e)}
+                onDragEnd={handleGroupDragEnd}
                 onDragOver={e => handleHeaderDragOver(group.id, e)}
                 onDragLeave={handleHeaderDragLeave}
                 onDrop={e => handleHeaderDrop(group.id, group.tickers.length, e)}
+                onClick={e => handleHeaderClick(group.id, e)}
+                style={{
+                  ...styles.groupHeader,
+                  background: headerBg,
+                  borderTop: isReorderTarget
+                    ? '2px solid var(--accent-primary)'
+                    : '2px solid transparent',
+                  cursor: 'grab',
+                }}
               >
-                <span
-                  style={styles.groupDragHandle}
-                  draggable
-                  onDragStart={e => handleGroupDragStart(group.id, groupIdx, e)}
-                  onDragEnd={handleGroupDragEnd}
-                  title="Drag to reorder group"
-                  aria-hidden
-                >⋮⋮</span>
                 <button
                   style={styles.collapseBtn}
                   onClick={() => toggleCollapse(group.id)}
@@ -1062,16 +1126,6 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'default',
     userSelect: 'none' as const,
     transition: 'background 0.1s, border-top 0.1s',
-  },
-  groupDragHandle: {
-    fontSize: 10,
-    color: 'var(--text-muted)',
-    opacity: 0.5,
-    letterSpacing: '-2px',
-    lineHeight: 1,
-    cursor: 'grab',
-    padding: '0 2px',
-    flexShrink: 0,
   },
   collapseBtn: {
     background: 'none',
