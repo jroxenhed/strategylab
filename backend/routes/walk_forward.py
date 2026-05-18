@@ -300,6 +300,7 @@ def _setup_walk_forward(
     def _strip_timeframes(rules):
         return [r.model_copy(update={"timeframe": None}) for r in (rules or [])]
 
+    had_regime = bool(req.base.regime and req.base.regime.enabled)
     base_raw = req.base.model_copy(deep=True, update={"regime": None})
     base = base_raw.model_copy(update={
         "buy_rules": _strip_timeframes(base_raw.buy_rules),
@@ -309,6 +310,29 @@ def _setup_walk_forward(
         "short_buy_rules": _strip_timeframes(base_raw.short_buy_rules),
         "short_sell_rules": _strip_timeframes(base_raw.short_sell_rules),
     })
+
+    # Guard: regime strategies put all logic in long_/short_ rule lists and leave
+    # the unified buy_rules/sell_rules empty. Once regime is stripped, the engine
+    # runs in plain mode and only consults buy_rules/sell_rules — so empty lists
+    # produce zero trades across every window. Detect this and fail fast with an
+    # actionable message rather than silently returning a wall of zeros.
+    if not base.buy_rules:
+        if had_regime or base.long_buy_rules or base.short_buy_rules:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "WFA cannot run a regime/b23 strategy: regime is stripped at the "
+                    "WFA boundary (documented v1 limitation), and your unified "
+                    "buy_rules is empty so no entries are ever generated. To run "
+                    "this in WFA, either disable regime mode before opening the WFA "
+                    "panel, or copy your long_buy_rules / sell_rules into the "
+                    "unified buy_rules / sell_rules."
+                ),
+            )
+        raise HTTPException(
+            status_code=400,
+            detail="buy_rules is empty — WFA needs at least one entry rule.",
+        )
     df = _fetch(base.ticker, base.start, base.end, base.interval, source=base.source)
     total_bars = len(df)
     min_required = req.is_bars + req.oos_bars + req.gap_bars

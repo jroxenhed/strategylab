@@ -1000,6 +1000,35 @@ export default function WalkForwardPanel({ lastRequest, onApplyParams, onRunBack
         Multi-timeframe rules are disabled in walk-forward — same constraint as regime.
       </div>
 
+      {/* Regime strip warning — surfaces the silent-empty-buy_rules failure mode */}
+      {(() => {
+        const regimeOn = !!lastRequest.regime?.enabled
+        const hasDirRules =
+          (lastRequest.long_buy_rules?.length ?? 0) > 0 ||
+          (lastRequest.short_buy_rules?.length ?? 0) > 0
+        const emptyUnified = (lastRequest.buy_rules?.length ?? 0) === 0
+        if (!regimeOn && !hasDirRules) return null
+        return (
+          <div style={{
+            fontSize: 11,
+            padding: '6px 8px',
+            marginTop: 4,
+            marginBottom: 6,
+            borderRadius: 4,
+            background: emptyUnified ? 'rgba(239,83,80,0.10)' : 'rgba(245,158,11,0.10)',
+            border: `1px solid ${emptyUnified ? 'rgba(239,83,80,0.4)' : 'rgba(245,158,11,0.4)'}`,
+            color: emptyUnified ? '#fca5a5' : '#fcd34d',
+            lineHeight: 1.45,
+          }}>
+            <strong>⚠ Regime is stripped in walk-forward.</strong>{' '}
+            {emptyUnified
+              ? <>Your unified <code>buy_rules</code> is empty, so WFA will produce <strong>zero trades on every window</strong>. Copy your long/short rules into the unified buy/sell rules, or run WFA without regime mode.</>
+              : <>WFA will run using the unified <code>buy_rules</code> / <code>sell_rules</code> only — your long/short direction rules will be ignored for this WFA run.</>
+            }
+          </div>
+        )
+      })()}
+
       {/* ─── Error ──────────────────────────────────────────────── */}
       {error && (
         <div style={{ color: '#ef5350', fontSize: 12, padding: '6px 0' }}>{error}</div>
