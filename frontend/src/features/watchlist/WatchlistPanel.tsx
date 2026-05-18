@@ -1019,7 +1019,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   groupName: {
     fontSize: 13,
-    fontWeight: 600,
+    fontWeight: 700,
     color: 'var(--text-primary)',
     flex: 1,
     overflow: 'hidden',
@@ -1030,7 +1030,7 @@ const styles: Record<string, React.CSSProperties> = {
   groupNameInput: {
     flex: 1,
     fontSize: 13,
-    fontWeight: 600,
+    fontWeight: 700,
     background: 'var(--bg-surface)',
     border: '1px solid var(--accent-primary)',
     borderRadius: 3,
