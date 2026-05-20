@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*245 / 259 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*246 / 261 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -10,10 +10,9 @@ _(none open)_
 
 ## Up Next
 
-- [F249](#f249) — [next] Migrate the last two `createChart` callers that use fixed `height: NNN` + no resize tracking [easy]
 - [F212](#f212) — [next] F210 inline-confirm browser smoke remains partially open [easy]
 
-## Open Work — 37 items
+## Open Work — 38 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -23,9 +22,9 @@ _(none open)_
 | [D](#d-bots-live-trading) | Bots (live trading) | 1 | [D24b](#d24b) |
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 12 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F216](#f216) |
-| [F · Hardening](#f-hardening) | Security, reliability, validation | 3 | [F187](#f187), [F211](#f211), [F249](#f249) |
-| [F · Polish](#f-polish) | UI, naming, dead code | 7 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217](#f217), [F250](#f250) |
-| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 5 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219) |
+| [F · Hardening](#f-hardening) | Security, reliability, validation | 2 | [F187](#f187), [F211](#f211) |
+| [F · Polish](#f-polish) | UI, naming, dead code | 8 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217](#f217), [F249c](#f249c), [F250](#f250) |
+| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 6 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219), [F249b](#f249b) |
 
 ## A — Charts & Indicators
 
@@ -162,7 +161,7 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f222"></a> **F222** Surface intraday date-range clamp in UI — chip near From/To inputs shows effective range when interval limit kicks in. Frontend-only v1; computed from interval-limit constants. Click "Use effective range" must update React state via the onBlur fiber-call (commit-on-blur trap). See plan F-UX2. [medium] [hardening] (resolved 2026-05-16)
 - [x] <a id="f223"></a> **F223** Zero-trade / unparseable-threshold rule validation — frontend red-border guard on RuleRow when condition needs a threshold and value is blank/NaN. Disable Run while invalid. Whitelist threshold-free conditions (`crosses_above`, `turns_up`, etc). See plan F-UX3. [easy] [hardening] (resolved 2026-05-16)
 - [x] <a id="f224"></a> **F224** Slippage input — locale-aware parse — format with `Intl.NumberFormat('en-US', …)` (not `toLocaleString`); strip non-`[0-9.]` before `parseFloat`. Audit all empirical-float inputs (grep `toLocaleString`). Today sends NaN under sv-SE locale. See plan F-UX4. [easy] [hardening] (resolved 2026-05-16)
-- [ ] <a id="f249"></a> **F249** [next] Migrate the last two `createChart` callers that use fixed `height: NNN` + no resize tracking — `frontend/src/features/strategy/StrategyComparison.tsx:62-63` (`height: chartRef.current.clientHeight || 240` with a fixed 240-px container) and `frontend/src/features/strategy/WalkForwardPanel.tsx:200-202` (`height: 180` with a fixed 180-px container). Both render at their initial pixel size and never track parent layout changes. Not the F218 trap (no `applyOptions` feedback loop), but still a v4 leftover — switch to `autoSize: true` for consistency with the rest of the codebase (Chart, SubPane, MacroEquityChart, MiniSparkline, PerformanceComparison, Results). Single-line edits per file; container divs already have explicit CSS height so autoSize will work without adding height. (from F220 sweep 2026-05-16) [easy] [hardening]
+- [x] <a id="f249"></a> **F249** Migrate the last two `createChart` callers that use fixed `height: NNN` + no resize tracking — `frontend/src/features/strategy/StrategyComparison.tsx` and `frontend/src/features/strategy/WalkForwardPanel.tsx` migrated to use `autoSize: true` for clean layout responsiveness and standardizing with v5 codebase conventions. [easy] [hardening] (resolved 2026-05-20)
 
 ### F · Polish
 - [ ] <a id="f34"></a> **F34** 118+ hardcoded hex colors while CSS variables exist — theme change requires touching dozens of files. Migrate Results.tsx and BotCard.tsx to use --bg-*, --accent-*, --text-* variables. [medium] [polish]
@@ -201,6 +200,7 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f245a"></a> **F245a** Indicator sidebar layout pass + palette expansion — denser collapsed rows in `IndicatorList.tsx`, expand `PRESET_COLORS` from 10 → 14-16 colors, add custom-hex swatch. No schema change (per-instance `color` already persists). See plan F-UX26a. [medium] [polish] (resolved 2026-05-16)
 - [x] <a id="f247a"></a> **F247a** Watchlist drag-reorder + quick-add — HTML5 drag within the flat list; explicit `+ Add ticker` button accepting comma-separated bulk add (uppercase + dedupe). No schema change. See plan F-UX28a. [easy] [polish] (resolved 2026-05-16)
 - [x] <a id="f247b"></a> **F247b** Watchlist collapsible groups — schema migrates `string[]` → `{groups: [{name, tickers, collapsed}], ungrouped: string[]}`. Tickers unique across groups; drag-between is a move not a copy; corrupt-localStorage falls back to empty + toast. Depends on F247a. See plan F-UX28b. [medium] [polish] (resolved 2026-05-16)
+- [ ] <a id="f249c"></a> **F249c** Verify responsive resize on collapsible panels — manual or automated check of StrategyComparison and WalkForwardPanel layout changes when sidebar chevrons are toggled, checking that charts resize dynamically with zero ghost axes. [medium] [polish]
 - [ ] <a id="f250"></a> **F250** MiniSparkline lost the resize-time `fitContent()` call when F220 dropped its `ResizeObserver`. Today, the sparkline calls `fitContent()` on every data update (`applyRange()` in `useEffect([equityData, alignedRange?.from, alignedRange?.to])`), so the loss is only visible if the user resizes the BotCard column between data ticks — the visible logical range stays the same while the canvas changes pixels, which compresses/expands the bars but keeps them all visible. Acceptable for now since `handleScroll: false, handleScale: false` means the user can't manually pan/zoom anyway. If users notice clipped or stretched sparklines after column resizes, re-add a minimal `ResizeObserver` that ONLY calls `chart.timeScale().fitContent()` (NOT `applyOptions` — that would re-introduce the F218 trap). (from F220 follow-up 2026-05-16) [easy] [polish]
 
 ### F · Testing and Infra
@@ -230,3 +230,4 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f194"></a> **F194** Frontend test for `useInstanceIndicators` `isError`/`errorMessage` surfacing (F49 hook contract). Mock `useQueries` to return `[{ isError: true, error: ... }]`, assert hook returns `isError: true` + non-empty `errorMessage`. Plus a SubPane component test that the error overlay renders the message text. (from 15-item bundle kieran-typescript TG-02 + reliability gap) [easy] [testing] (added 2026-05-13) (resolved 2026-05-15)
 - [x] <a id="f207"></a> **F207** Frontend test infra: 11 pre-existing failures in `WalkForwardPanel.test.tsx` (10) + `BotCard.test.tsx` (1) predate the 2026-05-15 bundles — `WalkForwardPanel` failures look like baseURL/MSW infra issues (`waitForWrapper` timing out on `findByText` after `fireEvent.click`); BotCard's single failure is uninvestigated. The journal repeatedly references these as "pre-existing" but they've persisted long enough to mask future regressions. Triage: stash all open changes, run `npm run test -- --run src/features/strategy/WalkForwardPanel.test.tsx -t "renders result table"` against a clean main, capture the exact failure mode, fix the test infra (likely a missing MSW setup or fake-baseURL assertion). [easy] [testing] (resolved 2026-05-15)
 - [ ] <a id="f219"></a> **F219** Idle-rAF canary smoke test — F218 surfaced a class of bug (perpetual repaint loop while idle) that is invisible to unit tests, invisible to crisp screenshots, and only manifests as elevated CPU + naked-eye flicker. A trivial chrome-devtools-mcp probe — hook `requestAnimationFrame` for 500ms after chart mount with no user input, assert `< 5` calls — would have caught F218 the moment it landed. Real work: add to the overnight headless render probe (F51) once that exists, or as a standalone post-build check. Also worth: a MutationObserver canary that counts canvas-attribute mutations over 1s (zero expected). Both run in <2s. Catches future regressions to autoSize handling and any new v4→v5 lightweight-charts pattern drift. [easy] [testing] (added 2026-05-15)
+- [ ] <a id="f249b"></a> **F249b** Layout mounting tests for StrategyComparison and WalkForwardPanel — add frontend tests (Vitest + React Testing Library) to ensure createChart instances are initialized with the proper `autoSize: true` configuration and no width/height properties. [easy] [testing]

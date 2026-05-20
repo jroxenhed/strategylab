@@ -60,7 +60,7 @@ export default function StrategyComparison({ ticker, start, end, interval, dataS
   useEffect(() => {
     if (!chartRef.current || results.length === 0) return
     const chart = createChart(chartRef.current, {
-      height: chartRef.current.clientHeight || 240,
+      autoSize: true,
       layout: { background: { type: ColorType.Solid, color: '#0d1117' }, textColor: '#8b949e' },
       grid: { vertLines: { color: '#1c2128' }, horzLines: { color: '#1c2128' } },
       timeScale: { borderColor: '#30363d' },

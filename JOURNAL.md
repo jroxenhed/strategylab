@@ -4,6 +4,15 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-20
+
+### F249 lightweight-charts autoSize migration completion
+
+- **[F249](TODO.md#f249)** Migrated the remaining two static-height `createChart` callers (`StrategyComparison.tsx` and `WalkForwardPanel.tsx`) to standard lightweight-charts v5 `autoSize: true` for clean, responsive layout sizing.
+- **Verification**: Verified the frontend builds successfully with zero errors via `npm run build`. Verified no other `createChart` instances on fixed heights or manual ResizeObservers remain in the codebase.
+- **Deferred / Follow-up**: Created two new items on the TODO tracker: **[F249b](TODO.md#f249b)** `[easy] [testing]` for adding layout mounting tests, and **[F249c](TODO.md#f249c)** `[medium] [polish]` to manually or automatically verify responsive resizing of charts on collapsible panel toggle.
+- **Branch**: `main`.
+
 ## 2026-05-16
 
 ### Overnight build 29 — Tier A: F220 lightweight-charts autoSize sweep

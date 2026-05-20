@@ -198,8 +198,7 @@ function StitchedEquityChart({ data }: { data: WfaEquityPoint[] }) {
     if (!containerRef.current || data.length === 0) return
 
     const chart = createChart(containerRef.current, {
-      width: containerRef.current.clientWidth || 700,
-      height: 180,
+      autoSize: true,
       layout: {
         background: { type: ColorType.Solid, color: '#0d1117' },
         textColor: '#8b949e',
