@@ -1082,15 +1082,27 @@ def run_backtest(
                     new_dir = req.direction if curr_regime_active else ("short" if req.direction == "long" else "long")
                 else:
                     new_dir = req.direction
-            rules_list = _fired_rules(active_buy, indicators, i) if fired else []
+            # F4: trade.rules tooltip should reflect ALL rules that contributed
+            # to the entry, including HTF rules (whose contribution was via the
+            # htf gate). Pass the full (non-base-stripped) rule list to
+            # _fired_rules so HTF rule descriptions appear in trade attribution.
+            display_buy = (
+                (long_buy_rules if (b23_mode and curr_regime_active) else
+                 short_buy_rules if b23_mode else
+                 buy_rules)
+            )
+            rules_list = _fired_rules(display_buy, indicators, i) if fired else []
             return fired, rules_list, new_dir if fired else req.direction
 
         def _buy_trace(i, curr_regime_active=True):
+            # F3/F4: trace tooltips display the FULL rule list (including HTF
+            # rules and muted rules so the user sees why each rule did/didn't
+            # contribute). _trace_rules emits {muted, result} entries; the
+            # frontend renders muted rules in the dim style.
             if b23_mode:
-                # Use the same rule-set selection logic as _buy_signal_fn
-                active_buy = long_buy_rules_base if curr_regime_active else short_buy_rules_base
+                active_buy = long_buy_rules if curr_regime_active else short_buy_rules
                 return _trace_rules(active_buy, indicators, i, "buy")
-            return _trace_rules(buy_rules_base, indicators, i, "buy")
+            return _trace_rules(buy_rules, indicators, i, "buy")
 
         _buy_signal_fn.trace = _buy_trace
 
@@ -1104,17 +1116,30 @@ def run_backtest(
                 active_sell = sell_rules_base
                 htf_sell_gate = bool(htf_sell_mask.iloc[i])
                 fired = htf_sell_gate and eval_rules(sell_rules_base, req.sell_logic, indicators, i)
-            rules_list = _fired_rules(active_sell, indicators, i) if fired else []
+            # F4: same as buy — full rule list for trade.rules attribution.
+            if b23_mode and position_direction == 'long':
+                display_sell = long_sell_rules
+            elif b23_mode and position_direction == 'short':
+                display_sell = short_sell_rules
+            else:
+                display_sell = sell_rules
+            rules_list = _fired_rules(display_sell, indicators, i) if fired else []
             return fired, rules_list
 
         def _sell_trace(i, position_direction):
+            # F3: in-position trace passes the full rule list (including muted)
+            # so the debug overlay shows why each rule did/didn't fire — matches
+            # the pre-refactor behavior. Flat-bar trace pre-filters muted to
+            # avoid clutter (also pre-refactor).
             if b23_mode and position_direction is not None:
-                active_sell = long_sell_rules_base if position_direction == 'long' else short_sell_rules_base
-            else:
-                active_sell = sell_rules_base
-            if not b23_mode:
-                active_sell = [r for r in sell_rules if not r.muted]
-            return _trace_rules(active_sell if active_sell else sell_rules_base, indicators, i, "sell")
+                display = long_sell_rules if position_direction == 'long' else short_sell_rules
+                return _trace_rules(display, indicators, i, "sell")
+            if position_direction is not None:
+                # in-position: full sell_rules (including muted)
+                return _trace_rules(sell_rules, indicators, i, "sell")
+            # flat: pre-filter muted
+            filtered = [r for r in sell_rules if not r.muted]
+            return _trace_rules(filtered if filtered else sell_rules, indicators, i, "sell")
 
         _sell_signal_fn.trace = _sell_trace
 
