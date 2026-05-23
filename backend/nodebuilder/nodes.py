@@ -232,6 +232,22 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
             "subtitle": "OR",
         },
     ),
+    # NOT — single-input boolean inverter. In the plan NOT was listed as T3 scope,
+    # but Unit 3 (auto_render) requires a NOT node to render rule.negated correctly.
+    # Adding it here resolves the contradiction; impl in Unit 7b is a trivial ~not~.
+    NodeCatalogEntry(
+        name="not",
+        cat="logic",
+        desc="Inverts the incoming boolean signal.",
+        reads=("@bool",),
+        writes=("@bool",),
+        defaults={
+            "params": {},
+            "ins": 1,
+            "outs": 1,
+            "subtitle": "NOT",
+        },
+    ),
 
     # ------------------------------------------------------------------
     # Settings — produce SimulatorSetting at compile time, not per-bar.

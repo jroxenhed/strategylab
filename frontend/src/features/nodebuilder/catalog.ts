@@ -234,6 +234,20 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
     },
     compileActive: true,
   },
+  {
+    name: "not",
+    cat: "logic",
+    desc: "Inverts the incoming boolean signal.",
+    reads: ["@bool"],
+    writes: ["@bool"],
+    defaults: {
+      params: {},
+      ins: 1,
+      outs: 1,
+      subtitle: "NOT",
+    },
+    compileActive: true,
+  },
 
   // ── Settings ───────────────────────────────────────────────────────────
   {
