@@ -17,6 +17,8 @@ import Discovery from './features/discovery/Discovery'
 import WatchlistPanel from './features/watchlist/WatchlistPanel'
 import { useTimezone, tzLabel } from './shared/utils/time'
 import { seedFromLocalStorageIfAny } from './shared/utils/seedFromLocalStorage'
+import NodeBuilder from './features/nodebuilder/NodeBuilder'
+import AutoRenderToggle from './features/nodebuilder/AutoRenderToggle'
 
 type AppTab = 'chart' | 'trading' | 'discovery'
 
@@ -24,6 +26,7 @@ type AppTab = 'chart' | 'trading' | 'discovery'
 const STORAGE_KEY = 'strategylab-settings'
 const BACKTEST_CACHE_KEY = 'strategylab-last-backtest'
 const CHART_COLLAPSED_KEY = 'strategylab-chart-collapsed'
+const GRAPH_VIEW_KEY = 'nodebuilder-graph-view-active'
 const EMPTY_OHLCV: never[] = []
 const today = new Date().toISOString().slice(0, 10)
 const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
@@ -122,6 +125,10 @@ export default function App() {
   const [chartCollapsed, setChartCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem(CHART_COLLAPSED_KEY) === 'true' } catch { return false }
   })
+  // Unit 4a — graph view toggle; persisted to localStorage
+  const [graphViewActive, setGraphViewActive] = useState<boolean>(() => {
+    try { return localStorage.getItem(GRAPH_VIEW_KEY) === 'true' } catch { return false }
+  })
   // F244 — narrow rails below 1440 px (evaluated once on mount; viewport changes during use are rare)
   const narrowRails = useMemo(() => window.innerWidth < 1440, [])
   const [datePreset, setDatePreset] = useState<DatePreset>((saved?.datePreset as DatePreset) ?? 'Y')
@@ -167,6 +174,10 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem(CHART_COLLAPSED_KEY, String(chartCollapsed)) } catch {}
   }, [chartCollapsed])
+
+  useEffect(() => {
+    try { localStorage.setItem(GRAPH_VIEW_KEY, String(graphViewActive)) } catch {}
+  }, [graphViewActive])
 
   const chartInterval = chartEnabled ? viewInterval : interval
   const { data: ohlcv = EMPTY_OHLCV, isLoading: ohlcvLoading, isFetching: ohlcvFetching, isError: ohlcvError, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, chartInterval, dataSource, extendedHours)
@@ -228,6 +239,10 @@ export default function App() {
               >
                 {chartCollapsed ? '▸ Show Chart' : '◂ Hide Chart'}
               </button>
+              <AutoRenderToggle
+                active={graphViewActive}
+                onToggle={() => setGraphViewActive(v => !v)}
+              />
               {/* F235 — sticky metrics strip after button cluster */}
               {backtestResult && (() => {
                 const s = backtestResult.summary
@@ -307,7 +322,16 @@ export default function App() {
 
             {/* CENTER COLUMN */}
             <Panel defaultSize="66%" minSize="30%">
-              <div style={{ height: '100%', overflow: 'hidden' }}>
+              <div style={{ height: '100%', overflow: 'hidden', position: 'relative' }}>
+
+                {/* Unit 4a — NodeBuilder graph view: display:none survival so TanStack Query
+                     cache is retained while toggling. Both subtrees stay mounted. */}
+                <div style={{ position: 'absolute', inset: 0, display: graphViewActive ? 'block' : 'none', zIndex: 1 }}>
+                  <NodeBuilder request={lastRequest} graphViewActive={graphViewActive} />
+                </div>
+
+                {/* Chart + Rules subtree: hidden when graph view is active */}
+                <div style={{ height: '100%', display: graphViewActive ? 'none' : 'block' }}>
                 {/* F248: keying the Group on `chartCollapsed` forces a fresh
                      layout when toggling — chart Panel + Separator are
                      conditionally rendered, so collapsing actually frees
@@ -443,6 +467,7 @@ export default function App() {
                   </Panel>
 
                 </Group>
+                </div>{/* end chart subtree wrapper */}
               </div>
             </Panel>
 
