@@ -4,6 +4,22 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-23
+
+### Node Strategy Builder T1+T2 implementation
+
+- Built the complete T1 (read-only auto-rendered viewer) + T2 (editable canvas + graph evaluator + backtest parity + bot runner branch) per `docs/plans/2026-05-22-node-strategy-builder-t1-t2.md`. 17 commits on `feat/node-strategy-builder-t1-t2`. Branch pushed; **not yet merged** — pending T1 affirmation gate + T2 ≥1 paper-day gate, both user-driven.
+- **Phase 0 → Unit 10 all shipped** with full test coverage. Stats: 667 backend tests pass (167 new nodebuilder + 500 existing untouched), 2 intentional skips (regime + b23 parity — T3 scope); 55 frontend nodebuilder tests pass.
+- **Tier-C refactor**: `_run_simulation` extracted from `run_backtest` (Unit 8a) — snapshot-gated against a 10-strategy fixture, all pass at `rel=1e-9`. Pickled OHLCV fixtures cover the yfinance non-determinism that bit the first attempt.
+- **R2 parity**: 8/10 graph backtest fixtures match rule backtest at `rel=1e-4` (regime + b23 skipped per plan). Two real bugs caught during parity testing: MACD-wire-resolution at the comparison node (named `@macd_signal` wires were resolving to `@macd_line`), and ATR-trailing-stop needing an implicit ATR(14) when no ATR node was on the graph. Both fixed.
+- **R3**: bot runner branches on `BotConfig.kind`; graph hash + compiled-program cache for hot-reload; mid-position graph-swap rejected at the route with 409.
+- **R7**: two-surface parity test enforces `RuleIndicator ⊆ NODE_CATALOG` over time, with legacy MA aliases and T3-deferred (stochastic/adx) explicitly carved out.
+- **Layout fix**: auto-rendered graph reads top-to-bottom (matches the design handoff's wire-from-body-bottom-to-body-top convention), not left-to-right as I initially wrote it.
+- **Opus correctness-review pass** found 7 issues; all addressed (commits `8e3364e`, `a8b997b`, `7e1bb0f`). Key fixes: applied wire.attr resolution to logic/terminal resolvers (same bug class as the MACD comparison fix, but the fix wasn't propagated to siblings); compile-time rejection of crossovers reading per-bar derived booleans (would silently never fire); permanent-error state when `kind=graph` + `graph=None` at tick time (was looping in MAX_CONSEC_ERRORS retry backoff).
+- **Edit-mode perf pass**: user reported sluggishness after Unit 6 shipped. Memoised `rfNodes`/`rfEdges`, replaced `NODE_CATALOG.find()` per-render with a module-load Map, switched `onMove` (per-pixel) → `onMoveEnd`, wrapped node renderers in `React.memo`. Improved but **not fully resolved** — see handoff doc.
+- **Handoff for next session**: `docs/plans/2026-05-23-node-strategy-builder-NEXT-SESSION.md` — known remaining edit-mode sluggishness, polish items, and the two user-driven gates that block ship.
+- **Branch**: `feat/node-strategy-builder-t1-t2`.
+
 ## 2026-05-20
 
 ### F249 lightweight-charts autoSize migration completion
