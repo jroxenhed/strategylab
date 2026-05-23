@@ -152,7 +152,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
     name: "crosses_above",
     cat: "comparison",
     desc: "True on the bar where the left series crosses above the right series.",
-    reads: ["@close", "@close"],
+    reads: ["@series"],
     writes: ["@bool"],
     defaults: {
       params: { threshold: null },
@@ -166,7 +166,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
     name: "crosses_below",
     cat: "comparison",
     desc: "True on the bar where the left series crosses below the right series.",
-    reads: ["@close", "@close"],
+    reads: ["@series"],
     writes: ["@bool"],
     defaults: {
       params: { threshold: null },
@@ -180,7 +180,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
     name: "above",
     cat: "comparison",
     desc: "True when the left series is above the right series (or a scalar threshold).",
-    reads: ["@close", "@close"],
+    reads: ["@series"],
     writes: ["@bool"],
     defaults: {
       params: { threshold: null },
@@ -194,7 +194,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
     name: "below",
     cat: "comparison",
     desc: "True when the left series is below the right series (or a scalar threshold).",
-    reads: ["@close", "@close"],
+    reads: ["@series"],
     writes: ["@bool"],
     defaults: {
       params: { threshold: null },
