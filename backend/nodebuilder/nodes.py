@@ -1,12 +1,14 @@
-"""Core 14 node catalog metadata.
+"""Core 14 node catalog metadata + Unit 7b impl functions.
 
-Stub — populated by Unit 2 (catalog) and Unit 7b (impls).
 Unit 2: NODE_CATALOG + helpers (metadata only, no runtime impls).
-Unit 7b: adds impl functions (rsi_impl, macd_impl, etc.).
+Unit 7b: adds impl functions (rsi_impl, macd_impl, etc.) + result dataclasses
+         + NODE_IMPLS registry.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
+from typing import Any, Callable, Optional
 
 
 @dataclass(frozen=True)
@@ -414,3 +416,423 @@ def catalog_by_category() -> dict[str, list[NodeCatalogEntry]]:
     for entry in NODE_CATALOG:
         result.setdefault(entry.cat, []).append(entry)
     return result
+
+
+# ===========================================================================
+# Unit 7b — Result dataclasses + impl functions + NODE_IMPLS registry
+# ===========================================================================
+#
+# These types are defined locally to avoid a potential import cycle with
+# evaluator.py (Unit 7a).  Unit 7a's compile step adapts them to its own
+# IndicatorSpec / PerBarOp / SimulatorSetting internally.
+# ===========================================================================
+
+
+@dataclass
+class IndicatorImplResult:
+    """Returned by indicator impl functions.
+
+    catalog_name : registry key matching indicators.py / signal_engine.py usage.
+    params       : validated params dict ready for compute_instance().
+    write_attr   : primary attribute written to the bar-data store (e.g. "@rsi").
+    """
+    catalog_name: str
+    params: dict[str, Any]
+    write_attr: str
+
+
+@dataclass
+class PerBarImplResult:
+    """Returned by comparison / logic impl functions.
+
+    reads  : attribute names consumed by fn.
+    writes : attribute name produced by fn (typically "@bool").
+    fn     : callable(attrs: dict[str, pd.Series], i: int) -> bool
+    """
+    reads: tuple[str, ...]
+    writes: str
+    fn: Callable[[dict, int], bool]
+
+
+@dataclass
+class SimulatorSettingImplResult:
+    """Returned by settings impl functions.
+
+    key   : simulator field name (e.g. "position_size", "stop_loss_pct").
+    value : scalar or composite value (float | None | dict).
+    """
+    key: str
+    value: Any
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _is_nan(v: Any) -> bool:
+    """True when v is a float NaN; safe for non-float types."""
+    return isinstance(v, float) and math.isnan(v)
+
+
+def _safe_float(v: Any) -> Optional[float]:
+    """Return float(v) or None when v is None / NaN."""
+    if v is None or _is_nan(v):
+        return None
+    return float(v)
+
+
+# ---------------------------------------------------------------------------
+# Indicator impls
+# ---------------------------------------------------------------------------
+
+def rsi_impl(params: dict) -> IndicatorImplResult:
+    """RSI node impl.  period ∈ [2, 500], type ∈ {"sma", "wilder"}."""
+    period = int(params.get("period", 14))
+    if period < 2:
+        raise ValueError(f"RSI period must be >= 2, got {period}")
+    if period > 500:
+        raise ValueError(f"RSI period must be <= 500, got {period}")
+    ma_type = str(params.get("type", "sma")).lower()
+    return IndicatorImplResult(
+        catalog_name="rsi",
+        params={"period": period, "type": ma_type},
+        write_attr="@rsi",
+    )
+
+
+def macd_impl(params: dict) -> IndicatorImplResult:
+    """MACD node impl.  fast/slow/signal each ∈ [2, 500]."""
+    fast = int(params.get("fast", 12))
+    slow = int(params.get("slow", 26))
+    signal = int(params.get("signal", 9))
+    for name, val in (("fast", fast), ("slow", slow), ("signal", signal)):
+        if val < 2:
+            raise ValueError(f"MACD {name} must be >= 2, got {val}")
+        if val > 500:
+            raise ValueError(f"MACD {name} must be <= 500, got {val}")
+    return IndicatorImplResult(
+        catalog_name="macd",
+        params={"fast": fast, "slow": slow, "signal": signal},
+        write_attr="@macd_line",
+    )
+
+
+def sma_impl(params: dict) -> IndicatorImplResult:
+    """SMA node impl.  period ∈ [2, 500]."""
+    period = int(params.get("period", 20))
+    if period < 2:
+        raise ValueError(f"SMA period must be >= 2, got {period}")
+    if period > 500:
+        raise ValueError(f"SMA period must be <= 500, got {period}")
+    return IndicatorImplResult(
+        catalog_name="sma",
+        params={"period": period, "type": "sma"},
+        write_attr="@sma",
+    )
+
+
+def ema_impl(params: dict) -> IndicatorImplResult:
+    """EMA node impl.  period ∈ [2, 500]."""
+    period = int(params.get("period", 20))
+    if period < 2:
+        raise ValueError(f"EMA period must be >= 2, got {period}")
+    if period > 500:
+        raise ValueError(f"EMA period must be <= 500, got {period}")
+    return IndicatorImplResult(
+        catalog_name="ema",
+        params={"period": period, "type": "ema"},
+        write_attr="@ema",
+    )
+
+
+def bollinger_impl(params: dict) -> IndicatorImplResult:
+    """Bollinger Bands impl.  period ∈ [2, 500], stddev ∈ [0.5, 5]."""
+    period = int(params.get("period", 20))
+    stddev = float(params.get("stddev", 2.0))
+    if period < 2:
+        raise ValueError(f"Bollinger period must be >= 2, got {period}")
+    if period > 500:
+        raise ValueError(f"Bollinger period must be <= 500, got {period}")
+    if stddev < 0.5:
+        raise ValueError(f"Bollinger stddev must be >= 0.5, got {stddev}")
+    if stddev > 5.0:
+        raise ValueError(f"Bollinger stddev must be <= 5, got {stddev}")
+    return IndicatorImplResult(
+        catalog_name="bollinger",
+        params={"period": period, "stddev": stddev},
+        write_attr="@bb_upper",
+    )
+
+
+def atr_impl(params: dict) -> IndicatorImplResult:
+    """ATR node impl.  period ∈ [2, 500]."""
+    period = int(params.get("period", 14))
+    if period < 2:
+        raise ValueError(f"ATR period must be >= 2, got {period}")
+    if period > 500:
+        raise ValueError(f"ATR period must be <= 500, got {period}")
+    return IndicatorImplResult(
+        catalog_name="atr",
+        params={"period": period},
+        write_attr="@atr",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Comparison impls  — semantics match signal_engine.eval_rule()
+# ---------------------------------------------------------------------------
+
+def above_impl(params: dict, incoming_attrs: tuple[str, ...]) -> PerBarImplResult:
+    """True when left > right (or left > scalar threshold).
+
+    Two forms:
+      - 1 incoming attr + threshold param : attrs[a].iloc[i] > threshold
+      - 2 incoming attrs                  : attrs[a].iloc[i] > attrs[b].iloc[i]
+    """
+    threshold = params.get("threshold")
+    if threshold is None and len(incoming_attrs) < 2:
+        raise ValueError("above_impl needs either a threshold param or two incoming attrs")
+
+    if threshold is not None and len(incoming_attrs) >= 1:
+        a = incoming_attrs[0]
+        thr = float(threshold)
+
+        def fn(attrs: dict, i: int) -> bool:
+            v = _safe_float(attrs[a].iloc[i])
+            return False if v is None else bool(v > thr)
+    else:
+        a, b = incoming_attrs[0], incoming_attrs[1]
+
+        def fn(attrs: dict, i: int) -> bool:
+            va = _safe_float(attrs[a].iloc[i])
+            vb = _safe_float(attrs[b].iloc[i])
+            if va is None or vb is None:
+                return False
+            return bool(va > vb)
+
+    return PerBarImplResult(reads=incoming_attrs, writes="@bool", fn=fn)
+
+
+def below_impl(params: dict, incoming_attrs: tuple[str, ...]) -> PerBarImplResult:
+    """True when left < right (or left < scalar threshold).
+
+    Two forms:
+      - 1 incoming attr + threshold param : attrs[a].iloc[i] < threshold
+      - 2 incoming attrs                  : attrs[a].iloc[i] < attrs[b].iloc[i]
+    """
+    threshold = params.get("threshold")
+    if threshold is None and len(incoming_attrs) < 2:
+        raise ValueError("below_impl needs either a threshold param or two incoming attrs")
+
+    if threshold is not None and len(incoming_attrs) >= 1:
+        a = incoming_attrs[0]
+        thr = float(threshold)
+
+        def fn(attrs: dict, i: int) -> bool:
+            v = _safe_float(attrs[a].iloc[i])
+            return False if v is None else bool(v < thr)
+    else:
+        a, b = incoming_attrs[0], incoming_attrs[1]
+
+        def fn(attrs: dict, i: int) -> bool:
+            va = _safe_float(attrs[a].iloc[i])
+            vb = _safe_float(attrs[b].iloc[i])
+            if va is None or vb is None:
+                return False
+            return bool(va < vb)
+
+    return PerBarImplResult(reads=incoming_attrs, writes="@bool", fn=fn)
+
+
+def crosses_above_impl(params: dict, incoming_attrs: tuple[str, ...]) -> PerBarImplResult:
+    """True on the exact bar where series crosses above reference (or threshold).
+
+    Matches signal_engine crossover_up semantics:
+      threshold form : v_prev < threshold <= v_now
+      two-series form: v_prev < ref_prev  AND v_now >= ref_now
+    Guard: i == 0 always returns False.
+    """
+    threshold = params.get("threshold")
+    if threshold is None and len(incoming_attrs) < 2:
+        raise ValueError("crosses_above_impl needs either a threshold param or two incoming attrs")
+
+    if threshold is not None and len(incoming_attrs) >= 1:
+        a = incoming_attrs[0]
+        thr = float(threshold)
+
+        def fn(attrs: dict, i: int) -> bool:
+            if i == 0:
+                return False
+            v_now = _safe_float(attrs[a].iloc[i])
+            v_prev = _safe_float(attrs[a].iloc[i - 1])
+            if v_now is None or v_prev is None:
+                return False
+            return bool(v_prev < thr <= v_now)
+    else:
+        a, b = incoming_attrs[0], incoming_attrs[1]
+
+        def fn(attrs: dict, i: int) -> bool:
+            if i == 0:
+                return False
+            va_now = _safe_float(attrs[a].iloc[i])
+            va_prev = _safe_float(attrs[a].iloc[i - 1])
+            vb_now = _safe_float(attrs[b].iloc[i])
+            vb_prev = _safe_float(attrs[b].iloc[i - 1])
+            if any(v is None for v in (va_now, va_prev, vb_now, vb_prev)):
+                return False
+            return bool(va_prev < vb_prev and va_now >= vb_now)
+
+    return PerBarImplResult(reads=incoming_attrs, writes="@bool", fn=fn)
+
+
+def crosses_below_impl(params: dict, incoming_attrs: tuple[str, ...]) -> PerBarImplResult:
+    """True on the exact bar where series crosses below reference (or threshold).
+
+    Matches signal_engine crossover_down semantics:
+      threshold form : v_prev > threshold >= v_now
+      two-series form: v_prev > ref_prev  AND v_now <= ref_now
+    Guard: i == 0 always returns False.
+    """
+    threshold = params.get("threshold")
+    if threshold is None and len(incoming_attrs) < 2:
+        raise ValueError("crosses_below_impl needs either a threshold param or two incoming attrs")
+
+    if threshold is not None and len(incoming_attrs) >= 1:
+        a = incoming_attrs[0]
+        thr = float(threshold)
+
+        def fn(attrs: dict, i: int) -> bool:
+            if i == 0:
+                return False
+            v_now = _safe_float(attrs[a].iloc[i])
+            v_prev = _safe_float(attrs[a].iloc[i - 1])
+            if v_now is None or v_prev is None:
+                return False
+            return bool(v_prev > thr >= v_now)
+    else:
+        a, b = incoming_attrs[0], incoming_attrs[1]
+
+        def fn(attrs: dict, i: int) -> bool:
+            if i == 0:
+                return False
+            va_now = _safe_float(attrs[a].iloc[i])
+            va_prev = _safe_float(attrs[a].iloc[i - 1])
+            vb_now = _safe_float(attrs[b].iloc[i])
+            vb_prev = _safe_float(attrs[b].iloc[i - 1])
+            if any(v is None for v in (va_now, va_prev, vb_now, vb_prev)):
+                return False
+            return bool(va_prev > vb_prev and va_now <= vb_now)
+
+    return PerBarImplResult(reads=incoming_attrs, writes="@bool", fn=fn)
+
+
+# ---------------------------------------------------------------------------
+# Logic impls
+# ---------------------------------------------------------------------------
+
+def and_impl(params: dict, incoming_attrs: tuple[str, ...]) -> PerBarImplResult:
+    """True when ALL incoming boolean attrs are truthy."""
+    def fn(attrs: dict, i: int) -> bool:
+        return all(bool(attrs[a].iloc[i]) for a in incoming_attrs)
+
+    return PerBarImplResult(reads=incoming_attrs, writes="@bool", fn=fn)
+
+
+def or_impl(params: dict, incoming_attrs: tuple[str, ...]) -> PerBarImplResult:
+    """True when ANY incoming boolean attr is truthy."""
+    def fn(attrs: dict, i: int) -> bool:
+        return any(bool(attrs[a].iloc[i]) for a in incoming_attrs)
+
+    return PerBarImplResult(reads=incoming_attrs, writes="@bool", fn=fn)
+
+
+def not_impl(params: dict, incoming_attrs: tuple[str, ...]) -> PerBarImplResult:
+    """Inverts the single incoming boolean attr.
+
+    Guard: i == 0 returns False (matches eval_rules guard for negated rules).
+    """
+    if len(incoming_attrs) < 1:
+        raise ValueError("not_impl requires exactly one incoming attr")
+    a = incoming_attrs[0]
+
+    def fn(attrs: dict, i: int) -> bool:
+        if i == 0:
+            return False
+        return not bool(attrs[a].iloc[i])
+
+    return PerBarImplResult(reads=incoming_attrs, writes="@bool", fn=fn)
+
+
+# ---------------------------------------------------------------------------
+# Settings impls
+# ---------------------------------------------------------------------------
+
+def position_size_impl(params: dict) -> SimulatorSettingImplResult:
+    """Fraction of capital per trade (0.0–1.0). Default: 1.0 (100%)."""
+    size = float(params.get("size", 1.0))
+    if not (0.0 < size <= 1.0):
+        raise ValueError(f"position_size must be in (0, 1], got {size}")
+    return SimulatorSettingImplResult(key="position_size", value=size)
+
+
+def stop_loss_impl(params: dict) -> SimulatorSettingImplResult:
+    """Fixed stop-loss percentage below/above entry. None disables the stop."""
+    pct = params.get("pct")
+    value = float(pct) if pct is not None else None
+    if value is not None and value <= 0:
+        raise ValueError(f"stop_loss pct must be > 0, got {value}")
+    return SimulatorSettingImplResult(key="stop_loss_pct", value=value)
+
+
+def slippage_impl(params: dict) -> SimulatorSettingImplResult:
+    """Modeled slippage cost per leg in basis points. Default: 2.0 bps."""
+    bps = float(params.get("bps", 2.0))
+    if bps < 0:
+        raise ValueError(f"slippage bps must be >= 0, got {bps}")
+    return SimulatorSettingImplResult(key="slippage_bps", value=bps)
+
+
+def commission_impl(params: dict) -> SimulatorSettingImplResult:
+    """Per-share commission rate + minimum per order. Defaults match Alpaca (free)."""
+    per_share_rate = float(params.get("per_share_rate", 0.0))
+    min_per_order = float(params.get("min_per_order", 0.0))
+    if per_share_rate < 0:
+        raise ValueError(f"per_share_rate must be >= 0, got {per_share_rate}")
+    if min_per_order < 0:
+        raise ValueError(f"min_per_order must be >= 0, got {min_per_order}")
+    return SimulatorSettingImplResult(
+        key="commission",
+        value={"per_share_rate": per_share_rate, "min_per_order": min_per_order},
+    )
+
+
+# ---------------------------------------------------------------------------
+# NODE_IMPLS registry — maps catalog name → impl callable
+# ---------------------------------------------------------------------------
+# Comparison and logic impls have signature (params, incoming_attrs).
+# Indicator and settings impls have signature (params,).
+# The compile step (Unit 7a) is responsible for passing the right arguments.
+
+NODE_IMPLS: dict[str, Callable] = {
+    # Indicators
+    "rsi": rsi_impl,
+    "macd": macd_impl,
+    "sma": sma_impl,
+    "ema": ema_impl,
+    "bollinger": bollinger_impl,
+    "atr": atr_impl,
+    # Comparisons
+    "above": above_impl,
+    "below": below_impl,
+    "crosses_above": crosses_above_impl,
+    "crosses_below": crosses_below_impl,
+    # Logic
+    "and": and_impl,
+    "or": or_impl,
+    "not": not_impl,
+    # Settings
+    "position_size": position_size_impl,
+    "stop_loss": stop_loss_impl,
+    "slippage": slippage_impl,
+    "commission": commission_impl,
+}
