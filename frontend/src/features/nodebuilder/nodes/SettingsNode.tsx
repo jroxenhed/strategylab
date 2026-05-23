@@ -63,6 +63,7 @@ export default function SettingsNode({ data }: NodeProps) {
       writes={writes}
       display={d.display}
       bypass={d.bypass}
+      editable={d.editable === true}
     />
   )
 }

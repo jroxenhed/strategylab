@@ -3,6 +3,8 @@
  *
  * Unit 4b: registers custom nodeTypes + edgeTypes.
  * Unit 5: wires to Zustand store when graph.readOnly === false.
+ * Unit 6: Tab key opens TabMenu; Delete/Backspace deletes selected node or wire;
+ *          onConnect creates wires via store.addWire; handles visible in edit mode.
  *
  * Translates the Graph into React Flow nodes + edges, dispatching each
  * backend node to the correct custom renderer by category.
@@ -11,21 +13,26 @@
  * Editable (store-backed): nodesDraggable=true; drag-end calls store.moveNode.
  */
 
-import { useCallback } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ReactFlow,
+  ReactFlowProvider,
   Background,
   Controls,
   MiniMap,
+  useReactFlow,
   type Node as RFNode,
   type Edge as RFEdge,
   type NodeTypes,
   type EdgeTypes,
+  type Connection,
 } from '@xyflow/react'
-import type { Graph } from '../../api/nodebuilder'
+import type { Graph, GraphNode } from '../../api/nodebuilder'
 import { NODE_CATALOG } from './catalog'
 import type { BaseNodeData } from './nodes/BaseNode'
 import { useNodeBuilderStore } from './store'
+import TabMenu from './TabMenu'
+import type { NodeCatalogEntry } from './catalog'
 
 // ── Custom node renderers ────────────────────────────────────────────────────
 import TickerNode from './nodes/TickerNode'
@@ -78,20 +85,36 @@ function rfTypeFor(backendType: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Canvas component
+// Canvas (inner) — needs useReactFlow() so it must be a child of ReactFlowProvider
 // ---------------------------------------------------------------------------
-interface CanvasProps {
+interface CanvasInnerProps {
   graph: Graph
+  editable: boolean
 }
 
-export default function Canvas({ graph }: CanvasProps) {
+function CanvasInner({ graph, editable }: CanvasInnerProps) {
+  const { screenToFlowPosition } = useReactFlow()
   const storeMoveNode = useNodeBuilderStore(s => s.moveNode)
   const storeSetViewport = useNodeBuilderStore(s => s.setViewport)
+  const storeAddNode = useNodeBuilderStore(s => s.addNode)
+  const storeAddWire = useNodeBuilderStore(s => s.addWire)
+  const storeRemoveNodeWithRewire = useNodeBuilderStore(s => s.removeNodeWithRewire)
+  const storeRemoveWire = useNodeBuilderStore(s => s.removeWire)
+  const storeSelect = useNodeBuilderStore(s => s.select)
+  const selectedNodeId = useNodeBuilderStore(s => s.selectedNodeId)
 
-  const editable = !graph.readOnly
+  // Tab menu state
+  const [tabMenuOpen, setTabMenuOpen] = useState(false)
+  const [tabMenuScreen, setTabMenuScreen] = useState({ x: 200, y: 200 })
+  const [tabMenuGraph, setTabMenuGraph] = useState({ x: 0, y: 0 })
+  const [tabAutoWire, setTabAutoWire] = useState(true)
+
+  // Selected wire id (for delete)
+  const [selectedWireId, setSelectedWireId] = useState<string | null>(null)
+
+  const containerRef = useRef<HTMLDivElement>(null)
 
   // Translate Graph.nodes (dict[str, Node]) → RF nodes array
-  // BaseNodeData extends Record<string, unknown> so it satisfies the RF constraint.
   const rfNodes: RFNode[] = Object.values(graph.nodes).map(n => {
     const catalogEntry = NODE_CATALOG.find(e => e.name === n.type) ?? null
     const data: BaseNodeData = {
@@ -101,6 +124,7 @@ export default function Canvas({ graph }: CanvasProps) {
       display: n.display,
       bypass: n.bypass,
       nodePath: n.id,
+      editable,
     }
     return {
       id: n.id,
@@ -109,20 +133,71 @@ export default function Canvas({ graph }: CanvasProps) {
       data,
       draggable: editable,
       selectable: true,
+      selected: n.id === selectedNodeId,
     }
   })
 
   // Translate Graph.wires → RF edges
-  // With response_model_by_alias=True on the endpoint, wires have `from`/`to`.
   const rfEdges: RFEdge[] = graph.wires.map(w => ({
     id: w.id,
     source: w.from,
     target: w.to,
     label: w.attr ?? undefined,
     type: 'attr',
+    selected: w.id === selectedWireId,
   }))
 
-  // When in editable mode, persist node positions to the store on drag end.
+  // ── Key handlers ──────────────────────────────────────────────────────────
+
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      if (!editable) return
+      // Don't interfere with the TabMenu's own keydown (it handles its own input)
+      if (tabMenuOpen) return
+
+      const tag = (e.target as HTMLElement).tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+
+      if (e.key === 'Tab') {
+        e.preventDefault()
+        // Open at center of canvas container
+        const rect = containerRef.current?.getBoundingClientRect()
+        const screenX = rect ? rect.left + rect.width / 2 : 300
+        const screenY = rect ? rect.top + 80 : 200
+        setTabMenuScreen({ x: screenX, y: screenY })
+        setTabMenuGraph(screenToFlowPosition({ x: screenX, y: screenY }))
+        setTabMenuOpen(true)
+        return
+      }
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedNodeId) {
+          e.preventDefault()
+          storeRemoveNodeWithRewire(selectedNodeId)
+          storeSelect(null)
+          setSelectedWireId(null)
+        } else if (selectedWireId) {
+          e.preventDefault()
+          storeRemoveWire(selectedWireId)
+          setSelectedWireId(null)
+        }
+      }
+    },
+    [
+      editable, tabMenuOpen, selectedNodeId, selectedWireId,
+      storeRemoveNodeWithRewire, storeSelect, storeRemoveWire, screenToFlowPosition,
+    ]
+  )
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    el.addEventListener('keydown', handleKeyDown)
+    return () => el.removeEventListener('keydown', handleKeyDown)
+  }, [handleKeyDown])
+
+  // ── Drag-end: persist positions ───────────────────────────────────────────
+
   const handleNodeDragStop = useCallback(
     (_event: React.MouseEvent, node: RFNode) => {
       if (!editable) return
@@ -131,7 +206,8 @@ export default function Canvas({ graph }: CanvasProps) {
     [editable, storeMoveNode],
   )
 
-  // Persist viewport changes (pan/zoom) to the store when in editable mode.
+  // ── Viewport persist ──────────────────────────────────────────────────────
+
   const handleMove = useCallback(
     (_event: MouseEvent | TouchEvent | null, viewport: { x: number; y: number; zoom: number }) => {
       if (!editable) return
@@ -140,8 +216,128 @@ export default function Canvas({ graph }: CanvasProps) {
     [editable, storeSetViewport],
   )
 
+  // ── onConnect: wire drag creates a wire ───────────────────────────────────
+
+  const handleConnect = useCallback(
+    (params: Connection) => {
+      if (!params.source || !params.target) return
+      // Derive attr from source node's catalog writes[0]
+      const sourceNode = graph.nodes[params.source]
+      let attr: string | null = null
+      if (sourceNode) {
+        const entry = NODE_CATALOG.find(e => e.name === sourceNode.type)
+        attr = (entry?.writes[0] as string | undefined) ?? null
+      }
+      try {
+        storeAddWire({
+          id: crypto.randomUUID(),
+          from: params.source,
+          to: params.target,
+          attr,
+        })
+      } catch {
+        // Cycle detected — silently ignore (React Flow already shows visual feedback)
+      }
+    },
+    [graph.nodes, storeAddWire],
+  )
+
+  // ── Node click → select ───────────────────────────────────────────────────
+
+  const handleNodeClick = useCallback(
+    (_event: React.MouseEvent, node: RFNode) => {
+      storeSelect(node.id)
+      setSelectedWireId(null)
+    },
+    [storeSelect],
+  )
+
+  // ── Edge (wire) click → select wire ──────────────────────────────────────
+
+  const handleEdgeClick = useCallback(
+    (_event: React.MouseEvent, edge: RFEdge) => {
+      setSelectedWireId(edge.id)
+      storeSelect(null)
+    },
+    [storeSelect],
+  )
+
+  // ── Canvas click (background) → deselect ─────────────────────────────────
+
+  const handlePaneClick = useCallback(() => {
+    storeSelect(null)
+    setSelectedWireId(null)
+  }, [storeSelect])
+
+  // ── Tab menu: create node ─────────────────────────────────────────────────
+
+  const handleTabMenuCreate = useCallback(
+    (catalogEntry: NodeCatalogEntry, withWire: boolean) => {
+      const id = crypto.randomUUID()
+      const newNode: GraphNode = {
+        id,
+        type: catalogEntry.name,
+        params: { ...catalogEntry.defaults.params },
+        position: [tabMenuGraph.x, tabMenuGraph.y],
+        display: false,
+        bypass: false,
+      }
+      storeAddNode(newNode)
+
+      // Auto-wire: source.out → new.in
+      if (withWire && selectedNodeId && selectedNodeId !== id) {
+        const srcNode = graph.nodes[selectedNodeId]
+        let attr: string | null = null
+        if (srcNode) {
+          const entry = NODE_CATALOG.find(e => e.name === srcNode.type)
+          attr = (entry?.writes[0] as string | undefined) ?? null
+        }
+        try {
+          storeAddWire({
+            id: crypto.randomUUID(),
+            from: selectedNodeId,
+            to: id,
+            attr,
+          })
+        } catch {
+          // Cycle — skip auto-wire silently
+        }
+      }
+
+      storeSelect(id)
+    },
+    [tabMenuGraph, storeAddNode, storeAddWire, storeSelect, selectedNodeId, graph.nodes],
+  )
+
+  // ── RF built-in delete callbacks (also hook for robustness) ──────────────
+
+  const handleNodesDelete = useCallback(
+    (nodes: RFNode[]) => {
+      for (const n of nodes) {
+        storeRemoveNodeWithRewire(n.id)
+      }
+      storeSelect(null)
+    },
+    [storeRemoveNodeWithRewire, storeSelect],
+  )
+
+  const handleEdgesDelete = useCallback(
+    (edges: RFEdge[]) => {
+      for (const e of edges) {
+        storeRemoveWire(e.id)
+      }
+      setSelectedWireId(null)
+    },
+    [storeRemoveWire],
+  )
+
   return (
-    <div className="nodebuilder-root" style={{ width: '100%', height: '100%', background: 'var(--nb-bg)' }}>
+    <div
+      ref={containerRef}
+      className="nodebuilder-root"
+      tabIndex={0}
+      style={{ width: '100%', height: '100%', background: 'var(--nb-bg)', outline: 'none' }}
+    >
       <ReactFlow
         nodes={rfNodes}
         edges={rfEdges}
@@ -150,8 +346,15 @@ export default function Canvas({ graph }: CanvasProps) {
         nodesDraggable={editable}
         nodesConnectable={editable}
         elementsSelectable={true}
+        deleteKeyCode={null}  // We handle Delete ourselves to run rewire logic
         onNodeDragStop={editable ? handleNodeDragStop : undefined}
         onMove={editable ? handleMove : undefined}
+        onConnect={editable ? handleConnect : undefined}
+        onNodeClick={handleNodeClick}
+        onEdgeClick={editable ? handleEdgeClick : undefined}
+        onPaneClick={handlePaneClick}
+        onNodesDelete={editable ? handleNodesDelete : undefined}
+        onEdgesDelete={editable ? handleEdgesDelete : undefined}
         fitView
         fitViewOptions={{ padding: 0.2 }}
         minZoom={0.1}
@@ -167,6 +370,37 @@ export default function Canvas({ graph }: CanvasProps) {
           style={{ background: 'oklch(0.18 0.014 250)', border: '1px solid oklch(0.30 0.018 250)' }}
         />
       </ReactFlow>
+
+      {editable && (
+        <TabMenu
+          open={tabMenuOpen}
+          screenPosition={tabMenuScreen}
+          graphPosition={tabMenuGraph}
+          selectedNodeId={selectedNodeId}
+          autoWire={tabAutoWire}
+          onToggleAutoWire={() => setTabAutoWire(v => !v)}
+          onCreate={handleTabMenuCreate}
+          onClose={() => setTabMenuOpen(false)}
+        />
+      )}
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Canvas — public component. Wraps CanvasInner inside ReactFlowProvider so
+// useReactFlow() works inside CanvasInner.
+// ---------------------------------------------------------------------------
+interface CanvasProps {
+  graph: Graph
+}
+
+export default function Canvas({ graph }: CanvasProps) {
+  const editable = !graph.readOnly
+
+  return (
+    <ReactFlowProvider>
+      <CanvasInner graph={graph} editable={editable} />
+    </ReactFlowProvider>
   )
 }

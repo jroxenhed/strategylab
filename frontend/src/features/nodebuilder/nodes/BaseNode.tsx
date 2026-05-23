@@ -53,6 +53,8 @@ export interface BaseNodeData extends Record<string, unknown> {
   display: boolean
   bypass: boolean
   nodePath: string
+  /** True when the canvas is in editable mode; handles become visible dots. */
+  editable?: boolean
 }
 
 interface BaseNodeProps {
@@ -74,6 +76,8 @@ interface BaseNodeProps {
   width?: number
   /** Optional extra body content (param rows, etc.). */
   children?: React.ReactNode
+  /** When true, handles render as visible colored dots (editable mode). */
+  editable?: boolean
 }
 
 export function BaseNode({
@@ -86,6 +90,7 @@ export function BaseNode({
   bypass = false,
   width = 158,
   children,
+  editable = false,
 }: BaseNodeProps) {
   const catEntry = CATS[cat] ?? CATS.indicator
   const catColor = catEntry.color
@@ -110,13 +115,27 @@ export function BaseNode({
       : 'none',
   }
 
+  // Visible handle style (editable mode) — 8px dot, category color
+  const handleVisibleStyle: React.CSSProperties = editable ? {
+    width: 8,
+    height: 8,
+    background: catColor,
+    border: '1px solid oklch(0.10 0.008 250)',
+    borderRadius: '50%',
+  } : {
+    width: 0,
+    height: 0,
+    border: 0,
+    background: 'transparent',
+  }
+
   return (
     <>
-      {/* Invisible target handle (top) */}
+      {/* Target handle (top) */}
       <Handle
         type="target"
         position={Position.Top}
-        style={{ width: 0, height: 0, border: 0, background: 'transparent', top: 0 }}
+        style={{ ...handleVisibleStyle, top: editable ? -4 : 0 }}
       />
 
       <div style={containerStyle}>
@@ -228,11 +247,11 @@ export function BaseNode({
         )}
       </div>
 
-      {/* Invisible source handle (bottom) */}
+      {/* Source handle (bottom) */}
       <Handle
         type="source"
         position={Position.Bottom}
-        style={{ width: 0, height: 0, border: 0, background: 'transparent', bottom: 0 }}
+        style={{ ...handleVisibleStyle, bottom: editable ? -4 : 0 }}
       />
     </>
   )

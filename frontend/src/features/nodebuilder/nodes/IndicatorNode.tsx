@@ -53,6 +53,7 @@ export default function IndicatorNode({ data }: NodeProps) {
       writes={writes}
       display={d.display}
       bypass={d.bypass}
+      editable={d.editable === true}
     />
   )
 }

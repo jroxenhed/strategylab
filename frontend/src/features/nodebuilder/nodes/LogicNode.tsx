@@ -27,6 +27,7 @@ export default function LogicNode({ data }: NodeProps) {
       writes={writes}
       display={d.display}
       bypass={d.bypass}
+      editable={d.editable === true}
     />
   )
 }
