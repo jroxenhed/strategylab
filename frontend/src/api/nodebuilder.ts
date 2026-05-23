@@ -1,8 +1,8 @@
 /**
- * Nodebuilder API client — Unit 3.
+ * Nodebuilder API client — Unit 3 + Unit 8b.
  *
- * fetchAutoRender: POST /api/nodebuilder/auto_render
- * Returns the Graph representation of an existing rule strategy (read-only).
+ * fetchAutoRender:      POST /api/nodebuilder/auto_render
+ * fetchGraphBacktest:   POST /api/nodebuilder/backtest
  */
 
 import { api } from './client'
@@ -51,4 +51,63 @@ export interface AutoRenderResponse {
 export async function fetchAutoRender(req: StrategyRequest): Promise<Graph> {
   const { data } = await api.post<AutoRenderResponse>('/api/nodebuilder/auto_render', req)
   return data.graph
+}
+
+// ---------------------------------------------------------------------------
+// Unit 8b: Graph backtest
+// ---------------------------------------------------------------------------
+
+/** Simulator-level settings that accompany a graph backtest request. */
+export interface GraphBacktestRequest {
+  graph: Graph
+  ticker: string
+  start: string
+  end: string
+  interval?: string
+  source?: string
+  initial_capital?: number
+  position_size?: number
+  stop_loss_pct?: number | null
+  trailing_stop?: unknown | null
+  max_bars_held?: number | null
+  slippage_bps?: number
+  commission_pct?: number
+  per_share_rate?: number
+  min_per_order?: number
+  borrow_rate_annual?: number
+  dynamic_sizing?: unknown | null
+  skip_after_stop?: unknown | null
+  trading_hours?: unknown | null
+  direction?: string
+}
+
+/** One entry in the equity or baseline curve. */
+export interface CurvePoint {
+  time: string | number
+  value: number
+}
+
+/** Summary statistics returned by the graph backtest. */
+export type BacktestSummary = Record<string, unknown>
+
+/** Trade record returned by the graph backtest. */
+export type TradeRecord = Record<string, unknown>
+
+/** Response from POST /api/nodebuilder/backtest. */
+export interface GraphBacktestResult {
+  summary: BacktestSummary
+  trades: TradeRecord[]
+  equity_curve: CurvePoint[]
+  baseline_curve: CurvePoint[]
+}
+
+/**
+ * Run a backtest using a compiled node graph.
+ *
+ * @param req - GraphBacktestRequest with the graph + simulator settings.
+ * @returns   - GraphBacktestResult with summary, trades, equity_curve, baseline_curve.
+ */
+export async function fetchGraphBacktest(req: GraphBacktestRequest): Promise<GraphBacktestResult> {
+  const { data } = await api.post<GraphBacktestResult>('/api/nodebuilder/backtest', req)
+  return data
 }

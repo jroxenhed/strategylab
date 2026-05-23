@@ -241,13 +241,20 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
                 continue
 
             # Collect the two inbound attrs; wires come in order they were added.
+            # Priority: if the wire carries an explicit attr (e.g. "@macd_signal"),
+            # use it directly — the evaluator stores multi-output sub-attrs under
+            # those canonical names.  Fallback to attr_written_by for wires without
+            # an explicit attr.
             inbound: list[str] = []
             for wire in graph.wires:
                 if wire.to_path == node_path:
-                    src = wire.from_path
-                    written = attr_written_by.get(src)
-                    if written:
-                        inbound.append(written)
+                    if wire.attr and wire.attr.startswith("@"):
+                        inbound.append(wire.attr)
+                    else:
+                        src = wire.from_path
+                        written = attr_written_by.get(src)
+                        if written:
+                            inbound.append(written)
 
             params = dict(node.params) if node.params else {}
             threshold = params.get("threshold")
