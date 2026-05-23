@@ -394,6 +394,513 @@ def _compute_regime_series(req: StrategyRequest, ltf_df: pd.DataFrame) -> "pd.Se
     return aligned.fillna(0).astype(bool)
 
 
+def _run_simulation(
+    df: pd.DataFrame,
+    indicators: dict,
+    buy_signal_fn,
+    sell_signal_fn,
+    req: "StrategyRequest",
+    b23_mode: bool,
+    regime_active_series,
+    on_flip: str,
+    date_strs: list,
+) -> dict:
+    """Run the bar-by-bar simulation loop and return core results.
+
+    This is the behavior-neutral simulator extracted from run_backtest (Unit 8a).
+    It handles position management, stops, costs, and equity tracking.
+    Rule-mode debug fields (signal_trace, rule_signals, ema_overlays, regime_series)
+    are passed through from the caller or generated here when req.debug is True.
+
+    Args:
+        df: OHLCV DataFrame (same slice passed to run_backtest).
+        indicators: Pre-computed indicator series dict from compute_indicators.
+        buy_signal_fn: Callable(i, curr_regime_active) ->
+            (fired: bool, rules: list[str], position_direction: str | None).
+            Returns whether a buy signal fires at bar i, the fired-rule descriptions
+            (for the trade record), and the direction to enter.
+        sell_signal_fn: Callable(i, position_direction, curr_regime_active) ->
+            (fired: bool, rules: list[str]).
+            Returns whether a sell signal fires at bar i for the current direction.
+        req: StrategyRequest — used for all simulator-level settings (stops,
+            sizing, costs, direction, debug flag, etc.).
+        b23_mode: Whether the dual-direction regime mode is active.
+        regime_active_series: Boolean pd.Series aligned to df.index (or None).
+        on_flip: Regime flip mode string ("hold", "close_only", "close_and_reverse").
+        date_strs: Pre-formatted timestamp list for df.index (from _format_time_index).
+
+    Returns:
+        dict with keys: summary (partial, no spy_corr), trades, equity_curve.
+        Also includes signal_trace when req.debug is True.
+    """
+    close = df["Close"]
+    high = df["High"]
+    low = df["Low"]
+
+    # Simulator state
+    capital = req.initial_capital
+    position = 0.0
+    entry_price = 0.0
+    entry_ts = None
+    entry_bar_idx = 0
+    trail_peak = 0.0
+    trail_stop_price = None
+    trades = []
+    equity = []
+
+    position_direction: str | None = None  # set at entry, cleared at exit
+    drag = req.slippage_bps / 10_000.0   # bps → fractional
+    ts = req.trailing_stop
+    atr = indicators.get("atr")
+    signal_trace = [] if req.debug else None
+    ds = req.dynamic_sizing
+    th = req.trading_hours
+    sas = req.skip_after_stop
+    is_intraday = req.interval in _INTRADAY_INTERVALS
+    prev_regime_active: bool = False
+
+    # B25: per-direction counters in b23_mode; single counters otherwise
+    if b23_mode:
+        consec_sl_count_by_dir: dict[str, int] = {'long': 0, 'short': 0}
+        skip_remaining_by_dir: dict[str, int] = {'long': 0, 'short': 0}
+    else:
+        consec_sl_count = 0  # track consecutive stop losses for dynamic sizing
+        skip_remaining = 0   # entries still to skip after a qualifying stop
+
+    # B25: per-direction helper closures (depend only on req and b23_mode)
+    def _dir_stop(direction: str):
+        """Return per-direction stop_loss_pct when b23_mode, else global."""
+        if not b23_mode:
+            return req.stop_loss_pct
+        v = req.long_stop_loss_pct if direction == 'long' else req.short_stop_loss_pct
+        return v if v is not None else req.stop_loss_pct
+
+    def _dir_ts(direction: str):
+        """Return per-direction trailing_stop when b23_mode, else global.
+        Merges per-direction type+value into global config's source/activate fields.
+        """
+        if not b23_mode:
+            return req.trailing_stop
+        base = req.trailing_stop
+        override = req.long_trailing_stop if direction == 'long' else req.short_trailing_stop
+        if override is None:
+            return base
+        if base is None:
+            return override
+        return TrailingStopConfig(
+            type=override.type, value=override.value,
+            source=base.source, activate_on_profit=base.activate_on_profit,
+            activate_pct=base.activate_pct,
+        )
+
+    def _dir_mbh(direction: str):
+        """Return per-direction max_bars_held when b23_mode, else global."""
+        if not b23_mode:
+            return req.max_bars_held
+        v = req.long_max_bars_held if direction == 'long' else req.short_max_bars_held
+        return v if v is not None else req.max_bars_held
+
+    def _dir_size(direction: str) -> float:
+        """Return per-direction position_size when b23_mode, else global."""
+        if not b23_mode:
+            return req.position_size
+        v = req.long_position_size if direction == 'long' else req.short_position_size
+        return v if v is not None else req.position_size
+
+    close_arr = close.to_numpy(dtype=float, copy=False)
+
+    for i in range(len(df)):
+        price = close_arr[i]
+        date = date_strs[i]
+
+        # Trading hours filter (only affects entries, not exits)
+        hour_ok = True
+        if is_intraday and th and th.enabled:
+            bar_dt = df.index[i]
+            if bar_dt.tzinfo is not None:
+                et_time = bar_dt.astimezone(pd.Timestamp.now(tz="America/New_York").tzinfo)
+            else:
+                et_time = pd.Timestamp(bar_dt, tz="UTC").tz_convert("America/New_York")
+
+            et_time_str = et_time.strftime("%H:%M")
+            if et_time_str < th.start_time or et_time_str >= th.end_time:
+                hour_ok = False
+            for sr in th.skip_ranges:
+                if "-" in sr:
+                    parts = sr.split("-", 1)
+                    if parts[0].strip() <= et_time_str < parts[1].strip():
+                        hour_ok = False
+                        break
+
+        curr_regime_active = bool(regime_active_series.iloc[i]) if regime_active_series is not None else True
+
+        # Regime flip: forced exit (and optional reversal) when on_flip != "hold"
+        if i > 0 and regime_active_series is not None and on_flip != "hold":
+            if curr_regime_active != prev_regime_active and position > 0:
+                raw_exit = price
+                if position_direction == "short":
+                    exit_price_rf = raw_exit * (1 + drag)
+                else:
+                    exit_price_rf = raw_exit * (1 - drag)
+                exit_slippage_rf = abs(position * (raw_exit - exit_price_rf))
+                commission_rf = per_leg_commission(position, req)
+                bcost_rf = borrow_cost(position, entry_price, entry_ts, df.index[i],
+                                       position_direction, req)
+                if position_direction == "short":
+                    pnl_rf = position * (entry_price - exit_price_rf) - commission_rf - bcost_rf
+                    capital += position * entry_price + pnl_rf
+                else:
+                    proceeds_rf = position * exit_price_rf
+                    pnl_rf = (proceeds_rf - commission_rf) - position * entry_price
+                    capital += proceeds_rf - commission_rf
+                exit_type_rf = "cover" if position_direction == "short" else "sell"
+                rf_old_direction = position_direction
+                trades.append({
+                    "type": exit_type_rf, "date": date, "price": round(exit_price_rf, 4),
+                    "shares": round(position, 4), "direction": rf_old_direction,
+                    "pnl": round(pnl_rf, 2),
+                    "pnl_pct": round(pnl_rf / (position * entry_price) * 100, 2),
+                    "stop_loss": False, "trailing_stop": False,
+                    "slippage": round(exit_slippage_rf, 2), "commission": round(commission_rf, 2),
+                    "borrow_cost": round(bcost_rf, 2), "rules": ["regime flip"],
+                    "exit_reason": "regime_flip",
+                })
+                if signal_trace is not None:
+                    signal_trace.append({
+                        "date": date, "price": round(price, 4), "position": "exited",
+                        "action": "REGIME_FLIP_EXIT",
+                    })
+                position = 0.0
+                position_direction = None
+                entry_ts = None
+                trail_peak = 0.0
+                trail_stop_price = None
+                # Regime flip is not a stop-loss; don't modify consec_sl_count
+
+                if on_flip == "close_and_reverse":
+                    new_dir = "short" if rf_old_direction == "long" else "long"
+                    if new_dir == "short":
+                        fill_price_rf = price * (1 - drag)
+                    else:
+                        fill_price_rf = price * (1 + drag)
+                    # B25: rebind ts for new direction before trail_peak usage
+                    ts = _dir_ts(new_dir)
+                    shares_rf = (capital * _dir_size(new_dir)) / fill_price_rf
+                    commission_rf2 = per_leg_commission(shares_rf, req)
+                    entry_slippage_rf = abs(shares_rf * (fill_price_rf - price))
+                    position = shares_rf
+                    position_direction = new_dir
+                    entry_price = fill_price_rf
+                    entry_ts = df.index[i]
+                    entry_bar_idx = i
+                    capital -= shares_rf * fill_price_rf + commission_rf2
+                    trail_peak = fill_price_rf
+                    trail_stop_price = None
+                    trades.append({
+                        "type": "short" if new_dir == "short" else "buy",
+                        "date": date, "price": round(fill_price_rf, 4),
+                        "shares": round(shares_rf, 4), "direction": new_dir,
+                        "slippage": round(entry_slippage_rf, 2),
+                        "commission": round(commission_rf2, 2),
+                        "rules": ["regime flip reverse"],
+                    })
+                    if signal_trace is not None:
+                        signal_trace.append({
+                            "date": date, "price": round(price, 4), "position": "entered",
+                            "action": "REGIME_FLIP_REVERSE",
+                        })
+
+        if regime_active_series is not None:
+            prev_regime_active = curr_regime_active
+
+        # Delegate buy/sell signal evaluation to the callables (rule-aware)
+        buy_fired_raw, buy_rules_list, new_direction = buy_signal_fn(i, curr_regime_active)
+        buy_fires = position == 0 and hour_ok and buy_fired_raw
+
+        if b23_mode:
+            sr_key = 'long' if curr_regime_active else 'short'
+            if buy_fires and skip_remaining_by_dir[sr_key] > 0:
+                skip_remaining_by_dir[sr_key] -= 1
+                if signal_trace is not None:
+                    signal_trace.append({
+                        "date": date, "price": round(price, 4), "position": "flat",
+                        "action": f"SKIPPED (post-stop, {skip_remaining_by_dir[sr_key]} left) [{sr_key}]",
+                    })
+                buy_fires = False
+        else:
+            if buy_fires and skip_remaining > 0:
+                skip_remaining -= 1
+                if signal_trace is not None:
+                    signal_trace.append({
+                        "date": date, "price": round(price, 4), "position": "flat",
+                        "action": f"SKIPPED (post-stop, {skip_remaining} left)",
+                    })
+                buy_fires = False
+
+        if buy_fires:
+            position_direction = new_direction
+
+            # B25: bind per-direction trailing stop AFTER position_direction is known
+            ts = _dir_ts(position_direction)
+
+            # Dynamic sizing: reduce position after consecutive stop losses
+            effective_size = _dir_size(position_direction)
+            if b23_mode:
+                csl = consec_sl_count_by_dir[position_direction]
+            else:
+                csl = consec_sl_count
+            if ds and ds.enabled and csl >= ds.consec_sls:
+                effective_size = _dir_size(position_direction) * (ds.reduced_pct / 100)
+
+            # Slippage: short entry fills lower (worse for seller), long fills higher (worse for buyer)
+            if position_direction == "short":
+                fill_price = price * (1 - drag)
+            else:
+                fill_price = price * (1 + drag)
+            shares = (capital * effective_size) / fill_price
+            commission = per_leg_commission(shares, req)
+            position = shares
+            entry_price = fill_price
+            entry_ts = df.index[i]
+            entry_bar_idx = i
+            capital -= shares * fill_price + commission
+            trail_peak = fill_price
+            trail_stop_price = None
+            entry_slippage = abs(shares * (fill_price - price))
+            entry_type = "short" if position_direction == "short" else "buy"
+            trades.append({
+                "type": entry_type, "date": date, "price": round(fill_price, 4),
+                "shares": round(shares, 4),
+                "direction": position_direction,
+                "slippage": round(entry_slippage, 2),
+                "commission": round(commission, 2),
+                "rules": buy_rules_list,
+            })
+            if signal_trace is not None:
+                buy_trace_detail = buy_signal_fn.trace(i, curr_regime_active) if hasattr(buy_signal_fn, "trace") else []
+                signal_trace.append({
+                    "date": date, "price": round(price, 4), "position": "entered",
+                    "action": "SHORT" if position_direction == "short" else "BUY",
+                    "buy_rules": buy_trace_detail,
+                })
+
+        elif position > 0:
+            # Update trailing stop peak and compute trail_stop_price
+            trail_hit = False
+            if ts:
+                if position_direction == "short":
+                    # Short: track trough (mirror high→low)
+                    source_price = low.iloc[i] if ts.source == "high" else price
+                    threshold = entry_price * (1 - ts.activate_pct / 100)
+                    if not ts.activate_on_profit or source_price <= threshold:
+                        trail_peak = min(trail_peak, source_price)
+                    if ts.type == "pct":
+                        trail_stop_price = trail_peak * (1 + ts.value / 100)
+                    else:  # atr
+                        atr_val = atr.iloc[i] if atr is not None and not pd.isna(atr.iloc[i]) else 0.0
+                        trail_stop_price = trail_peak + ts.value * atr_val
+                    trail_hit = high.iloc[i] >= trail_stop_price
+                else:
+                    source_price = high.iloc[i] if ts.source == "high" else price
+                    threshold = entry_price * (1 + ts.activate_pct / 100)
+                    if not ts.activate_on_profit or source_price >= threshold:
+                        trail_peak = max(trail_peak, source_price)
+                    if ts.type == "pct":
+                        trail_stop_price = trail_peak * (1 - ts.value / 100)
+                    else:  # atr
+                        atr_val = atr.iloc[i] if atr is not None and not pd.isna(atr.iloc[i]) else 0.0
+                        trail_stop_price = trail_peak - ts.value * atr_val
+                    trail_hit = low.iloc[i] <= trail_stop_price
+
+            # Check fixed stop loss (B25: use per-direction stop when b23_mode)
+            stop_loss_pct_eff = _dir_stop(position_direction)
+            if position_direction == "short":
+                stop_price_limit = entry_price * (1 + stop_loss_pct_eff / 100) if (stop_loss_pct_eff and stop_loss_pct_eff > 0) else None
+                stop_hit = stop_price_limit is not None and high.iloc[i] >= stop_price_limit
+            else:
+                stop_price_limit = entry_price * (1 - stop_loss_pct_eff / 100) if (stop_loss_pct_eff and stop_loss_pct_eff > 0) else None
+                stop_hit = stop_price_limit is not None and low.iloc[i] <= stop_price_limit
+
+            # Time stop: exit after N bars held (B25: use per-direction max_bars_held when b23_mode)
+            mbh_eff = _dir_mbh(position_direction)
+            time_stop_hit = mbh_eff is not None and (i - entry_bar_idx) >= mbh_eff
+
+            # Exit priority: fixed stop beats trailing stop beats time stop
+            if stop_hit:
+                raw_exit = stop_price_limit
+                exit_reason = "stop_loss"
+            elif trail_hit:
+                raw_exit = trail_stop_price
+                exit_reason = "trailing_stop"
+            elif time_stop_hit:
+                raw_exit = price
+                exit_reason = "time_stop"
+            else:
+                raw_exit = price
+                exit_reason = "signal"
+
+            # Slippage: short covers at higher price (worse), long sells at lower price (worse)
+            if position_direction == "short":
+                exit_price = raw_exit * (1 + drag)
+            else:
+                exit_price = raw_exit * (1 - drag)
+
+            sell_fired_raw, sell_rules_list = sell_signal_fn(i, position_direction, curr_regime_active)
+            if stop_hit or trail_hit or time_stop_hit or sell_fired_raw:
+                exit_slippage = abs(position * (raw_exit - exit_price))
+                commission = per_leg_commission(position, req)
+                bcost = borrow_cost(position, entry_price, entry_ts, df.index[i],
+                                    position_direction, req)
+                if position_direction == "short":
+                    pnl = position * (entry_price - exit_price) - commission - bcost
+                    capital += position * entry_price + pnl
+                else:
+                    proceeds = position * exit_price
+                    pnl = (proceeds - commission) - position * entry_price
+                    capital += proceeds - commission
+                exit_type = "cover" if position_direction == "short" else "sell"
+                exit_rules: list[str] = []
+                if exit_reason == "stop_loss":
+                    exit_rules = ["stop loss"]
+                elif exit_reason == "trailing_stop":
+                    exit_rules = ["trailing stop"]
+                elif time_stop_hit:
+                    exit_rules = ["time stop"]
+                else:
+                    exit_rules = sell_rules_list
+                trades.append({
+                    "type": exit_type,
+                    "date": date,
+                    "price": round(exit_price, 4),
+                    "shares": round(position, 4),
+                    "direction": position_direction,
+                    "pnl": round(pnl, 2),
+                    "pnl_pct": round(pnl / (position * entry_price) * 100, 2),
+                    "stop_loss": exit_reason == "stop_loss",
+                    "trailing_stop": exit_reason == "trailing_stop",
+                    "slippage": round(exit_slippage, 2),
+                    "commission": round(commission, 2),
+                    "borrow_cost": round(bcost, 2),
+                    "rules": exit_rules,
+                })
+                if signal_trace is not None:
+                    action = "STOP_LOSS" if exit_reason == "stop_loss" else "TRAIL_STOP" if exit_reason == "trailing_stop" else ("COVER" if position_direction == "short" else "SELL")
+                # B25: capture exited_direction BEFORE clearing position_direction
+                exited_direction = position_direction
+                position = 0.0
+                position_direction = None
+                entry_ts = None
+                trail_peak = 0.0
+                trail_stop_price = None
+                ds_trigger = ds.trigger if ds else "sl"
+                if b23_mode:
+                    if is_post_loss_trigger(exit_reason, ds_trigger):
+                        consec_sl_count_by_dir[exited_direction] += 1
+                    else:
+                        consec_sl_count_by_dir[exited_direction] = 0
+                    if sas and sas.enabled and is_post_loss_trigger(exit_reason, sas.trigger):
+                        skip_remaining_by_dir[exited_direction] = sas.count
+                else:
+                    if is_post_loss_trigger(exit_reason, ds_trigger):
+                        consec_sl_count += 1
+                    else:
+                        consec_sl_count = 0
+                    if sas and sas.enabled and is_post_loss_trigger(exit_reason, sas.trigger):
+                        skip_remaining = sas.count
+                if signal_trace is not None:
+                    sell_trace_detail = sell_signal_fn.trace(i, position_direction) if hasattr(sell_signal_fn, "trace") else []
+                    signal_trace.append({
+                        "date": date, "price": round(price, 4), "position": "exited",
+                        "action": action,
+                        "sell_rules": sell_trace_detail,
+                    })
+            elif signal_trace is not None:
+                # In position but no sell — trace any bar where at least one sell rule fires
+                sell_trace_detail = sell_signal_fn.trace(i, position_direction) if hasattr(sell_signal_fn, "trace") else []
+                if any(d.get("result") for d in sell_trace_detail if not d.get("muted")):
+                    signal_trace.append({
+                        "date": date, "price": round(price, 4), "position": "holding",
+                        "action": "SELL_PARTIAL (AND not met)",
+                        "sell_rules": sell_trace_detail,
+                    })
+
+        elif signal_trace is not None and position == 0 and not b23_mode:
+            # Not in position — trace if sell rules WOULD have fired.
+            # Suppressed in b23_mode: unified sell_rules are hidden from the user;
+            # showing them in a flat-position trace would leak the hidden rule set.
+            sell_trace_detail = sell_signal_fn.trace(i, None) if hasattr(sell_signal_fn, "trace") else []
+            if sell_trace_detail and i > 0:
+                if any(d.get("result") for d in sell_trace_detail if not d.get("muted")):
+                    signal_trace.append({
+                        "date": date, "price": round(price, 4), "position": "flat",
+                        "action": "MISSED (no position)",
+                        "sell_rules": sell_trace_detail,
+                    })
+
+        if position_direction == "short" and position > 0:
+            unrealized = position * (entry_price - price)
+            total_value = capital + position * entry_price + unrealized
+        else:
+            total_value = capital + (position * price if position > 0 else 0)
+        equity.append({"time": date, "value": round(total_value, 2)})
+
+    # Close open position at last price
+    final_price = close.iloc[-1]
+    if position_direction == "short" and position > 0:
+        unrealized = position * (entry_price - final_price)
+        final_value = capital + position * entry_price + unrealized
+    else:
+        final_value = capital + position * final_price
+
+    total_return = (final_value - req.initial_capital) / req.initial_capital * 100
+    buy_hold_return = (close.iloc[-1] - close.iloc[0]) / close.iloc[0] * 100
+
+    # Sharpe ratio (annualized, daily returns)
+    eq_values = [e["value"] for e in equity]
+    eq_series = pd.Series(eq_values)
+    daily_returns = eq_series.pct_change().dropna()
+    sharpe = float((daily_returns.mean() / daily_returns.std()) * np.sqrt(252)) if daily_returns.std() > 0 else 0
+
+    # Max drawdown
+    peak = eq_series.cummax()
+    drawdown = (eq_series - peak) / peak
+    max_drawdown = float(drawdown.min() * 100)
+
+    # Include both exit types so regime close_and_reverse (mixed long/short) counts correctly
+    sell_trades = [t for t in trades if t["type"] in ("sell", "cover")]
+    winning = [t for t in sell_trades if t.get("pnl", 0) > 0]
+    win_rate = len(winning) / len(sell_trades) * 100 if sell_trades else 0
+
+    gains = [float(t["pnl"]) for t in sell_trades if t.get("pnl", 0) > 0]
+    losses = [float(t["pnl"]) for t in sell_trades if t.get("pnl", 0) < 0]
+    gain_stats = _side_stats(gains)
+    loss_stats = _side_stats(losses)
+    pnl_distribution = [round(float(t.get("pnl", 0)), 2) for t in sell_trades]
+    edge_stats = _edge_stats(gains, losses, len(sell_trades))
+
+    sim_result = {
+        "summary": {
+            "initial_capital": req.initial_capital,
+            "final_value": round(final_value, 2),
+            "total_return_pct": round(total_return, 2),
+            "buy_hold_return_pct": round(buy_hold_return, 2),
+            "num_trades": len(sell_trades),
+            "win_rate_pct": round(win_rate, 2),
+            "sharpe_ratio": round(sharpe, 3),
+            "max_drawdown_pct": round(max_drawdown, 2),
+            "gain_stats": gain_stats,
+            "loss_stats": loss_stats,
+            "pnl_distribution": pnl_distribution,
+            **edge_stats,
+        },
+        "trades": trades,
+        "equity_curve": equity,
+    }
+    if signal_trace is not None:
+        sim_result["signal_trace"] = signal_trace
+    return sim_result
+
+
 @router.post("/api/backtest", responses={400: {"description": "Invalid source"}})
 def backtest_endpoint(req: StrategyRequest):
     # FastAPI route wrapper. Keep the public HTTP signature one-arg so Pydantic
@@ -480,9 +987,6 @@ def run_backtest(
         short_sell_rules_base = _base_tf_only(short_sell_rules)
 
         # F246: Pre-compute HTF rule masks for buy/sell rule sets.
-        # Rules with timeframe=None stay in the main loop (existing behavior).
-        # Rules with a non-None timeframe are evaluated over HTF bars, aligned to base_index,
-        # and stored as pre-computed boolean Series to gate each bar's buy/sell decision.
         _htf_kwargs = dict(
             ticker=req.ticker, start=req.start, end=req.end,
             base_index=df.index, source=req.source,
@@ -496,80 +1000,13 @@ def run_backtest(
             htf_short_buy_mask = _apply_htf_rules(short_buy_rules, req.short_buy_logic or 'AND', **_htf_kwargs)
             htf_short_sell_mask = _apply_htf_rules(short_sell_rules, req.short_sell_logic or 'AND', **_htf_kwargs)
 
-        # Simulate
-        capital = req.initial_capital
-        position = 0.0
-        entry_price = 0.0
-        entry_ts = None
-        entry_bar_idx = 0
-        trail_peak = 0.0
-        trail_stop_price = None
-        trades = []
-        equity = []
-
-        position_direction: str | None = None  # set at entry, cleared at exit
-        drag = req.slippage_bps / 10_000.0   # bps → fractional
-        ts = req.trailing_stop
-        atr = indicators.get("atr")
-        signal_trace = [] if req.debug else None
-        ds = req.dynamic_sizing
-        th = req.trading_hours
-        sas = req.skip_after_stop
-        is_intraday = req.interval in _INTRADAY_INTERVALS
         regime_active_series = _compute_regime_series(req, df)
         on_flip = req.regime.on_flip if (req.regime and req.regime.enabled) else "hold"
-        prev_regime_active: bool = False
+        date_strs = _format_time_index(df.index, req.interval)
+        close_arr = close.to_numpy(dtype=float, copy=False)
 
-        # B25: per-direction counters in b23_mode; single counters otherwise
-        if b23_mode:
-            consec_sl_count_by_dir: dict[str, int] = {'long': 0, 'short': 0}
-            skip_remaining_by_dir: dict[str, int] = {'long': 0, 'short': 0}
-        else:
-            consec_sl_count = 0  # track consecutive stop losses for dynamic sizing
-            skip_remaining = 0   # entries still to skip after a qualifying stop
-
-        # B25: per-direction helper closures
-        def _dir_stop(direction: str):
-            """Return per-direction stop_loss_pct when b23_mode, else global."""
-            if not b23_mode:
-                return req.stop_loss_pct
-            v = req.long_stop_loss_pct if direction == 'long' else req.short_stop_loss_pct
-            return v if v is not None else req.stop_loss_pct
-
-        def _dir_ts(direction: str):
-            """Return per-direction trailing_stop when b23_mode, else global.
-            Merges per-direction type+value into global config's source/activate fields.
-            """
-            if not b23_mode:
-                return req.trailing_stop
-            base = req.trailing_stop
-            override = req.long_trailing_stop if direction == 'long' else req.short_trailing_stop
-            if override is None:
-                return base
-            if base is None:
-                return override
-            return TrailingStopConfig(
-                type=override.type, value=override.value,
-                source=base.source, activate_on_profit=base.activate_on_profit,
-                activate_pct=base.activate_pct,
-            )
-
-        def _dir_mbh(direction: str):
-            """Return per-direction max_bars_held when b23_mode, else global."""
-            if not b23_mode:
-                return req.max_bars_held
-            v = req.long_max_bars_held if direction == 'long' else req.short_max_bars_held
-            return v if v is not None else req.max_bars_held
-
-        def _dir_size(direction: str) -> float:
-            """Return per-direction position_size when b23_mode, else global."""
-            if not b23_mode:
-                return req.position_size
-            v = req.long_position_size if direction == 'long' else req.short_position_size
-            return v if v is not None else req.position_size
-
+        # Rule description helpers (used by signal callables for trade.rules + trace)
         def _rule_desc(r):
-            """Short human-readable description of a rule."""
             desc = f"{r.indicator} {r.condition}"
             if r.value is not None:
                 desc += f" {r.value}"
@@ -579,22 +1016,19 @@ def run_backtest(
                 desc += f" min {r.threshold}%"
             return desc.strip()
 
-        def _fired_rules(rules, indicators, i):
-            """Return list of rule descriptions for non-muted rules that fired."""
-            return [_rule_desc(r) for r in rules if not r.muted and eval_rule(r, indicators, i)]
+        def _fired_rules(rules, ind, i):
+            return [_rule_desc(r) for r in rules if not r.muted and eval_rule(r, ind, i)]
 
-        def _trace_rules(rules, indicators, i, label):
-            """Build per-rule evaluation detail for debug trace."""
+        def _trace_rules(rules, ind, i, label):
             details = []
             for r in rules:
                 if r.muted:
                     details.append({"rule": _rule_desc(r), "muted": True, "result": False})
                     continue
-                result = eval_rule(r, indicators, i)
-                # `or` on a pd.Series triggers `bool(series)` → ValueError. Pick explicitly.
-                ind_series = resolve_series(r, indicators)
+                result = eval_rule(r, ind, i)
+                ind_series = resolve_series(r, ind)
                 if ind_series is None:
-                    ind_series = indicators.get("close")
+                    ind_series = ind.get("close")
                 v_now = round(float(ind_series.iloc[i]), 4) if ind_series is not None and pd.notna(ind_series.iloc[i]) else None
                 v_prev = round(float(ind_series.iloc[i - 1]), 4) if ind_series is not None and i > 0 and pd.notna(ind_series.iloc[i - 1]) else None
                 details.append({
@@ -605,410 +1039,100 @@ def run_backtest(
                 })
             return details
 
-        close_arr = close.to_numpy(dtype=float, copy=False)
-        # Pre-format every bar's timestamp once (vectorized)
-        date_strs = _format_time_index(df.index, req.interval)
+        # Build buy and sell signal callables that wrap eval_rules.
+        # These capture all rule lists, HTF masks, indicators, and req so that
+        # _run_simulation stays agnostic to rule-mode details.
+        #
+        # buy_signal_fn(i, curr_regime_active) ->
+        #     (fired: bool, rules: list[str], position_direction: str | None)
+        #
+        # sell_signal_fn(i, position_direction, curr_regime_active) ->
+        #     (fired: bool, rules: list[str])
+        #
+        # .trace(i) / .trace(i, pd) methods are attached for debug trace support.
 
-        for i in range(len(df)):
-            price = close_arr[i]
-            date = date_strs[i]
-
-            # Trading hours filter (only affects entries, not exits)
-            hour_ok = True
-            if is_intraday and th and th.enabled:
-                bar_dt = df.index[i]
-                if bar_dt.tzinfo is not None:
-                    et_time = bar_dt.astimezone(pd.Timestamp.now(tz="America/New_York").tzinfo)
-                else:
-                    et_time = pd.Timestamp(bar_dt, tz="UTC").tz_convert("America/New_York")
-
-                et_time_str = et_time.strftime("%H:%M")
-                if et_time_str < th.start_time or et_time_str >= th.end_time:
-                    hour_ok = False
-                for sr in th.skip_ranges:
-                    if "-" in sr:
-                        parts = sr.split("-", 1)
-                        if parts[0].strip() <= et_time_str < parts[1].strip():
-                            hour_ok = False
-                            break
-
-            curr_regime_active = bool(regime_active_series.iloc[i]) if regime_active_series is not None else True
-
-            # Regime flip: forced exit (and optional reversal) when on_flip != "hold"
-            if i > 0 and regime_active_series is not None and on_flip != "hold":
-                if curr_regime_active != prev_regime_active and position > 0:
-                    raw_exit = price
-                    if position_direction == "short":
-                        exit_price_rf = raw_exit * (1 + drag)
-                    else:
-                        exit_price_rf = raw_exit * (1 - drag)
-                    exit_slippage_rf = abs(position * (raw_exit - exit_price_rf))
-                    commission_rf = per_leg_commission(position, req)
-                    bcost_rf = borrow_cost(position, entry_price, entry_ts, df.index[i],
-                                           position_direction, req)
-                    if position_direction == "short":
-                        pnl_rf = position * (entry_price - exit_price_rf) - commission_rf - bcost_rf
-                        capital += position * entry_price + pnl_rf
-                    else:
-                        proceeds_rf = position * exit_price_rf
-                        pnl_rf = (proceeds_rf - commission_rf) - position * entry_price
-                        capital += proceeds_rf - commission_rf
-                    exit_type_rf = "cover" if position_direction == "short" else "sell"
-                    rf_old_direction = position_direction
-                    trades.append({
-                        "type": exit_type_rf, "date": date, "price": round(exit_price_rf, 4),
-                        "shares": round(position, 4), "direction": rf_old_direction,
-                        "pnl": round(pnl_rf, 2),
-                        "pnl_pct": round(pnl_rf / (position * entry_price) * 100, 2),
-                        "stop_loss": False, "trailing_stop": False,
-                        "slippage": round(exit_slippage_rf, 2), "commission": round(commission_rf, 2),
-                        "borrow_cost": round(bcost_rf, 2), "rules": ["regime flip"],
-                        "exit_reason": "regime_flip",
-                    })
-                    if signal_trace is not None:
-                        signal_trace.append({
-                            "date": date, "price": round(price, 4), "position": "exited",
-                            "action": "REGIME_FLIP_EXIT",
-                        })
-                    position = 0.0
-                    position_direction = None
-                    entry_ts = None
-                    trail_peak = 0.0
-                    trail_stop_price = None
-                    # Regime flip is not a stop-loss; don't modify consec_sl_count
-
-                    if on_flip == "close_and_reverse":
-                        new_dir = "short" if rf_old_direction == "long" else "long"
-                        if new_dir == "short":
-                            fill_price_rf = price * (1 - drag)
-                        else:
-                            fill_price_rf = price * (1 + drag)
-                        # B25: rebind ts for new direction before trail_peak usage
-                        ts = _dir_ts(new_dir)
-                        shares_rf = (capital * _dir_size(new_dir)) / fill_price_rf
-                        commission_rf2 = per_leg_commission(shares_rf, req)
-                        entry_slippage_rf = abs(shares_rf * (fill_price_rf - price))
-                        position = shares_rf
-                        position_direction = new_dir
-                        entry_price = fill_price_rf
-                        entry_ts = df.index[i]
-                        entry_bar_idx = i
-                        capital -= shares_rf * fill_price_rf + commission_rf2
-                        trail_peak = fill_price_rf
-                        trail_stop_price = None
-                        trades.append({
-                            "type": "short" if new_dir == "short" else "buy",
-                            "date": date, "price": round(fill_price_rf, 4),
-                            "shares": round(shares_rf, 4), "direction": new_dir,
-                            "slippage": round(entry_slippage_rf, 2),
-                            "commission": round(commission_rf2, 2),
-                            "rules": ["regime flip reverse"],
-                        })
-                        if signal_trace is not None:
-                            signal_trace.append({
-                                "date": date, "price": round(price, 4), "position": "entered",
-                                "action": "REGIME_FLIP_REVERSE",
-                            })
-
-            if regime_active_series is not None:
-                prev_regime_active = curr_regime_active
-
-            if regime_active_series is None:
-                regime_ok = True
-            elif on_flip == "close_and_reverse":
-                regime_ok = True
-            else:
-                regime_ok = curr_regime_active
-
+        def _buy_signal_fn(i, curr_regime_active):
             if b23_mode:
                 if curr_regime_active:
                     active_buy = long_buy_rules_base
                     active_buy_logic = req.long_buy_logic
-                    htf_buy_gate = bool(htf_long_buy_mask.iloc[i])
+                    htf_gate = bool(htf_long_buy_mask.iloc[i])
+                    new_dir = 'long'
                 else:
                     active_buy = short_buy_rules_base
                     active_buy_logic = req.short_buy_logic
-                    htf_buy_gate = bool(htf_short_buy_mask.iloc[i])
-                buy_fires = position == 0 and hour_ok and htf_buy_gate and eval_rules(active_buy, active_buy_logic, indicators, i)
+                    htf_gate = bool(htf_short_buy_mask.iloc[i])
+                    new_dir = 'short'
+                regime_ok = True  # b23_mode uses direction-specific rules; regime gate is already baked in
+                fired = htf_gate and eval_rules(active_buy, active_buy_logic, indicators, i)
             else:
-                htf_buy_gate = bool(htf_buy_mask.iloc[i])
-                buy_fires = position == 0 and hour_ok and regime_ok and htf_buy_gate and eval_rules(buy_rules_base, req.buy_logic, indicators, i)
+                active_buy = buy_rules_base
+                htf_gate = bool(htf_buy_mask.iloc[i])
+                # Non-b23: regime gate is enforced here (mirrors original code)
+                if regime_active_series is None:
+                    regime_ok = True
+                elif on_flip == "close_and_reverse":
+                    regime_ok = True
+                else:
+                    regime_ok = curr_regime_active
+                fired = regime_ok and htf_gate and eval_rules(buy_rules_base, req.buy_logic, indicators, i)
+                active_buy = buy_rules_base
+                # Direction: follows regime on close_and_reverse, else req.direction
+                if on_flip == "close_and_reverse" and regime_active_series is not None:
+                    new_dir = req.direction if curr_regime_active else ("short" if req.direction == "long" else "long")
+                else:
+                    new_dir = req.direction
+            rules_list = _fired_rules(active_buy, indicators, i) if fired else []
+            return fired, rules_list, new_dir if fired else req.direction
+
+        def _buy_trace(i, curr_regime_active=True):
             if b23_mode:
-                sr_key = 'long' if curr_regime_active else 'short'
-                if buy_fires and skip_remaining_by_dir[sr_key] > 0:
-                    skip_remaining_by_dir[sr_key] -= 1
-                    if signal_trace is not None:
-                        signal_trace.append({
-                            "date": date, "price": round(price, 4), "position": "flat",
-                            "action": f"SKIPPED (post-stop, {skip_remaining_by_dir[sr_key]} left) [{sr_key}]",
-                        })
-                    buy_fires = False
+                # Use the same rule-set selection logic as _buy_signal_fn
+                active_buy = long_buy_rules_base if curr_regime_active else short_buy_rules_base
+                return _trace_rules(active_buy, indicators, i, "buy")
+            return _trace_rules(buy_rules_base, indicators, i, "buy")
+
+        _buy_signal_fn.trace = _buy_trace
+
+        def _sell_signal_fn(i, position_direction, curr_regime_active):
+            if b23_mode and position_direction is not None:
+                active_sell = long_sell_rules_base if position_direction == 'long' else short_sell_rules_base
+                active_sell_logic = req.long_sell_logic if position_direction == 'long' else req.short_sell_logic
+                htf_sell_gate = bool((htf_long_sell_mask if position_direction == 'long' else htf_short_sell_mask).iloc[i])
+                fired = htf_sell_gate and (eval_rules(active_sell, active_sell_logic, indicators, i) if active_sell else False)
             else:
-                if buy_fires and skip_remaining > 0:
-                    skip_remaining -= 1
-                    if signal_trace is not None:
-                        signal_trace.append({
-                            "date": date, "price": round(price, 4), "position": "flat",
-                            "action": f"SKIPPED (post-stop, {skip_remaining} left)",
-                        })
-                    buy_fires = False
+                active_sell = sell_rules_base
+                htf_sell_gate = bool(htf_sell_mask.iloc[i])
+                fired = htf_sell_gate and eval_rules(sell_rules_base, req.sell_logic, indicators, i)
+            rules_list = _fired_rules(active_sell, indicators, i) if fired else []
+            return fired, rules_list
 
-            if buy_fires:
-                # Direction follows regime when close_and_reverse is active
-                if b23_mode:
-                    position_direction = 'long' if curr_regime_active else 'short'
-                elif on_flip == "close_and_reverse" and regime_active_series is not None:
-                    position_direction = req.direction if curr_regime_active else ("short" if req.direction == "long" else "long")
-                else:
-                    position_direction = req.direction
-
-                # B25: bind per-direction trailing stop AFTER position_direction is known
-                ts = _dir_ts(position_direction)
-
-                # Dynamic sizing: reduce position after consecutive stop losses
-                effective_size = _dir_size(position_direction)
-                if b23_mode:
-                    csl = consec_sl_count_by_dir[position_direction]
-                else:
-                    csl = consec_sl_count
-                if ds and ds.enabled and csl >= ds.consec_sls:
-                    effective_size = _dir_size(position_direction) * (ds.reduced_pct / 100)
-
-                # Slippage: short entry fills lower (worse for seller), long fills higher (worse for buyer)
-                if position_direction == "short":
-                    fill_price = price * (1 - drag)
-                else:
-                    fill_price = price * (1 + drag)
-                shares = (capital * effective_size) / fill_price
-                commission = per_leg_commission(shares, req)
-                position = shares
-                entry_price = fill_price
-                entry_ts = df.index[i]
-                entry_bar_idx = i
-                capital -= shares * fill_price + commission
-                trail_peak = fill_price
-                trail_stop_price = None
-                entry_slippage = abs(shares * (fill_price - price))
-                entry_type = "short" if position_direction == "short" else "buy"
-                # In b23_mode, active_buy holds the direction-specific rule list bound
-                # above; using buy_rules here would show the hidden unified rules in
-                # trade tooltips even though they never drove the entry signal.
-                display_buy_rules = active_buy if b23_mode else buy_rules
-                trades.append({
-                    "type": entry_type, "date": date, "price": round(fill_price, 4),
-                    "shares": round(shares, 4),
-                    "direction": position_direction,
-                    "slippage": round(entry_slippage, 2),
-                    "commission": round(commission, 2),
-                    "rules": _fired_rules(display_buy_rules, indicators, i),
-                })
-                if signal_trace is not None:
-                    signal_trace.append({
-                        "date": date, "price": round(price, 4), "position": "entered",
-                        "action": "SHORT" if position_direction == "short" else "BUY",
-                        "buy_rules": _trace_rules(display_buy_rules, indicators, i, "buy"),
-                    })
-
-            elif position > 0:
-                # Update trailing stop peak and compute trail_stop_price
-                trail_hit = False
-                if ts:
-                    if position_direction == "short":
-                        # Short: track trough (mirror high→low)
-                        source_price = low.iloc[i] if ts.source == "high" else price
-                        threshold = entry_price * (1 - ts.activate_pct / 100)
-                        if not ts.activate_on_profit or source_price <= threshold:
-                            trail_peak = min(trail_peak, source_price)
-                        if ts.type == "pct":
-                            trail_stop_price = trail_peak * (1 + ts.value / 100)
-                        else:  # atr
-                            atr_val = atr.iloc[i] if atr is not None and not pd.isna(atr.iloc[i]) else 0.0
-                            trail_stop_price = trail_peak + ts.value * atr_val
-                        trail_hit = high.iloc[i] >= trail_stop_price
-                    else:
-                        source_price = high.iloc[i] if ts.source == "high" else price
-                        threshold = entry_price * (1 + ts.activate_pct / 100)
-                        if not ts.activate_on_profit or source_price >= threshold:
-                            trail_peak = max(trail_peak, source_price)
-                        if ts.type == "pct":
-                            trail_stop_price = trail_peak * (1 - ts.value / 100)
-                        else:  # atr
-                            atr_val = atr.iloc[i] if atr is not None and not pd.isna(atr.iloc[i]) else 0.0
-                            trail_stop_price = trail_peak - ts.value * atr_val
-                        trail_hit = low.iloc[i] <= trail_stop_price
-
-                # Check fixed stop loss (B25: use per-direction stop when b23_mode)
-                stop_loss_pct_eff = _dir_stop(position_direction)
-                if position_direction == "short":
-                    stop_price_limit = entry_price * (1 + stop_loss_pct_eff / 100) if (stop_loss_pct_eff and stop_loss_pct_eff > 0) else None
-                    stop_hit = stop_price_limit is not None and high.iloc[i] >= stop_price_limit
-                else:
-                    stop_price_limit = entry_price * (1 - stop_loss_pct_eff / 100) if (stop_loss_pct_eff and stop_loss_pct_eff > 0) else None
-                    stop_hit = stop_price_limit is not None and low.iloc[i] <= stop_price_limit
-
-                # Time stop: exit after N bars held (B25: use per-direction max_bars_held when b23_mode)
-                mbh_eff = _dir_mbh(position_direction)
-                time_stop_hit = mbh_eff is not None and (i - entry_bar_idx) >= mbh_eff
-
-                # Exit priority: fixed stop beats trailing stop beats time stop
-                if stop_hit:
-                    raw_exit = stop_price_limit
-                    exit_reason = "stop_loss"
-                elif trail_hit:
-                    raw_exit = trail_stop_price
-                    exit_reason = "trailing_stop"
-                elif time_stop_hit:
-                    raw_exit = price
-                    exit_reason = "time_stop"
-                else:
-                    raw_exit = price
-                    exit_reason = "signal"
-
-                # Slippage: short covers at higher price (worse), long sells at lower price (worse)
-                if position_direction == "short":
-                    exit_price = raw_exit * (1 + drag)
-                else:
-                    exit_price = raw_exit * (1 - drag)
-                if b23_mode and position_direction is not None:
-                    active_sell = long_sell_rules_base if position_direction == 'long' else short_sell_rules_base
-                    active_sell_logic = req.long_sell_logic if position_direction == 'long' else req.short_sell_logic
-                    htf_sell_gate = bool((htf_long_sell_mask if position_direction == 'long' else htf_short_sell_mask).iloc[i])
-                    sell_fired = htf_sell_gate and (eval_rules(active_sell, active_sell_logic, indicators, i) if active_sell else False)
-                else:
-                    htf_sell_gate = bool(htf_sell_mask.iloc[i])
-                    sell_fired = htf_sell_gate and eval_rules(sell_rules_base, req.sell_logic, indicators, i)
-                display_sell_rules = active_sell if b23_mode and position_direction is not None else sell_rules
-                if stop_hit or trail_hit or time_stop_hit or sell_fired:
-                    exit_slippage = abs(position * (raw_exit - exit_price))
-                    commission = per_leg_commission(position, req)
-                    bcost = borrow_cost(position, entry_price, entry_ts, df.index[i],
-                                        position_direction, req)
-                    if position_direction == "short":
-                        pnl = position * (entry_price - exit_price) - commission - bcost
-                        capital += position * entry_price + pnl
-                    else:
-                        proceeds = position * exit_price
-                        pnl = (proceeds - commission) - position * entry_price
-                        capital += proceeds - commission
-                    exit_type = "cover" if position_direction == "short" else "sell"
-                    exit_rules: list[str] = []
-                    if exit_reason == "stop_loss":
-                        exit_rules = ["stop loss"]
-                    elif exit_reason == "trailing_stop":
-                        exit_rules = ["trailing stop"]
-                    elif time_stop_hit:
-                        exit_rules = ["time stop"]
-                    else:
-                        exit_rules = _fired_rules(display_sell_rules, indicators, i)
-                    trades.append({
-                        "type": exit_type,
-                        "date": date,
-                        "price": round(exit_price, 4),
-                        "shares": round(position, 4),
-                        "direction": position_direction,
-                        "pnl": round(pnl, 2),
-                        "pnl_pct": round(pnl / (position * entry_price) * 100, 2),
-                        "stop_loss": exit_reason == "stop_loss",
-                        "trailing_stop": exit_reason == "trailing_stop",
-                        "slippage": round(exit_slippage, 2),
-                        "commission": round(commission, 2),
-                        "borrow_cost": round(bcost, 2),
-                        "rules": exit_rules,
-                    })
-                    if signal_trace is not None:
-                        action = "STOP_LOSS" if exit_reason == "stop_loss" else "TRAIL_STOP" if exit_reason == "trailing_stop" else ("COVER" if position_direction == "short" else "SELL")
-                    # B25: capture exited_direction BEFORE clearing position_direction
-                    exited_direction = position_direction
-                    position = 0.0
-                    position_direction = None
-                    entry_ts = None
-                    trail_peak = 0.0
-                    trail_stop_price = None
-                    ds_trigger = ds.trigger if ds else "sl"
-                    if b23_mode:
-                        if is_post_loss_trigger(exit_reason, ds_trigger):
-                            consec_sl_count_by_dir[exited_direction] += 1
-                        else:
-                            consec_sl_count_by_dir[exited_direction] = 0
-                        if sas and sas.enabled and is_post_loss_trigger(exit_reason, sas.trigger):
-                            skip_remaining_by_dir[exited_direction] = sas.count
-                    else:
-                        if is_post_loss_trigger(exit_reason, ds_trigger):
-                            consec_sl_count += 1
-                        else:
-                            consec_sl_count = 0
-                        if sas and sas.enabled and is_post_loss_trigger(exit_reason, sas.trigger):
-                            skip_remaining = sas.count
-                    if signal_trace is not None:
-                        signal_trace.append({
-                            "date": date, "price": round(price, 4), "position": "exited",
-                            "action": action,
-                            "sell_rules": _trace_rules(display_sell_rules, indicators, i, "sell"),
-                        })
-                elif signal_trace is not None:
-                    # In position but no sell — trace any bar where at least one sell rule fires
-                    sell_details = _trace_rules(display_sell_rules, indicators, i, "sell")
-                    if any(d["result"] for d in sell_details if not d.get("muted")):
-                        signal_trace.append({
-                            "date": date, "price": round(price, 4), "position": "holding",
-                            "action": "SELL_PARTIAL (AND not met)",
-                            "sell_rules": sell_details,
-                        })
-
-            elif signal_trace is not None and position == 0 and not b23_mode:
-                # Not in position — trace if sell rules WOULD have fired.
-                # Suppressed in b23_mode: unified sell_rules are hidden from the user;
-                # showing them in a flat-position trace would leak the hidden rule set.
+        def _sell_trace(i, position_direction):
+            if b23_mode and position_direction is not None:
+                active_sell = long_sell_rules_base if position_direction == 'long' else short_sell_rules_base
+            else:
+                active_sell = sell_rules_base
+            if not b23_mode:
                 active_sell = [r for r in sell_rules if not r.muted]
-                if active_sell and i > 0:
-                    sell_details = _trace_rules(sell_rules, indicators, i, "sell")
-                    if any(d["result"] for d in sell_details if not d.get("muted")):
-                        signal_trace.append({
-                            "date": date, "price": round(price, 4), "position": "flat",
-                            "action": "MISSED (no position)",
-                            "sell_rules": sell_details,
-                        })
+            return _trace_rules(active_sell if active_sell else sell_rules_base, indicators, i, "sell")
 
-            if position_direction == "short" and position > 0:
-                unrealized = position * (entry_price - price)
-                total_value = capital + position * entry_price + unrealized
-            else:
-                total_value = capital + (position * price if position > 0 else 0)
-            equity.append({"time": date, "value": round(total_value, 2)})
+        _sell_signal_fn.trace = _sell_trace
 
-        # Close open position at last price
-        final_price = close.iloc[-1]
-        if position_direction == "short" and position > 0:
-            unrealized = position * (entry_price - final_price)
-            final_value = capital + position * entry_price + unrealized
-        else:
-            final_value = capital + position * final_price
+        # Run the simulator loop
+        sim = _run_simulation(
+            df=df,
+            indicators=indicators,
+            buy_signal_fn=_buy_signal_fn,
+            sell_signal_fn=_sell_signal_fn,
+            req=req,
+            b23_mode=b23_mode,
+            regime_active_series=regime_active_series,
+            on_flip=on_flip,
+            date_strs=date_strs,
+        )
 
-        total_return = (final_value - req.initial_capital) / req.initial_capital * 100
-        buy_hold_return = (close.iloc[-1] - close.iloc[0]) / close.iloc[0] * 100
-
-        # Sharpe ratio (annualized, daily returns)
-        eq_values = [e["value"] for e in equity]
-        eq_series = pd.Series(eq_values)
-        daily_returns = eq_series.pct_change().dropna()
-        sharpe = float((daily_returns.mean() / daily_returns.std()) * np.sqrt(252)) if daily_returns.std() > 0 else 0
-
-        # Max drawdown
-        peak = eq_series.cummax()
-        drawdown = (eq_series - peak) / peak
-        max_drawdown = float(drawdown.min() * 100)
-
-        # Include both exit types so regime close_and_reverse (mixed long/short) counts correctly
-        sell_trades = [t for t in trades if t["type"] in ("sell", "cover")]
-        winning = [t for t in sell_trades if t.get("pnl", 0) > 0]
-        win_rate = len(winning) / len(sell_trades) * 100 if sell_trades else 0
-
-        gains = [float(t["pnl"]) for t in sell_trades if t.get("pnl", 0) > 0]
-        losses = [float(t["pnl"]) for t in sell_trades if t.get("pnl", 0) < 0]
-        gain_stats = _side_stats(gains)
-        loss_stats = _side_stats(losses)
-        pnl_distribution = [round(float(t.get("pnl", 0)), 2) for t in sell_trades]
-        edge_stats = _edge_stats(gains, losses, len(sell_trades))
+        trades = sim["trades"]
+        equity = sim["equity_curve"]
 
         # Build EMA overlay for rising_over/falling_over conditions in buy rules
         ema_overlays = []
@@ -1083,21 +1207,7 @@ def run_backtest(
             spy_corr = {"beta": None, "r_squared": None}
 
         result = {
-            "summary": {
-                "initial_capital": req.initial_capital,
-                "final_value": round(final_value, 2),
-                "total_return_pct": round(total_return, 2),
-                "buy_hold_return_pct": round(buy_hold_return, 2),
-                "num_trades": len(sell_trades),
-                "win_rate_pct": round(win_rate, 2),
-                "sharpe_ratio": round(sharpe, 3),
-                "max_drawdown_pct": round(max_drawdown, 2),
-                "gain_stats": gain_stats,
-                "loss_stats": loss_stats,
-                "pnl_distribution": pnl_distribution,
-                **edge_stats,
-                **spy_corr,
-            },
+            "summary": {**sim["summary"], **spy_corr},
             "trades": trades,
             "equity_curve": equity,
             "baseline_curve": baseline_curve,
@@ -1105,8 +1215,8 @@ def run_backtest(
         }
         if ema_overlays:
             result["ema_overlays"] = ema_overlays
-        if signal_trace is not None:
-            result["signal_trace"] = signal_trace
+        if "signal_trace" in sim:
+            result["signal_trace"] = sim["signal_trace"]
         if rule_signals:
             result["rule_signals"] = rule_signals
         if regime_active_series is not None:
