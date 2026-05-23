@@ -1,13 +1,17 @@
 /**
- * Canvas — React Flow integration for the read-only graph viewer.
+ * Canvas — React Flow integration for the graph viewer.
  *
  * Unit 4b: registers custom nodeTypes + edgeTypes.
- * Translates the Graph (from auto_render API) into React Flow nodes + edges,
- * dispatching each backend node to the correct custom renderer by category.
+ * Unit 5: wires to Zustand store when graph.readOnly === false.
  *
- * Pan/zoom enabled. Nodes are not draggable and not connectable (read-only).
+ * Translates the Graph into React Flow nodes + edges, dispatching each
+ * backend node to the correct custom renderer by category.
+ *
+ * Read-only (auto-render): pan/zoom only; nodes are not draggable/connectable.
+ * Editable (store-backed): nodesDraggable=true; drag-end calls store.moveNode.
  */
 
+import { useCallback } from 'react'
 import {
   ReactFlow,
   Background,
@@ -21,6 +25,7 @@ import {
 import type { Graph } from '../../api/nodebuilder'
 import { NODE_CATALOG } from './catalog'
 import type { BaseNodeData } from './nodes/BaseNode'
+import { useNodeBuilderStore } from './store'
 
 // ── Custom node renderers ────────────────────────────────────────────────────
 import TickerNode from './nodes/TickerNode'
@@ -80,6 +85,11 @@ interface CanvasProps {
 }
 
 export default function Canvas({ graph }: CanvasProps) {
+  const storeMoveNode = useNodeBuilderStore(s => s.moveNode)
+  const storeSetViewport = useNodeBuilderStore(s => s.setViewport)
+
+  const editable = !graph.readOnly
+
   // Translate Graph.nodes (dict[str, Node]) → RF nodes array
   // BaseNodeData extends Record<string, unknown> so it satisfies the RF constraint.
   const rfNodes: RFNode[] = Object.values(graph.nodes).map(n => {
@@ -97,7 +107,7 @@ export default function Canvas({ graph }: CanvasProps) {
       type: rfTypeFor(n.type),
       position: { x: n.position[0], y: n.position[1] },
       data,
-      draggable: false,
+      draggable: editable,
       selectable: true,
     }
   })
@@ -112,6 +122,24 @@ export default function Canvas({ graph }: CanvasProps) {
     type: 'attr',
   }))
 
+  // When in editable mode, persist node positions to the store on drag end.
+  const handleNodeDragStop = useCallback(
+    (_event: React.MouseEvent, node: RFNode) => {
+      if (!editable) return
+      storeMoveNode(node.id, [node.position.x, node.position.y])
+    },
+    [editable, storeMoveNode],
+  )
+
+  // Persist viewport changes (pan/zoom) to the store when in editable mode.
+  const handleMove = useCallback(
+    (_event: MouseEvent | TouchEvent | null, viewport: { x: number; y: number; zoom: number }) => {
+      if (!editable) return
+      storeSetViewport({ x: viewport.x, y: viewport.y, zoom: viewport.zoom })
+    },
+    [editable, storeSetViewport],
+  )
+
   return (
     <div className="nodebuilder-root" style={{ width: '100%', height: '100%', background: 'var(--nb-bg)' }}>
       <ReactFlow
@@ -119,9 +147,11 @@ export default function Canvas({ graph }: CanvasProps) {
         edges={rfEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
-        nodesDraggable={false}
-        nodesConnectable={false}
+        nodesDraggable={editable}
+        nodesConnectable={editable}
         elementsSelectable={true}
+        onNodeDragStop={editable ? handleNodeDragStop : undefined}
+        onMove={editable ? handleMove : undefined}
         fitView
         fitViewOptions={{ padding: 0.2 }}
         minZoom={0.1}
