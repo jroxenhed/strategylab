@@ -239,15 +239,19 @@ export default function Sidebar({
       <div style={styles.section}>
         <div style={styles.sectionTitle}>Data Source</div>
         <div style={styles.segmentedToggle}>
-          {(['yahoo', 'alpaca', 'ibkr'] as const).map(src => {
+          {(['yahoo', 'alpaca', 'polygon', 'ibkr'] as const).map(src => {
             const available = providers.includes(src)
             const active = dataSource === src || (src === 'alpaca' && dataSource === 'alpaca-iex')
+            const unavailableTitle =
+              src === 'ibkr' ? 'Set IBKR_HOST + IBKR_PORT in backend/.env and start IB Gateway'
+              : src === 'polygon' ? 'Set POLYGON_API_KEY in backend/.env to enable'
+              : 'Set ALPACA_API_KEY + ALPACA_SECRET_KEY in backend/.env to enable'
             return (
               <button
                 key={src}
                 onClick={() => available && onDataSourceChange(src)}
                 disabled={!available}
-                title={!available ? (src === 'ibkr' ? 'Set IBKR_HOST + IBKR_PORT in backend/.env and start IB Gateway' : 'Set ALPACA_API_KEY + ALPACA_SECRET_KEY in backend/.env to enable') : undefined}
+                title={!available ? unavailableTitle : undefined}
                 style={{
                   flex: 1,
                   padding: '6px 0',
@@ -278,7 +282,7 @@ export default function Sidebar({
             <span style={{ marginLeft: 8, fontSize: 12 }}>IEX feed <span style={{ color: 'var(--accent-green)' }}>(real-time)</span></span>
           </label>
         )}
-        {(dataSource === 'yahoo' || dataSource === 'ibkr') && ['1m','5m','15m','30m','1h','60m'].includes(interval) && (
+        {(dataSource === 'yahoo' || dataSource === 'ibkr' || dataSource === 'polygon') && ['1m','5m','15m','30m','1h','60m'].includes(interval) && (
           <label style={{ ...styles.checkRow, marginTop: 12, marginBottom: 0 }}>
             <input
               type="checkbox"

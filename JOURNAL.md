@@ -4,6 +4,16 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-05-23
+
+### F251 Polygon.io data provider
+
+- **[F251](TODO.md#f251)** Added `PolygonProvider` in `backend/shared.py` for 15y+ historical equity data (the gap that pushed this work: yfinance intraday caps at 730d/1h, Alpaca SIP starts ~2016, neither covers 15y of 1-min bars). Sync `httpx.Client` against `/v2/aggs/ticker/.../range/{multiplier}/{timespan}/{from}/{to}` with `adjusted=true`. Interval map mirrors Alpaca (1m/5m/15m/30m/1h/60m/1d/1wk/1mo; 2m/90m rejected). Pagination follows `next_url` with `apiKey` re-appended (Polygon strips it from `next_url`). Rate-limit handling is defensive — works on Starter (5 req/min) or Advanced (unlimited) unchanged: honors `Retry-After` on 429, exponential backoff on 5xx, capped 5 retries. RTH filter when `extended_hours=False` matches the Alpaca branch (Polygon includes pre/post by default). 401/403 surface as 502 "auth failed (check POLYGON_API_KEY)" without leaking the key. Registered conditionally on `POLYGON_API_KEY` env var — provider shows up in `/api/providers` only when wired.
+- **Frontend**: added `polygon` to `DataSource` type, Sidebar source-toggle button with conditional disabled-state tooltip, extended-hours toggle gated on polygon as well (it supports the flag).
+- **Verification**: `python3 -c 'import shared; ...'` with `POLYGON_API_KEY=test_dummy` confirms registration. `npm run build` clean. Live fetch verification deferred until real API key lands — explicit gap.
+- **Deferred → TODO (2 new items)**: **[F251b](TODO.md#f251b)** [medium] [infra] disk-persistent parquet OHLCV cache for Polygon — in-process TTL wipes on restart, painful on Starter's 5 req/min for repeated 15y backtests. **[F251c](TODO.md#f251c)** [easy] [arch] `polygon-crypto` sibling provider — endpoint is structurally identical, defer until crypto strategy is actually being designed.
+- **Branch**: `feat/polygon-provider` (off main).
+
 ## 2026-05-20
 
 ### F249 lightweight-charts autoSize migration completion

@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*246 / 261 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*247 / 264 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 - [F212](#f212) — [next] F210 inline-confirm browser smoke remains partially open [easy]
 
-## Open Work — 38 items
+## Open Work — 40 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -21,10 +21,10 @@ _(none open)_
 | [C](#c-strategy-summary-analytics) | Strategy Summary & Analytics | 3 | [C29](#c29)–[C31](#c31) |
 | [D](#d-bots-live-trading) | Bots (live trading) | 1 | [D24b](#d24b) |
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
-| [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 12 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F216](#f216) |
+| [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 13 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F216](#f216), [F251c](#f251c) |
 | [F · Hardening](#f-hardening) | Security, reliability, validation | 2 | [F187](#f187), [F211](#f211) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 8 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217](#f217), [F249c](#f249c), [F250](#f250) |
-| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 6 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219), [F249b](#f249b) |
+| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 7 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219), [F249b](#f249b), [F251b](#f251b) |
 
 ## A — Charts & Indicators
 
@@ -113,6 +113,8 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f245b"></a> **F245b** Indicator pane drag-reorder — drag handle in `IndicatorList.tsx`; reorder writes a new array order; chart pane order follows. Drive sub-pane unmount/remount via React conditional render + stable `key` per indicator id (NOT imperative `chart.remove()` — F218-class repaint risk). Depends on F245a. See plan F-UX26b. [medium] [arch] (resolved 2026-05-16)
 - [x] <a id="f246"></a> **F246** Single-HTF rules in strategy builder — add optional `Rule.timeframe` field; partition entry/exit rules by TF (approach c, mirrors regime); evaluate per-TF, AND results. Use `align_htf_to_ltf` from `shared.py`. WFA must strip multi-TF rules (extend `model_copy` in `routes/walk_forward.py:298` to traverse all rule lists). v1 does NOT render HTF series on base chart. See plan F-UX27a. [hard] [arch] (resolved 2026-05-16)
 - [x] <a id="f248"></a> **F248** Collapsible chart panel — chevron in chart-panel header collapses chart; persist to localStorage. Profile post-F215 idle CPU FIRST: <1.5% → lite (cancel AbortController + `display:none`, ~45min); ≥1.5% → full (React conditional render unmounts `<Chart/>` + `SubPane`s, ~3h). Do NOT use imperative `chart.remove()` for full-unmount; let React drive. See plan F-UX29. [medium] [arch] (resolved 2026-05-16)
+- [x] <a id="f251"></a> **F251** Polygon.io data provider — adds `PolygonProvider` in `backend/shared.py` backed by `/v2/aggs/ticker/.../range/{multiplier}/{timespan}/{from}/{to}`. Handles all StrategyLab intervals (`1m`/`5m`/`15m`/`30m`/`1h`/`60m`/`1d`/`1wk`/`1mo`; rejects `2m`/`90m` to match Alpaca). Defensive rate-limiting: respects `Retry-After` on 429, exponential backoff on 5xx, capped at 5 retries — works on Starter (5 req/min) or Advanced (unlimited) without code changes. Paginates via `next_url` with up to 50k bars/page so 15y of intraday is one streaming fetch. RTH filter mirrors the Alpaca branch when `extended_hours=False`. Adjusted=true (split+div) to match yfinance default. Registered only when `POLYGON_API_KEY` env var is set; appears in `/api/providers` automatically. Sidebar source toggle gains a "Polygon" tab with disabled-state tooltip; not subject to the yfinance intraday clamp. Smoke-tested registration + interval-map; live fetch verification pending API key. Polygon docs: `https://polygon.io/docs/rest/stocks/aggregates/custom-bars`. [medium] [arch] (resolved 2026-05-23)
+- [ ] <a id="f251c"></a> **F251c** Polygon crypto provider as `polygon-crypto` — Polygon's crypto aggregates endpoint is structurally identical (`/v2/aggs/ticker/X:BTCUSD/range/...`); add a sibling `PolygonCryptoProvider` (or a `PolygonProvider(asset='crypto')` flag) registered when `POLYGON_API_KEY` + a `POLYGON_ENABLE_CRYPTO=1` env flag are set. Skip the RTH filter (24/7 market). Sidebar source toggle gets a sub-toggle like the Alpaca-IEX one. Defer until a crypto strategy is actually being designed — speculative today. [easy] [arch] (added 2026-05-23, from F251)
 
 ### F · Hardening
 - [x] <a id="f49"></a> **F49** `useInstanceIndicators` swallows HTF query errors — `Object.assign(merged, q.data)` silently skips when `q.data` is `undefined` (error state). User sees a chart missing an indicator with no explanation. Add `isError`/`errorMessage` to the hook's return and surface in `SubPane.tsx` (e.g. red "Failed to load" overlay, mirroring the loading overlay). Pattern is pre-existing but exposed more visibly by A14a — now that loading state is shown, the asymmetry of "loading state visible / error state silent" is more jarring. [medium] (from PR #28 reliability review) [hardening] (resolved 2026-05-13)
@@ -231,3 +233,4 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f207"></a> **F207** Frontend test infra: 11 pre-existing failures in `WalkForwardPanel.test.tsx` (10) + `BotCard.test.tsx` (1) predate the 2026-05-15 bundles — `WalkForwardPanel` failures look like baseURL/MSW infra issues (`waitForWrapper` timing out on `findByText` after `fireEvent.click`); BotCard's single failure is uninvestigated. The journal repeatedly references these as "pre-existing" but they've persisted long enough to mask future regressions. Triage: stash all open changes, run `npm run test -- --run src/features/strategy/WalkForwardPanel.test.tsx -t "renders result table"` against a clean main, capture the exact failure mode, fix the test infra (likely a missing MSW setup or fake-baseURL assertion). [easy] [testing] (resolved 2026-05-15)
 - [ ] <a id="f219"></a> **F219** Idle-rAF canary smoke test — F218 surfaced a class of bug (perpetual repaint loop while idle) that is invisible to unit tests, invisible to crisp screenshots, and only manifests as elevated CPU + naked-eye flicker. A trivial chrome-devtools-mcp probe — hook `requestAnimationFrame` for 500ms after chart mount with no user input, assert `< 5` calls — would have caught F218 the moment it landed. Real work: add to the overnight headless render probe (F51) once that exists, or as a standalone post-build check. Also worth: a MutationObserver canary that counts canvas-attribute mutations over 1s (zero expected). Both run in <2s. Catches future regressions to autoSize handling and any new v4→v5 lightweight-charts pattern drift. [easy] [testing] (added 2026-05-15)
 - [ ] <a id="f249b"></a> **F249b** Layout mounting tests for StrategyComparison and WalkForwardPanel — add frontend tests (Vitest + React Testing Library) to ensure createChart instances are initialized with the proper `autoSize: true` configuration and no width/height properties. [easy] [testing]
+- [ ] <a id="f251b"></a> **F251b** Disk-persistent OHLCV cache for Polygon — the in-process TTL cache on `_fetch()` is wiped on server restart, so repeated 15y daily backtests after a restart re-hit Polygon (slow + counts toward rate limit on Starter). Add a parquet-on-disk cache keyed by `(provider, ticker, interval, start, end, extended_hours)` under `backend/data/ohlcv_cache/`; check disk before issuing the API call, write on successful fetch. Optional `?force_refresh=1` query param to bypass for live-data flows. Daily/historical only — skip intraday near current day (cache poisons mid-day fetches with stale tails). [medium] [infra] (added 2026-05-23, from F251)

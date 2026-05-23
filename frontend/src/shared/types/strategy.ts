@@ -1,7 +1,7 @@
 import type { TimeValue } from './chart'
 import type { IndicatorInstance } from './indicators'
 
-export type DataSource = 'yahoo' | 'alpaca' | 'alpaca-iex' | 'ibkr'
+export type DataSource = 'yahoo' | 'alpaca' | 'alpaca-iex' | 'polygon' | 'ibkr'
 
 export interface Rule {
   indicator: 'macd' | 'rsi' | 'price' | 'ma' | 'bb' | 'atr' | 'atr_pct' | 'volume' | 'stochastic' | 'adx'

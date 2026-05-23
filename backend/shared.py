@@ -276,6 +276,143 @@ class IBKRDataProvider:
         return df
 
 
+# ---------------------------------------------------------------------------
+# Polygon.io data provider
+# ---------------------------------------------------------------------------
+
+# Polygon's /v2/aggs endpoint uses (multiplier, timespan) tuples.
+_POLYGON_INTERVAL_MAP: dict[str, tuple[int, str]] = {
+    "1m": (1, "minute"),
+    "5m": (5, "minute"),
+    "15m": (15, "minute"),
+    "30m": (30, "minute"),
+    "1h": (1, "hour"),
+    "60m": (1, "hour"),
+    "1d": (1, "day"),
+    "1wk": (1, "week"),
+    "1mo": (1, "month"),
+}
+
+_POLYGON_UNSUPPORTED = {"2m", "90m"}
+
+_POLYGON_BASE = "https://api.polygon.io"
+
+
+class PolygonProvider:
+    """DataProvider backed by Polygon.io aggregates endpoint.
+
+    Polygon returns at most 50,000 bars per page; follow `next_url` to paginate.
+    Free/Starter tiers rate-limit at 5 req/min and respond 429 with a
+    `Retry-After` header — honor it and back off exponentially on 5xx.
+    """
+
+    def __init__(self, api_key: str, timeout: float = 30.0, max_retries: int = 5):
+        self._api_key = api_key
+        self._timeout = timeout
+        self._max_retries = max_retries
+
+    def fetch(self, ticker: str, start: str, end: str, interval: str, extended_hours: bool = False) -> pd.DataFrame:
+        _data_rate_counter.record()
+        if interval in _POLYGON_UNSUPPORTED:
+            raise HTTPException(status_code=400, detail=f"Interval {interval} not supported by Polygon")
+
+        mt = _POLYGON_INTERVAL_MAP.get(interval)
+        if mt is None:
+            raise HTTPException(status_code=400, detail=f"Interval {interval} not supported by Polygon")
+        multiplier, timespan = mt
+
+        # Polygon accepts YYYY-MM-DD or ms-epoch. Use date strings — pd.Timestamp
+        # normalises both date-only and datetime input strings.
+        start_str = pd.Timestamp(start).strftime("%Y-%m-%d")
+        end_str = pd.Timestamp(end).strftime("%Y-%m-%d")
+
+        url = f"{_POLYGON_BASE}/v2/aggs/ticker/{ticker.upper()}/range/{multiplier}/{timespan}/{start_str}/{end_str}"
+        params = {"adjusted": "true", "sort": "asc", "limit": 50000, "apiKey": self._api_key}
+
+        import httpx
+        rows: list[dict] = []
+        with httpx.Client(timeout=self._timeout) as client:
+            next_url: str | None = url
+            next_params: dict | None = params
+            while next_url is not None:
+                data = self._request_with_backoff(client, next_url, next_params)
+                for r in data.get("results") or []:
+                    rows.append({
+                        "Open": r["o"],
+                        "High": r["h"],
+                        "Low": r["l"],
+                        "Close": r["c"],
+                        "Volume": r["v"],
+                        # `t` is unix ms (UTC); convert downstream.
+                        "timestamp": r["t"],
+                    })
+                # Polygon's next_url includes most query params but not apiKey.
+                nxt = data.get("next_url")
+                if nxt:
+                    next_url = nxt
+                    next_params = {"apiKey": self._api_key}
+                else:
+                    next_url = None
+                    next_params = None
+
+        if not rows:
+            raise HTTPException(status_code=404, detail=f"No data for {ticker}")
+
+        df = pd.DataFrame(rows)
+        df.index = pd.to_datetime(df.pop("timestamp"), unit="ms", utc=True)
+
+        # Polygon intraday aggregates include extended-hours bars — filter to
+        # RTH when not requested. Mirrors the Alpaca branch.
+        if not extended_hours and interval in _INTRADAY_INTERVALS:
+            et = df.index.tz_convert("America/New_York")
+            rth = (et.time >= pd.Timestamp("09:30").time()) & (et.time < pd.Timestamp("16:00").time())
+            df = df.loc[rth]
+            if df.empty:
+                raise HTTPException(status_code=404, detail=f"No RTH data for {ticker}")
+
+        # Strip tz to match the other providers (yahoo/alpaca return naive index
+        # after pd.to_datetime); downstream code attaches tz where it needs.
+        df.index = df.index.tz_convert(None) if df.index.tz is not None else df.index
+        return df
+
+    def _request_with_backoff(self, client, url: str, params: dict | None) -> dict:
+        """GET with exponential backoff on 429/5xx. Honors Retry-After."""
+        import time as _time
+        for attempt in range(self._max_retries):
+            try:
+                resp = client.get(url, params=params)
+            except Exception as e:
+                if attempt == self._max_retries - 1:
+                    logger.exception("Polygon request failed: %s", url)
+                    raise HTTPException(status_code=502, detail="Polygon fetch failed")
+                _time.sleep(min(2 ** attempt, 30))
+                continue
+
+            if resp.status_code == 200:
+                return resp.json()
+            if resp.status_code == 401 or resp.status_code == 403:
+                raise HTTPException(status_code=502, detail="Polygon auth failed (check POLYGON_API_KEY)")
+            if resp.status_code == 404:
+                # No data for this window — return empty results so the caller
+                # raises the standard 404 after pagination ends.
+                return {"results": [], "next_url": None}
+            if resp.status_code == 429 or resp.status_code >= 500:
+                retry_after = resp.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        delay = float(retry_after)
+                    except ValueError:
+                        delay = 2 ** attempt
+                else:
+                    delay = 2 ** attempt
+                _time.sleep(min(delay, 60))
+                continue
+            # Other 4xx — surface as upstream error without leaking body.
+            logger.warning("Polygon unexpected status %s for %s", resp.status_code, url)
+            raise HTTPException(status_code=502, detail=f"Polygon error {resp.status_code}")
+        raise HTTPException(status_code=502, detail="Polygon rate-limit retries exhausted")
+
+
 def _create_alpaca_client():
     """Create an Alpaca StockHistoricalDataClient from env vars. Returns None if no keys."""
     api_key = os.environ.get("ALPACA_API_KEY", "").strip()
@@ -301,6 +438,11 @@ _alpaca_client = _create_alpaca_client()
 if _alpaca_client is not None:
     _providers["alpaca"] = AlpacaProvider(_alpaca_client, feed='sip')
     _providers["alpaca-iex"] = AlpacaProvider(_alpaca_client, feed='iex')
+
+# F174: WORKER-SAFE — env-var read + pure httpx.Client; no global mutable state.
+_polygon_api_key = os.environ.get("POLYGON_API_KEY", "").strip()
+if _polygon_api_key:
+    _providers["polygon"] = PolygonProvider(_polygon_api_key)
 
 
 # F174: WORKER-SAFE — TradingClient construction also reads env vars and is a
