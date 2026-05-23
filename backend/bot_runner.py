@@ -311,10 +311,25 @@ class BotRunner(RegimeMixin, ExitsMixin):
             import numpy as np
             import pandas as _pd
 
-            vol_series = df.get('Volume', _pd.Series(0, index=df.index))
+            volume_missing = 'Volume' not in df.columns
+            vol_series = df['Volume'] if not volume_missing else _pd.Series(0, index=df.index)
             ohlcv = OHLCVSeries(
                 close=df['Close'], high=df['High'], low=df['Low'], volume=vol_series
             )
+            # F6: graph compares against @volume become silent zeros if the
+            # provider didn't return a Volume column. Warn so the operator
+            # notices instead of trading on bogus data.
+            if volume_missing:
+                references_volume = any(
+                    "@volume" in op.reads for op in program.per_bar_program
+                )
+                if references_volume:
+                    self._log(
+                        "WARN",
+                        f"Graph references @volume but DataFrame lacks Volume column "
+                        f"(provider={cfg.source}); zero-filling — comparisons against "
+                        f"@volume will be False.",
+                    )
             try:
                 indicator_attrs = await self._run_in_executor(
                     lambda: compute_indicators_from_specs(program.indicator_specs, ohlcv)

@@ -233,7 +233,37 @@ export function spliceNodeOntoWire(
   const A = wire.from
   const B = wire.to
 
+  if (A === nodeId || B === nodeId) {
+    // Splicing a node into its own incident wire would create a self-loop.
+    throw new Error(
+      `spliceNodeOntoWire: nodeId ${nodeId} is already an endpoint of wire ${wireId}`,
+    )
+  }
+
+  // F7: reject splices that would form a cycle. If nodeId already has any
+  // path back to A (via its other existing wires), inserting A→nodeId
+  // closes A→nodeId→…→A. Likewise nodeId→B is safe only if B has no path
+  // back to nodeId. Check against the graph with `wire` removed so the
+  // existing A→B edge doesn't trivially block the second leg.
   const withoutWire = graph.wires.filter(w => w.id !== wireId)
+  const graphMinusWire: Graph = { ...graph, wires: withoutWire }
+  if (wouldCreateCycle(graphMinusWire, A, nodeId)) {
+    throw new Error(
+      `spliceNodeOntoWire: inserting ${nodeId} into ${wireId} (${A}→${B}) would create a cycle via ${A}→${nodeId}`,
+    )
+  }
+  const graphAfterFirstLeg: Graph = {
+    ...graphMinusWire,
+    wires: [
+      ...graphMinusWire.wires,
+      { id: _genId(), from: A, to: nodeId, attr: wire.attr ?? null },
+    ],
+  }
+  if (wouldCreateCycle(graphAfterFirstLeg, nodeId, B)) {
+    throw new Error(
+      `spliceNodeOntoWire: inserting ${nodeId} into ${wireId} (${A}→${B}) would create a cycle via ${nodeId}→${B}`,
+    )
+  }
 
   const newWires: GraphWire[] = [
     { id: _genId(), from: A, to: nodeId, attr: wire.attr ?? null },

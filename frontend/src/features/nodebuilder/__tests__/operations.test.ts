@@ -353,3 +353,39 @@ describe('wouldCreateCycle', () => {
     expect(wouldCreateCycle(g, 'D', 'A')).toBe(false)
   })
 })
+
+// ---------------------------------------------------------------------------
+// F7 review finding — spliceNodeOntoWire must reject cycle-creating splices
+// ---------------------------------------------------------------------------
+describe('spliceNodeOntoWire — F7 cycle guard', () => {
+  it('rejects splicing a node that is already an endpoint of the wire (self-loop)', () => {
+    const g = makeGraph(
+      [makeNode('A'), makeNode('B')],
+      [makeWire('w1', 'A', 'B')],
+    )
+    // Splice A into wire A→B → A→A self-loop is nonsense
+    expect(() => spliceNodeOntoWire(g, 'A', 'w1')).toThrow(/already an endpoint/)
+  })
+
+  it('rejects a splice that would create a cycle via an existing path', () => {
+    // Graph: A→B, B→C, C→D. Splicing B into wire C→D would add C→B + B→D,
+    // creating cycle B→C→B.
+    const g = makeGraph(
+      [makeNode('A'), makeNode('B'), makeNode('C'), makeNode('D')],
+      [makeWire('w1', 'A', 'B'), makeWire('w2', 'B', 'C'), makeWire('w3', 'C', 'D')],
+    )
+    expect(() => spliceNodeOntoWire(g, 'B', 'w3')).toThrow(/cycle/)
+  })
+
+  it('happy path: splice a fresh node onto a wire', () => {
+    const g = makeGraph(
+      [makeNode('A'), makeNode('B'), makeNode('X')],
+      [makeWire('w1', 'A', 'B')],
+    )
+    const out = spliceNodeOntoWire(g, 'X', 'w1')
+    // Original w1 removed; A→X and X→B added.
+    expect(out.wires.find(w => w.id === 'w1')).toBeUndefined()
+    expect(out.wires.some(w => w.from === 'A' && w.to === 'X')).toBe(true)
+    expect(out.wires.some(w => w.from === 'X' && w.to === 'B')).toBe(true)
+  })
+})
