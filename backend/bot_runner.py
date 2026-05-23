@@ -283,7 +283,18 @@ class BotRunner(RegimeMixin, ExitsMixin):
 
         if cfg.kind == "graph":
             if cfg.graph is None:
-                raise RuntimeError(f"Bot {cfg.bot_id!r} kind=graph but graph is None")
+                # Permanent error: a kind=graph bot with no graph cannot
+                # recover by retrying. Mirror the structural-IBKR-error path:
+                # set status=error + pause_reason so the supervisor loop
+                # surfaces a pause rather than burning MAX_CONSEC_ERRORS
+                # retries against an unresolvable config. (Soft-warn at
+                # BotConfig validation is preserved so stop/edit/start can
+                # transiently observe graph=None.)
+                self.state.status = "error"
+                self.state.pause_reason = "invalid config: kind=graph but graph is None"
+                self.state.error_message = self.state.pause_reason
+                self.manager.save()
+                return
             # Compute hash; recompile only when it differs from the cached hash
             import hashlib, json as _json
             graph_dump = _json.dumps(cfg.graph.model_dump(mode='json'), sort_keys=True)

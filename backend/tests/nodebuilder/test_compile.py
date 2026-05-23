@@ -310,3 +310,65 @@ def test_settings_extracted():
     assert setting_map.get("position_size") == pytest.approx(0.5)
     assert setting_map.get("stop_loss") == pytest.approx(5.0)
     assert setting_map.get("slippage_bps") == pytest.approx(3.0)
+
+
+# ---------------------------------------------------------------------------
+# F1 / F2 review findings — wire.attr resolution + crossover guard
+# ---------------------------------------------------------------------------
+
+def test_logic_node_honors_multi_output_wire_attr():
+    """A NOT/AND wired from MACD.@macd_signal must read @macd_signal, not @macd_line.
+
+    (Review finding F1: prior to fix, _inbound_attrs always resolved to the
+    upstream node's primary write attribute, silently swallowing port-level
+    selection on multi-output indicators.)
+    """
+    nodes = {
+        "/ticker": _node("/ticker", "ticker"),
+        "/macd": _node("/macd", "macd", {"fast": 12, "slow": 26, "signal": 9}),
+        "/not_macd_signal": _node("/not_macd_signal", "not"),
+        "/cmp": _node("/cmp", "below", {"threshold": 0.0}),
+        "/entry": _node("/entry", "entry"),
+    }
+    wires = [
+        _wire("w1", "/ticker", "/macd"),
+        # Critical: this wire carries @macd_signal, not the primary @macd_line.
+        Wire(**{"id": "w2", "from": "/macd", "to": "/not_macd_signal",
+                "attr": "@macd_signal"}),
+        # The NOT op writes a derived @bool_N — feed it through a comparison
+        # before Entry so the boolean-input invariant is satisfied.
+        _wire("w3", "/not_macd_signal", "/cmp"),
+        _wire("w4", "/cmp", "/entry"),
+    ]
+    g = _make_graph(nodes, wires)
+    prog = nb_compile(g)
+
+    # Find the NOT op in the program; its reads should include @macd_signal.
+    not_op = next(op for op in prog.per_bar_program if op.node_path == "/not_macd_signal")
+    assert "@macd_signal" in not_op.reads, (
+        f"Expected NOT to read @macd_signal (the named wire.attr), got {not_op.reads}"
+    )
+
+
+def test_crossover_on_derived_signal_rejected():
+    """Crossovers need iloc[i-1]; per-bar derived attrs only get iloc[i] populated.
+
+    (Review finding F2: silently never-firing crossovers on op outputs.)
+    """
+    # Build Ticker → RSI → Below(30) → [crosses_above on the resulting bool] → Entry
+    nodes = {
+        "/ticker": _node("/ticker", "ticker"),
+        "/rsi": _node("/rsi", "rsi", {"period": 14, "type": "sma"}),
+        "/below": _node("/below", "below", {"threshold": 30.0}),
+        "/cross": _node("/cross", "crosses_above", {"threshold": 0.5}),
+        "/entry": _node("/entry", "entry"),
+    }
+    wires = [
+        _wire("w1", "/ticker", "/rsi"),
+        _wire("w2", "/rsi", "/below"),
+        _wire("w3", "/below", "/cross"),  # @bool_N → crosses_above (FORBIDDEN)
+        _wire("w4", "/cross", "/entry"),
+    ]
+    g = _make_graph(nodes, wires)
+    with pytest.raises(TypeError, match="derived signal"):
+        nb_compile(g)

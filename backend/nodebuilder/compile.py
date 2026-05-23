@@ -110,8 +110,34 @@ def _make_not_fn(input_attr: str):
 # Wire resolution helpers
 # ---------------------------------------------------------------------------
 
+# Multi-output indicator sub-attrs that callers may select via wire.attr
+# instead of getting the primary @write. Wire labels matching these names
+# are treated as explicit port selectors. Other wire.attr values (e.g.
+# "@bool", "@rsi", "@close") are generic labels and we fall back to
+# attr_written_by, since the per-bar op output keys are numbered
+# (@bool_1, @bool_2, ...) and don't match those labels.
+_MULTI_OUTPUT_SUBATTRS = frozenset({
+    "@macd_line", "@macd_signal", "@macd_histogram",
+    "@bb_upper", "@bb_middle", "@bb_lower",
+})
+
+
 def _inbound_attrs(graph: Graph, node_path: str, attr_written_by: dict[str, str]) -> list[str]:
-    """Return the list of @-attr names written by the nodes that wire INTO node_path."""
+    """Return the @-attr names flowing INTO *node_path*.
+
+    Wires whose ``wire.attr`` selects a specific sub-output of a multi-output
+    indicator (e.g. ``@macd_signal``, ``@bb_upper``) honor that selection so
+    downstream nodes can compare against the non-primary output. Wires with
+    generic labels (``@close``, ``@rsi``, ``@bool``) fall back to the
+    upstream node's recorded write attribute — necessary because per-bar
+    op outputs are stored under numbered keys (``@bool_1``, ``@bool_2``)
+    that don't match the wire label.
+
+    This resolution mirrors the ComparisonNode dispatcher (historically the
+    only consumer of wire.attr); applying it uniformly here prevents a user
+    from wiring ``MACD.@macd_signal`` into NOT/AND/OR/Entry and silently
+    receiving ``@macd_line``.
+    """
     result = []
     for wire in graph.wires:
         if wire.to_path == node_path:
@@ -119,9 +145,12 @@ def _inbound_attrs(graph: Graph, node_path: str, attr_written_by: dict[str, str]
             src_node = graph.nodes.get(src)
             if src_node is None:
                 continue
-            written = attr_written_by.get(src)
-            if written:
-                result.append(written)
+            if wire.attr in _MULTI_OUTPUT_SUBATTRS:
+                result.append(wire.attr)
+            else:
+                written = attr_written_by.get(src)
+                if written:
+                    result.append(written)
     return result
 
 
@@ -240,15 +269,15 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
             if node.bypass:
                 continue
 
-            # Collect the two inbound attrs; wires come in order they were added.
-            # Priority: if the wire carries an explicit attr (e.g. "@macd_signal"),
-            # use it directly — the evaluator stores multi-output sub-attrs under
-            # those canonical names.  Fallback to attr_written_by for wires without
-            # an explicit attr.
+            # Collect the two inbound attrs. Mirrors _inbound_attrs: only
+            # multi-output sub-attrs (e.g. @macd_signal, @bb_upper) are
+            # honored as explicit port selectors; generic labels like
+            # @close / @rsi / @bool fall back to attr_written_by so per-bar
+            # op outputs (numbered @bool_N keys) resolve correctly.
             inbound: list[str] = []
             for wire in graph.wires:
                 if wire.to_path == node_path:
-                    if wire.attr and wire.attr.startswith("@"):
+                    if wire.attr in _MULTI_OUTPUT_SUBATTRS:
                         inbound.append(wire.attr)
                     else:
                         src = wire.from_path
@@ -258,6 +287,22 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
 
             params = dict(node.params) if node.params else {}
             threshold = params.get("threshold")
+
+            # T2 constraint: crossover comparisons need history (iloc[i-1]).
+            # Indicator/raw attrs (@close, @rsi, @macd_line ...) are full-length
+            # Series; per-bar derived attrs (@bool_N, written by other comparison
+            # /logic ops) only get iloc[i] populated at run time, so iloc[i-1] is
+            # NaN every tick → crossover silently never fires. Reject at compile.
+            if node_type in ("crosses_above", "crosses_below"):
+                for a in inbound:
+                    if a.startswith("@bool_"):
+                        raise TypeError(
+                            f"Crossover node {node_path!r} reads from a derived "
+                            f"signal ({a!r}). Crossovers require indicator or raw "
+                            f"OHLCV inputs at T2; comparing per-bar derived booleans "
+                            f"is unsupported (no history). Use AND/OR over plain "
+                            f"comparisons, or land Signal Processing nodes in T3."
+                        )
 
             if len(inbound) >= 2:
                 left_attr, right_attr = inbound[0], inbound[1]
