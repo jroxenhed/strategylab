@@ -14,17 +14,19 @@ import math
 import os
 import uuid
 from dataclasses import dataclass, field
+from typing import Any
 
 logger = logging.getLogger(__name__)
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from fileutil import atomic_write_text
 from slippage import slippage_cost_bps, fill_bias_bps
 
 from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest, RegimeConfig, LogicField, DirectionField, BoundedRuleList, OptionalBoundedRuleList, SymbolField, normalize_symbol, Interval, IntervalField
+from nodebuilder.models import Graph
 from routes.backtest import run_backtest
 from signal_engine import migrate_rule, Rule
 from shared import _fetch
@@ -92,6 +94,8 @@ class BotConfig(BaseModel):
     long_position_size: Optional[float] = None
     short_position_size: Optional[float] = None
     borrow_rate_annual: float = Field(default=0.5, ge=0)
+    kind: Literal["rule", "graph"] = "rule"  # default "rule" for existing bots.json safety
+    graph: Optional[Graph] = None
 
     @field_validator('long_position_size', 'short_position_size', mode='before')
     @classmethod
@@ -99,6 +103,14 @@ class BotConfig(BaseModel):
         if v is None:
             return v
         return max(0.01, min(1.0, v))
+
+    @model_validator(mode='after')
+    def _validate_graph_kind(self):
+        # Soft validation: WARN, do not raise. Required so stop+edit+start
+        # transitions don't hard-fail.
+        if self.kind == "graph" and self.graph is None:
+            logger.warning("BotConfig kind=graph but graph is None (id=%s)", getattr(self, 'bot_id', '<unknown>'))
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +161,10 @@ class BotState:
     position_direction: Optional[str] = None  # direction of current open position (None when flat)
     pending_regime_flip: bool = False          # True = close failed last tick, retry next tick
     was_running: bool = False                  # True if bot was running when server last restarted
+
+    # U9: graph-mode runtime cache (NOT persisted to bots.json)
+    graph_hash: Optional[str] = None          # SHA-256 of last compiled graph; triggers recompile on change
+    compiled_program: Optional[Any] = None    # CompiledProgram — Any to avoid circular import; rebuilt on first tick
 
     def append_slippage_bps(self, bps: float) -> None:
         """Append a slippage sample and cap the list at 1000 to prevent unbounded growth."""
@@ -528,6 +544,7 @@ class BotManager:
                 "position_direction": state.position_direction,
                 "pending_regime_flip": state.pending_regime_flip,
                 "was_running": state.was_running,
+                "kind": config.kind,
             })
         return result
 

@@ -5,7 +5,13 @@ import { apiErrorDetail } from '../../shared/utils/errors'
 import { btnStyle } from './ui'
 
 const SAVED_KEY = 'strategylab-saved-strategies'
+const SAVED_GRAPHS_KEY = 'strategylab-saved-graphs'
 const INTERVALS = ['1m', '5m', '15m', '30m', '1h']
+
+interface SavedGraph {
+  name: string
+  graph: object
+}
 
 export const sectionStyle: React.CSSProperties = {
   background: '#161b22',
@@ -41,6 +47,10 @@ export default function AddBotBar({
   const [maxDrawdownPct, setMaxDrawdownPct] = useState('')
   const [error, setError] = useState('')
   const [adding, setAdding] = useState(false)
+  // Source: "rule" (strategy rules) or "graph" (node graph)
+  const [source, setSource] = useState<'rule' | 'graph'>('rule')
+  const [savedGraphs, setSavedGraphs] = useState<SavedGraph[]>([])
+  const [selectedGraphIdx, setSelectedGraphIdx] = useState(-1)
 
   const loadStrategies = () => {
     try {
@@ -49,8 +59,16 @@ export default function AddBotBar({
     } catch {}
   }
 
+  const loadGraphs = () => {
+    try {
+      const raw = localStorage.getItem(SAVED_GRAPHS_KEY)
+      if (raw) setSavedGraphs(JSON.parse(raw))
+    } catch {}
+  }
+
   useEffect(() => {
     loadStrategies()
+    loadGraphs()
     // Check for pending spawn from Discovery tab
     try {
       const pending = localStorage.getItem('strategylab-pending-spawn')
@@ -83,7 +101,8 @@ export default function AddBotBar({
   }
 
   const available = fund?.available ?? 0
-  const canAdd = fund && fund.bot_fund > 0 && available > 0 && selectedIdx >= 0 && symbol && allocation
+  const canAdd = fund && fund.bot_fund > 0 && available > 0 && symbol && allocation &&
+    (source === 'rule' ? selectedIdx >= 0 : selectedGraphIdx >= 0)
 
   const handleAdd = async () => {
     if (adding) return
@@ -91,43 +110,72 @@ export default function AddBotBar({
     const alloc = parseFloat(allocation)
     if (isNaN(alloc) || alloc <= 0) { setError('Enter a valid allocation'); return }
     if (alloc > available) { setError(`Max available: ${fmtUsd(available)}`); return }
-    const s = strategies[selectedIdx]
     setAdding(true)
     try {
-      const hasRegime = !!(s.regime && s.regime.enabled)
-      await onAdd({
-        strategy_name: s.name,
-        symbol: symbol.toUpperCase(),
-        interval,
-        buy_rules: s.buyRules,
-        sell_rules: s.sellRules,
-        buy_logic: s.buyLogic ?? 'AND',
-        sell_logic: s.sellLogic ?? 'AND',
-        // Dual rule sets (for regime bots with B23 dual strategies)
-        long_buy_rules: s.longBuyRules ?? null,
-        long_sell_rules: s.longSellRules ?? null,
-        long_buy_logic: s.longBuyLogic ?? 'AND',
-        long_sell_logic: s.longSellLogic ?? 'AND',
-        short_buy_rules: s.shortBuyRules ?? null,
-        short_sell_rules: s.shortSellRules ?? null,
-        short_buy_logic: s.shortBuyLogic ?? 'AND',
-        short_sell_logic: s.shortSellLogic ?? 'AND',
-        allocated_capital: alloc,
-        position_size: 1.0,
-        stop_loss_pct: typeof s.stopLoss === 'number' ? s.stopLoss : null,
-        max_bars_held: typeof s.maxBarsHeld === 'number' ? s.maxBarsHeld : null,
-        trailing_stop: s.trailingEnabled ? s.trailingConfig : null,
-        dynamic_sizing: s.dynamicSizing ?? null,
-        skip_after_stop: s.skipAfterStop ?? null,
-        trading_hours: s.tradingHours ?? null,
-        slippage_bps: typeof s.slippageBps === 'number' ? s.slippageBps : 2.0,
-        max_spread_bps: maxSpreadBps ? parseFloat(maxSpreadBps) || null : null,
-        drawdown_threshold_pct: maxDrawdownPct ? parseFloat(maxDrawdownPct) || null : null,
-        data_source: dataSource,
-        direction: hasRegime ? (s.direction ?? direction) : direction,
-        broker,
-        regime: hasRegime ? s.regime : null,
-      })
+      if (source === 'graph') {
+        // Graph mode: post kind=graph + graph payload; no buy/sell rules needed
+        const g = savedGraphs[selectedGraphIdx]
+        await onAdd({
+          strategy_name: g.name,
+          symbol: symbol.toUpperCase(),
+          interval,
+          kind: 'graph',
+          graph: g.graph,
+          // Stub rule arrays required by BotConfig schema (empty)
+          buy_rules: [],
+          sell_rules: [],
+          buy_logic: 'AND',
+          sell_logic: 'AND',
+          long_buy_rules: null,
+          long_sell_rules: null,
+          short_buy_rules: null,
+          short_sell_rules: null,
+          allocated_capital: alloc,
+          position_size: 1.0,
+          slippage_bps: 2.0,
+          max_spread_bps: maxSpreadBps ? parseFloat(maxSpreadBps) || null : null,
+          drawdown_threshold_pct: maxDrawdownPct ? parseFloat(maxDrawdownPct) || null : null,
+          data_source: dataSource,
+          direction,
+          broker,
+        })
+      } else {
+        const s = strategies[selectedIdx]
+        const hasRegime = !!(s.regime && s.regime.enabled)
+        await onAdd({
+          strategy_name: s.name,
+          symbol: symbol.toUpperCase(),
+          interval,
+          buy_rules: s.buyRules,
+          sell_rules: s.sellRules,
+          buy_logic: s.buyLogic ?? 'AND',
+          sell_logic: s.sellLogic ?? 'AND',
+          // Dual rule sets (for regime bots with B23 dual strategies)
+          long_buy_rules: s.longBuyRules ?? null,
+          long_sell_rules: s.longSellRules ?? null,
+          long_buy_logic: s.longBuyLogic ?? 'AND',
+          long_sell_logic: s.longSellLogic ?? 'AND',
+          short_buy_rules: s.shortBuyRules ?? null,
+          short_sell_rules: s.shortSellRules ?? null,
+          short_buy_logic: s.shortBuyLogic ?? 'AND',
+          short_sell_logic: s.shortSellLogic ?? 'AND',
+          allocated_capital: alloc,
+          position_size: 1.0,
+          stop_loss_pct: typeof s.stopLoss === 'number' ? s.stopLoss : null,
+          max_bars_held: typeof s.maxBarsHeld === 'number' ? s.maxBarsHeld : null,
+          trailing_stop: s.trailingEnabled ? s.trailingConfig : null,
+          dynamic_sizing: s.dynamicSizing ?? null,
+          skip_after_stop: s.skipAfterStop ?? null,
+          trading_hours: s.tradingHours ?? null,
+          slippage_bps: typeof s.slippageBps === 'number' ? s.slippageBps : 2.0,
+          max_spread_bps: maxSpreadBps ? parseFloat(maxSpreadBps) || null : null,
+          drawdown_threshold_pct: maxDrawdownPct ? parseFloat(maxDrawdownPct) || null : null,
+          data_source: dataSource,
+          direction: hasRegime ? (s.direction ?? direction) : direction,
+          broker,
+          regime: hasRegime ? s.regime : null,
+        })
+      }
       setAllocation('')
     } catch (e) {
       setError(apiErrorDetail(e, 'Failed to add bot'))
@@ -139,18 +187,41 @@ export default function AddBotBar({
   return (
     <div style={{ ...sectionStyle, display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        {/* Strategy dropdown */}
-        <select
-          value={selectedIdx}
-          onChange={e => onStrategyChange(Number(e.target.value))}
-          onFocus={loadStrategies}
-          style={{ ...inputStyle, minWidth: 160 }}
-        >
-          <option value={-1}>Select strategy…</option>
-          {strategies.map((s, i) => (
-            <option key={i} value={i}>{s.name}</option>
-          ))}
-        </select>
+        {/* Source radio: Rules | Graph */}
+        <span style={{ fontSize: 12, color: '#888' }}>Source:</span>
+        {(['rule', 'graph'] as const).map(s => (
+          <label key={s} style={{ fontSize: 12, color: source === s ? '#e6edf3' : '#666', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3 }}>
+            <input type="radio" value={s} checked={source === s} onChange={() => setSource(s)} style={{ accentColor: '#58a6ff' }} />
+            {s === 'rule' ? 'Rules' : 'Graph'}
+          </label>
+        ))}
+
+        {/* Strategy dropdown (rule mode) or Graph dropdown (graph mode) */}
+        {source === 'rule' ? (
+          <select
+            value={selectedIdx}
+            onChange={e => onStrategyChange(Number(e.target.value))}
+            onFocus={loadStrategies}
+            style={{ ...inputStyle, minWidth: 160 }}
+          >
+            <option value={-1}>Select strategy…</option>
+            {strategies.map((s, i) => (
+              <option key={i} value={i}>{s.name}</option>
+            ))}
+          </select>
+        ) : (
+          <select
+            value={selectedGraphIdx}
+            onChange={e => setSelectedGraphIdx(Number(e.target.value))}
+            onFocus={loadGraphs}
+            style={{ ...inputStyle, minWidth: 160 }}
+          >
+            <option value={-1}>Select graph…</option>
+            {savedGraphs.map((g, i) => (
+              <option key={i} value={i}>{g.name}</option>
+            ))}
+          </select>
+        )}
 
         {/* Ticker */}
         <input

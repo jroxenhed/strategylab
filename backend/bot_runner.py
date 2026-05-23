@@ -197,18 +197,43 @@ class BotRunner(RegimeMixin, ExitsMixin):
 
         await asyncio.to_thread(self.manager.save)
 
+    def _compile_graph_program(self, cfg):
+        """Compile cfg.graph into a CompiledProgram.
+
+        Raises HTFGraphNotSupportedError if any node has a non-base timeframe param.
+        Raises RegimeUnsupportedError if /regime/ nodes are present (from compile()).
+        Called synchronously inside _tick(); errors propagate to the run() error handler.
+        """
+        # HTF detection: check before compile() to surface a clear error
+        for node in cfg.graph.nodes.values():
+            if getattr(node, 'params', {}).get('timeframe'):
+                from nodebuilder.evaluator import HTFGraphNotSupportedError
+                raise HTFGraphNotSupportedError(
+                    f"Graph bot {cfg.bot_id!r} uses HTF node {node.id!r} "
+                    f"(timeframe={node.params['timeframe']!r}). "
+                    "HTF intervals are not supported in graph-mode bots."
+                )
+        from nodebuilder.compile import compile as nb_compile
+        return nb_compile(cfg.graph)
+
     async def _tick(self):
         cfg = self.config
         state = self.state
         is_regime = bool(cfg.regime and cfg.regime.enabled)
 
-        buy_rules = [migrate_rule(r) for r in cfg.buy_rules]
-        sell_rules = [migrate_rule(r) for r in cfg.sell_rules]
-        all_rules = buy_rules + sell_rules
-        # Include dual rule sets so their indicators are computed
-        for extra in (cfg.long_buy_rules, cfg.long_sell_rules, cfg.short_buy_rules, cfg.short_sell_rules):
-            if extra:
-                all_rules = all_rules + [migrate_rule(r) for r in extra]
+        # Graph-mode: compute buy_rules/sell_rules lists only for rule-mode bots
+        if cfg.kind != "graph":
+            buy_rules = [migrate_rule(r) for r in cfg.buy_rules]
+            sell_rules = [migrate_rule(r) for r in cfg.sell_rules]
+            all_rules = buy_rules + sell_rules
+            # Include dual rule sets so their indicators are computed
+            for extra in (cfg.long_buy_rules, cfg.long_sell_rules, cfg.short_buy_rules, cfg.short_sell_rules):
+                if extra:
+                    all_rules = all_rules + [migrate_rule(r) for r in extra]
+        else:
+            buy_rules = []
+            sell_rules = []
+            all_rules = []
         loop = asyncio.get_event_loop()
 
         state.last_tick = datetime.now(timezone.utc).isoformat()
@@ -246,20 +271,70 @@ class BotRunner(RegimeMixin, ExitsMixin):
         state.last_bar_time = last_bar
         self._log("INFO", f"New bar: {last_bar} | close={df['Close'].iloc[-1]:.2f}")
 
-        # 4. Compute indicators
-        try:
-            vol = df["Volume"] if "Volume" in df.columns else None
-            indicators = await self._run_in_executor(
-                lambda: compute_indicators(df["Close"], high=df["High"], low=df["Low"],
-                                           volume=vol, rules=all_rules)
-            )
-        except Exception as e:
-            self._log("WARN", f"Indicator error: {e}")
-            return
-
+        # 4. Compute indicators (rule-mode) OR compile+evaluate graph (graph-mode)
         i = len(df) - 1
         price = float(df["Close"].iloc[-1])
         state.last_price = price
+
+        # Pre-initialize signal variables; graph mode computes them in section 4,
+        # rule mode computes them lazily in sections 6 and 7.
+        buy_signal: bool = False
+        sell_signal: bool = False
+
+        if cfg.kind == "graph":
+            if cfg.graph is None:
+                raise RuntimeError(f"Bot {cfg.bot_id!r} kind=graph but graph is None")
+            # Compute hash; recompile only when it differs from the cached hash
+            import hashlib, json as _json
+            graph_dump = _json.dumps(cfg.graph.model_dump(mode='json'), sort_keys=True)
+            current_hash = hashlib.sha256(graph_dump.encode()).hexdigest()
+            if current_hash != state.graph_hash or state.compiled_program is None:
+                state.compiled_program = await self._run_in_executor(
+                    lambda: self._compile_graph_program(cfg)
+                )
+                state.graph_hash = current_hash
+            program = state.compiled_program
+
+            from indicators import OHLCVSeries
+            from nodebuilder.evaluator import compute_indicators_from_specs, evaluate_graph
+            import numpy as np
+            import pandas as _pd
+
+            vol_series = df.get('Volume', _pd.Series(0, index=df.index))
+            ohlcv = OHLCVSeries(
+                close=df['Close'], high=df['High'], low=df['Low'], volume=vol_series
+            )
+            try:
+                indicator_attrs = await self._run_in_executor(
+                    lambda: compute_indicators_from_specs(program.indicator_specs, ohlcv)
+                )
+            except Exception as e:
+                self._log("WARN", f"Graph indicator error: {e}")
+                return
+            indicator_attrs['@close']  = df['Close']
+            indicator_attrs['@open']   = df['Open']
+            indicator_attrs['@high']   = df['High']
+            indicator_attrs['@low']    = df['Low']
+            indicator_attrs['@volume'] = vol_series
+            # Pre-allocate op-output series
+            for op in program.per_bar_program:
+                if op.writes not in indicator_attrs:
+                    indicator_attrs[op.writes] = _pd.Series(np.nan, index=df.index, dtype='float64')
+
+            sigs = evaluate_graph(program, indicator_attrs, i)
+            buy_signal  = sigs['entry']
+            sell_signal = sigs['exit']
+            indicators = indicator_attrs  # pass attrs dict to downstream helpers that expect it
+        else:
+            try:
+                vol = df["Volume"] if "Volume" in df.columns else None
+                indicators = await self._run_in_executor(
+                    lambda: compute_indicators(df["Close"], high=df["High"], low=df["Low"],
+                                               volume=vol, rules=all_rules)
+                )
+            except Exception as e:
+                self._log("WARN", f"Indicator error: {e}")
+                return
 
         # 4b. Regime evaluation — determine entry direction for this tick
         entry_dir = cfg.direction  # default for non-regime bots
@@ -382,19 +457,27 @@ class BotRunner(RegimeMixin, ExitsMixin):
                 return
 
             # Select buy rules based on direction (dual rule sets for regime bots)
-            if is_regime and entry_is_short and cfg.short_buy_rules:
+            # Graph mode: buy_signal was computed in section 4; skip eval_rules entirely.
+            if cfg.kind == "graph":
+                pass  # buy_signal already set above
+            elif is_regime and entry_is_short and cfg.short_buy_rules:
                 active_buy_rules = [migrate_rule(r) for r in cfg.short_buy_rules]
                 active_buy_logic = cfg.short_buy_logic
+                buy_signal = await self._run_in_executor(
+                    eval_rules, active_buy_rules, active_buy_logic, indicators, i
+                )
             elif is_regime and not entry_is_short and cfg.long_buy_rules:
                 active_buy_rules = [migrate_rule(r) for r in cfg.long_buy_rules]
                 active_buy_logic = cfg.long_buy_logic
+                buy_signal = await self._run_in_executor(
+                    eval_rules, active_buy_rules, active_buy_logic, indicators, i
+                )
             else:
                 active_buy_rules = buy_rules
                 active_buy_logic = cfg.buy_logic
-
-            buy_signal = await self._run_in_executor(
-                eval_rules, active_buy_rules, active_buy_logic, indicators, i
-            )
+                buy_signal = await self._run_in_executor(
+                    eval_rules, active_buy_rules, active_buy_logic, indicators, i
+                )
 
             if buy_signal:
                 if state.skip_remaining > 0:
@@ -442,9 +525,21 @@ class BotRunner(RegimeMixin, ExitsMixin):
             # Re-derive pos_is_short from actual position direction
             pos_is_short = state.position_direction == "short" if state.position_direction else cfg.direction == "short"
 
-            exit_reason = await self._evaluate_exit_reason(
-                cfg, state, price, df, i, pos_is_short, indicators, sell_rules, is_regime
-            )
+            if cfg.kind == "graph":
+                # Graph mode: sell_signal already evaluated in section 4.
+                # _evaluate_exit_reason handles stop-loss/trailing/time-stop;
+                # pass empty sell_rules so it won't call eval_rules (which would
+                # return False for an empty list), then override the signal exit
+                # with the pre-computed sell_signal from the graph evaluator.
+                exit_reason = await self._evaluate_exit_reason(
+                    cfg, state, price, df, i, pos_is_short, indicators, [], is_regime
+                )
+                if exit_reason is None and sell_signal:
+                    exit_reason = "signal"
+            else:
+                exit_reason = await self._evaluate_exit_reason(
+                    cfg, state, price, df, i, pos_is_short, indicators, sell_rules, is_regime
+                )
 
             if exit_reason:
                 await self._execute_exit(

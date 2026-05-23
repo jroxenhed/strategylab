@@ -453,6 +453,21 @@ export default function BotCard({
               <span style={{ color: (summary.broker ?? 'alpaca') === 'ibkr' ? '#f0b74e' : '#58a6ff' }}>
                 via {(summary.broker ?? 'alpaca') === 'ibkr' ? 'IBKR' : 'Alpaca'}
               </span>
+              {summary.kind === 'graph' && (
+                <span style={{
+                  marginLeft: 6,
+                  background: '#1a3a2a',
+                  color: '#3fb950',
+                  border: '1px solid #2ea043',
+                  borderRadius: 3,
+                  padding: '1px 5px',
+                  fontSize: 10,
+                  fontWeight: 600,
+                  letterSpacing: 0.3,
+                }}>
+                  via Graph
+                </span>
+              )}
             </span>
           </div>
 

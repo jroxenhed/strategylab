@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from bot_manager import BotConfig, BotManager
 from models import RegimeConfig, LogicField, DirectionField, OptionalBoundedRuleList
+from nodebuilder.models import Graph
 
 router = APIRouter(prefix="/api/bots")
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ class UpdateBotRequest(BaseModel):
     direction: Optional[DirectionField] = None
     broker: Optional[str] = None
     regime: Optional[RegimeConfig] = None
+    graph: Optional[Graph] = None
 
 
 
@@ -204,6 +206,22 @@ def get_bot(bot_id: str):
 @router.patch("/{bot_id}")
 def update_bot(bot_id: str, req: UpdateBotRequest):
     mgr = _get_manager()
+
+    # Mid-position graph-swap guard: only check when a graph is actually being supplied
+    if req.graph is not None:
+        try:
+            config, state = mgr.get_bot(bot_id)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        if state.entry_price is not None:
+            current_graph_dump = config.graph.model_dump(mode='json') if config.graph is not None else None
+            new_graph_dump = req.graph.model_dump(mode='json')
+            if current_graph_dump != new_graph_dump:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Bot is in position; close before swapping graph.",
+                )
+
     try:
         mgr.update_bot(bot_id, req.model_dump(exclude_none=True))
     except KeyError as e:

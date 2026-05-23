@@ -87,6 +87,7 @@ export interface BotSummary {
   position_direction?: string | null
   pending_regime_flip?: boolean
   was_running?: boolean
+  kind?: 'rule' | 'graph'
 }
 
 export interface BotDetail {
