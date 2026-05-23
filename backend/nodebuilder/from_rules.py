@@ -15,20 +15,29 @@ from nodebuilder.models import Graph, Node, Wire
 
 
 # ---------------------------------------------------------------------------
-# Layout constants
+# Layout constants — top-to-bottom flow (Houdini-style).
+# Pipeline levels become rows (y); per-level siblings spread horizontally (x).
+# Wires render from one node's body-bottom to the next node's body-top.
 # ---------------------------------------------------------------------------
 
-_COL_TICKER = 0.0
-_COL_INDICATOR = 200.0
-_COL_COMPARISON = 400.0
-_COL_LOGIC = 600.0
-_COL_REGIME_GATE = 800.0
-_COL_TERMINAL = 1000.0
-_ROW_PITCH = 80.0
-_SETTINGS_X = 200.0
-_SETTINGS_Y_START = 600.0
-_SETTINGS_Y_PITCH = 100.0
-_REGIME_Y_OFFSET = 400.0
+# Vertical positions (one row per pipeline stage)
+_COL_TICKER = 0.0           # row y for Ticker
+_COL_INDICATOR = 160.0      # row y for Indicators
+_COL_COMPARISON = 320.0     # row y for Comparisons (+ NOT wrappers offset 60px down)
+_COL_LOGIC = 540.0          # row y for per-side Logic AND/OR
+_COL_REGIME_GATE = 700.0    # row y for regime AND gates
+_COL_TERMINAL = 860.0       # row y for Entry / Exit terminals
+
+# Horizontal stacking within a row
+_ROW_PITCH = 200.0          # x-gap between siblings on the same row
+
+# Settings cluster lives to the side of the main pipeline
+_SETTINGS_X = -260.0        # x position (left of ticker)
+_SETTINGS_Y_START = 0.0     # y for first settings node
+_SETTINGS_Y_PITCH = 110.0   # vertical gap between settings nodes
+
+# Regime sub-tree pushed below the main pipeline (when present)
+_REGIME_Y_OFFSET = 1000.0   # added to main-pipeline y for regime-internal rows
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +236,7 @@ class _GraphBuilder:
             "symbol": symbol,
             "interval": interval,
             "source": source,
-        }, (_COL_TICKER, y))
+        }, (y, _COL_TICKER))
         return path
 
     # ------------------------------------------------------------------
@@ -243,7 +252,7 @@ class _GraphBuilder:
 
         path = prefix + _indicator_path(catalog_name, params)
         y = self._next_y(_COL_INDICATOR + (y_offset if y_offset else 0.0))
-        self._add_node(path, catalog_name, params, (_COL_INDICATOR, y))
+        self._add_node(path, catalog_name, params, (y, _COL_INDICATOR))
         self._indicator_cache[cache_key] = path
 
         # Wire ticker → indicator (ATR needs high/low/close; others just close)
@@ -282,7 +291,7 @@ class _GraphBuilder:
             logic_path,
             logic_op.lower(),
             {},
-            (_COL_LOGIC, logic_y),
+            (logic_y, _COL_LOGIC),
         )
 
         for idx, raw_rule in enumerate(rules):
@@ -339,7 +348,7 @@ class _GraphBuilder:
             if rule.condition in ("atr_pct",) or catalog_name == "atr_pct":
                 cmp_params["condition_extra"] = "atr_pct"
 
-            self._add_node(cmp_path, cmp_type, cmp_params, (_COL_COMPARISON, row_y))
+            self._add_node(cmp_path, cmp_type, cmp_params, (row_y, _COL_COMPARISON))
 
             # Wire left input → comparison
             self._add_wire(left_src_path, cmp_path, left_attr)
@@ -351,7 +360,7 @@ class _GraphBuilder:
             # --- NOT wrapper (if negated) --------------------------------
             if rule.negated:
                 not_path = f"{prefix}/not_{side}_{idx}"
-                self._add_node(not_path, "not", {}, (_COL_COMPARISON, row_y + _ROW_PITCH * 0.5))
+                self._add_node(not_path, "not", {}, (row_y, _COL_COMPARISON + 90.0))
                 self._add_wire(cmp_path, not_path, "@bool")
                 logic_input_path = not_path
             else:
@@ -404,11 +413,11 @@ class _GraphBuilder:
             regime_cmp_path = f"{prefix}/cmp_regime_0"
             regime_cmp_type = _resolve_condition(regime.condition)
             regime_cmp_params: dict[str, Any] = {}
-            self._add_node(regime_cmp_path, regime_cmp_type, regime_cmp_params, (_COL_COMPARISON, y_off))
+            self._add_node(regime_cmp_path, regime_cmp_type, regime_cmp_params, (y_off, _COL_COMPARISON))
             self._add_wire(regime_ind_path, regime_cmp_path, _indicator_attr(ind_name))
 
             regime_logic_path = f"{prefix}/logic_regime"
-            self._add_node(regime_logic_path, "and", {}, (_COL_LOGIC, y_off))
+            self._add_node(regime_logic_path, "and", {}, (y_off, _COL_LOGIC))
             self._add_wire(regime_cmp_path, regime_logic_path, "@bool")
 
         if regime_logic_path is None:
@@ -417,7 +426,7 @@ class _GraphBuilder:
         # Gate buy side
         if buy_logic_path is not None:
             gate_buy = "/and_regime_buy_gate"
-            self._add_node(gate_buy, "and", {}, (_COL_REGIME_GATE, 0.0))
+            self._add_node(gate_buy, "and", {}, (0.0, _COL_REGIME_GATE))
             self._add_wire(regime_logic_path, gate_buy, "@bool")
             self._add_wire(buy_logic_path, gate_buy, "@bool")
             self._add_wire(gate_buy, entry_path, "@bool")
@@ -428,7 +437,7 @@ class _GraphBuilder:
         # Gate sell side
         if sell_logic_path is not None:
             gate_sell = "/and_regime_sell_gate"
-            self._add_node(gate_sell, "and", {}, (_COL_REGIME_GATE, _ROW_PITCH))
+            self._add_node(gate_sell, "and", {}, (_ROW_PITCH, _COL_REGIME_GATE))
             self._add_wire(regime_logic_path, gate_sell, "@bool")
             self._add_wire(sell_logic_path, gate_sell, "@bool")
             self._add_wire(gate_sell, exit_path, "@bool")
@@ -588,15 +597,15 @@ def auto_render(req: StrategyRequest) -> Graph:
         "symbol": ticker,
         "interval": interval,
         "source": source,
-    }, (_COL_TICKER, 0.0))
+    }, (0.0, _COL_TICKER))
 
     # Entry / Exit terminal nodes
     entry_path = "/entry"
     exit_path = "/exit"
     # Entry at col 5 if regime (gate nodes in col 4), else col 4
     terminal_x = _COL_TERMINAL if has_regime else _COL_REGIME_GATE
-    builder._add_node(entry_path, "entry", {}, (terminal_x, 0.0))
-    builder._add_node(exit_path, "exit", {}, (terminal_x, _ROW_PITCH))
+    builder._add_node(entry_path, "entry", {}, (0.0, terminal_x))
+    builder._add_node(exit_path, "exit", {}, (_ROW_PITCH, terminal_x))
 
     # Settings nodes (always)
     builder.add_settings(req)
@@ -659,7 +668,7 @@ def auto_render(req: StrategyRequest) -> Graph:
         # Long and short buy → OR → entry
         if long_buy_logic and short_buy_logic:
             or_buy = "/or_b23_buy"
-            builder._add_node(or_buy, "or", {}, (_COL_LOGIC + 100, 0.0))
+            builder._add_node(or_buy, "or", {}, (0.0, _COL_LOGIC + 100))
             builder._add_wire(long_buy_logic, or_buy, "@bool")
             builder._add_wire(short_buy_logic, or_buy, "@bool")
             buy_logic_path_combined: Optional[str] = or_buy
@@ -672,7 +681,7 @@ def auto_render(req: StrategyRequest) -> Graph:
 
         if long_sell_logic and short_sell_logic:
             or_sell = "/or_b23_sell"
-            builder._add_node(or_sell, "or", {}, (_COL_LOGIC + 100, _ROW_PITCH))
+            builder._add_node(or_sell, "or", {}, (_ROW_PITCH, _COL_LOGIC + 100))
             builder._add_wire(long_sell_logic, or_sell, "@bool")
             builder._add_wire(short_sell_logic, or_sell, "@bool")
             sell_logic_path_combined: Optional[str] = or_sell
