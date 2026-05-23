@@ -13,7 +13,7 @@
  * Editable (store-backed): nodesDraggable=true; drag-end calls store.moveNode.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -49,13 +49,17 @@ import AttrEdge from './edges/AttrEdge'
 // nodeTypes / edgeTypes — defined outside component to avoid re-registration
 // on every render (React Flow warning if these change identity).
 // ---------------------------------------------------------------------------
+// Perf: wrap each renderer in React.memo so a single node move doesn't
+// re-render every other node. The default `arePropsEqual` is fine because
+// rfNodes (and its `data` payloads) are memoized in CanvasInner — a node's
+// `data` reference only changes when that node's underlying state changes.
 const nodeTypes: NodeTypes = {
-  ticker: TickerNode,
-  indicator: IndicatorNode,
-  comparison: ComparisonNode,
-  logic: LogicNode,
-  settings: SettingsNode,
-  output: OutputNode,
+  ticker: memo(TickerNode),
+  indicator: memo(IndicatorNode),
+  comparison: memo(ComparisonNode),
+  logic: memo(LogicNode),
+  settings: memo(SettingsNode),
+  output: memo(OutputNode),
 }
 
 const edgeTypes: EdgeTypes = {
@@ -74,12 +78,18 @@ const CATEGORY_TO_RF_TYPE: Record<string, string> = {
   output:     'output',
 }
 
+// Perf: NODE_CATALOG.find(...) per-node per-render was O(N×M); pre-build a
+// Map once at module load. Catalog is static.
+const CATALOG_BY_NAME: Map<string, NodeCatalogEntry> = new Map(
+  NODE_CATALOG.map(e => [e.name, e]),
+)
+
 /**
  * Resolve the React Flow node type for a given backend node type string.
  * Falls back to 'indicator' for types not in Core 14 (e.g. turns_up, stochastic).
  */
 function rfTypeFor(backendType: string): string {
-  const entry = NODE_CATALOG.find(e => e.name === backendType)
+  const entry = CATALOG_BY_NAME.get(backendType)
   if (!entry) return 'indicator'  // generic fallback
   return CATEGORY_TO_RF_TYPE[entry.cat] ?? 'indicator'
 }
@@ -114,38 +124,44 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
 
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Translate Graph.nodes (dict[str, Node]) → RF nodes array
-  const rfNodes: RFNode[] = Object.values(graph.nodes).map(n => {
-    const catalogEntry = NODE_CATALOG.find(e => e.name === n.type) ?? null
-    const data: BaseNodeData = {
-      backendType: n.type,
-      catalog: catalogEntry,
-      params: n.params,
-      display: n.display,
-      bypass: n.bypass,
-      nodePath: n.id,
-      editable,
-    }
-    return {
-      id: n.id,
-      type: rfTypeFor(n.type),
-      position: { x: n.position[0], y: n.position[1] },
-      data,
-      draggable: editable,
-      selectable: true,
-      selected: n.id === selectedNodeId,
-    }
-  })
+  // Translate Graph.nodes (dict) → RF nodes. Memoised so that pan/zoom and
+  // unrelated state changes don't rebuild the array (which would re-emit a
+  // new `data` reference per node → every node re-renders).
+  const rfNodes: RFNode[] = useMemo(() => {
+    return Object.values(graph.nodes).map(n => {
+      const catalogEntry = CATALOG_BY_NAME.get(n.type) ?? null
+      const data: BaseNodeData = {
+        backendType: n.type,
+        catalog: catalogEntry,
+        params: n.params,
+        display: n.display,
+        bypass: n.bypass,
+        nodePath: n.id,
+        editable,
+      }
+      return {
+        id: n.id,
+        type: rfTypeFor(n.type),
+        position: { x: n.position[0], y: n.position[1] },
+        data,
+        draggable: editable,
+        selectable: true,
+        selected: n.id === selectedNodeId,
+      }
+    })
+  }, [graph.nodes, editable, selectedNodeId])
 
-  // Translate Graph.wires → RF edges
-  const rfEdges: RFEdge[] = graph.wires.map(w => ({
-    id: w.id,
-    source: w.from,
-    target: w.to,
-    label: w.attr ?? undefined,
-    type: 'attr',
-    selected: w.id === selectedWireId,
-  }))
+  // Translate Graph.wires → RF edges. Memoised for the same reason as rfNodes.
+  const rfEdges: RFEdge[] = useMemo(() => {
+    return graph.wires.map(w => ({
+      id: w.id,
+      source: w.from,
+      target: w.to,
+      label: w.attr ?? undefined,
+      type: 'attr',
+      selected: w.id === selectedWireId,
+    }))
+  }, [graph.wires, selectedWireId])
 
   // ── Key handlers ──────────────────────────────────────────────────────────
 
@@ -207,8 +223,11 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   )
 
   // ── Viewport persist ──────────────────────────────────────────────────────
-
-  const handleMove = useCallback(
+  // Perf: onMove fires on EVERY pan/zoom pixel; writing to Zustand at that
+  // rate triggered a re-render storm. Use onMoveEnd instead — store-update
+  // once when the gesture finishes. React Flow handles the in-flight viewport
+  // itself via its internal state.
+  const handleMoveEnd = useCallback(
     (_event: MouseEvent | TouchEvent | null, viewport: { x: number; y: number; zoom: number }) => {
       if (!editable) return
       storeSetViewport({ x: viewport.x, y: viewport.y, zoom: viewport.zoom })
@@ -348,7 +367,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
         elementsSelectable={true}
         deleteKeyCode={null}  // We handle Delete ourselves to run rewire logic
         onNodeDragStop={editable ? handleNodeDragStop : undefined}
-        onMove={editable ? handleMove : undefined}
+        onMoveEnd={editable ? handleMoveEnd : undefined}
         onConnect={editable ? handleConnect : undefined}
         onNodeClick={handleNodeClick}
         onEdgeClick={editable ? handleEdgeClick : undefined}
