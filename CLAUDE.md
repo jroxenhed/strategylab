@@ -66,10 +66,12 @@ Every agent session (interactive or automated) follows this protocol to prevent 
    bash bin/slack-report.sh "Overnight build YYYY-MM-DD
    Shipped: <ID> (<title>), <ID> (<title>), ...
    Review: <P0> P0, <P1> P1, <P2> P2
+   Review cost: <input tokens summed across all persona dispatches>k input / <output>k output (estimate $<USD>)
    Branch: <branch-name>
    Next tagged: <IDs>
    Build: pass | fail (<reason>)"
    ```
+   The review-cost line is the empirical signal for whether sequential-within-5-min persona dispatch is paying off vs the prior all-parallel pattern. Sum tokens from each persona's Agent tool result (the `usage` block on completion); estimate USD using the model's current rate per 1M tokens. If the number isn't dropping vs prior runs after a few weeks, revisit the sequencing rule.
 
 ### Priority tags in TODO.md
 - `[next]` — highest-priority unchecked item(s), auto-picked by chain runner
