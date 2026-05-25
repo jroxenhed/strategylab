@@ -135,6 +135,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   // node → N renders per single-node change. Now: 1 render per single-node
   // change regardless of graph size.
   const rfNodeCacheRef = useRef<Map<string, { sig: string; rfNode: RFNode }>>(new Map())
+  const prevRfNodesRef = useRef<RFNode[] | null>(null)
   const rfNodes: RFNode[] = useMemo(() => {
     const cache = rfNodeCacheRef.current
     const seen = new Set<string>()
@@ -230,7 +231,6 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   // Without onNodesChange, React Flow's internal node state was being
   // continuously overwritten by the prop on every parent render → drag had
   // no visual update until release.
-  const prevRfNodesRef = useRef<RFNode[] | null>(null)
   const [localNodes, setLocalNodes] = useState<RFNode[]>(rfNodes)
   const [localEdges, setLocalEdges] = useState<RFEdge[]>(rfEdges)
   useEffect(() => { setLocalNodes(rfNodes) }, [rfNodes])
