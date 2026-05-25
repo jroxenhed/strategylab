@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*263 / 280 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*264 / 280 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 - [F212](#f212) — [next] F210 inline-confirm browser smoke remains partially open [easy]
 
-## Open Work — 40 items
+## Open Work — 39 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -23,7 +23,7 @@ _(none open)_
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 13 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F216](#f216), [F272](#f272) |
 | [F · Hardening](#f-hardening) | Security, reliability, validation | 2 | [F187](#f187), [F211](#f211) |
-| [F · Polish](#f-polish) | UI, naming, dead code | 9 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217](#f217), [F249c](#f249c), [F250](#f250), [F278](#f278) |
+| [F · Polish](#f-polish) | UI, naming, dead code | 8 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217](#f217), [F249c](#f249c), [F250](#f250) |
 | [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 6 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219), [F249b](#f249b) |
 
 ## A — Charts & Indicators
@@ -218,7 +218,7 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f263"></a> **F263** NodeBuilder cursor semantics — scoped CSS under `.nodebuilder-root`: empty pane → grab/grabbing, node → default arrow (grabbing while dragged), edge → pointer, handle/port → crosshair. Houdini-style: nodes feel like items, ports feel like connection sources, only empty pane invites panning. (61795ed) [easy] [polish] (resolved 2026-05-25)
 - [x] <a id="f265"></a> **F265** Visible selection ring on selected nodes — RF's default `.react-flow__node.selected` is a 0.5px dark outline (invisible on dark theme). Selection IS firing (handlers run, store updates) but no visual feedback. Added explicit 2px display-flag-colored ring + soft outer glow under `.nodebuilder-root`. (5897ba2) [easy] [polish] (resolved 2026-05-25)
 - [x] <a id="f273"></a> **F273** Visual feedback for invalid numeric input: red border (`--nb-cat-rules`) + glow + tooltip "Must be a number" on commit-reject. State tracked per-row in `ParamRow`; auto-clears on next onChange or ESC so the red disappears as soon as the user starts fixing. Browser-verified: invalid input → red+tooltip; valid edit → clean state. Caveat: `type="number"` strips truly-non-numeric chars at the DOM layer so the primary path is overflow-style invalidity (`1e9999` → `Infinity`); the silent-revert fallback covers the edge cases. (resolved 2026-05-25) [easy] [polish]
-- [ ] <a id="f278"></a> **F278** `ParamRow` should use `type="text" inputMode="numeric"` instead of `type="number"` for numeric params — `type="number"` strips any character it can't parse at the DOM layer (e.g. typing "1.2.3" results in `value=""`), which hides bad input from the user and short-circuits the F273 red-border feedback path before it can fire. Switch to `inputMode="numeric"` for mobile keyboard hint + manual `Number()` parse. (added 2026-05-25, from F273 close reading). [easy] [polish]
+- [x] <a id="f278"></a> **F278** `ParamRow` numeric inputs switched to `type="text" inputMode="decimal"` — `type="number"` was stripping unparseable chars at the DOM layer so F273's red-border path only fired on overflow-style invalidity. Now typing `"abc"` keeps the value visible *and* triggers red border + "Must be a number" tooltip on commit. `inputMode="decimal"` keeps the mobile numeric keypad. Browser-verified. (resolved 2026-05-25) [easy] [polish]
 
 ### F · Testing and Infra
 - [x] <a id="f50"></a> **F50** Frontend console-error smoke test in overnight build — after `npm run build`, boot `npm run preview &` (Vite preview server, default port **4173** — distinct from `npm run dev`'s 5173 because we want to validate the production `dist/` artifact, not the dev server). `curl -fsS http://localhost:4173/` to verify the page loads, then a short headless check (e.g. `node -e` with a minimal fetch + parse) that there are no obvious crash markers in the served HTML. Catches "compiles clean but throws on mount" and broken import paths that `tsc -b` doesn't detect. Append to `docs/overnight-builder-prompt-patch.md` Section 3.5 (smoke test). [easy] (from overnight pipeline gap review) [infra] (resolved 2026-05-15)

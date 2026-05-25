@@ -139,7 +139,8 @@ export function ParamRow({
     <label style={labelStyle}>
       <span style={{ flexShrink: 0 }}>{paramKey}</span>
       <input
-        type={isNumber ? 'number' : 'text'}
+        type="text"
+        inputMode={isNumber ? 'decimal' : 'text'}
         value={draft}
         title={invalid ?? undefined}
         onChange={e => { setDraft(e.target.value); if (invalid) setInvalid(null) }}

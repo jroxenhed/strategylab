@@ -67,6 +67,10 @@ Three follow-ups from F271 shipped together. The thread is: ParamRow had a silen
 - **[F277](TODO.md#f277)** Drift-guard tests in `catalog.test.ts`: (a) every `paramTypes` key is also in `defaults.params` — catches renames/typos like `type` vs `kind`; (b) every select-typed entry has a non-empty options array — catches half-edited schema; (c) every numeric default has an explicit `paramTypes` entry — prevents the catalog from regressing back to typeof-inference for canonical params. 17/17 catalog tests pass.
 - **One more follow-up filed:** **[F278](TODO.md#f278)** switch numeric inputs to `type="text" inputMode="numeric"` so the DOM stops swallowing partial bad input and F273's red border fires for the everyday case, not just overflows.
 
+### NodeBuilder: text+inputMode=decimal so red-border fires for everyday bad input (F278)
+
+- **[F278](TODO.md#f278)** Single-line swap in `ParamRow.tsx`: numeric inputs now use `type="text" inputMode="decimal"` instead of `type="number"`. Closes the loop on F273 — the visible-red path was previously only reachable via overflow-style invalidity because `type="number"` clobbered any unparseable char before our commit() could see it. Now typing `"abc"` keeps the bad value visible *and* triggers the red border + tooltip on blur. Browser-verified: `input.value === 'abc'`, red box-shadow, `title === 'Must be a number'`. Mobile gets the numeric keypad via `inputMode="decimal"`.
+
 ### Cache-economics-aware delegation rules (main branch)
 
 - **[d6af5a8](https://github.com/jroxenhed/strategylab/commit/d6af5a8)** Updated CLAUDE.md "Subagent delegation rule" with a size threshold (work must exceed the ~5–15k system-prompt write cost) + new "Subagent cache-write cost" bullet documenting per-dispatch cost, same-type-within-5-min cache hits, and the long-running-subagent / parent-cache-aging trap. Overnight builder rule changed from "parallel review of 4–6 personas in one message" to "sequence within 5-min bursts" since wall-clock isn't a constraint overnight. "Just check one thing" anti-pattern flipped: reflexive subagent dispatch for trivial reads is wasteful when inline hits parent cache at 0.1×.
