@@ -122,6 +122,10 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   const [tabMenuScreen, setTabMenuScreen] = useState({ x: 200, y: 200 })
   const [tabMenuGraph, setTabMenuGraph] = useState({ x: 0, y: 0 })
   const [tabAutoWire, setTabAutoWire] = useState(true)
+  // Houdini-style: when a port-drag ends in empty space, remember which node
+  // and port it came from so the next node we create from TabMenu auto-wires
+  // to it. Cleared on TabMenu close (Esc or successful create).
+  const pendingWireRef = useRef<{ fromNodeId: string; handleType: 'source' | 'target' } | null>(null)
 
   // Selected wire id (for delete)
   const [selectedWireId, setSelectedWireId] = useState<string | null>(null)
@@ -368,6 +372,46 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
     setSelectedWireId(null)
   }, [storeSelect])
 
+  // ── Port-drag → empty space opens TabMenu (Houdini pattern) ───────────────
+  // onConnectStart fires when the user starts dragging from a handle. We
+  // capture which node + handle so the next node we create can be auto-wired
+  // to it. onConnectEnd fires on release; if the drop landed on empty pane
+  // (not on a handle), we open the TabMenu at the cursor.
+
+  const handleConnectStart = useCallback(
+    (_event: unknown, params: { nodeId: string | null; handleType: 'source' | 'target' | null }) => {
+      if (!editable || !params.nodeId || !params.handleType) {
+        pendingWireRef.current = null
+        return
+      }
+      pendingWireRef.current = { fromNodeId: params.nodeId, handleType: params.handleType }
+    },
+    [editable],
+  )
+
+  const handleConnectEnd = useCallback(
+    (event: MouseEvent | TouchEvent) => {
+      if (!editable || !pendingWireRef.current) return
+      const target = event.target as HTMLElement | null
+      const onPane = !!target?.classList?.contains('react-flow__pane')
+      if (!onPane) {
+        // Dropped on a handle / something else — let handleConnect deal with it.
+        pendingWireRef.current = null
+        return
+      }
+      const point = 'touches' in event && event.touches.length > 0
+        ? { x: event.touches[0].clientX, y: event.touches[0].clientY }
+        : 'changedTouches' in event && event.changedTouches.length > 0
+        ? { x: event.changedTouches[0].clientX, y: event.changedTouches[0].clientY }
+        : { x: (event as MouseEvent).clientX, y: (event as MouseEvent).clientY }
+      setTabMenuScreen(point)
+      setTabMenuGraph(screenToFlowPosition(point))
+      setTabMenuOpen(true)
+      // pendingWireRef stays set; handleTabMenuCreate will consume it.
+    },
+    [editable, screenToFlowPosition],
+  )
+
   // ── Tab menu: create node ─────────────────────────────────────────────────
 
   const handleTabMenuCreate = useCallback(
@@ -383,7 +427,32 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
       }
       storeAddNode(newNode)
 
-      // Auto-wire: source.out → new.in
+      // Priority 1: port-drag → empty-space wire takes precedence over
+      // the autoWire-from-selection hint. Direction follows the dragged
+      // handle: source-handle drag → new node is the target; target-handle
+      // drag → new node is the source.
+      const pending = pendingWireRef.current
+      pendingWireRef.current = null
+      if (pending && pending.fromNodeId !== id) {
+        const isFromSource = pending.handleType === 'source'
+        const fromId = isFromSource ? pending.fromNodeId : id
+        const toId = isFromSource ? id : pending.fromNodeId
+        const sourceNode = graph.nodes[fromId] ?? (fromId === id ? newNode : undefined)
+        let attr: string | null = null
+        if (sourceNode) {
+          const entry = NODE_CATALOG.find(e => e.name === sourceNode.type)
+          attr = (entry?.writes[0] as string | undefined) ?? null
+        }
+        try {
+          storeAddWire({ id: crypto.randomUUID(), from: fromId, to: toId, attr })
+        } catch {
+          // Cycle — skip auto-wire silently
+        }
+        storeSelect(id)
+        return
+      }
+
+      // Auto-wire: source.out → new.in (from selected node)
       if (withWire && selectedNodeId && selectedNodeId !== id) {
         const srcNode = graph.nodes[selectedNodeId]
         let attr: string | null = null
@@ -451,6 +520,8 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
         onNodeDragStop={editable ? handleNodeDragStop : undefined}
         onMoveEnd={editable ? handleMoveEnd : undefined}
         onConnect={editable ? handleConnect : undefined}
+        onConnectStart={editable ? handleConnectStart : undefined}
+        onConnectEnd={editable ? handleConnectEnd : undefined}
         onNodeClick={handleNodeClick}
         onEdgeClick={editable ? handleEdgeClick : undefined}
         onPaneClick={handlePaneClick}
@@ -481,7 +552,11 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
           autoWire={tabAutoWire}
           onToggleAutoWire={() => setTabAutoWire(v => !v)}
           onCreate={handleTabMenuCreate}
-          onClose={() => setTabMenuOpen(false)}
+          onClose={() => {
+            // Closing without creating cancels the pending wire (Esc / outside click).
+            pendingWireRef.current = null
+            setTabMenuOpen(false)
+          }}
         />
       )}
     </div>
