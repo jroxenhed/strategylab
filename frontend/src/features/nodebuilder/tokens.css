@@ -56,3 +56,19 @@
   --nb-radius-card: 5px;
   --nb-radius-menu: 8px;
 }
+
+/* Cursor semantics — make the canvas behave like a node-graph editor instead
+   of "everything is panning":
+   - Pane (empty background): grab/grabbing for pan
+   - Nodes: default (arrow) — they're selectable/draggable items
+   - Edges: pointer — they're clickable
+   - Handles (ports): crosshair — drag to connect */
+.nodebuilder-root .react-flow__pane { cursor: grab; }
+.nodebuilder-root .react-flow__pane.dragging,
+.nodebuilder-root .react-flow .react-flow__pane:active { cursor: grabbing; }
+.nodebuilder-root .react-flow__node { cursor: default; }
+.nodebuilder-root .react-flow__node.draggable { cursor: default; }
+.nodebuilder-root .react-flow__node.dragging { cursor: grabbing; }
+.nodebuilder-root .react-flow__edge,
+.nodebuilder-root .react-flow__edge-path { cursor: pointer; }
+.nodebuilder-root .react-flow__handle { cursor: crosshair; }

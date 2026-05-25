@@ -21,11 +21,15 @@ import {
   Controls,
   MiniMap,
   useReactFlow,
+  applyNodeChanges,
+  applyEdgeChanges,
   type Node as RFNode,
   type Edge as RFEdge,
   type NodeTypes,
   type EdgeTypes,
   type Connection,
+  type NodeChange,
+  type EdgeChange,
 } from '@xyflow/react'
 import type { Graph, GraphNode } from '../../api/nodebuilder'
 import { NODE_CATALOG } from './catalog'
@@ -170,11 +174,20 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
     for (const id of Array.from(cache.keys())) {
       if (!seen.has(id)) cache.delete(id)
     }
+    // Stabilize the array reference itself: if every element matches the
+    // previous result element-wise, return the previous array so consumers
+    // (useEffect deps, child memo) don't see a new reference.
+    const prev = prevRfNodesRef.current
+    if (prev && prev.length === result.length && result.every((n, i) => n === prev[i])) {
+      return prev
+    }
+    prevRfNodesRef.current = result
     return result
   }, [graph.nodes, editable, selectedNodeId])
 
   // Per-edge cache, same pattern.
   const rfEdgeCacheRef = useRef<Map<string, { sig: string; rfEdge: RFEdge }>>(new Map())
+  const prevRfEdgesRef = useRef<RFEdge[] | null>(null)
   const rfEdges: RFEdge[] = useMemo(() => {
     const cache = rfEdgeCacheRef.current
     const seen = new Set<string>()
@@ -202,8 +215,33 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
     for (const id of Array.from(cache.keys())) {
       if (!seen.has(id)) cache.delete(id)
     }
+    const prev = prevRfEdgesRef.current
+    if (prev && prev.length === result.length && result.every((e, i) => e === prev[i])) {
+      return prev
+    }
+    prevRfEdgesRef.current = result
     return result
   }, [graph.wires, selectedWireId])
+
+  // Local mirror of nodes/edges so React Flow can update positions LIVE during
+  // a drag (and selection during a click) without round-tripping through the
+  // Zustand store. The store stays authoritative; we sync FROM store on
+  // memo-array changes, and commit drag-end / connect / delete back TO store.
+  // Without onNodesChange, React Flow's internal node state was being
+  // continuously overwritten by the prop on every parent render → drag had
+  // no visual update until release.
+  const prevRfNodesRef = useRef<RFNode[] | null>(null)
+  const [localNodes, setLocalNodes] = useState<RFNode[]>(rfNodes)
+  const [localEdges, setLocalEdges] = useState<RFEdge[]>(rfEdges)
+  useEffect(() => { setLocalNodes(rfNodes) }, [rfNodes])
+  useEffect(() => { setLocalEdges(rfEdges) }, [rfEdges])
+
+  const handleNodesChange = useCallback((changes: NodeChange[]) => {
+    setLocalNodes(nds => applyNodeChanges(changes, nds))
+  }, [])
+  const handleEdgesChange = useCallback((changes: EdgeChange[]) => {
+    setLocalEdges(eds => applyEdgeChanges(changes, eds))
+  }, [])
 
   // ── Key handlers ──────────────────────────────────────────────────────────
 
@@ -400,8 +438,10 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
       style={{ width: '100%', height: '100%', background: 'var(--nb-bg)', outline: 'none' }}
     >
       <ReactFlow
-        nodes={rfNodes}
-        edges={rfEdges}
+        nodes={localNodes}
+        edges={localEdges}
+        onNodesChange={handleNodesChange}
+        onEdgesChange={handleEdgesChange}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         nodesDraggable={editable}
