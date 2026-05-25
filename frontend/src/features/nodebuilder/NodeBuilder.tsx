@@ -42,6 +42,7 @@ export default function NodeBuilder({ request, graphViewActive }: NodeBuilderPro
   // Store state
   const storeGraph = useNodeBuilderStore(s => s.graph)
   const newEmptyGraph = useNodeBuilderStore(s => s.newEmptyGraph)
+  const loadFromAutoRender = useNodeBuilderStore(s => s.loadFromAutoRender)
 
   // Edit mode = store has a graph (readOnly=false)
   const editMode = storeGraph !== null && !storeGraph.readOnly
@@ -117,6 +118,20 @@ export default function NodeBuilder({ request, graphViewActive }: NodeBuilderPro
         <button style={styles.btn} onClick={newEmptyGraph}>
           New Empty Graph
         </button>
+        {!editMode && autoGraph && (
+          <button
+            style={{
+              ...styles.btn,
+              background: 'oklch(0.24 0.08 230 / 0.5)',
+              border: '1px solid oklch(0.45 0.10 230 / 0.6)',
+              color: 'oklch(0.85 0.14 230)',
+            }}
+            onClick={() => loadFromAutoRender(autoGraph)}
+            title="Copy the auto-rendered graph into the editor so you can modify it"
+          >
+            Edit this graph
+          </button>
+        )}
         {editMode && hasNodes && (
           <button
             style={{

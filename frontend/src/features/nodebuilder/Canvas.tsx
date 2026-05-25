@@ -124,11 +124,26 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
 
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Translate Graph.nodes (dict) → RF nodes. Memoised so that pan/zoom and
-  // unrelated state changes don't rebuild the array (which would re-emit a
-  // new `data` reference per node → every node re-renders).
+  // Per-node cache so that ONLY the node whose underlying state actually
+  // changed produces a fresh RFNode (and therefore a fresh `data` reference).
+  // Without this, any mutation (move, select, add) rebuilt every rfNode with a
+  // new `data` ref → React.memo on the custom renderers invalidated for every
+  // node → N renders per single-node change. Now: 1 render per single-node
+  // change regardless of graph size.
+  const rfNodeCacheRef = useRef<Map<string, { sig: string; rfNode: RFNode }>>(new Map())
   const rfNodes: RFNode[] = useMemo(() => {
-    return Object.values(graph.nodes).map(n => {
+    const cache = rfNodeCacheRef.current
+    const seen = new Set<string>()
+    const result: RFNode[] = []
+    for (const n of Object.values(graph.nodes)) {
+      seen.add(n.id)
+      const selected = n.id === selectedNodeId
+      const sig = `${n.type}|${n.position[0]},${n.position[1]}|${n.display ? 1 : 0}|${n.bypass ? 1 : 0}|${editable ? 1 : 0}|${selected ? 1 : 0}|${JSON.stringify(n.params)}`
+      const cached = cache.get(n.id)
+      if (cached && cached.sig === sig) {
+        result.push(cached.rfNode)
+        continue
+      }
       const catalogEntry = CATALOG_BY_NAME.get(n.type) ?? null
       const data: BaseNodeData = {
         backendType: n.type,
@@ -139,28 +154,55 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
         nodePath: n.id,
         editable,
       }
-      return {
+      const rfNode: RFNode = {
         id: n.id,
         type: rfTypeFor(n.type),
         position: { x: n.position[0], y: n.position[1] },
         data,
         draggable: editable,
         selectable: true,
-        selected: n.id === selectedNodeId,
+        selected,
       }
-    })
+      cache.set(n.id, { sig, rfNode })
+      result.push(rfNode)
+    }
+    // Evict removed nodes so the cache doesn't grow unbounded.
+    for (const id of Array.from(cache.keys())) {
+      if (!seen.has(id)) cache.delete(id)
+    }
+    return result
   }, [graph.nodes, editable, selectedNodeId])
 
-  // Translate Graph.wires → RF edges. Memoised for the same reason as rfNodes.
+  // Per-edge cache, same pattern.
+  const rfEdgeCacheRef = useRef<Map<string, { sig: string; rfEdge: RFEdge }>>(new Map())
   const rfEdges: RFEdge[] = useMemo(() => {
-    return graph.wires.map(w => ({
-      id: w.id,
-      source: w.from,
-      target: w.to,
-      label: w.attr ?? undefined,
-      type: 'attr',
-      selected: w.id === selectedWireId,
-    }))
+    const cache = rfEdgeCacheRef.current
+    const seen = new Set<string>()
+    const result: RFEdge[] = []
+    for (const w of graph.wires) {
+      seen.add(w.id)
+      const selected = w.id === selectedWireId
+      const sig = `${w.from}|${w.to}|${w.attr ?? ''}|${selected ? 1 : 0}`
+      const cached = cache.get(w.id)
+      if (cached && cached.sig === sig) {
+        result.push(cached.rfEdge)
+        continue
+      }
+      const rfEdge: RFEdge = {
+        id: w.id,
+        source: w.from,
+        target: w.to,
+        label: w.attr ?? undefined,
+        type: 'attr',
+        selected,
+      }
+      cache.set(w.id, { sig, rfEdge })
+      result.push(rfEdge)
+    }
+    for (const id of Array.from(cache.keys())) {
+      if (!seen.has(id)) cache.delete(id)
+    }
+    return result
   }, [graph.wires, selectedWireId])
 
   // ── Key handlers ──────────────────────────────────────────────────────────
