@@ -2,44 +2,83 @@
  * ParamRow / ParamRows — inline editor for node params.
  *
  * Rendered as <BaseNode> children when `editable` is true. One labelled input
- * per param. Numeric vs text inferred from `typeof value` (typed schema is F271).
+ * per param. Type inferred from `paramTypes` (catalog override) when provided,
+ * otherwise from `typeof value` (number → number input, anything else → text).
  *
  * Commit semantics: blur reads `e.target.value` directly (not React state) so a
  * fast type-then-tab can't lose the value to batching. Enter blurs, ESC reverts.
  * Container has `.nodrag .nopan` + onPointerDown stopPropagation to keep React
- * Flow from grabbing the cursor mid-edit.
+ * Flow from grabbing the cursor mid-edit. Select inputs commit immediately
+ * onChange (no blur step — there's nothing to type).
  */
 
 import { useState, useEffect } from 'react'
 import { useNodeBuilderStore } from '../store'
+import type { ParamTypeSpec } from '../catalog'
 
 export function ParamRows({
   nodeId,
   params,
+  paramTypes,
 }: {
   nodeId: string
   params: Record<string, unknown>
+  /** Optional per-key type overrides from `NodeCatalogEntry.paramTypes`. */
+  paramTypes?: Record<string, ParamTypeSpec>
 }) {
   return (
     <div className="nodrag nopan" style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
       {Object.entries(params).map(([key, value]) => (
-        <ParamRow key={key} nodeId={nodeId} paramKey={key} value={value} />
+        <ParamRow
+          key={key}
+          nodeId={nodeId}
+          paramKey={key}
+          value={value}
+          typeSpec={paramTypes?.[key]}
+        />
       ))}
     </div>
   )
+}
+
+const labelStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  fontFamily: 'var(--nb-font-mono)',
+  fontSize: 10,
+  color: 'var(--nb-text-muted)',
+  lineHeight: '14px',
+}
+
+const fieldStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  background: 'var(--nb-bg-elevated)',
+  border: '1px solid var(--nb-border)',
+  borderRadius: 'var(--nb-radius-pill)',
+  color: 'var(--nb-text)',
+  fontFamily: 'var(--nb-font-mono)',
+  fontSize: 10,
+  padding: '2px 5px',
+  outline: 'none',
 }
 
 export function ParamRow({
   nodeId,
   paramKey,
   value,
+  typeSpec,
 }: {
   nodeId: string
   paramKey: string
   value: unknown
+  typeSpec?: ParamTypeSpec
 }) {
   const updateNodeParams = useNodeBuilderStore(s => s.updateNodeParams)
-  const isNumber = typeof value === 'number'
+  const resolvedType = typeSpec?.type ?? (typeof value === 'number' ? 'number' : 'string')
+  const isNumber = resolvedType === 'number'
+  const isSelect = resolvedType === 'select'
   const initial = value === null || value === undefined ? '' : String(value)
   const [draft, setDraft] = useState(initial)
 
@@ -49,8 +88,6 @@ export function ParamRow({
     if (raw === initial) return
     if (isNumber) {
       const trimmed = raw.trim()
-      // Empty input reverts (matches ESC). Number('') === 0 would silently
-      // accept 0, which crashes period-like params downstream.
       if (trimmed === '') {
         setDraft(initial)
         return
@@ -66,16 +103,30 @@ export function ParamRow({
     }
   }
 
+  if (isSelect) {
+    const options = typeSpec?.options ?? []
+    // Include current value as a fallback option if it's not in the list, so a
+    // strategy with a legacy/unknown value still displays correctly.
+    const allOptions = options.includes(initial as never) ? options : [initial, ...options]
+    return (
+      <label style={labelStyle}>
+        <span style={{ flexShrink: 0 }}>{paramKey}</span>
+        <select
+          value={draft}
+          onChange={e => { setDraft(e.target.value); commit(e.target.value) }}
+          onPointerDown={e => e.stopPropagation()}
+          style={fieldStyle}
+        >
+          {allOptions.map(opt => (
+            <option key={opt} value={opt}>{opt}</option>
+          ))}
+        </select>
+      </label>
+    )
+  }
+
   return (
-    <label style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: 6,
-      fontFamily: 'var(--nb-font-mono)',
-      fontSize: 10,
-      color: 'var(--nb-text-muted)',
-      lineHeight: '14px',
-    }}>
+    <label style={labelStyle}>
       <span style={{ flexShrink: 0 }}>{paramKey}</span>
       <input
         type={isNumber ? 'number' : 'text'}
@@ -92,18 +143,7 @@ export function ParamRow({
           }
         }}
         onPointerDown={e => e.stopPropagation()}
-        style={{
-          flex: 1,
-          minWidth: 0,
-          background: 'var(--nb-bg-elevated)',
-          border: '1px solid var(--nb-border)',
-          borderRadius: 'var(--nb-radius-pill)',
-          color: 'var(--nb-text)',
-          fontFamily: 'var(--nb-font-mono)',
-          fontSize: 10,
-          padding: '2px 5px',
-          outline: 'none',
-        }}
+        style={fieldStyle}
       />
     </label>
   )

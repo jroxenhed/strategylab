@@ -5,6 +5,17 @@
  * Implementations land in Unit 7b on the Python side; this file stays pure data.
  */
 
+/**
+ * Optional per-param schema override. Used by the inline editor (ParamRow) so
+ * enum-style params render as `<select>` instead of free-text inputs.
+ * If a key is missing here, ParamRow falls back to inferring from `typeof value`.
+ */
+export interface ParamTypeSpec {
+  type: 'number' | 'string' | 'select';
+  /** Required when type === 'select'. */
+  options?: readonly string[];
+}
+
 export interface NodeCatalogEntry {
   /** Unique node-type identifier, e.g. "rsi", "crosses_below". */
   name: string;
@@ -42,7 +53,20 @@ export interface NodeCatalogEntry {
    * step is a no-op at T2 (currently "size" and "stop" output terminals).
    */
   compileActive: boolean;
+  /** Per-param input type overrides — drives ParamRow rendering. */
+  paramTypes?: Record<string, ParamTypeSpec>;
 }
+
+// ---------------------------------------------------------------------------
+// Shared option lists — central so adding a provider / interval updates every
+// node that exposes it (currently only ticker, but more could follow).
+// ---------------------------------------------------------------------------
+export const INTERVAL_OPTIONS = [
+  '1m', '5m', '15m', '30m', '1h', '1d', '1wk', '1mo',
+] as const;
+export const SOURCE_OPTIONS = [
+  'yahoo', 'alpaca', 'alpaca-iex', 'ibkr', 'polygon',
+] as const;
 
 export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
   // ── Ticker (source) ────────────────────────────────────────────────────
@@ -59,6 +83,11 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
       subtitle: null,
     },
     compileActive: true,
+    paramTypes: {
+      symbol: { type: 'string' },
+      interval: { type: 'select', options: INTERVAL_OPTIONS },
+      source: { type: 'select', options: SOURCE_OPTIONS },
+    },
   },
 
   // ── Indicators ─────────────────────────────────────────────────────────
@@ -75,6 +104,10 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
       subtitle: "RSI(14)",
     },
     compileActive: true,
+    paramTypes: {
+      period: { type: 'number' },
+      type: { type: 'select', options: ['sma', 'ema', 'wma'] as const },
+    },
   },
   {
     name: "macd",

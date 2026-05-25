@@ -60,7 +60,7 @@ export default function IndicatorNode({ id, data }: NodeProps) {
       editable={editable}
     >
       {editable && Object.keys(params).length > 0 && (
-        <ParamRows nodeId={id} params={params} />
+        <ParamRows nodeId={id} params={params} paramTypes={catalog?.paramTypes} />
       )}
     </BaseNode>
   )

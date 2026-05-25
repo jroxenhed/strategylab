@@ -69,7 +69,7 @@ export default function SettingsNode({ id, data }: NodeProps) {
       editable={editable}
     >
       {editable && Object.keys(params).length > 0 && (
-        <ParamRows nodeId={id} params={params} />
+        <ParamRows nodeId={id} params={params} paramTypes={d.catalog?.paramTypes} />
       )}
     </BaseNode>
   )

@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*259 / 277 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*260 / 279 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 - [F212](#f212) — [next] F210 inline-confirm browser smoke remains partially open [easy]
 
-## Open Work — 41 items
+## Open Work — 42 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -21,10 +21,10 @@ _(none open)_
 | [C](#c-strategy-summary-analytics) | Strategy Summary & Analytics | 3 | [C29](#c29)–[C31](#c31) |
 | [D](#d-bots-live-trading) | Bots (live trading) | 1 | [D24b](#d24b) |
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
-| [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 14 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F216](#f216), [F271](#f271)–[F272](#f272) |
+| [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 14 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F216](#f216), [F272](#f272), [F276](#f276) |
 | [F · Hardening](#f-hardening) | Security, reliability, validation | 2 | [F187](#f187), [F211](#f211) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 9 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217](#f217), [F249c](#f249c), [F250](#f250), [F273](#f273) |
-| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 6 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219), [F249b](#f249b) |
+| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 7 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219), [F249b](#f249b), [F277](#f277) |
 
 ## A — Charts & Indicators
 
@@ -120,8 +120,9 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f268"></a> **F268** NodeBuilder parameter editing — `updateNodeParams(nodeId, partial)` pure op (operations.ts) + store wiring + inline editable param rows on `IndicatorNode` when graph is editable. One row per param, numeric/text input committed on blur (reads `e.target.value` so fast-type-then-blur never misses), Enter blurs, ESC reverts to last committed value. `.nodrag .nopan` on the row container + onPointerDown stopPropagation keep React Flow from hijacking the cursor. Three tests added (15b/15c/15d). Browser-verified: edited EMA period 200→50, ran backtest, POST payload contains `"period":50`. Inspector panel deferred to follow-up; threshold/text params on other renderers also deferred (TickerNode, ComparisonNode, etc.). (resolved 2026-05-25) [medium] [arch]
 - [x] <a id="f269"></a> **F269** Inline param editing applied to TickerNode + ComparisonNode + SettingsNode (LogicNode + OutputNode have no params, deliberately skipped). Each renderer hides its param-derived subtitle / title-suffix when `editable=true` and renders `<ParamRows nodeId={id} params={params}>` as `<BaseNode>` children. Browser-verified end-to-end: edited ticker symbol AMD→NVDA, slippage bps 2→7, RSI-below threshold 30→22 in one go; backtest POST payload contained all three new values. (resolved 2026-05-25) [medium] [arch]
 - [x] <a id="f270"></a> **F270** Extracted `ParamRows`/`ParamRow` from `IndicatorNode.tsx` into shared `nodes/ParamRow.tsx`. Same semantics (e.target.value blur-commit, Enter blurs, ESC reverts, `.nodrag .nopan` + `onPointerDown` stopPropagation, numeric-vs-text inferred from `typeof value`). Used by IndicatorNode/TickerNode/ComparisonNode/SettingsNode. Vitest deferred — pure component, behavior is covered by F268's browser verification + F269's three-renderer roundtrip. (resolved 2026-05-25) [easy] [arch]
-- [ ] <a id="f271"></a> **F271** Typed param schema from catalog → inline editor — currently `ParamRow` infers numeric vs text from `typeof value === 'number'`, which breaks for select-style params (e.g. RSI `type: "sma" | "ema" | "wma"`). Add a `paramTypes?: Record<string, { type: 'number' | 'string' | 'select'; options?: string[] }>` field to `NodeCatalogEntry` and render a `<select>` for enums. RSI `type` and TickerNode `interval`/`source` are the canaries. (added 2026-05-25, from F268). [medium] [arch]
+- [x] <a id="f271"></a> **F271** Typed param schema from catalog → inline editor. New `ParamTypeSpec` + optional `paramTypes` on `NodeCatalogEntry`. ParamRow renders `<select>` for `type: 'select'` (commits onChange immediately, no blur step). Shared option lists `INTERVAL_OPTIONS` / `SOURCE_OPTIONS` exported from catalog so adding a provider/interval updates every node that exposes it. Wired for ticker (`interval`, `source`) + rsi (`type`). Unknown legacy values are preserved as the first option so loaded strategies don't lose data. Browser-verified: changed RSI `type` sma→ema and ticker `interval` 30m→1h via the dropdowns, backtest returned **200** with the new values in the payload (`"type":"ema"`, `"interval":"1h"`) and ran 89 trades. (resolved 2026-05-25) [medium] [arch]
 - [ ] <a id="f272"></a> **F272** Inspector panel for node params — when a node has >3 params or long values (e.g. multi-line code blocks for Code nodes), inline editing gets cramped. Right-side panel shows selected-node form; selection ring already in place (F265). Defer until F269+F271 expose nodes that actually need it. (added 2026-05-25, from F268 plan §6). [medium] [arch]
+- [ ] <a id="f276"></a> **F276** Extend `paramTypes` to remaining indicator/comparison/settings nodes — F271 covered ticker + RSI as canaries. Still free-text: comparison `threshold` (numeric, no enum needed but should be explicitly typed for consistency), bollinger `stddev` (number), per_share_rate (number), etc. Mechanical pass; add `paramTypes: { ... }` to every catalog entry whose defaults aren't already self-explanatory. (added 2026-05-25, from F271 close reading). [easy] [arch]
 
 ### F · Hardening
 - [x] <a id="f49"></a> **F49** `useInstanceIndicators` swallows HTF query errors — `Object.assign(merged, q.data)` silently skips when `q.data` is `undefined` (error state). User sees a chart missing an indicator with no explanation. Add `isError`/`errorMessage` to the hook's return and surface in `SubPane.tsx` (e.g. red "Failed to load" overlay, mirroring the loading overlay). Pattern is pre-existing but exposed more visibly by A14a — now that loading state is shown, the asymmetry of "loading state visible / error state silent" is more jarring. [medium] (from PR #28 reliability review) [hardening] (resolved 2026-05-13)
@@ -247,3 +248,4 @@ Own multi-session research project. Needs its own design work before implementat
 - [ ] <a id="f219"></a> **F219** Idle-rAF canary smoke test — F218 surfaced a class of bug (perpetual repaint loop while idle) that is invisible to unit tests, invisible to crisp screenshots, and only manifests as elevated CPU + naked-eye flicker. A trivial chrome-devtools-mcp probe — hook `requestAnimationFrame` for 500ms after chart mount with no user input, assert `< 5` calls — would have caught F218 the moment it landed. Real work: add to the overnight headless render probe (F51) once that exists, or as a standalone post-build check. Also worth: a MutationObserver canary that counts canvas-attribute mutations over 1s (zero expected). Both run in <2s. Catches future regressions to autoSize handling and any new v4→v5 lightweight-charts pattern drift. [easy] [testing] (added 2026-05-15)
 - [ ] <a id="f249b"></a> **F249b** Layout mounting tests for StrategyComparison and WalkForwardPanel — add frontend tests (Vitest + React Testing Library) to ensure createChart instances are initialized with the proper `autoSize: true` configuration and no width/height properties. [easy] [testing]
 - [x] <a id="f267"></a> **F267** Docs reorg: retire `docs/superpowers/` — plugin-specific holdover folder. ~45 plan + spec files moved via `git mv` into the existing `docs/plans/` and `docs/specs/` (plugin-agnostic, already where recent work lived). All cross-references in `.md` files updated via sed. CLAUDE.md "On Start" handoff contract updated to point at the new locations. [easy] [infra] (resolved 2026-05-25)
+- [ ] <a id="f277"></a> **F277** Backend should validate `paramTypes` against actual param schema — currently catalog `paramTypes` is duck-typed against `defaults.params` shape. Easy to typo a key or drift from backend's accepted params (e.g. `type` vs `kind`). A test (TS or pytest) that walks the catalog and asserts every key in `paramTypes` is also in `defaults.params` would catch it. (added 2026-05-25, from F271). [easy] [testing]
