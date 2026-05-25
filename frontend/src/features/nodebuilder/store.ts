@@ -17,6 +17,7 @@ import {
   addWire as opAddWire,
   removeWire as opRemoveWire,
   moveNode as opMoveNode,
+  updateNodeParams as opUpdateNodeParams,
   spliceNodeOntoWire as opSpliceNodeOntoWire,
   MIN_SUPPORTED_VERSION,
   IncompatibleGraphVersionError,
@@ -90,6 +91,7 @@ export interface NodeBuilderState {
   addWire(wire: GraphWire): void
   removeWire(wireId: string): void
   moveNode(nodeId: string, position: [number, number]): void
+  updateNodeParams(nodeId: string, partial: Record<string, unknown>): void
   spliceNodeOntoWire(nodeId: string, wireId: string): void
 
   // ── Persistence ──────────────────────────────────────────────────────────
@@ -180,6 +182,13 @@ export const useNodeBuilderStore = create<NodeBuilderState>()((set, get) => ({
     const { graph } = get()
     if (!graph) return
     const next = opMoveNode(graph, nodeId, position)
+    set({ graph: next, graphHash: hashGraph(next) })
+  },
+
+  updateNodeParams(nodeId, partial) {
+    const { graph } = get()
+    if (!graph) return
+    const next = opUpdateNodeParams(graph, nodeId, partial)
     set({ graph: next, graphHash: hashGraph(next) })
   },
 

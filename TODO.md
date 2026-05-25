@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*254 / 270 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*255 / 275 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -10,10 +10,9 @@ _(none open)_
 
 ## Up Next
 
-- [F268](#f268) — [next] NodeBuilder parameter editing [medium]
 - [F212](#f212) — [next] F210 inline-confirm browser smoke remains partially open [easy]
 
-## Open Work — 39 items
+## Open Work — 43 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -22,9 +21,9 @@ _(none open)_
 | [C](#c-strategy-summary-analytics) | Strategy Summary & Analytics | 3 | [C29](#c29)–[C31](#c31) |
 | [D](#d-bots-live-trading) | Bots (live trading) | 1 | [D24b](#d24b) |
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
-| [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 13 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F216](#f216), [F268](#f268) |
+| [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 16 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F216](#f216), [F269](#f269)–[F272](#f272) |
 | [F · Hardening](#f-hardening) | Security, reliability, validation | 2 | [F187](#f187), [F211](#f211) |
-| [F · Polish](#f-polish) | UI, naming, dead code | 8 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217](#f217), [F249c](#f249c), [F250](#f250) |
+| [F · Polish](#f-polish) | UI, naming, dead code | 9 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217](#f217), [F249c](#f249c), [F250](#f250), [F273](#f273) |
 | [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 6 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219), [F249b](#f249b) |
 
 ## A — Charts & Indicators
@@ -118,7 +117,11 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f262"></a> **F262** NodeBuilder live drag updates — React Flow was running in a broken half-controlled mode (`nodes={rfNodes}` without `onNodesChange`), so RF's internal node state was being overwritten by the prop on every parent render and drag snapped only at mouseup. Fix: local mirror (`localNodes`/`localEdges` useState) that RF drives via `onNodesChange`/`onEdgesChange` + `applyNodeChanges`; store stays authoritative via existing drag-end/connect/delete handlers + sync useEffect. Memo arrays reference-stabilized to avoid unnecessary sync fires. (61795ed; TDZ follow-up 2953b29) [medium] [arch] (resolved 2026-05-25)
 - [x] <a id="f264"></a> **F264** Houdini-style wire-to-empty-space → TabMenu auto-wire — drag a wire from a port into the empty pane → TabMenu opens at cursor → pick a node → wire auto-connects in the direction dragged. `onConnectStart` captures source nodeId + handle type; `onConnectEnd` detects drops on the pane (not on a handle); `handleTabMenuCreate` consumes the pending wire and adds it. Direction-aware (source-handle drag → new node is target; target-handle drag → new node is source). Cleanup on Esc / outside-click / drop-on-handle. (a461de8) [medium] [arch] (resolved 2026-05-25)
 - [x] <a id="f266"></a> **F266** NodeBuilder selection-latency fix — after F262, clicking a node fired two renders (applyNodeChanges + sync useEffect re-replacing `localNodes` with store-derived `rfNodes`, same data new refs). Second render+paint added perceptible lag on 120Hz displays. Sync useEffect now short-circuits when only `selected` differs across the two arrays; selection already applied via applyNodeChanges. (c97cfe8) [easy] [arch] (resolved 2026-05-25)
-- [ ] <a id="f268"></a> **F268** [next] NodeBuilder parameter editing — params are displayed on nodes (RSI shows period etc.) but not editable. Add `updateNodeParams(nodeId, partial)` store op + inline numeric/select inputs on node bodies (Houdini-style for short scalars), inspector panel deferred until inline gets cramped. Three in-session decisions (inline vs inspector, validation locus, auto-rerun vs manual) captured in [`docs/plans/2026-05-25-node-builder-param-editing.md`](docs/plans/2026-05-25-node-builder-param-editing.md) with recommendations. (added 2026-05-25, from this session's UX-polish iteration; user noted "next: data flow + editing"). [medium] [arch]
+- [x] <a id="f268"></a> **F268** NodeBuilder parameter editing — `updateNodeParams(nodeId, partial)` pure op (operations.ts) + store wiring + inline editable param rows on `IndicatorNode` when graph is editable. One row per param, numeric/text input committed on blur (reads `e.target.value` so fast-type-then-blur never misses), Enter blurs, ESC reverts to last committed value. `.nodrag .nopan` on the row container + onPointerDown stopPropagation keep React Flow from hijacking the cursor. Three tests added (15b/15c/15d). Browser-verified: edited EMA period 200→50, ran backtest, POST payload contains `"period":50`. Inspector panel deferred to follow-up; threshold/text params on other renderers also deferred (TickerNode, ComparisonNode, etc.). (resolved 2026-05-25) [medium] [arch]
+- [ ] <a id="f269"></a> **F269** Extend inline param editing to TickerNode + ComparisonNode + SettingsNode + LogicNode renderers — F268 only wired up `IndicatorNode`. Each renderer has its own header/body and currently displays params as part of the title (e.g. TickerNode shows `AAPL · 30m · alpaca-iex`, ComparisonNode shows `Below · 30`). Pattern: re-use the `ParamRows`/`ParamRow` helper from `IndicatorNode.tsx`, hide param suffix from title when `editable=true`, render rows underneath. Use catalog `defaults.params` shape to drive input type. (added 2026-05-25, from F268 scope split). [medium] [arch]
+- [ ] <a id="f270"></a> **F270** Extract `ParamRows`/`ParamRow` from `IndicatorNode.tsx` into shared `nodes/ParamRow.tsx` — once a second renderer needs it (F269), the inline editor should not be co-located with one specific node renderer. Includes the `.nodrag .nopan` wrapper, `e.target.value` blur-commit, ESC revert, Enter blur. Tests: vitest the commit logic against fake store. (added 2026-05-25, from F268 scope split). [easy] [arch]
+- [ ] <a id="f271"></a> **F271** Typed param schema from catalog → inline editor — currently `ParamRow` infers numeric vs text from `typeof value === 'number'`, which breaks for select-style params (e.g. RSI `type: "sma" | "ema" | "wma"`). Add a `paramTypes?: Record<string, { type: 'number' | 'string' | 'select'; options?: string[] }>` field to `NodeCatalogEntry` and render a `<select>` for enums. RSI `type` and TickerNode `interval`/`source` are the canaries. (added 2026-05-25, from F268). [medium] [arch]
+- [ ] <a id="f272"></a> **F272** Inspector panel for node params — when a node has >3 params or long values (e.g. multi-line code blocks for Code nodes), inline editing gets cramped. Right-side panel shows selected-node form; selection ring already in place (F265). Defer until F269+F271 expose nodes that actually need it. (added 2026-05-25, from F268 plan §6). [medium] [arch]
 
 ### F · Hardening
 - [x] <a id="f49"></a> **F49** `useInstanceIndicators` swallows HTF query errors — `Object.assign(merged, q.data)` silently skips when `q.data` is `undefined` (error state). User sees a chart missing an indicator with no explanation. Add `isError`/`errorMessage` to the hook's return and surface in `SubPane.tsx` (e.g. red "Failed to load" overlay, mirroring the loading overlay). Pattern is pre-existing but exposed more visibly by A14a — now that loading state is shown, the asymmetry of "loading state visible / error state silent" is more jarring. [medium] (from PR #28 reliability review) [hardening] (resolved 2026-05-13)
@@ -211,6 +214,7 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f261"></a> **F261** "Edit this graph" button — `NodeBuilder.tsx` toolbar, clones auto-rendered graph into Zustand store via existing `loadFromAutoRender()` so the user keeps their work when transitioning from read-only viewer to editor. Visible only when an auto-render graph exists and edit mode is not active. (a6e5a44) [easy] [polish] (resolved 2026-05-25)
 - [x] <a id="f263"></a> **F263** NodeBuilder cursor semantics — scoped CSS under `.nodebuilder-root`: empty pane → grab/grabbing, node → default arrow (grabbing while dragged), edge → pointer, handle/port → crosshair. Houdini-style: nodes feel like items, ports feel like connection sources, only empty pane invites panning. (61795ed) [easy] [polish] (resolved 2026-05-25)
 - [x] <a id="f265"></a> **F265** Visible selection ring on selected nodes — RF's default `.react-flow__node.selected` is a 0.5px dark outline (invisible on dark theme). Selection IS firing (handlers run, store updates) but no visual feedback. Added explicit 2px display-flag-colored ring + soft outer glow under `.nodebuilder-root`. (5897ba2) [easy] [polish] (resolved 2026-05-25)
+- [ ] <a id="f273"></a> **F273** Visual feedback for invalid param values — current behavior: invalid numeric (e.g. `"abc"`) silently reverts to previous value via `setDraft(initial)`. User has no signal the input was rejected. Add red border on invalid + tooltip "must be a number" / equivalent. Defer until F269 lands so the styling is shared. (added 2026-05-25, from F268). [easy] [polish]
 
 ### F · Testing and Infra
 - [x] <a id="f50"></a> **F50** Frontend console-error smoke test in overnight build — after `npm run build`, boot `npm run preview &` (Vite preview server, default port **4173** — distinct from `npm run dev`'s 5173 because we want to validate the production `dist/` artifact, not the dev server). `curl -fsS http://localhost:4173/` to verify the page loads, then a short headless check (e.g. `node -e` with a minimal fetch + parse) that there are no obvious crash markers in the served HTML. Catches "compiles clean but throws on mount" and broken import paths that `tsc -b` doesn't detect. Append to `docs/overnight-builder-prompt-patch.md` Section 3.5 (smoke test). [easy] (from overnight pipeline gap review) [infra] (resolved 2026-05-15)

@@ -15,6 +15,7 @@ import {
   removeWire,
   addWire,
   moveNode,
+  updateNodeParams,
   removeNodeWithRewire,
   spliceNodeOntoWire,
   wouldCreateCycle,
@@ -272,6 +273,35 @@ it('14. moveNode updates position', () => {
 it('15. moveNode on readOnly throws', () => {
   const g = makeGraph([makeNode('A')], [], true)
   expect(() => moveNode(g, 'A', [10, 20])).toThrow(ReadOnlyGraphError)
+})
+
+// ---------------------------------------------------------------------------
+// 15b. updateNodeParams merges partial into node.params
+// ---------------------------------------------------------------------------
+it('15b. updateNodeParams merges partial into node.params', () => {
+  const node: GraphNode = { ...makeNode('A'), params: { period: 14, threshold: 30 } }
+  const g = makeGraph([node], [])
+  const result = updateNodeParams(g, 'A', { period: 21 })
+  expect(result.nodes['A'].params).toEqual({ period: 21, threshold: 30 })
+  // original unchanged
+  expect(g.nodes['A'].params).toEqual({ period: 14, threshold: 30 })
+})
+
+// ---------------------------------------------------------------------------
+// 15c. updateNodeParams on readOnly throws
+// ---------------------------------------------------------------------------
+it('15c. updateNodeParams on readOnly throws', () => {
+  const g = makeGraph([makeNode('A')], [], true)
+  expect(() => updateNodeParams(g, 'A', { period: 21 })).toThrow(ReadOnlyGraphError)
+})
+
+// ---------------------------------------------------------------------------
+// 15d. updateNodeParams no-op on missing node
+// ---------------------------------------------------------------------------
+it('15d. updateNodeParams no-op on missing node', () => {
+  const g = makeGraph([makeNode('A')], [])
+  const result = updateNodeParams(g, 'ZZ', { period: 21 })
+  expect(result).toBe(g)
 })
 
 // ---------------------------------------------------------------------------

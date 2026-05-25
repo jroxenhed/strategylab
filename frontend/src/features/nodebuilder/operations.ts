@@ -147,6 +147,31 @@ export function moveNode(
 }
 
 /**
+ * Update params on a node (shallow merge of `partial` into existing params).
+ * No-op when the node doesn't exist. Component-side coercion is the caller's
+ * responsibility; backend graph validation surfaces semantic errors on run.
+ */
+export function updateNodeParams(
+  graph: Graph,
+  nodeId: string,
+  partial: Record<string, unknown>,
+): Graph {
+  assertEditable(graph, 'updateNodeParams')
+  const existing = graph.nodes[nodeId]
+  if (!existing) return graph
+  return {
+    ...graph,
+    nodes: {
+      ...graph.nodes,
+      [nodeId]: {
+        ...existing,
+        params: { ...(existing.params ?? {}), ...partial },
+      },
+    },
+  }
+}
+
+/**
  * Delete-rewire: remove a node and reconnect incoming → outgoing edges
  * using the Cartesian product, deduplicating and refusing cycles/self-loops.
  *
