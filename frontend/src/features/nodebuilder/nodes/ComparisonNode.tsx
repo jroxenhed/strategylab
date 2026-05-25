@@ -8,27 +8,28 @@
 
 import type { NodeProps } from '@xyflow/react'
 import { BaseNode, type BaseNodeData } from './BaseNode'
+import { ParamRows } from './ParamRow'
 
 /** Convert snake_case condition to title-case readable label. */
 function friendlyCondition(name: string): string {
-  // crosses_above → Crosses Above, above → Above, etc.
   return name
     .split('_')
     .map(w => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ')
 }
 
-export default function ComparisonNode({ data }: NodeProps) {
+export default function ComparisonNode({ id, data }: NodeProps) {
   const d = data as unknown as BaseNodeData
   const params = d.params ?? {}
   const catalog = d.catalog
   const backendType = d.backendType ?? ''
+  const editable = d.editable === true
 
   const conditionLabel = friendlyCondition(backendType)
   const threshold = params.threshold != null ? String(params.threshold) : null
 
-  // Build title: "Crosses Above" optionally with " · 30" chip inline
-  const title = threshold ? `${conditionLabel} · ${threshold}` : conditionLabel
+  // In edit mode, threshold is shown as an input below; keep title clean.
+  const title = (!editable && threshold) ? `${conditionLabel} · ${threshold}` : conditionLabel
 
   const reads = catalog?.reads ?? ['@close', '@close']
   const writes = catalog?.writes ?? ['@bool']
@@ -41,7 +42,11 @@ export default function ComparisonNode({ data }: NodeProps) {
       writes={writes}
       display={d.display}
       bypass={d.bypass}
-      editable={d.editable === true}
-    />
+      editable={editable}
+    >
+      {editable && Object.keys(params).length > 0 && (
+        <ParamRows nodeId={id} params={params} />
+      )}
+    </BaseNode>
   )
 }

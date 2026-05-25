@@ -8,6 +8,7 @@
 
 import type { NodeProps } from '@xyflow/react'
 import { BaseNode, type BaseNodeData } from './BaseNode'
+import { ParamRows } from './ParamRow'
 
 /** Format params into a readable subtitle based on the node type. */
 function formatSubtitle(backendType: string, params: Record<string, unknown>): string {
@@ -46,24 +47,30 @@ function titleFor(backendType: string): string {
   }
 }
 
-export default function SettingsNode({ data }: NodeProps) {
+export default function SettingsNode({ id, data }: NodeProps) {
   const d = data as unknown as BaseNodeData
   const params = d.params ?? {}
   const backendType = d.backendType ?? ''
+  const editable = d.editable === true
 
   const title = titleFor(backendType)
-  const subtitle = formatSubtitle(backendType, params)
+  // In edit mode, params show as inputs below; subtitle would duplicate them.
+  const subtitle = editable ? undefined : (formatSubtitle(backendType, params) || undefined)
   const writes = d.catalog?.writes ?? ['@setting']
 
   return (
     <BaseNode
       cat="settings"
       title={title}
-      subtitle={subtitle || undefined}
+      subtitle={subtitle}
       writes={writes}
       display={d.display}
       bypass={d.bypass}
-      editable={d.editable === true}
-    />
+      editable={editable}
+    >
+      {editable && Object.keys(params).length > 0 && (
+        <ParamRows nodeId={id} params={params} />
+      )}
+    </BaseNode>
   )
 }
