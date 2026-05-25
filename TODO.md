@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*257 / 277 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*259 / 277 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 - [F212](#f212) — [next] F210 inline-confirm browser smoke remains partially open [easy]
 
-## Open Work — 43 items
+## Open Work — 41 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -22,7 +22,7 @@ _(none open)_
 | [D](#d-bots-live-trading) | Bots (live trading) | 1 | [D24b](#d24b) |
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 14 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F216](#f216), [F271](#f271)–[F272](#f272) |
-| [F · Hardening](#f-hardening) | Security, reliability, validation | 4 | [F187](#f187), [F211](#f211), [F274](#f274)–[F275](#f275) |
+| [F · Hardening](#f-hardening) | Security, reliability, validation | 2 | [F187](#f187), [F211](#f211) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 9 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217](#f217), [F249c](#f249c), [F250](#f250), [F273](#f273) |
 | [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 6 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219), [F249b](#f249b) |
 
@@ -171,8 +171,8 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f223"></a> **F223** Zero-trade / unparseable-threshold rule validation — frontend red-border guard on RuleRow when condition needs a threshold and value is blank/NaN. Disable Run while invalid. Whitelist threshold-free conditions (`crosses_above`, `turns_up`, etc). See plan F-UX3. [easy] [hardening] (resolved 2026-05-16)
 - [x] <a id="f224"></a> **F224** Slippage input — locale-aware parse — format with `Intl.NumberFormat('en-US', …)` (not `toLocaleString`); strip non-`[0-9.]` before `parseFloat`. Audit all empirical-float inputs (grep `toLocaleString`). Today sends NaN under sv-SE locale. See plan F-UX4. [easy] [hardening] (resolved 2026-05-16)
 - [x] <a id="f249"></a> **F249** Migrate the last two `createChart` callers that use fixed `height: NNN` + no resize tracking — `frontend/src/features/strategy/StrategyComparison.tsx` and `frontend/src/features/strategy/WalkForwardPanel.tsx` migrated to use `autoSize: true` for clean layout responsiveness and standardizing with v5 codebase conventions. [easy] [hardening] (resolved 2026-05-20)
-- [ ] <a id="f274"></a> **F274** Auto-render produces graphs the backtest endpoint rejects (`/regime/*` nodes) — clicking "Edit this graph" on the default AMD/30m strategy then "▶ Run Backtest" 400s with `"Graph contains a /regime/ node (...). Regime is not supported in the graph evaluator at T2."`. Two ways out: (a) strip `/regime/*` nodes + their wires from auto-render output for the T2 evaluator (matches what WFA already does — see CLAUDE.md Walk-Forward §"Regime is unconditionally stripped"); (b) wire regime support into the graph evaluator (T3 scope). Pick (a) for the interim — single line at the `auto_render` boundary or in the `loadFromAutoRender` store action. Discovered 2026-05-25 during F268 verification; previously hidden because edit-then-run wasn't a UX path. (added 2026-05-25). [easy] [hardening]
-- [ ] <a id="f275"></a> **F275** `ParamRow` empty-string handling for numeric params — typing into a numeric input, selecting all, deleting (e.target.value === '') currently triggers `Number('') === 0` → commits `0`. Bad behaviour for params where 0 is meaningless (period=0 crashes indicator math). Either reject empty on commit (revert to initial) or require a minimum. Pick "reject empty → revert" since it matches ESC semantics. (added 2026-05-25, from F268 close reading). [easy] [hardening]
+- [x] <a id="f274"></a> **F274** `loadFromAutoRender` strips `/regime/*` nodes + incident wires so editing the auto-rendered graph and pressing Run Backtest doesn't 400 with "Regime is not supported in the graph evaluator at T2." Same approach as WFA. T1 read-only viewer still shows regime nodes; only the editable copy is filtered. Browser-verified: first successful 200 from `/api/nodebuilder/backtest` (was 400 every prior attempt this session). (resolved 2026-05-25) [easy] [hardening]
+- [x] <a id="f275"></a> **F275** `ParamRow` numeric empty-string → revert to initial instead of `Number('') === 0`. Two-line guard at top of `commit()`; matches ESC semantics. (resolved 2026-05-25) [easy] [hardening]
 
 ### F · Polish
 - [ ] <a id="f34"></a> **F34** 118+ hardcoded hex colors while CSS variables exist — theme change requires touching dozens of files. Migrate Results.tsx and BotCard.tsx to use --bg-*, --accent-*, --text-* variables. [medium] [polish]

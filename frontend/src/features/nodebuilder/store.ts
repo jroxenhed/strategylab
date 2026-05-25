@@ -224,7 +224,24 @@ export const useNodeBuilderStore = create<NodeBuilderState>()((set, get) => ({
   },
 
   loadFromAutoRender(graph) {
-    const editable: Graph = { ...graph, readOnly: false }
+    // Strip /regime/* nodes + incident wires. The T2 graph evaluator returns
+    // 400 on regime nodes ("Regime is not supported"), and WFA already strips
+    // them at its boundary (see CLAUDE.md WFA §"Regime is unconditionally
+    // stripped"). T1 read-only view still shows them; the editable copy must
+    // not, otherwise Run Backtest 400s every time.
+    const filteredNodes: Record<string, GraphNode> = {}
+    for (const [id, n] of Object.entries(graph.nodes)) {
+      if (!id.startsWith('/regime/')) filteredNodes[id] = n
+    }
+    const filteredWires = graph.wires.filter(
+      w => !w.from.startsWith('/regime/') && !w.to.startsWith('/regime/'),
+    )
+    const editable: Graph = {
+      ...graph,
+      readOnly: false,
+      nodes: filteredNodes,
+      wires: filteredWires,
+    }
     set({
       graph: editable,
       graphHash: hashGraph(editable),

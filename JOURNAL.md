@@ -41,6 +41,13 @@ Continuation of F268. Took F270 first (extract) so F269 (apply to other renderer
   - **[F274](TODO.md#f274)** Auto-render produces graphs the backtest endpoint rejects: `/regime/*` nodes 400 with "Regime is not supported in the graph evaluator at T2". WFA already strips them at the route boundary; same fix on auto-render output (or in `loadFromAutoRender`) closes the UX gap.
   - **[F275](TODO.md#f275)** `ParamRow` numeric input: deleting all characters commits `Number('') === 0` instead of reverting. Bad for period-like params where 0 crashes downstream math.
 
+### NodeBuilder hardening: regime stripping + empty-string guard (F274 + F275)
+
+Both follow-ups from the previous block shipped together — small, related, and F274 unblocks every future end-to-end verification in this branch.
+
+- **[F274](TODO.md#f274)** `loadFromAutoRender` now strips `/regime/*` nodes and any wire incident to them when copying an auto-rendered graph into the editable store. Same approach WFA already uses at its boundary (see CLAUDE.md WFA §"Regime is unconditionally stripped"). T1 read-only viewer still shows regime nodes — only the editable copy is filtered. Browser-verified by reloading, clicking "Edit this graph", clicking "▶ Run Backtest": **first 200 from `/api/nodebuilder/backtest` all session** (every prior attempt 400'd). Node count visibly drops from 33 to 29 (4 regime nodes removed) when entering edit mode.
+- **[F275](TODO.md#f275)** Two-line guard in `ParamRow.commit()`: if `raw.trim() === ''` revert to initial instead of committing `Number('') === 0`. Matches ESC semantics. Prevents the period-style params from silently going to 0 if a user select-all-deletes.
+
 ### Cache-economics-aware delegation rules (main branch)
 
 - **[d6af5a8](https://github.com/jroxenhed/strategylab/commit/d6af5a8)** Updated CLAUDE.md "Subagent delegation rule" with a size threshold (work must exceed the ~5–15k system-prompt write cost) + new "Subagent cache-write cost" bullet documenting per-dispatch cost, same-type-within-5-min cache hits, and the long-running-subagent / parent-cache-aging trap. Overnight builder rule changed from "parallel review of 4–6 personas in one message" to "sequence within 5-min bursts" since wall-clock isn't a constraint overnight. "Just check one thing" anti-pattern flipped: reflexive subagent dispatch for trivial reads is wasteful when inline hits parent cache at 0.1×.

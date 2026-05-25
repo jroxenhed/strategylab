@@ -48,7 +48,14 @@ export function ParamRow({
   const commit = (raw: string) => {
     if (raw === initial) return
     if (isNumber) {
-      const n = Number(raw)
+      const trimmed = raw.trim()
+      // Empty input reverts (matches ESC). Number('') === 0 would silently
+      // accept 0, which crashes period-like params downstream.
+      if (trimmed === '') {
+        setDraft(initial)
+        return
+      }
+      const n = Number(trimmed)
       if (Number.isFinite(n)) {
         updateNodeParams(nodeId, { [paramKey]: n })
       } else {
