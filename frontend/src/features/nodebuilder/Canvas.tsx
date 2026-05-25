@@ -237,8 +237,37 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   // no visual update until release.
   const [localNodes, setLocalNodes] = useState<RFNode[]>(rfNodes)
   const [localEdges, setLocalEdges] = useState<RFEdge[]>(rfEdges)
-  useEffect(() => { setLocalNodes(rfNodes) }, [rfNodes])
-  useEffect(() => { setLocalEdges(rfEdges) }, [rfEdges])
+  // Sync store-derived rfNodes/rfEdges INTO the local mirror — but skip when
+  // the only thing that changed is selection (which applyNodeChanges has
+  // already applied locally). Without this short-circuit, every click fired
+  // a second render + paint after the first (visible) one, causing a perceived
+  // lag between click and selection ring on 120Hz displays. The store update
+  // from onNodeClick still happens; we just don't redundantly re-sync.
+  useEffect(() => {
+    setLocalNodes(curr => {
+      if (curr.length !== rfNodes.length) return rfNodes
+      // Same id ordering and same content modulo selection? Keep curr.
+      const onlySelectionDiffers = curr.every((n, i) => {
+        const r = rfNodes[i]
+        return n.id === r.id
+          && n.data === r.data
+          && n.position === r.position
+          && n.draggable === r.draggable
+          && n.type === r.type
+      })
+      return onlySelectionDiffers ? curr : rfNodes
+    })
+  }, [rfNodes])
+  useEffect(() => {
+    setLocalEdges(curr => {
+      if (curr.length !== rfEdges.length) return rfEdges
+      const onlySelectionDiffers = curr.every((e, i) => {
+        const r = rfEdges[i]
+        return e.id === r.id && e.source === r.source && e.target === r.target && e.label === r.label && e.type === r.type
+      })
+      return onlySelectionDiffers ? curr : rfEdges
+    })
+  }, [rfEdges])
 
   const handleNodesChange = useCallback((changes: NodeChange[]) => {
     setLocalNodes(nds => applyNodeChanges(changes, nds))
