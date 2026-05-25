@@ -45,7 +45,7 @@ Designed a comprehensive implementation plan for regime-gated direction switchin
 ## Stats
 - **79/101 shipped** (was 75 at session start)
 - **6 new TODO items** added: A13a, A13b, B21, B22, B23, D24
-- **Plan file:** `docs/superpowers/plans/2026-05-01-regime-filter.md`
+- **Plan file:** `docs/plans/2026-05-01-regime-filter.md`
 - **3 plan iterations** with 6 total review agents dispatched
 - **~25 subagents** used across the session (exploration, planning, review)
 - **0 code exploration in main session** — pure orchestrator

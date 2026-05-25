@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python/FastAPI (backend), React/TypeScript/Vite (frontend), lightweight-charts v5.
 
-**Spec:** `docs/superpowers/specs/2026-04-11-post-live-run-polish-design.md`
+**Spec:** `docs/specs/2026-04-11-post-live-run-polish-design.md`
 
 **Implementation order:** Task 1 (Discovery refactor) → Task 2 (sparkline toggle) → Task 3 (global start/stop) → Task 4 (buy & hold overlay) → Task 5 (gain/loss stats + histogram).
 

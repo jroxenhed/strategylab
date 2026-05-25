@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python FastAPI APIRouter, React/TypeScript, Vite
 
-**Spec:** `docs/superpowers/specs/2026-04-04-project-restructure-design.md`
+**Spec:** `docs/specs/2026-04-04-project-restructure-design.md`
 
 ---
 

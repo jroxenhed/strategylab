@@ -8,7 +8,7 @@
 
 **Tech Stack:** React + TypeScript (frontend), Python/FastAPI (backend), lightweight-charts v5, TanStack Query, existing CSS variables.
 
-**Spec:** [`docs/superpowers/specs/2026-04-20-indicator-system-redesign-design.md`](../specs/2026-04-20-indicator-system-redesign-design.md)
+**Spec:** [`docs/specs/2026-04-20-indicator-system-redesign-design.md`](../specs/2026-04-20-indicator-system-redesign-design.md)
 
 ### Spec deviations
 

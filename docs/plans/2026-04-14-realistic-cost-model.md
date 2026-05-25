@@ -8,7 +8,7 @@
 
 **Tech Stack:** FastAPI + Pydantic (backend), React + TypeScript + TanStack Query (frontend), pytest.
 
-**Spec:** `docs/superpowers/specs/2026-04-14-realistic-cost-model-design.md`
+**Spec:** `docs/specs/2026-04-14-realistic-cost-model-design.md`
 
 ---
 

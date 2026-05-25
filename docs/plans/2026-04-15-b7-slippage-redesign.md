@@ -26,7 +26,7 @@
 **Commit boundaries match session boundaries** so a future `git bisect` on any regression lands on the correct layer.
 
 **Shared references (read once per session as needed):**
-- Spec: `docs/superpowers/specs/2026-04-15-slippage-redesign-design.md`
+- Spec: `docs/specs/2026-04-15-slippage-redesign-design.md`
 - Convention table: spec §Core convention (side-inversion table).
 - Policy pseudo-code: spec §Policy (`decide_modeled_bps`).
 - Rollout ordering: spec §Rollout.

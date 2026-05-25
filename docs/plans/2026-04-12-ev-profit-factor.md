@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3 + FastAPI (backend), pytest (backend tests), React + TypeScript + Vite (frontend). No Jest/Vitest in the frontend — frontend verification is manual browser checks.
 
-**Spec:** `docs/superpowers/specs/2026-04-12-ev-profit-factor-design.md`
+**Spec:** `docs/specs/2026-04-12-ev-profit-factor-design.md`
 
 ---
 

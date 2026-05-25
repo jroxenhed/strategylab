@@ -53,7 +53,7 @@ Every agent session (interactive or automated) follows this protocol to prevent 
 ### On Start
 1. Read `TODO.md` — identify unchecked items, note the shipped/total count
 2. Read `JOURNAL.md` (last entry only) — understand what was just shipped
-3. If working on a specific TODO item, check for a linked spec/plan in `docs/superpowers/`
+3. If working on a specific TODO item, check for a linked spec/plan in `docs/plans/`
 
 ### On End
 1. Update `TODO.md` — check off completed items, add new items if work surfaced them. **Every implementation session must surface at least 1–2 new items** — if you found zero, you weren't looking hard enough. Edge cases, missing validation, UX gaps, performance concerns, and natural follow-ups all count. Tag new items with the parent task ID (e.g. B5d from B5c). New F-items must include one bucket tag: `[arch]` / `[hardening]` / `[polish]` / `[testing]` / `[infra]`. The only things that don't belong are speculative feature requests with no connection to the work you just did — those go in `IDEAS.md` (graduate to `TODO.md` once they have a clear what+why+how).

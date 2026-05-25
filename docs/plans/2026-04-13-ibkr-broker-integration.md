@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python, `ib_insync`, FastAPI, React/TypeScript
 
-**Spec:** `docs/superpowers/specs/2026-04-13-ibkr-broker-integration-design.md`
+**Spec:** `docs/specs/2026-04-13-ibkr-broker-integration-design.md`
 
 ---
 

@@ -2,7 +2,7 @@
 
 ## Context
 
-StrategyLab has a backtester, saved strategies, and Alpaca paper trading integration (account, positions, orders, manual signal scanner). The missing piece is **automation** — a bot that runs saved strategies in a loop, evaluating rules and placing orders automatically. The full spec lives at `docs/superpowers/specs/2026-04-08-live-trading-bot-plan.md`.
+StrategyLab has a backtester, saved strategies, and Alpaca paper trading integration (account, positions, orders, manual signal scanner). The missing piece is **automation** — a bot that runs saved strategies in a loop, evaluating rules and placing orders automatically. The full spec lives at `docs/specs/2026-04-08-live-trading-bot-plan.md`.
 
 This plan implements the spec across 2 phases: backend first (Steps 1–4), then frontend (Steps 5–8). Each phase ends with a verification checkpoint and commit.
 

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python (FastAPI, pandas, hashlib), TypeScript/React (lightweight-charts v5 BaselineSeries/LineSeries/HistogramSeries, TanStack Query)
 
-**Spec:** `docs/superpowers/specs/2026-04-12-equity-curve-macro-mode-design.md`
+**Spec:** `docs/specs/2026-04-12-equity-curve-macro-mode-design.md`
 
 ---
 

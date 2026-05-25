@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python/FastAPI (backend), React/TypeScript (frontend), lightweight-charts, pandas
 
-**Spec:** `docs/superpowers/specs/2026-04-21-b12-parameterized-ma-rules-design.md`
+**Spec:** `docs/specs/2026-04-21-b12-parameterized-ma-rules-design.md`
 
 ---
 

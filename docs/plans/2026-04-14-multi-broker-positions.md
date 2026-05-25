@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12, FastAPI, asyncio, ib_insync (IBKR), pytest for backend. Frontend: React + TypeScript + TanStack Query.
 
-Spec: `docs/superpowers/specs/2026-04-14-multi-broker-positions-design.md` (approved).
+Spec: `docs/specs/2026-04-14-multi-broker-positions-design.md` (approved).
 
 **PR split:**
 - **PR 1 — Phase 1 (D6):** Tasks 1–5. Heartbeat monitor + `/api/broker` health surface + IBKR badge dot. Ships standalone.
