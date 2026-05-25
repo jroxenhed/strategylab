@@ -126,3 +126,46 @@ describe("catalogByCategory()", () => {
     }
   });
 });
+
+describe("NODE_CATALOG.paramTypes (F277 — drift guard)", () => {
+  it("every paramTypes key is also a key in defaults.params", () => {
+    for (const entry of NODE_CATALOG) {
+      if (!entry.paramTypes) continue;
+      const defaultKeys = new Set(Object.keys(entry.defaults.params));
+      for (const key of Object.keys(entry.paramTypes)) {
+        expect(
+          defaultKeys.has(key),
+          `node "${entry.name}" has paramTypes["${key}"] but no defaults.params["${key}"]`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("every paramTypes entry of type 'select' has a non-empty options array", () => {
+    for (const entry of NODE_CATALOG) {
+      if (!entry.paramTypes) continue;
+      for (const [key, spec] of Object.entries(entry.paramTypes)) {
+        if (spec.type !== 'select') continue;
+        expect(
+          Array.isArray(spec.options) && spec.options.length > 0,
+          `node "${entry.name}" paramTypes["${key}"].type is 'select' but options is empty/missing`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("every numeric default has an explicit paramTypes entry (no silent inference for canonical params)", () => {
+    // Soft contract: any param whose default is a `number` should be explicitly
+    // typed so future readers can trust the catalog over typeof-inference.
+    // (Strings without enums may rely on inference until F271+ extends them.)
+    for (const entry of NODE_CATALOG) {
+      for (const [key, value] of Object.entries(entry.defaults.params)) {
+        if (typeof value !== 'number') continue;
+        expect(
+          entry.paramTypes?.[key]?.type,
+          `node "${entry.name}" param "${key}" defaults to a number but is not declared in paramTypes`,
+        ).toBe('number');
+      }
+    }
+  });
+});

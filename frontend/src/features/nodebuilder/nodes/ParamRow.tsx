@@ -81,24 +81,30 @@ export function ParamRow({
   const isSelect = resolvedType === 'select'
   const initial = value === null || value === undefined ? '' : String(value)
   const [draft, setDraft] = useState(initial)
+  const [invalid, setInvalid] = useState<string | null>(null)
 
-  useEffect(() => { setDraft(initial) }, [initial])
+  useEffect(() => { setDraft(initial); setInvalid(null) }, [initial])
 
   const commit = (raw: string) => {
-    if (raw === initial) return
+    if (raw === initial) { setInvalid(null); return }
     if (isNumber) {
       const trimmed = raw.trim()
+      // Empty input → silent revert (F275). Distinct from "abc" which is
+      // unparseable: we keep the bad value visible + red so the user can fix it.
       if (trimmed === '') {
         setDraft(initial)
+        setInvalid(null)
         return
       }
       const n = Number(trimmed)
       if (Number.isFinite(n)) {
+        setInvalid(null)
         updateNodeParams(nodeId, { [paramKey]: n })
       } else {
-        setDraft(initial)
+        setInvalid('Must be a number')
       }
     } else {
+      setInvalid(null)
       updateNodeParams(nodeId, { [paramKey]: raw })
     }
   }
@@ -125,13 +131,18 @@ export function ParamRow({
     )
   }
 
+  const inputStyle: React.CSSProperties = invalid
+    ? { ...fieldStyle, borderColor: 'var(--nb-cat-rules)', boxShadow: '0 0 0 1px var(--nb-cat-rules)' }
+    : fieldStyle
+
   return (
     <label style={labelStyle}>
       <span style={{ flexShrink: 0 }}>{paramKey}</span>
       <input
         type={isNumber ? 'number' : 'text'}
         value={draft}
-        onChange={e => setDraft(e.target.value)}
+        title={invalid ?? undefined}
+        onChange={e => { setDraft(e.target.value); if (invalid) setInvalid(null) }}
         onBlur={e => commit(e.target.value)}
         onKeyDown={e => {
           if (e.key === 'Enter') {
@@ -139,11 +150,12 @@ export function ParamRow({
             (e.target as HTMLInputElement).blur()
           } else if (e.key === 'Escape') {
             setDraft(initial);
+            setInvalid(null);
             (e.target as HTMLInputElement).blur()
           }
         }}
         onPointerDown={e => e.stopPropagation()}
-        style={fieldStyle}
+        style={inputStyle}
       />
     </label>
   )

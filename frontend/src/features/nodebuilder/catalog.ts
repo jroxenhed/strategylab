@@ -122,6 +122,11 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
       subtitle: "MACD(12,26,9)",
     },
     compileActive: true,
+    paramTypes: {
+      fast: { type: 'number' },
+      slow: { type: 'number' },
+      signal: { type: 'number' },
+    },
   },
   {
     name: "sma",
@@ -136,6 +141,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
       subtitle: "SMA(20)",
     },
     compileActive: true,
+    paramTypes: { period: { type: 'number' } },
   },
   {
     name: "ema",
@@ -150,6 +156,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
       subtitle: "EMA(20)",
     },
     compileActive: true,
+    paramTypes: { period: { type: 'number' } },
   },
   {
     name: "bollinger",
@@ -164,6 +171,10 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
       subtitle: "BB(20,2)",
     },
     compileActive: true,
+    paramTypes: {
+      period: { type: 'number' },
+      stddev: { type: 'number' },
+    },
   },
   {
     name: "atr",
@@ -178,6 +189,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
       subtitle: "ATR(14)",
     },
     compileActive: true,
+    paramTypes: { period: { type: 'number' } },
   },
 
   // ── Comparisons ────────────────────────────────────────────────────────
@@ -194,6 +206,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
       subtitle: "crosses above",
     },
     compileActive: true,
+    paramTypes: { threshold: { type: 'number' } },
   },
   {
     name: "crosses_below",
@@ -208,6 +221,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
       subtitle: "crosses below",
     },
     compileActive: true,
+    paramTypes: { threshold: { type: 'number' } },
   },
   {
     name: "above",
@@ -222,6 +236,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
       subtitle: "above",
     },
     compileActive: true,
+    paramTypes: { threshold: { type: 'number' } },
   },
   {
     name: "below",
@@ -236,6 +251,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
       subtitle: "below",
     },
     compileActive: true,
+    paramTypes: { threshold: { type: 'number' } },
   },
 
   // ── Logic ──────────────────────────────────────────────────────────────
@@ -297,6 +313,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
       setting_key: "position_size",
     },
     compileActive: true,
+    paramTypes: { size: { type: 'number' } },
   },
   {
     name: "stop_loss",
@@ -312,6 +329,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
       setting_key: "stop_loss",
     },
     compileActive: true,
+    paramTypes: { pct: { type: 'number' } },
   },
   {
     name: "slippage",
@@ -327,6 +345,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
       setting_key: "slippage_bps",
     },
     compileActive: true,
+    paramTypes: { bps: { type: 'number' } },
   },
   {
     name: "commission",
@@ -342,6 +361,10 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
       setting_key: "commission",
     },
     compileActive: true,
+    paramTypes: {
+      per_share_rate: { type: 'number' },
+      min_per_order: { type: 'number' },
+    },
   },
 
   // ── Output terminals — compile-active ──────────────────────────────────
