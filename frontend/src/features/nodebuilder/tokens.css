@@ -72,3 +72,11 @@
 .nodebuilder-root .react-flow__edge,
 .nodebuilder-root .react-flow__edge-path { cursor: pointer; }
 .nodebuilder-root .react-flow__handle { cursor: crosshair; }
+
+/* Selected node — RF's default 0.5px dark outline is invisible on the dark
+   theme, so nothing visually changes on click. Use the display-flag color
+   as the selection ring for a clear, theme-coherent highlight. */
+.nodebuilder-root .react-flow__node.selected {
+  box-shadow: 0 0 0 2px var(--nb-flag-display), 0 0 12px oklch(0.78 0.13 220 / 0.4);
+  border-radius: var(--nb-radius-node);
+}
