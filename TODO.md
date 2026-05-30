@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*264 / 280 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*264 / 281 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 - [F212](#f212) — [next] F210 inline-confirm browser smoke remains partially open [easy]
 
-## Open Work — 39 items
+## Open Work — 40 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -22,7 +22,7 @@ _(none open)_
 | [D](#d-bots-live-trading) | Bots (live trading) | 1 | [D24b](#d24b) |
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 13 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F216](#f216), [F272](#f272) |
-| [F · Hardening](#f-hardening) | Security, reliability, validation | 2 | [F187](#f187), [F211](#f211) |
+| [F · Hardening](#f-hardening) | Security, reliability, validation | 3 | [F187](#f187), [F211](#f211), [F279](#f279) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 8 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217](#f217), [F249c](#f249c), [F250](#f250) |
 | [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 6 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219), [F249b](#f249b) |
 
@@ -174,6 +174,7 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f249"></a> **F249** Migrate the last two `createChart` callers that use fixed `height: NNN` + no resize tracking — `frontend/src/features/strategy/StrategyComparison.tsx` and `frontend/src/features/strategy/WalkForwardPanel.tsx` migrated to use `autoSize: true` for clean layout responsiveness and standardizing with v5 codebase conventions. [easy] [hardening] (resolved 2026-05-20)
 - [x] <a id="f274"></a> **F274** `loadFromAutoRender` strips `/regime/*` nodes + incident wires so editing the auto-rendered graph and pressing Run Backtest doesn't 400 with "Regime is not supported in the graph evaluator at T2." Same approach as WFA. T1 read-only viewer still shows regime nodes; only the editable copy is filtered. Browser-verified: first successful 200 from `/api/nodebuilder/backtest` (was 400 every prior attempt this session). (resolved 2026-05-25) [easy] [hardening]
 - [x] <a id="f275"></a> **F275** `ParamRow` numeric empty-string → revert to initial instead of `Number('') === 0`. Two-line guard at top of `commit()`; matches ESC semantics. (resolved 2026-05-25) [easy] [hardening]
+- [ ] <a id="f279"></a> **F279** Optimizer/WFA/Sensitivity worker pool leaks on cancel — caught a 2.5-day orphaned `multiprocessing.spawn` child (PPID = backend, ~150min CPU) that wedged the backend after the parent died mid-run. The pool workers don't terminate when the parent is killed; they get reparented to init and tie up the next backend's lifespan. Fix: wrap every `Pool()` use in `routes/optimizer.py`, `routes/walk_forward.py`, `routes/sensitivity.py` with a `try / finally: pool.terminate(); pool.join()` block (or convert to `with Pool() as p:` context-manager form). Verify with `ps -ef | grep multiprocessing.spawn` after killing the backend mid-optimizer-run — should leave zero orphans. [medium] [hardening] (added 2026-05-30)
 
 ### F · Polish
 - [ ] <a id="f34"></a> **F34** 118+ hardcoded hex colors while CSS variables exist — theme change requires touching dozens of files. Migrate Results.tsx and BotCard.tsx to use --bg-*, --accent-*, --text-* variables. [medium] [polish]

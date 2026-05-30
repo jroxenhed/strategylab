@@ -1,10 +1,32 @@
 #!/bin/sh
-# Auto-stamp new TODO items + sync index before commit.
+# Pre-commit:
+#  1. Secret scan on every commit (added 2026-05-30, F279 sibling)
+#  2. TODO auto-stamp + index sync when TODO.md is staged
 # Installed via: bin/install-hooks.sh
 
 set -e
 
-# Only run if TODO.md is staged
+# --- Secret scan ---
+# Block commits that introduce well-known API-key shapes. Tight patterns only
+# (low false-positive rate). Bypass with --no-verify if you really mean it.
+secret_patterns='sk-ant-[A-Za-z0-9_-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{32,}|AKIA[0-9A-Z]{16}|aws_secret_access_key[[:space:]]*=[[:space:]]*[A-Za-z0-9/+=]{40}|AIza[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|xox[bpas]-[A-Za-z0-9-]{10,}|hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]+|sk_live_[A-Za-z0-9]{20,}|pk_live_[A-Za-z0-9]{20,}|PK[A-Z0-9]{18}[[:space:]]*[A-Za-z0-9]'
+
+leak=$(git diff --cached -U0 --diff-filter=ACM \
+    | grep -E '^\+[^+]' \
+    | grep -EHn "$secret_patterns" || true)
+
+if [ -n "$leak" ]; then
+    echo "pre-commit: ABORT — likely secret in staged changes:" >&2
+    echo "" >&2
+    printf '%s\n' "$leak" | head -5 >&2
+    echo "" >&2
+    echo "If this is a false positive, commit with --no-verify." >&2
+    echo "If it's a real leak, unstage + rotate the key before retrying." >&2
+    exit 1
+fi
+# --- End secret scan ---
+
+# Only run TODO sync if TODO.md is staged
 if git diff --cached --name-only | grep -qx 'TODO.md'; then
     if [ ! -f bin/sync-todo-index.py ]; then
         echo "pre-commit: bin/sync-todo-index.py missing, skipping sync"
