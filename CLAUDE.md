@@ -2,123 +2,9 @@
 
 Interactive trading strategy backtester + live paper trading platform. Read this before touching anything.
 
-## Working Style
+> **First-time contributor?** See [ONBOARDING.md](ONBOARDING.md) for setup.
 
-- **The task description IS the context.** Don't browse to "get oriented" — if the task is unclear, ask.
-- **No bulk reads.** No `cat`, no `ls *`, no reading full files to skim. Grep for the distinctive anchor, then Read only the small slice (±20 lines) around it.
-- **Grep over Read** whenever searching for a specific line, pattern, or symbol.
-- Work in small, focused steps. One-sentence narration before each. Commit per task, don't batch. Always push after committing.
-- If hitting an error or blocker, STOP and report immediately — don't retry in a loop.
-- Don't trust line numbers in docs/plans — they drift. Grep for the string anchor, then edit.
-- Output reasoning progressively to avoid API stream idle timeouts; never go silent for >60s.
-- **Key Bugs Fixed is authoritative.** If code appears to invite a "simpler" approach that conflicts with that section, don't take it — those patterns exist for non-obvious runtime reasons.
-- **Subagent delegation rule.** Dispatch subagents when (a) work can run in parallel, (b) the subagent has a specialized capability (named persona, dedicated agent type), or (c) the orchestrator is a higher model tier than the subagent (Opus orchestrating Sonnet implementations). Don't dispatch when the only benefit would be "follow the rule" — same-tier serial dispatch is pure overhead. The orchestrator always owns judgment (what to build, what to fix, what to defer) and verification (did the work happen as intended).
-- **Orchestrator cycle (interactive sessions, Opus orchestrating Sonnet):**
-  1. Pick task from TODO
-  2. Explore+Spec (haiku) — map current code AND return a draft implementation brief. Orchestrator reviews/adjusts the brief (2s of judgment), doesn't rewrite from scratch.
-  3. Implement (parallel sonnet) — backend + frontend simultaneously when independent. Before dispatching, verify file independence: list target files per agent, confirm zero overlap. If files overlap, sequence those agents.
-  4. Verify (orchestrator) — grep key changes, run `npm run build` (not `tsc --noEmit`), spot-check with absolute paths. If UI was touched, run the Live-Browser UI Verification protocol (see below) before Review.
-  5. Review (parallel sonnet) — 4–7 persona agents via ce:review
-  6. Synthesize (orchestrator) — merge findings, classify fix vs defer
-  7. Fix — dispatch one fixer agent when fixes need holistic decisions (extract shared helper, multi-file refactor, harmonize API contracts). Apply directly when fixes are mechanical (rename, regex tighten, single-line guard) and match the reviewer's `suggested_fix` text verbatim. Never dispatch per-finding fixers.
-  8. Verify + commit (orchestrator) — run `npm run build`, check fixes, update TODO/JOURNAL atomically, push
-  9. Repeat
-- **Routine env (overnight builder).** Single Opus session executes end-to-end. Dispatch for parallel review (4-6 personas in one message); do sequential implementation directly (no tier arbitrage when both are Opus). Single-fixer pattern optional when fixes are mechanical, required when holistic. See `docs/overnight-builder-prompt-patch.md` for the procedural script.
-- **Pipeline parallelism across tasks.** Don't wait for Task A's full cycle before starting Task B. While Task A is in review (the slowest phase), Task B can be in explore/implement if files don't overlap. Use `run_in_background: true` on review agents, dispatch the next task's explore+implement while reviews run, synthesize and fix Task A when results arrive, then move to Task B's review.
-- **Model routing.** Orchestrator/judgment work runs Opus 4.7 (xHigh effort when available). Subagents: haiku for fast reads, sonnet for routine implementation/review (cheap parallel personas), opus 4.7 for complex review or synthesis where missing a P1 is expensive. Cost is not the primary constraint — wall-clock and quality are. Set `model` on every Agent call.
-- **Review rules.** Pass file paths and intent to reviewers, not diff content. Always use absolute paths. Severity-graded review (see tiers below) — match review depth to actual risk, not item count.
-- **Severity-graded review tiers.** Item tag drives default tier; aggregate diff and contract surface can promote a bundle to the next tier. Personas earn tokens at the architectural/adversarial tails; Opus orchestrator covers the wide middle.
-  - **Tier A — `[easy]` items, bundle diff <100 lines, no contract surface.** No persona review. Orchestrator verifies via AST parse, full test suite, spot-check each agent's claimed change vs actual file state, `npm run build` if frontend touched. Morning calibration pass (2 personas) is the safety net.
-  - **Tier B — `[medium]` items OR aggregate bundle 100-300 lines OR bundle touches >5 files.** 1-2 personas: `correctness` always, plus conditional file-type reviewer (`kieran-python` for `.py` changes, `kieran-typescript` for `.ts/.tsx`). 2 max.
-  - **Tier C — `[hard]` / architectural / contract changes (response_model, error wording, public API shape, auth, persistence) OR aggregate bundle >300 lines.** Current 4-6 panel (always-on 4 + conditionals based on diff).
-  - **Contract-surface override.** Any of these always promote to Tier C regardless of item tag or line count: changing a Pydantic `response_model`, changing public API error wording/shape, changing auth/authz, changing persistence schema, changing TypeScript shared types, removing a public route. The blast radius is callers, not LOC.
-- **Two-tier review architecture.** Builder and morning passes run in different environments and use different mechanisms — don't try to consolidate them.
-  - **Overnight (builder, coverage role):** manual Task-tool dispatch is canonical — the `ce:review` skill does not resolve in the routine env. Builder applies the severity-graded tier system above: Tier A ships with orchestrator verification only; Tier B/C run personas. Dispatches happen in parallel within a tier; never run all 4 always-on personas on a Tier A bundle.
-  - **Morning (calibration role):** ce:review skill works in the interactive session. 2-persona roster: **agent-native** (the only persona the builder doesn't run — surfaces architectural drift, OpenAPI gaps, error-contract issues) + **reliability** (severity-calibration sweep: re-judge builder deferrals, debunk overshoot findings; do not fish for new ones). Builder already runs adversarial + security overnight; rerunning them on the same diff is duplicate cost. ~5 minutes: review, fix confirmed P1s, merge.
-- **Anti-patterns to avoid:**
-  - "Just check one thing" trap — any investigation in the main session is a delegation failure; dispatch a haiku agent instead
-  - Reading full diffs into orchestrator context — wasteful; pass file paths, let reviewers gather evidence
-  - Relative paths in verification — always use absolute paths; agents do not maintain working directory
-  - "Run git diff" in review prompts — reviewers may lack shell access; use "read these files" instead
-  - `tsc --noEmit` as verification — misses `verbatimModuleSyntax` errors that cause blank pages. Always use `npm run build` (runs `tsc -b`).
-  - Implementation agents committing — agents follow CLAUDE.md literally and will commit+push. Always include "Do NOT commit or push" in implementation agent prompts. The orchestrator owns commit decisions.
-  - System `python` for syntax checks — macOS system Python is 2.7. Always use `python3` explicitly.
-  - Dispatching review agents on wrong branch — always check out the PR branch or extract files to `/tmp` before dispatching. Agents that read main when reviewing a PR produce false positives.
-- Live-browser verification is the default for any UI-touching item with user-visible behavior. See **Live-Browser UI Verification** below for the protocol. Journal to `JOURNAL.md` at session end.
-
-## Handoff Contract
-
-Every agent session (interactive or automated) follows this protocol to prevent cross-session drift.
-
-### On Start
-1. Read `TODO.md` — identify unchecked items, note the shipped/total count
-2. Read `JOURNAL.md` (last entry only) — understand what was just shipped
-3. If working on a specific TODO item, check for a linked spec/plan in `docs/plans/`
-
-### On End
-1. Update `TODO.md` — check off completed items, add new items if work surfaced them. **Every implementation session must surface at least 1–2 new items** — if you found zero, you weren't looking hard enough. Edge cases, missing validation, UX gaps, performance concerns, and natural follow-ups all count. Tag new items with the parent task ID (e.g. B5d from B5c). New F-items must include one bucket tag: `[arch]` / `[hardening]` / `[polish]` / `[testing]` / `[infra]`. The only things that don't belong are speculative feature requests with no connection to the work you just did — those go in `IDEAS.md` (graduate to `TODO.md` once they have a clear what+why+how).
-2. Append to `JOURNAL.md` — reuse today's date header if it exists, one bullet per shipped item with bold **[ID]** cross-reference
-3. Tag suitable unchecked items `[next]` for the next overnight run (prefer prereqs of in-progress work, then `[easy]` items)
-4. Both updates in the **same commit** as the code changes (atomic)
-5. Send Slack summary (silently skips if webhook not configured):
-   ```
-   bash bin/slack-report.sh "Overnight build YYYY-MM-DD
-   Shipped: <ID> (<title>), <ID> (<title>), ...
-   Review: <P0> P0, <P1> P1, <P2> P2
-   Branch: <branch-name>
-   Next tagged: <IDs>
-   Build: pass | fail (<reason>)"
-   ```
-
-### Priority tags in TODO.md
-- `[next]` — highest-priority unchecked item(s), auto-picked by chain runner
-- `[easy]` / `[medium]` / `[hard]` — optional difficulty hint for model routing
-
-### Rules
-- Never commit code without updating the tracking files.
-- Never update tracking files without corresponding code.
-- If all `[next]` items are done, fall back to unchecked items in section order (A before B, etc.).
-
-### TODO.md tooling
-- `bin/sync-todo-index.py` regenerates the index table, anchors, F-bucket H3 grouping, and Critical (P1) section. Idempotent.
-- `.githooks/pre-commit` runs the sync automatically when `TODO.md` is staged AND auto-stamps newly added items with `(added YYYY-MM-DD)`. Install once per clone via `bin/install-hooks.sh`.
-- Author just types `- [ ] **F94** Title — body. [easy] [hardening]`; the hook handles anchor + date + index regeneration.
-- Half-formed ideas without a clear what+why+how go in `IDEAS.md`, not `TODO.md`. Graduate to `TODO.md` once specifics exist.
-
-## Live-Browser UI Verification
-
-Default protocol for any UI-touching item. Slots into step 4 of the orchestrator cycle (Verify, before Review). The MCP is `chrome-devtools-mcp` — opens its own Chrome instance, separate from Safari/your normal browser, so localStorage and cookies are blank by default.
-
-### When to run
-
-- **Required:** any Tier B/C item that changes `.tsx` or `.ts` under `frontend/src/features/` or `frontend/src/App.tsx`.
-- **Required:** any Tier A item that changes user-visible behavior (rendering conditions, hover/popover, click handlers, timers, AbortControllers, focus listeners). Don't downgrade because the item is small.
-- **Skippable:** pure refactors with zero behavior change (rename, extract component without prop changes), backend-only items, items where the test path needs unrealistic setup (running bot with live broker, etc.). Note "static-verified only — <reason>" in the JOURNAL entry so the gap is visible.
-
-### Protocol
-
-1. **Confirm dev server is up** — `curl -s http://localhost:5173 > /dev/null` (`./start.sh` runs it).
-2. **List pages** — `mcp__chrome-devtools__list_pages`. If empty, `mcp__chrome-devtools__new_page` → `http://localhost:5173/`.
-3. **Seed state** if the test path needs it. localStorage keys are listed in code (e.g. `strategylab-saved-strategies`); seed via `evaluate_script` + `localStorage.setItem(...)`. **Reload the page after seeding** — React's initial-state `useState(loadX)` reads localStorage once at mount.
-4. **Drive the actual user flow.** Click → wait_for → assert. Don't just check that the component rendered; exercise the specific behavior the diff claims to change (the timer fires, the popover appears on hover, the abort fires on resubmit, the skeleton shows during refetch).
-5. **Take a screenshot** for visual-regression-prone changes (popover positioning, skeleton, layout shifts). The a11y snapshot misses CSS issues.
-6. **Verify the assertion in code, not eyeballing.** Read localStorage state, count DOM elements with the expected class, read `performance.getEntriesByType('resource')` for network behavior. Eyeballing a screenshot won't catch a count-off-by-one.
-7. **Reset state** before the next item — clear seeded localStorage keys or close+reopen the page. Don't let item N's state pollute item N+1.
-
-### Known traps
-
-- **Controlled inputs that commit on blur, not change.** `<input type="date">` in Sidebar uses `onBlur`/`onKeyDown Enter` (never `onChange`). Native `setter.call(input, value) + dispatchEvent('input'/'change')` updates the input visually but DOES NOT propagate to React state. Fix: find the React fiber via `Object.keys(el).find(k => k.startsWith('__reactProps$'))` and call `props.onBlur({ target: { value: '...' } })` directly. Same pattern for any other commit-on-blur input.
-- **Synthetic `mouseleave` doesn't fire React handlers reliably.** React 18 synthesises `mouseleave` from native cursor tracking, which CDP-injected events bypass. Hover-show is testable; hover-hide via JS dispatch is not. Use the `mcp__chrome-devtools__hover` tool on a different uid to move the real cursor away, or accept this as a test-tool limitation and verify hover-show only.
-- **Buttons disabled-while-loading make click-twice tests no-ops.** Optimizer + Sensitivity panels are `disabled={loading}`. The second click does nothing; the abort-on-resubmit code path is unreachable from the UI. If the item under test claims double-click handling, verify the disabled guard isn't the actual mechanism.
-- **`display: 'none'` keeps tabs mounted.** Switching tabs at the top level (Chart/Live Trading/Discovery) or sub-tabs (Summary/Trades/etc.) does NOT unmount the component. Local state survives. To force unmount, reload the page or close the Results panel.
-- **localStorage key mismatch.** Dotted keys (`strategylab.saved`) are wrong; the project uses dashed keys (`strategylab-saved-strategies`). Always grep for `SAVED_STRATEGIES_KEY` / similar constants before seeding.
-- **Trade-conditional sub-tabs.** Session/Monte Carlo/Rolling/Hold Time only appear when the backtest produces enough trades (Monte Carlo+Hold Time ≥2 sells, Rolling ≥5 sells, Session requires intraday data). A 0-trade backtest hides them. Seed a strategy that fires (e.g. RSI 35/65 on AAPL 2020-2026 → ~29 trades).
-
-### What good verification looks like
-
-Tier B item ships with: (a) screenshot if visual, (b) one-line assertion in the journal that names the specific behavior exercised ("clicked Delete StratA, waited 6s, asserted localStorage = [StratB, StratC]"), (c) commit references the verification ("browser-verified" in commit body when applicable).
-
-If the verification surfaces a bug, the cycle is: fix → re-run the same verification → THEN commit. Don't ship the original implementation hoping the fix will land next session.
+This file documents non-obvious architecture and runtime behavior — the stuff a fresh agent (or human) needs to know before editing. Patterns marked in **Key Bugs Fixed** are authoritative: if code looks like it invites a "simpler" approach that conflicts with that section, don't take it.
 
 ## Chart.tsx Architecture
 
@@ -224,7 +110,7 @@ Non-obvious bits:
 - `bot_runner._tick()` async loop per bot; uses `TradingProvider` abstraction — no direct broker SDK imports anywhere.
 - Allocation **compounds**: `allocated_capital + total_pnl` (matches backtest). Position size hardcoded 100%.
 - Journal rows tagged with `bot_id`; `compute_realized_pnl(symbol, direction, bot_id)` scopes per-bot so delete+recreate starts clean. Legacy untagged rows excluded.
-- **IBKR integration (D7) shipped** — details + operational gotchas (Read-Only mode, Error 162, ib_insync rules, Pydantic route-model trap) live in memory, not here.
+- **IBKR integration shipped** — IB Gateway must be running on `127.0.0.1:4002` and "Read-Only API" must be unchecked (Gateway → Configure → Settings → API), otherwise order submission returns Error 321.
 
 ## Key Bugs Fixed
 

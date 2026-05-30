@@ -30,3 +30,10 @@ backend/data/*.bak*
 
 # Misc
 .env
+
+# Personal Claude workflow notes (not for public repo)
+CLAUDE.local.md
+
+# Half-baked ideas / in-progress design docs (kept local)
+docs/ideas/
+docs/ideation/

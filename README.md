@@ -2,6 +2,8 @@
 
 Interactive trading strategy backtester and paper trading platform. Build strategies with technical indicators, backtest against historical data, and execute trades via Alpaca or Interactive Brokers paper trading.
 
+> **New here? Start with [ONBOARDING.md](ONBOARDING.md)** for prereqs and first-time setup.
+
 ## Stack
 
 - **Frontend**: React + TypeScript + Vite, lightweight-charts v5 (TradingView), TanStack Query
