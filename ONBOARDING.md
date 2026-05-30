@@ -45,7 +45,7 @@ cp .env.example backend/.env
 
 1. **Default chart loads with AAPL daily.** Pan/zoom should sync across the price, MACD, and RSI panes.
 2. **Run a backtest.** Sidebar → Add Rule → `RSI < 35` (buy) and `RSI > 65` (sell). Click **Backtest**. You should see ~29 trades on AAPL 2020-present.
-3. **Try the node editor.** Open the Node Builder tab. Drag nodes from the palette, connect them, hit **Backtest**. (This is in active development — feedback welcome.)
+3. **See your strategy as a node graph.** After step 2, click **View as Graph** to swap the chart for a Houdini-style top-to-bottom node graph of the same strategy: Ticker → Indicators → Comparisons → Logic → Entry/Exit. By default it's read-only and auto-renders from your current rules. Click **Edit this graph** to copy it into the editor (an "Editing" badge appears) — then drag nodes, rewire ports, change params, and hit **▶ Run Backtest** to backtest the graph directly. **Back to Chart** returns to the chart view. (T2 stage, actively in development — regime/HTF rules aren't supported in graph mode yet. Feedback welcome.)
 4. **Live paper trading** (optional). Add Alpaca paper keys to `backend/.env`, restart, then **Add Bot** in the Live Trading tab.
 
 ## Data providers
@@ -74,4 +74,5 @@ See the **Project Structure** section in [README.md](README.md). Key entry point
 - `backend/routes/backtest.py` — backtest endpoint, cost model
 - `frontend/src/App.tsx` — central state hub
 - `frontend/src/features/chart/Chart.tsx` — main chart + pane sync (read before editing)
-- `frontend/src/features/nodebuilder/` — node-based strategy editor (xyflow/react)
+- `frontend/src/features/nodebuilder/` — node graph UI (xyflow/react); `catalog.ts` is the node palette
+- `backend/nodebuilder/` — graph model + `compile.py` (graph → indicator specs / per-bar program / sim settings), `from_rules.py` (auto-render a StrategyRequest into a graph); served via `routes/nodebuilder.py`
