@@ -220,7 +220,9 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
     <div style={styles.section}>
       <div style={styles.header}>
         <span style={styles.title}>Trade Journal</span>
-        <span style={styles.count}>{limit === 0 || trades.length >= total ? total : `${trades.length} of ${total}`}</span>
+        {data != null && (
+          <span style={styles.count}>{limit === 0 || trades.length >= total ? total : `${trades.length} of ${total}`}</span>
+        )}
         <button onClick={() => refetch()} style={styles.reload} title="Refresh">↻</button>
         <select
           value={brokerFilter}
