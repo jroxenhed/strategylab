@@ -28,3 +28,13 @@ if (typeof globalThis.sessionStorage === 'undefined' || typeof globalThis.sessio
 }
 
 import '@testing-library/jest-dom/vitest'
+
+// ResizeObserver stub — jsdom does not implement ResizeObserver (K-06).
+// Centralised here so individual test files don't need (globalThis as any) casts.
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+}

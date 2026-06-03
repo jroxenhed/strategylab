@@ -10,6 +10,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { createElement } from 'react'
 import type { StrategyRequest } from '../../shared/types'
+import { createChart } from 'lightweight-charts'
 
 // ---------------------------------------------------------------------------
 // Mock: lightweight-charts
@@ -622,5 +623,75 @@ describe('WalkForwardPanel', () => {
 
     await screen.findByText('WFE')
     expect(screen.getByText(/Healthy walk-forward/i)).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// F249b — chart initialisation: autoSize + no explicit width/height
+// ---------------------------------------------------------------------------
+// Verifies the lightweight-charts v5 mandated pattern:
+//   createChart(el, { autoSize: true, /* NO width / NO height */ })
+// Pairing v5 with explicit width+height causes a 60Hz repaint loop (F218).
+
+describe('WalkForwardPanel — createChart options (F249b)', () => {
+  afterEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+    if (originalFetch !== undefined) {
+      globalThis.fetch = originalFetch
+      originalFetch = undefined as unknown as typeof fetch
+    }
+    try { localStorage.clear() } catch { /* jsdom */ }
+  })
+
+  it('initialises createChart with autoSize: true and no width/height', async () => {
+    originalFetch = globalThis.fetch
+    globalThis.fetch = makeSseFetchMock(makeTwoWindowResponse().data)
+
+    renderPanel()
+    fireEvent.click(screen.getByRole('button', { name: /run walk-forward/i }))
+
+    // Wait for results so the chart useEffect fires
+    await screen.findByText('WFE')
+
+    const mockCreateChart = vi.mocked(createChart)
+    // At least one createChart call must have happened (the stitched equity chart)
+    expect(mockCreateChart).toHaveBeenCalled()
+
+    for (const [, opts] of mockCreateChart.mock.calls) {
+      const options = opts as Record<string, unknown> | undefined
+      expect(options?.autoSize).toBe(true)
+      expect(options).not.toHaveProperty('width')
+      expect(options).not.toHaveProperty('height')
+    }
+  })
+
+  it('never calls chart.applyOptions with a width property', async () => {
+    originalFetch = globalThis.fetch
+    globalThis.fetch = makeSseFetchMock(makeTwoWindowResponse().data)
+
+    renderPanel()
+    fireEvent.click(screen.getByRole('button', { name: /run walk-forward/i }))
+    await screen.findByText('WFE')
+
+    const mockCreateChart = vi.mocked(createChart)
+    expect(mockCreateChart).toHaveBeenCalled()
+
+    // Collect all applyOptions calls across every chart instance
+    for (const [, opts] of mockCreateChart.mock.calls) {
+      void opts // suppress unused-var lint on the container arg
+    }
+    const allInstances = mockCreateChart.mock.results
+      .filter(r => r.type === 'return')
+      .map(r => r.value as ReturnType<typeof createChart>)
+
+    for (const inst of allInstances) {
+      const applyOpts = inst.applyOptions as ReturnType<typeof vi.fn>
+      for (const [callArg] of applyOpts.mock.calls) {
+        const arg = callArg as Record<string, unknown> | undefined
+        expect(arg).not.toHaveProperty('width')
+        expect(arg).not.toHaveProperty('height')
+      }
+    }
   })
 })
