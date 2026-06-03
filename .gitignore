@@ -43,3 +43,4 @@ docs/private/
 
 # Externalized orchestrator run-state (lean-context contract; per-task work product)
 .run/
+bin/__pycache__/
