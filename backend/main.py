@@ -68,6 +68,17 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # F279: Force-kill any orphaned WFA worker processes before other cleanup.
+        # Runs in its own try/except so a cleanup error never blocks shutdown.
+        # NOTE: only fires on GRACEFUL shutdown (lifespan exit), not on SIGKILL of
+        # the backend. Primary protection is the in-run `finally` in
+        # run_windows_parallel, which kills stragglers as each WFA run ends.
+        try:
+            from routes.wfa_pool import shutdown_all_executors
+            shutdown_all_executors()
+        except Exception as e:
+            logger.warning("F279: shutdown_all_executors failed: %s", e)
+
         await manager.shutdown()
         await monitor.stop()
         from notifications import close_client

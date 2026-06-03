@@ -64,6 +64,44 @@ _MIN_WINDOWS_FOR_POOL = 4
 # local to the worker and never written back to the parent.
 _WORKER_DF: Optional[pd.DataFrame] = None
 
+# F279: Registry of live ProcessPoolExecutor instances. Populated right after
+# creation in run_windows_parallel; discarded on teardown. Used by
+# shutdown_all_executors() (wired into the FastAPI lifespan) to force-kill
+# any stragglers when the backend shuts down.
+# Plain set is fine — we discard explicitly on teardown; entries left over at
+# shutdown are the orphan-reaping purpose of the lifespan backstop.
+_LIVE_EXECUTORS: set[ProcessPoolExecutor] = set()
+
+
+def _force_kill_executor(ex: ProcessPoolExecutor) -> None:
+    """Tear down a ProcessPoolExecutor, force-killing any worker still alive.
+    ProcessPoolExecutor has no terminate(); a worker stuck in a C call (yfinance)
+    ignores cooperative deadlines, so the only reliable cleanup is SIGKILLing the OS
+    process. We snapshot `_processes` (a CPython internal, getattr-guarded) BEFORE
+    shutdown() because shutdown() nulls it; shutdown(wait=False) stops the manager
+    thread without blocking, then we kill the snapshot — by which point the manager
+    is winding down, so killed workers don't surface as BrokenProcessPool noise."""
+    procs = list((getattr(ex, "_processes", None) or {}).values())
+    try:
+        ex.shutdown(wait=False, cancel_futures=True)
+    except Exception as exc:  # noqa: BLE001 — best-effort cleanup
+        logger.warning("F279: executor shutdown failed: %s", exc)
+    for p in procs:
+        try:
+            if p.is_alive():
+                p.kill()
+                p.join(timeout=1)
+        except Exception as exc:  # noqa: BLE001 — best-effort cleanup
+            logger.warning("F279: failed to kill WFA worker pid=%s: %s", getattr(p, "pid", "?"), exc)
+
+
+def shutdown_all_executors() -> None:
+    """Force-kill workers of every live WFA executor. Called from the FastAPI
+    lifespan shutdown as a backstop for the clean-shutdown path."""
+    for ex in list(_LIVE_EXECUTORS):
+        _force_kill_executor(ex)
+        _LIVE_EXECUTORS.discard(ex)
+
 
 class WindowOutput(NamedTuple):
     """Raw per-window output produced by a worker. The route post-processes
@@ -393,6 +431,7 @@ def run_windows_parallel(
         initializer=_init_worker,
         initargs=(df_pickled,),
     )
+    _LIVE_EXECUTORS.add(ex)  # F279: register for lifespan backstop
     try:
         future_to_idx: dict = {}
         for w_idx, (is_s, is_e, oos_s, oos_e) in enumerate(windows):
@@ -455,11 +494,12 @@ def run_windows_parallel(
 
         return results, timed_out
     finally:
-        # Non-blocking shutdown — cancels pending futures, lets running ones
-        # complete in the background. The main process returns immediately.
-        # Note: spawned worker subprocesses may continue running until their
-        # internal timeout fires; the per-worker deadline (Fix 4) bounds this.
-        ex.shutdown(wait=False, cancel_futures=True)
+        # F279: tear down the executor — _force_kill_executor snapshots the workers,
+        # calls shutdown(wait=False, cancel_futures=True), then SIGKILLs any straggler.
+        # shutdown() alone never kills a worker stuck in a C call (the orphan-leak
+        # vector); all needed results are already collected by this point.
+        _force_kill_executor(ex)
+        _LIVE_EXECUTORS.discard(ex)
 
 
 def _run_windows_serial(

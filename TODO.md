@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*265 / 282 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*266 / 283 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -10,7 +10,6 @@ _(none open)_
 
 ## Up Next
 
-- [F279](#f279) — [next] Optimizer/WFA/Sensitivity worker pool leaks on cancel [medium]
 - [F212](#f212) — [next] F210 inline-confirm browser smoke remains partially open [easy]
 
 ## Open Work — 40 items
@@ -23,9 +22,9 @@ _(none open)_
 | [D](#d-bots-live-trading) | Bots (live trading) | 1 | [D24b](#d24b) |
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 13 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F216](#f216), [F272](#f272) |
-| [F · Hardening](#f-hardening) | Security, reliability, validation | 3 | [F187](#f187), [F211](#f211), [F279](#f279) |
+| [F · Hardening](#f-hardening) | Security, reliability, validation | 2 | [F187](#f187), [F211](#f211) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 8 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217b](#f217b), [F249c](#f249c), [F250](#f250) |
-| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 6 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219), [F249b](#f249b) |
+| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 7 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219), [F249b](#f249b), [F279b](#f279b) |
 
 ## A — Charts & Indicators
 
@@ -175,7 +174,7 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f249"></a> **F249** Migrate the last two `createChart` callers that use fixed `height: NNN` + no resize tracking — `frontend/src/features/strategy/StrategyComparison.tsx` and `frontend/src/features/strategy/WalkForwardPanel.tsx` migrated to use `autoSize: true` for clean layout responsiveness and standardizing with v5 codebase conventions. [easy] [hardening] (resolved 2026-05-20)
 - [x] <a id="f274"></a> **F274** `loadFromAutoRender` strips `/regime/*` nodes + incident wires so editing the auto-rendered graph and pressing Run Backtest doesn't 400 with "Regime is not supported in the graph evaluator at T2." Same approach as WFA. T1 read-only viewer still shows regime nodes; only the editable copy is filtered. Browser-verified: first successful 200 from `/api/nodebuilder/backtest` (was 400 every prior attempt this session). (resolved 2026-05-25) [easy] [hardening]
 - [x] <a id="f275"></a> **F275** `ParamRow` numeric empty-string → revert to initial instead of `Number('') === 0`. Two-line guard at top of `commit()`; matches ESC semantics. (resolved 2026-05-25) [easy] [hardening]
-- [ ] <a id="f279"></a> **F279** [next] Optimizer/WFA/Sensitivity worker pool leaks on cancel — caught a 2.5-day orphaned `multiprocessing.spawn` child (PPID = backend, ~150min CPU) that wedged the backend after the parent died mid-run. The pool workers don't terminate when the parent is killed; they get reparented to init and tie up the next backend's lifespan. Fix: wrap every `Pool()` use in `routes/optimizer.py`, `routes/walk_forward.py`, `routes/sensitivity.py` with a `try / finally: pool.terminate(); pool.join()` block (or convert to `with Pool() as p:` context-manager form). Verify with `ps -ef | grep multiprocessing.spawn` after killing the backend mid-optimizer-run — should leave zero orphans. **LIVE EVIDENCE 2026-06-03:** hit this exact failure during F217 browser verification — backend PID 60500 (uvicorn --reload, up 4d23h, reparented to PPID 1) was wedged and hung on `/journal` because of orphaned `multiprocessing.spawn` child PID 76567 (up 4d1h, still child of 60500). Had to `kill -9` both to free port 8000. This is actively biting, not hypothetical — promoting to [next]. [medium] [hardening] (added 2026-05-30)
+- [x] <a id="f279"></a> **F279** Optimizer/WFA/Sensitivity worker pool leaks on cancel — caught a 2.5-day orphaned `multiprocessing.spawn` child (PPID = backend, ~150min CPU) that wedged the backend after the parent died mid-run. **SCOPE CORRECTION (resolved 2026-06-03):** the TODO premise was stale — `routes/optimizer.py` and `routes/sensitivity.py` don't exist, and the real modules (`backtest_optimizer.py`/`backtest_sweep.py`/`grid_runner.py`) spawn no pools. The ONLY process pool in the backend is `ProcessPoolExecutor` in `routes/wfa_pool.py:run_windows_parallel`, and it was already in a try/finally — but `shutdown(wait=False)` never KILLS workers (ProcessPoolExecutor has no `.terminate()`), so a worker stuck in a C call (yfinance) ignoring the cooperative deadline orphans. Fix: `_force_kill_executor()` snapshots `_processes` (getattr-guarded CPython internal) → `shutdown(wait=False, cancel_futures=True)` → SIGKILL the snapshot; a `_LIVE_EXECUTORS` registry + `shutdown_all_executors()` wired into the FastAPI lifespan as a graceful-shutdown backstop. 5 new cleanup tests + 58 WFA regression green. **LIVE EVIDENCE 2026-06-03:** hit this exact failure during F217 verification — backend PID 60500 wedged, orphaned `multiprocessing.spawn` child PID 76567 (4d1h). [medium] [hardening] (added 2026-05-30)
 
 ### F · Polish
 - [ ] <a id="f34"></a> **F34** 118+ hardcoded hex colors while CSS variables exist — theme change requires touching dozens of files. Migrate Results.tsx and BotCard.tsx to use --bg-*, --accent-*, --text-* variables. [medium] [polish]
@@ -253,3 +252,4 @@ Own multi-session research project. Needs its own design work before implementat
 - [ ] <a id="f249b"></a> **F249b** Layout mounting tests for StrategyComparison and WalkForwardPanel — add frontend tests (Vitest + React Testing Library) to ensure createChart instances are initialized with the proper `autoSize: true` configuration and no width/height properties. [easy] [testing]
 - [x] <a id="f267"></a> **F267** Docs reorg: retire `docs/superpowers/` — plugin-specific holdover folder. ~45 plan + spec files moved via `git mv` into the existing `docs/plans/` and `docs/specs/` (plugin-agnostic, already where recent work lived). All cross-references in `.md` files updated via sed. CLAUDE.md "On Start" handoff contract updated to point at the new locations. [easy] [infra] (resolved 2026-05-25)
 - [x] <a id="f277"></a> **F277** Catalog drift test added in `catalog.test.ts` ("F277 — drift guard"): three assertions — (a) every `paramTypes` key is also in `defaults.params`, (b) every select-typed entry has a non-empty options array, (c) every numeric default has an explicit `paramTypes` entry (no silent inference). Backend-side validation (cross-checking against Python's actual accepted params) deferred — frontend test catches the high-leverage typo + drift cases. 17/17 catalog tests pass. (resolved 2026-05-25) [easy] [testing]
+- [ ] <a id="f279b"></a> **F279b** Manual/automated integration test for the F279 orphan-kill — the unit test (`test_wfa_pool_cleanup.py`) proves `_force_kill_executor` kills a real spawned worker, but the full failure path (start a real WFA run, SIGKILL the backend mid-flight, then `ps -ef | grep multiprocessing.spawn` → expect zero orphans) is still a manual residual. Worth a scripted check, ideally folded into the F51 headless render probe once that lands. [testing] (from F279)
