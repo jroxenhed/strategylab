@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*267 / 286 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*267 / 287 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 - [F212](#f212) — [next] F210 inline-confirm browser smoke remains partially open [easy]
 
-## Open Work — 42 items
+## Open Work — 43 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -24,7 +24,7 @@ _(none open)_
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 13 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F216](#f216), [F272](#f272) |
 | [F · Hardening](#f-hardening) | Security, reliability, validation | 1 | [F211](#f211) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 8 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217b](#f217b), [F249c](#f249c), [F250](#f250) |
-| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 10 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219), [F249b](#f249b), [F279b](#f279b), [F280](#f280)–[F282](#f282) |
+| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 11 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219), [F249b](#f249b), [F279b](#f279b), [F280](#f280)–[F283](#f283) |
 
 ## A — Charts & Indicators
 
@@ -256,3 +256,4 @@ Own multi-session research project. Needs its own design work before implementat
 - [ ] <a id="f280"></a> **F280** Validate (or fix) the Slack "Review cost" measurement before deciding overnight review parallel-vs-sequential — the overnight builder defaults to **parallel** persona dispatch; sequencing-within-5-min to save cache writes is only worth adopting if the data shows it pays off, and the empirical signal is the Slack-report "Review cost" line (`bin/slack-report.sh` + the per-persona `usage` token sums). Webhook confirmed working 2026-06-04 (interactive F187 report delivered); token-summing automated 2026-06-04 — `run-state.py add-agent` now takes `--tokens/--tool-uses/--duration-ms` (transcribe the Agent result's usage block verbatim) and `report <id>` emits the per-agent table with a review-role subtotal. Remaining: run a few overnight builds each way to get real numbers. Until then, parallel stays the default — don't serialize reviews on the unvalidated cache-cost hypothesis. (from the 2026-06-03 doc-cleanup; resolves the C1 collision between the old prompt-patch and the playbook.) [infra]
 - [ ] <a id="f281"></a> **F281** Stale-TODO audit — F187 sat "Critical / unusable" in TODO.md for 18 days after its fix shipped (`4a56082`, 2026-05-16, an interactive-session commit that violated the "never commit code without updating tracking files" rule). Sweep the remaining unchecked Critical + Hardening items against `git log` (grep commit subjects/bodies for the item's anchor terms) and close anything already shipped; consider a `bin/` helper that flags unchecked F-IDs mentioned in commit messages. [easy] [infra]
 - [ ] <a id="f282"></a> **F282** Sensitivity-route regression parity — F187's new variance regression tests cover `run_grid` (optimizer + WFA IS path) but the sensitivity sweep (`POST /api/backtest/sweep`, same `backtest_sweep.py` module) drives `_apply_param` through its own route handler; add one integration test there asserting per-step results differ across swept values, mirroring `test_optimizer_regression.py`. (from F187 testing-persona review) [easy] [testing]
+- [ ] <a id="f283"></a> **F283** `sync-todo-index.py` consistency guard — a bullet containing `(resolved YYYY-MM-DD` while still `- [ ]` is a contradiction (happened twice on 2026-06-04: the F187 ghost + a failed checkbox Edit that shipped a resolved-note with an unchecked box). Detect in the sync pass and fail loudly (exit 1 from the pre-commit hook with the offending IDs) so the contradiction can't be committed; `--fix` flag may auto-flip to `[x]`. [easy] [infra] (added 2026-06-04)
