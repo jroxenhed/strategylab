@@ -6,11 +6,12 @@ import {
   type JournalResponse, type StaleAware, type Position, type Order, type Account,
 } from '../../api/trading'
 
-// Polling for these two queries is owned by a single setInterval in
-// PaperTrading that calls invalidateQueries(['bots']) / (['journal']).
-// tanstack dedupes the refetch across observers, so 1 fetch/cycle no
-// matter how many components subscribe — vs the previous per-observer
-// refetchInterval that fired N independent timers and N fetches.
+// Polling for all trading queries is owned by a single setInterval in
+// PaperTrading that calls invalidateQueries on each key. tanstack dedupes
+// the refetch across observers, so 1 fetch/cycle no matter how many
+// components subscribe — vs the previous per-observer refetchInterval
+// that fired N independent timers and N fetches.
+// Cadences: journal + bots + positions → 5 s; orders + account → 30 s.
 export function useBotsQuery() {
   return useQuery<BotListResponse>({
     queryKey: ['bots'],
@@ -32,8 +33,6 @@ export function usePositionsQuery(brokerFilter: string = 'all') {
     queryKey: ['positions', brokerFilter],
     queryFn: ({ signal }) => fetchPositions(brokerFilter, signal),
     staleTime: 0,
-    refetchInterval: 5_000,
-    refetchIntervalInBackground: false,
   })
 }
 
@@ -42,8 +41,9 @@ export function useAccountQuery() {
     queryKey: ['account'],
     queryFn: ({ signal }) => fetchAccount(signal),
     staleTime: 0,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
+    // 'always': fetch immediately on every (re)mount — bridges the gap until
+    // PaperTrading's 30s setInterval fires its first tick after remount (COR-05).
+    refetchOnMount: 'always',
   })
 }
 
@@ -52,7 +52,7 @@ export function useOrdersQuery(brokerFilter: string = 'all') {
     queryKey: ['orders', brokerFilter],
     queryFn: ({ signal }) => fetchOrders(brokerFilter, signal),
     staleTime: 0,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
+    // 'always': same rationale as useAccountQuery — see COR-05.
+    refetchOnMount: 'always',
   })
 }

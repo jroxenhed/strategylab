@@ -14,18 +14,34 @@ export default function PaperTrading() {
   const [stale, setStale] = useState<string[]>([])
   const [dismissed, setDismissed] = useState(false)
 
-  // Single polling owner for journal + bots — invalidate triggers a deduped
-  // refetch on all subscribers, so 1 fetch/cycle no matter how many components
-  // read the data. Replaces per-observer refetchInterval (which fired N timers).
+  // Single polling owner for all trading queries — invalidate triggers a
+  // deduped refetch on all subscribers, so 1 fetch/cycle no matter how many
+  // components read the data. Replaces per-observer refetchInterval.
+  // Cadences: journal + bots + positions → 5 s; orders + account → 30 s.
+  //
+  // Prefix-match invalidation (K-04): queryKey: ['positions'] (no brokerFilter)
+  // intentionally invalidates ALL brokerFilter variants simultaneously via
+  // TanStack Query v5 prefix-match (exact: false default). This is correct —
+  // we want all observers updated on each tick regardless of their filter.
   const qc = useQueryClient()
   useEffect(() => {
-    const tick = () => {
+    const tick5s = () => {
       if (document.hidden) return
       qc.invalidateQueries({ queryKey: ['journal'] })
       qc.invalidateQueries({ queryKey: ['bots'] })
+      qc.invalidateQueries({ queryKey: ['positions'] })
     }
-    const id = window.setInterval(tick, 5_000)
-    return () => window.clearInterval(id)
+    const tick30s = () => {
+      if (document.hidden) return
+      qc.invalidateQueries({ queryKey: ['orders'] })
+      qc.invalidateQueries({ queryKey: ['account'] })
+    }
+    const id5 = window.setInterval(tick5s, 5_000)
+    const id30 = window.setInterval(tick30s, 30_000)
+    return () => {
+      window.clearInterval(id5)
+      window.clearInterval(id30)
+    }
   }, [qc])
 
   const onStale = useCallback((list: string[]) => {
