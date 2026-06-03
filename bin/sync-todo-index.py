@@ -1001,14 +1001,50 @@ def strip_intro_section_table(lines: list[str]) -> list[str]:
 # Main
 # ---------------------------------------------------------------------------
 
+_RESOLVED_NOTE_RE = re.compile(r'\(resolved \d{4}-\d{2}-\d{2}')
+
+
 def process(
     input_path: Path,
     output_path: Path,
     archive_before: date | None,
     dry_run: bool,
-):
+    fix: bool = False,
+) -> None:
     text = input_path.read_text(encoding='utf-8')
     lines = text.splitlines(keepends=True)
+
+    # Consistency guard — unchecked bullet with a (resolved ...) note is a contradiction.
+    # Runs before any file writes so a bad commit is always blocked.
+    offenders: list[str] = []
+    for i, raw in enumerate(lines):
+        m = BULLET_RE.match(raw)
+        if not m:
+            continue
+        prefix = m.group(1)
+        if 'x' in prefix:
+            continue  # already checked — fine
+        if _RESOLVED_NOTE_RE.search(raw):
+            item_id = m.group(3) or '(unknown)'
+            offenders.append(item_id)
+            if fix:
+                lines[i] = raw.replace('- [ ]', '- [x]', 1)
+                print(
+                    f'FIXED: {item_id} had (resolved ...) but was unchecked — auto-flipped to [x]',
+                    file=sys.stderr,
+                )
+
+    if offenders and not fix:
+        for oid in offenders:
+            print(
+                f'INCONSISTENT: {oid} has (resolved ...) but is unchecked',
+                file=sys.stderr,
+            )
+        print(
+            '\nFix: check off the item(s) manually, or re-run with --fix to auto-flip.',
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Strip old intro Section/Topic table
     lines = strip_intro_section_table(lines)
@@ -1067,6 +1103,8 @@ def main():
                              'warns and aborts if output already has content unless confirmed.')
     parser.add_argument('--archive-before', metavar='YYYY-MM-DD', help='Archive checked items older than this date')
     parser.add_argument('--dry-run', action='store_true', help='Print diff to stdout instead of writing')
+    parser.add_argument('--fix', action='store_true',
+                        help='Auto-flip bullets that have (resolved YYYY-MM-DD) but are still unchecked to [x]')
     args = parser.parse_args()
 
     # --- Resolve input/output paths ---
@@ -1123,7 +1161,7 @@ def main():
         print(f'Error: {input_path} not found', file=sys.stderr)
         sys.exit(1)
 
-    process(input_path, output_path, archive_before, args.dry_run)
+    process(input_path, output_path, archive_before, args.dry_run, fix=args.fix)
 
 
 if __name__ == '__main__':
