@@ -1,18 +1,18 @@
 # StrategyLab TODO
 
-\*\*267 / 287 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*267 / 288 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
 ## Critical (P1)
 
-_(none open)_
+- [F284](#f284) — SignalScanner watchlist round-trip is broken in BOTH directions and silently wipes groups
 
 ## Up Next
 
 - [F212](#f212) — [next] F210 inline-confirm browser smoke remains partially open [easy]
 
-## Open Work — 43 items
+## Open Work — 44 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -22,7 +22,7 @@ _(none open)_
 | [D](#d-bots-live-trading) | Bots (live trading) | 1 | [D24b](#d24b) |
 | [E](#e-discovery) | Discovery | 4 | [E1](#e1)–[E4](#e4) |
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 13 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F216](#f216), [F272](#f272) |
-| [F · Hardening](#f-hardening) | Security, reliability, validation | 1 | [F211](#f211) |
+| [F · Hardening](#f-hardening) | Security, reliability, validation | 2 | [F211](#f211), [F284](#f284) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 8 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217b](#f217b), [F249c](#f249c), [F250](#f250) |
 | [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 11 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219), [F249b](#f249b), [F279b](#f279b), [F280](#f280)–[F283](#f283) |
 
@@ -175,6 +175,7 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f274"></a> **F274** `loadFromAutoRender` strips `/regime/*` nodes + incident wires so editing the auto-rendered graph and pressing Run Backtest doesn't 400 with "Regime is not supported in the graph evaluator at T2." Same approach as WFA. T1 read-only viewer still shows regime nodes; only the editable copy is filtered. Browser-verified: first successful 200 from `/api/nodebuilder/backtest` (was 400 every prior attempt this session). (resolved 2026-05-25) [easy] [hardening]
 - [x] <a id="f275"></a> **F275** `ParamRow` numeric empty-string → revert to initial instead of `Number('') === 0`. Two-line guard at top of `commit()`; matches ESC semantics. (resolved 2026-05-25) [easy] [hardening]
 - [x] <a id="f279"></a> **F279** Optimizer/WFA/Sensitivity worker pool leaks on cancel — caught a 2.5-day orphaned `multiprocessing.spawn` child (PPID = backend, ~150min CPU) that wedged the backend after the parent died mid-run. **SCOPE CORRECTION (resolved 2026-06-03):** the TODO premise was stale — `routes/optimizer.py` and `routes/sensitivity.py` don't exist, and the real modules (`backtest_optimizer.py`/`backtest_sweep.py`/`grid_runner.py`) spawn no pools. The ONLY process pool in the backend is `ProcessPoolExecutor` in `routes/wfa_pool.py:run_windows_parallel`, and it was already in a try/finally — but `shutdown(wait=False)` never KILLS workers (ProcessPoolExecutor has no `.terminate()`), so a worker stuck in a C call (yfinance) ignoring the cooperative deadline orphans. Fix: `_force_kill_executor()` snapshots `_processes` (getattr-guarded CPython internal) → `shutdown(wait=False, cancel_futures=True)` → SIGKILL the snapshot; a `_LIVE_EXECUTORS` registry + `shutdown_all_executors()` wired into the FastAPI lifespan as a graceful-shutdown backstop. 5 new cleanup tests + 58 WFA regression green. **LIVE EVIDENCE 2026-06-03:** hit this exact failure during F217 verification — backend PID 60500 wedged, orphaned `multiprocessing.spawn` child PID 76567 (4d1h). [medium] [hardening] (added 2026-05-30)
+- [ ] <a id="f284"></a> **F284** SignalScanner watchlist round-trip is broken in BOTH directions and silently wipes groups — `fetchWatchlist()` (api/trading.ts) reads `data.symbols ?? []` from the `{groups, ungrouped}` response → always `[]`, so the scanner shows its hardcoded defaults regardless of real state; `saveWatchlist()` POSTs legacy `{symbols}` which `WatchlistState` silently drops (Pydantic `extra="ignore"`) → writes `{groups:[],ungrouped:[]}` and WIPES the user's groups. Same disease as the AddBotRequest silent-drop in Key Bugs Fixed. Reproduced live 2026-06-04 (wiped the real watchlist during F140 browser verification; recovered via Safari localStorage mirror). Fix: (a) `extra="forbid"` on WatchlistState so legacy POSTs 422 loudly, (b) fetchWatchlist parses groups+ungrouped and flattens, (c) scanner save becomes read-modify-write — preserve groups, write only ungrouped, (d) regression tests both sides incl. groups-preservation. Also fold in: loadWatchlist's localStorage mirror overwrites the backup with VALID-empty backend state — consider only mirroring non-empty states so the backup survives a server-side wipe. [P1] [hardening]
 
 ### F · Polish
 - [ ] <a id="f34"></a> **F34** 118+ hardcoded hex colors while CSS variables exist — theme change requires touching dozens of files. Migrate Results.tsx and BotCard.tsx to use --bg-*, --accent-*, --text-* variables. [medium] [polish]
