@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*278 / 289 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*278 / 291 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 - [F212](#f212) — [next] F210 inline-confirm browser smoke remains partially open [easy]
 
-## Open Work — 34 items
+## Open Work — 36 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -24,7 +24,7 @@ _(none open)_
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 12 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F272](#f272) |
 | [F · Hardening](#f-hardening) | Security, reliability, validation | 1 | [F211](#f211) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 5 | [F35](#f35), [F210](#f210), [F212](#f212), [F249c](#f249c), [F250](#f250) |
-| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 6 | [F51](#f51), [F97](#f97), [F161](#f161), [F219](#f219), [F279b](#f279b), [F280](#f280) |
+| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 8 | [F51](#f51), [F97](#f97), [F161](#f161), [F219](#f219), [F279b](#f279b), [F280](#f280), [F286](#f286)–[F287](#f287) |
 
 ## A — Charts & Indicators
 
@@ -259,3 +259,5 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f281"></a> **F281** Stale-TODO audit — F187 sat "Critical / unusable" in TODO.md for 18 days after its fix shipped (`4a56082`, 2026-05-16, an interactive-session commit that violated the "never commit code without updating tracking files" rule). Sweep the remaining unchecked Critical + Hardening items against `git log` (grep commit subjects/bodies for the item's anchor terms) and close anything already shipped; consider a `bin/` helper that flags unchecked F-IDs mentioned in commit messages. [easy] [infra] (resolved 2026-06-04 — full-board audit: 35 items, 0 ghosts, 3 partials all correctly-open; report at .run/F-BATCH-0604/audit-stale-todo.md; F187 confirmed an isolated incident; F283 guard now blocks the cheapest recurrence)
 - [x] <a id="f282"></a> **F282** Sensitivity-route regression parity — F187's new variance regression tests cover `run_grid` (optimizer + WFA IS path) but the sensitivity sweep (`POST /api/backtest/sweep`, same `backtest_sweep.py` module) drives `_apply_param` through its own route handler; add one integration test there asserting per-step results differ across swept values, mirroring `test_optimizer_regression.py`. (from F187 testing-persona review) [easy] [testing] (resolved 2026-06-04 — 3 sweep-route variance tests on synthetic bars in test_sweep_route_regression.py)
 - [x] <a id="f283"></a> **F283** `sync-todo-index.py` consistency guard — a bullet containing `(resolved YYYY-MM-DD` while still `- [ ]` is a contradiction (happened twice on 2026-06-04: the F187 ghost + a failed checkbox Edit that shipped a resolved-note with an unchecked box). Detect in the sync pass and fail loudly (exit 1 from the pre-commit hook with the offending IDs) so the contradiction can't be committed; `--fix` flag may auto-flip to `[x]`. [easy] [infra] (added 2026-06-04) (resolved 2026-06-04 — guard exits 1 pre-write with offender IDs; --fix flips and prints FIXED:; prefix-only regex is deliberate for prose notes)
+- [ ] <a id="f286"></a> **F286** `run-state.py` cwd-independence — resolve `.run/` relative to the script's own location (`Path(__file__).resolve().parent.parent / '.run'`) instead of cwd. Slipped twice in one session (invoked from `backend/` and from inside `.run/<id>/` → "can't open file" / wrong-path errors) despite a cheatsheet note saying "run from repo root"; tools should not depend on operator discipline the codebase can encode. [easy] [infra] (from F-BATCH-0604 retro) (added 2026-06-04)
+- [ ] <a id="f287"></a> **F287** Auto-capture subagent usage telemetry via a Claude Code `SubagentStop` hook — the F280 telemetry currently requires hand-transcribing each Agent result's usage block into `run-state.py add-agent --tokens ...` (17 manual transcriptions in the 2026-06-04 batch; works, but is toil and typo-prone). A SubagentStop hook in `.claude/settings.json` can append `{agent_id, tokens, tool_uses, duration_ms, timestamp}` to `.run/current-session-usage.jsonl`; `run-state.py report` (or a small merge step) joins it against the agent rows. Investigate what payload SubagentStop actually receives before building. [medium] [infra] (from F-BATCH-0604 retro) (added 2026-06-04)
