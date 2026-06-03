@@ -26,7 +26,9 @@ interface Props {
 export default function TradeJournal({ brokerFilter, onBrokerFilterChange, availableBrokers, health, heartbeatWarmup }: Props) {
   const [limit, setLimit] = useState<number>(loadLimit)
   useEffect(() => { localStorage.setItem(LIMIT_KEY, String(limit)) }, [limit])
-  const { data: trades = [], refetch } = useJournalQuery(brokerFilter, limit === 0 ? undefined : limit)
+  const { data, refetch } = useJournalQuery(brokerFilter, limit === 0 ? undefined : limit)
+  const trades = data?.trades ?? []
+  const total = data?.total ?? 0
   const { data: botsData } = useBotsQuery()
   const knownBotIds = botsData ? new Set(botsData.bots.map(b => b.bot_id)) : null
   const [filter, setFilter] = useState('')
@@ -138,7 +140,7 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
     try {
       // Fetch the full (unbounded) journal for export so the CSV contains
       // complete history even when the live table is capped at 200 rows.
-      allTrades = await fetchJournal(filter || undefined, brokerFilter)
+      allTrades = (await fetchJournal(filter || undefined, brokerFilter)).trades
     } catch {
       allTrades = filtered  // fallback to what's already loaded
     } finally {
@@ -218,7 +220,7 @@ export default function TradeJournal({ brokerFilter, onBrokerFilterChange, avail
     <div style={styles.section}>
       <div style={styles.header}>
         <span style={styles.title}>Trade Journal</span>
-        <span style={styles.count}>{trades.length}</span>
+        <span style={styles.count}>{limit === 0 || trades.length >= total ? total : `${trades.length} of ${total}`}</span>
         <button onClick={() => refetch()} style={styles.reload} title="Refresh">↻</button>
         <select
           value={brokerFilter}

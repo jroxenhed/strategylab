@@ -94,6 +94,11 @@ export interface JournalTrade {
   borrow_cost: number | null
 }
 
+export interface JournalResponse {
+  trades: JournalTrade[]
+  total: number
+}
+
 export interface StaleAware<T> {
   rows: T[]
   stale_brokers: string[]
@@ -185,12 +190,12 @@ export async function saveWatchlist(symbols: string[]): Promise<void> {
   await api.post('/api/trading/watchlist', { symbols })
 }
 
-export async function fetchJournal(symbol?: string, broker: string = 'all', signal?: AbortSignal, limit?: number): Promise<JournalTrade[]> {
+export async function fetchJournal(symbol?: string, broker: string = 'all', signal?: AbortSignal, limit?: number): Promise<JournalResponse> {
   const params: Record<string, string | number> = { broker }
   if (symbol) params.symbol = symbol
   if (limit != null) params.limit = limit
   const { data } = await api.get('/api/trading/journal', { params, signal })
-  return data.trades ?? []
+  return { trades: data.trades ?? [], total: data.total ?? 0 }
 }
 
 export async function fetchPerformance(req: PerformanceRequest): Promise<PerformanceResponse> {

@@ -506,16 +506,17 @@ def get_performance(req: PerformanceRequest):
 @router.get("/journal")
 def get_journal(symbol: Optional[str] = None, broker: str = "all", limit: Optional[int] = None):
     if not JOURNAL_PATH.exists():
-        return {"trades": []}
+        return {"trades": [], "total": 0}
     journal = json.loads(JOURNAL_PATH.read_text())
     trades = journal.get("trades", [])
     if symbol:
         trades = [t for t in trades if t["symbol"].upper() == symbol.upper()]
     if broker != "all":
         trades = [t for t in trades if t.get("broker") == broker]
+    total = len(trades)
     if limit is not None:
         trades = trades[-limit:]
-    return {"trades": trades}
+    return {"trades": trades, "total": total}
 
 
 def _empty_watchlist_state() -> dict:

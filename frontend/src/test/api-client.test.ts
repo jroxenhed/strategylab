@@ -159,6 +159,19 @@ describe('fetchJournal', () => {
       signal: undefined,
     })
   })
+
+  it('resolves to the { trades, total } shape', async () => {
+    const trade = { symbol: 'AAPL', side: 'buy' }
+    getSpy.mockResolvedValueOnce(ok({ trades: [trade], total: 5 }))
+    const result = await fetchJournal(undefined, 'all')
+    expect(result).toEqual({ trades: [trade], total: 5 })
+  })
+
+  it('falls back to total 0 when the response omits total', async () => {
+    getSpy.mockResolvedValueOnce(ok({ trades: [] }))
+    const result = await fetchJournal(undefined, 'all')
+    expect(result).toEqual({ trades: [], total: 0 })
+  })
 })
 
 /* ── broker API ─────────────────────────────────────────────────── */

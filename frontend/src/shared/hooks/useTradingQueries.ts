@@ -3,7 +3,7 @@ import { listBots } from '../../api/bots'
 import type { BotListResponse } from '../types'
 import {
   fetchJournal, fetchPositions, fetchAccount, fetchOrders,
-  type JournalTrade, type StaleAware, type Position, type Order, type Account,
+  type JournalResponse, type StaleAware, type Position, type Order, type Account,
 } from '../../api/trading'
 
 // Polling for these two queries is owned by a single setInterval in
@@ -20,7 +20,7 @@ export function useBotsQuery() {
 }
 
 export function useJournalQuery(brokerFilter: string = 'all', limit?: number) {
-  return useQuery<JournalTrade[]>({
+  return useQuery<JournalResponse>({
     queryKey: ['journal', brokerFilter, limit],
     queryFn: ({ signal }) => fetchJournal(undefined, brokerFilter, signal, limit),
     staleTime: 0,

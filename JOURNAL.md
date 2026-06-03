@@ -4,6 +4,14 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-06-03
+
+### Orchestrator lean-context contract (Tier 1) + first task through the new cycle
+
+- **Lean-context run-state contract** — implemented Tier 1 of `~/Downloads/orchestrator-lean-context-brief.md`: subagents write full work product to `.run/<task-id>/` and return only path + ≤5-line digest + status token; orchestrator holds pointers + one state file. Rule + phase table + `run-state.py init` activation wired into the orchestrator cycle in `CLAUDE.local.md` (gitignored). Added `bin/run-state.py` (idempotent read/update/validate of `.run/<id>/state.json`; `validate` hard-fails on drift — agent-claimed result/verified files must exist on disk) + `.run/` gitignore. Committed `313e3ed`. Tiers 2–3 deliberately deferred pending measurement.
+- **[F217](TODO.md#f217)** TradeJournal "Last N" now shows the unloaded count — backend `get_journal()` returns additive `total` (computed after symbol/broker filters, before the `-limit` slice); count chip renders `{loaded} of {total}` when truncated, plain `{total}` when "All" (`limit === 0`) or fully loaded. Touched `trading.py` (+test), `api/trading.ts` (`JournalResponse`), `useTradingQueries.ts`, `TradeJournal.tsx`, collateral `PositionsTable.tsx`. **Browser-verified** via chrome-devtools-mcp against the live backend (711 trades): "Last 200" → chip "200 of 711" (DOM-asserted, layout 65×15px no wrap/overflow), "All" → "711". Screenshot `docs/screenshots/f217-journal-count-truncated.png`. First task run end-to-end through the new run-state cycle (explore→implement→verify→review→synthesize→fix, all phases externalized to `.run/F217/`). Tier-C review panel (correctness/api-contract/typescript): 0 P0/P1; fixed API-01 (added 2 `fetchJournal` resolved-shape tests, 12/12 pass), rejected 2 overshoot findings, deferred 1 as **[F217b]** (chip flashes "0" during load — pre-existing, not a regression).
+- **[F279](TODO.md#f279)** promoted to [next] with live evidence — the F217 browser verification hit the exact F279 leak: the running backend (PID 60500, up 4d23h) was wedged and hung on `/journal`, held alive by an orphaned `multiprocessing.spawn` child (PID 76567, up 4d1h). Killed both to unwedge. Confirms the pool-worker leak is actively biting, not hypothetical.
+
 ## 2026-05-25
 
 ### NodeBuilder: UX polish + Houdini-style interaction patterns

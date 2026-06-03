@@ -20,7 +20,8 @@ export default function PositionsTable({ brokerFilter, onBrokerFilterChange, ava
   const closeKey = (symbol: string, broker: string | null, side: string) => `${symbol}|${broker ?? ''}|${side}`
   const { data: positionsData } = usePositionsQuery(brokerFilter)
   // 200 rows is sufficient: only bot entry timestamps are needed for open positions.
-  const { data: journal = [] } = useJournalQuery(brokerFilter, 200)
+  const { data: journalData } = useJournalQuery(brokerFilter, 200)
+  const journal = journalData?.trades ?? []
   const positions = positionsData?.rows ?? []
 
   useEffect(() => {
