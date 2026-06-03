@@ -600,7 +600,9 @@ class BotManager:
                 for config, state in self.bots.values()
             ],
         }
-        atomic_write_text(DATA_PATH, json.dumps(data, indent=2, default=str))
+        # DI-06: explicit depth=1 — bots.json is high-value config; one backup
+        # is worth the per-save shutil.copy2 at current file sizes.
+        atomic_write_text(DATA_PATH, json.dumps(data, indent=2, default=str), backup_depth=1)
 
     def load(self):
         if not os.path.exists(DATA_PATH):

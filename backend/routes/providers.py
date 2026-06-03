@@ -147,3 +147,12 @@ def _persist_env(key: str, value: str, env_path: Optional[pathlib.Path] = None):
             os.chmod(str(env_path), 0o600)
         except OSError:
             logger.warning("could not chmod 0600 on %s", env_path)
+        # DI-01: also restrict any .bak siblings — shutil.copy2 copies the
+        # source mode (typically 0o644 on macOS), leaving secrets readable.
+        # Apply 0o600 to .bak and all numbered variants (.bak.2, .bak.3, …).
+        for bak in [str(env_path) + ".bak"] + [f"{env_path}.bak.{i}" for i in range(2, 10)]:
+            if os.path.exists(bak):
+                try:
+                    os.chmod(bak, 0o600)
+                except OSError:
+                    logger.warning("could not chmod 0600 on %s", bak)

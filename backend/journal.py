@@ -229,4 +229,6 @@ def _log_trade(symbol: str, side: str, qty: float, price: float | None,
             "broker": broker,
             "borrow_cost": borrow_cost,
         })
-        atomic_write_text(JOURNAL_PATH, json.dumps(journal, indent=2))
+        # DI-06: explicit depth=1 — journal is the highest-value data; one
+        # backup is worth the per-trade shutil.copy2 at current file sizes.
+        atomic_write_text(JOURNAL_PATH, json.dumps(journal, indent=2), backup_depth=1)

@@ -2,6 +2,7 @@
 
 import logging
 import os
+import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -9,11 +10,40 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _rotate_backups(path: str, depth: int) -> None:
+    """Rotate existing backups and copy the current file to <path>.bak.
+
+    Depth 1: copies current file → <path>.bak (one backup kept).
+    Depth N: rotates .bak.(N-1) → .bak.N, …, .bak → .bak.2, then copies
+    current file → <path>.bak.
+
+    Uses os.replace for the rotation steps (atomic rename on POSIX) and
+    shutil.copy2 for the live-file copy so the original stays in place until
+    the main write's os.replace.
+
+    Trade-off: if this function raises (e.g. disk full), the caller logs a
+    warning and continues — primary data write always wins over backup.
+    """
+    bak = path + ".bak"
+    if depth == 1:
+        shutil.copy2(path, bak)
+        return
+    # Rotate existing numbered backups from highest to lowest.
+    for i in range(depth, 1, -1):
+        src = bak if i == 2 else f"{bak}.{i - 1}"
+        dst = f"{bak}.{i}"
+        if os.path.exists(src):
+            os.replace(src, dst)
+    # Copy current file to .bak (depth ≥ 2 also uses plain .bak as slot 1).
+    shutil.copy2(path, bak)
+
+
 def atomic_write_text(
     path: "str | os.PathLike[str]",
     content: str,
     *,
     encoding: str = "utf-8",
+    backup_depth: int = 1,
 ) -> None:
     """Atomically replace *path* with *content*.
 
@@ -28,9 +58,39 @@ def atomic_write_text(
 
     Cleanup invariant: if any step before os.replace raises, the temp file is
     unlinked (best-effort; OSError during unlink is silently ignored).
+
+    Backup behaviour (backup_depth, default 1):
+      - 0: no backups created.
+      - 1: if the target already exists, copies it to <path>.bak before the
+           rename.  On subsequent calls the .bak is overwritten (single backup).
+      - N>1: rotates .bak → .bak.2 → … → .bak.N before copying current to .bak,
+             keeping the N most-recent prior versions.
+
+    Backup failure policy: if the backup copy raises (e.g. disk full, permission
+    error), a WARNING is logged and the primary write proceeds normally.  The
+    invariant is that a failed backup NEVER aborts the write — primary data
+    integrity always takes priority over the backup copy.
     """
+    if backup_depth < 0:
+        raise ValueError(f"backup_depth must be >= 0, got {backup_depth}")
+
     path = str(path)
     dir_ = os.path.dirname(path) or "."
+
+    # Rotate/copy backup BEFORE opening the temp file so the original is still
+    # in place.  Failure is non-fatal: warn and continue.
+    if backup_depth > 0 and os.path.exists(path):
+        try:
+            _rotate_backups(path, backup_depth)
+        except OSError as exc:
+            logger.warning(
+                "atomic_write_text: backup failed for %s (depth=%d): %s — "
+                "proceeding with primary write",
+                path,
+                backup_depth,
+                exc,
+            )
+
     fd = tempfile.NamedTemporaryFile(
         mode="w", delete=False, dir=dir_, suffix=".tmp", encoding=encoding
     )
