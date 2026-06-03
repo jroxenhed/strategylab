@@ -37,3 +37,6 @@ CLAUDE.local.md
 # Half-baked ideas / in-progress design docs (kept local)
 docs/ideas/
 docs/ideation/
+
+# Externalized orchestrator run-state (lean-context contract; per-task work product)
+.run/
