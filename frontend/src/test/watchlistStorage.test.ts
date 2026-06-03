@@ -95,6 +95,24 @@ describe('loadWatchlist — API success', () => {
     expect(wasCorrupt).toBe(false)
     expect(state).toEqual(emptyState())
   })
+
+  it('does NOT overwrite localStorage when API returns a valid but empty state (F284)', async () => {
+    // Seed localStorage with the user's real backup
+    const backup: WatchlistState = {
+      groups: [{ id: 'g1', name: 'Tech', tickers: ['AAPL'], collapsed: false }],
+      ungrouped: ['SPY'],
+    }
+    localStorage.setItem('watchlist-symbols', JSON.stringify(backup))
+    // API returns valid but empty state (e.g. server-side wipe)
+    mockFetchOk({ groups: [], ungrouped: [] })
+    const { state, wasCorrupt } = await loadWatchlist()
+    expect(wasCorrupt).toBe(false)
+    expect(state).toEqual(emptyState())   // returned state reflects what backend said
+    // localStorage backup must NOT be overwritten by a server-side wipe
+    const stored = JSON.parse(localStorage.getItem('watchlist-symbols')!)
+    expect(stored.groups).toHaveLength(1)
+    expect(stored.ungrouped).toContain('SPY')
+  })
 })
 
 // ---------------------------------------------------------------------------

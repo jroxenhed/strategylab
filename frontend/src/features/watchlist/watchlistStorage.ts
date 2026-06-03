@@ -192,8 +192,12 @@ export async function loadWatchlist(): Promise<LoadResult> {
       const data: unknown = await resp.json()
       const state = parseWatchlistPayload(data)
       if (state) {
-        // Mirror to localStorage as a local backup
-        localStorage.setItem(WATCHLIST_KEY, JSON.stringify(state))
+        // Mirror to localStorage as a local backup only when non-empty,
+        // so a server-side wipe (valid but empty state) doesn't overwrite
+        // the user's local backup.
+        if (state.groups.length > 0 || state.ungrouped.length > 0) {
+          localStorage.setItem(WATCHLIST_KEY, JSON.stringify(state))
+        }
         return { state, wasCorrupt: false }
       }
     }

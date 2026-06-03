@@ -1,5 +1,6 @@
 import { api } from './client'
 import type { Rule } from '../shared/types'
+import type { WatchlistGroup } from '../features/watchlist/watchlistStorage'
 
 // --- Types ---
 
@@ -183,11 +184,61 @@ export async function scanSignals(req: ScanRequest): Promise<ScanResponse> {
 
 export async function fetchWatchlist(): Promise<string[]> {
   const { data } = await api.get('/api/trading/watchlist')
-  return data.symbols ?? []
+  // Backend returns { groups: WatchlistGroup[], ungrouped: string[] }.
+  // Flatten all tickers preserving order, dedup (first occurrence wins).
+  const groups: Array<{ tickers?: string[] }> = data.groups ?? []
+  const ungrouped: string[] = data.ungrouped ?? []
+  const all = [...groups.flatMap(g => g.tickers ?? []), ...ungrouped]
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const t of all) {
+    const key = t.toUpperCase()
+    if (!seen.has(key)) { seen.add(key); result.push(t) }
+  }
+  return result
 }
 
+/**
+ * saveWatchlist — read-modify-write: preserves existing groups, updates only
+ * the ungrouped list (scanner-owned symbols minus any already in a group).
+ *
+ * Any symbol in `symbols` that already belongs to a group is left there and
+ * excluded from ungrouped to avoid duplication. Two saves in a row are
+ * idempotent.
+ *
+ * NOTE: concurrent calls share a TOCTOU race window (GET→POST with no
+ * server-side CAS). Two simultaneous scanner saves can overwrite each other;
+ * the window is narrow in practice (scanner saves are user-triggered) but
+ * is not eliminated. See K-02 for background.
+ *
+ * A failed GET now throws (aborts the save) rather than proceeding with empty
+ * groups — proceeding would silently wipe the user's group membership.
+ */
 export async function saveWatchlist(symbols: string[]): Promise<void> {
-  await api.post('/api/trading/watchlist', { symbols })
+  // Fetch current state to preserve groups.
+  // If the GET fails, abort — proceeding with empty groups would overwrite
+  // all group membership with an ungrouped list, which is a silent data wipe.
+  let currentGroups: WatchlistGroup[] = []
+  const { data } = await api.get('/api/trading/watchlist')
+  currentGroups = data.groups ?? []
+
+  // Build set of all tickers already in groups
+  const inGroup = new Set<string>(
+    currentGroups.flatMap(g => (g.tickers ?? []).map(t => t.toUpperCase()))
+  )
+
+  // ungrouped = requested symbols NOT already in a group (deduped, order-preserving)
+  const seen = new Set<string>()
+  const ungrouped: string[] = []
+  for (const t of symbols) {
+    const key = t.toUpperCase()
+    if (!inGroup.has(key) && !seen.has(key)) {
+      seen.add(key)
+      ungrouped.push(t)
+    }
+  }
+
+  await api.post('/api/trading/watchlist', { groups: currentGroups, ungrouped })
 }
 
 export async function fetchJournal(symbol?: string, broker: string = 'all', signal?: AbortSignal, limit?: number): Promise<JournalResponse> {

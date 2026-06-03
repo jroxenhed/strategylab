@@ -2,12 +2,13 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 from datetime import datetime, timezone
 
 from fileutil import atomic_write_text
 from fastapi import APIRouter
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional
 import pandas as pd
 
@@ -21,6 +22,10 @@ from models import StrategyRequest, LogicField, SymbolField, SymbolList, normali
 from routes.backtest import run_backtest
 
 WATCHLIST_PATH = DATA_DIR / "watchlist.json"
+
+# DI-02/DI-05: serialise all watchlist read-modify-write operations.
+# Mirrors the _env_lock pattern in routes/providers.py.
+_watchlist_lock = threading.Lock()
 
 router = APIRouter(prefix="/api/trading")
 
@@ -86,6 +91,8 @@ def _normalize_ticker_list(v) -> list:
 
 
 class WatchlistGroup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str = Field(..., min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=80)
     tickers: list[str] = Field(default_factory=list, max_length=200)
@@ -98,6 +105,8 @@ class WatchlistGroup(BaseModel):
 
 
 class WatchlistState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     groups: list[WatchlistGroup] = Field(default_factory=list, max_length=50)
     ungrouped: list[str] = Field(default_factory=list, max_length=500)
 
@@ -536,13 +545,10 @@ def _read_watchlist_raw() -> dict:
         data = json.loads(WATCHLIST_PATH.read_text())
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning("watchlist.json is unparseable (%s); backing up and returning empty state", exc)
-        bak_path = WATCHLIST_PATH.with_suffix(".json.bak")
-        try:
-            import shutil
-            shutil.copy2(str(WATCHLIST_PATH), str(bak_path))
-        except OSError as bak_exc:
-            logger.warning("could not create watchlist backup: %s", bak_exc)
-        atomic_write_text(WATCHLIST_PATH, json.dumps(_empty_watchlist_state(), indent=2))
+        # K3: route corrupt-JSON recovery through the standard backup machinery
+        # (same rotating-backup policy as normal writes) rather than a one-off
+        # shutil.copy2 with a different naming convention.
+        atomic_write_text(WATCHLIST_PATH, json.dumps(_empty_watchlist_state(), indent=2), backup_depth=2)
         return _empty_watchlist_state()
 
     # Legacy migration: {symbols: [...]} → new schema
@@ -594,10 +600,11 @@ def get_watchlist():
 
 @router.post("/watchlist")
 def save_watchlist(req: WatchlistState):
-    deduped = _dedup_watchlist(req)
-    content = json.dumps(deduped.model_dump(), indent=2)
-    atomic_write_text(WATCHLIST_PATH, content)
-    return deduped.model_dump()
+    with _watchlist_lock:
+        deduped = _dedup_watchlist(req)
+        content = json.dumps(deduped.model_dump(), indent=2)
+        atomic_write_text(WATCHLIST_PATH, content, backup_depth=2)
+        return deduped.model_dump()
 
 
 @router.post("/watchlist/seed")
@@ -606,12 +613,15 @@ def seed_watchlist(req: WatchlistState):
 
     Only writes if the on-disk file is currently empty or missing.
     Returns {seeded: true} if written, {seeded: false, reason: "already_populated"} otherwise.
+    Lock covers the check+write so concurrent tabs can't both pass the
+    empty-check and double-write (TOCTOU — DI-05).
     """
-    existing = _read_watchlist_raw()
-    has_data = bool(existing.get("groups")) or bool(existing.get("ungrouped"))
-    if has_data:
-        return {"seeded": False, "reason": "already_populated"}
-    deduped = _dedup_watchlist(req)
-    content = json.dumps(deduped.model_dump(), indent=2)
-    atomic_write_text(WATCHLIST_PATH, content)
-    return {"seeded": True}
+    with _watchlist_lock:
+        existing = _read_watchlist_raw()
+        has_data = bool(existing.get("groups")) or bool(existing.get("ungrouped"))
+        if has_data:
+            return {"seeded": False, "reason": "already_populated"}
+        deduped = _dedup_watchlist(req)
+        content = json.dumps(deduped.model_dump(), indent=2)
+        atomic_write_text(WATCHLIST_PATH, content, backup_depth=2)
+        return {"seeded": True}

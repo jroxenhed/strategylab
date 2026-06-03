@@ -261,6 +261,51 @@ def test_strategies_put_missing_name(client, tmp_path, monkeypatch):
     assert resp.status_code == 422
 
 
+def test_watchlist_legacy_post_returns_422(client, tmp_path, monkeypatch):
+    """F284: POST with legacy {symbols: [...]} shape → 422 (extra field forbidden).
+
+    Before F284 this was silently dropped by extra="ignore", writing empty state
+    and wiping the user's groups. extra="forbid" on WatchlistState makes this loud.
+    """
+    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", tmp_path / "watchlist.json")
+    resp = client.post("/api/trading/watchlist", json={"symbols": ["AAPL", "TSLA"]})
+    assert resp.status_code == 422
+
+
+def test_watchlist_groups_survive_scanner_style_save(client, tmp_path, monkeypatch):
+    """F284: groups written in one POST must survive a subsequent ungrouped-only POST.
+
+    The scanner save path sends {groups: <current_groups>, ungrouped: [...]}.
+    This test confirms a full round-trip: write groups, write ungrouped, verify
+    groups are still intact.
+    """
+    watchlist_file = tmp_path / "watchlist.json"
+    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", watchlist_file)
+
+    # Step 1: write full state with a group
+    payload_with_group = {
+        "groups": [{"id": "g1", "name": "Tech", "tickers": ["AAPL", "MSFT"], "collapsed": False}],
+        "ungrouped": ["TSLA"],
+    }
+    resp = client.post("/api/trading/watchlist", json=payload_with_group)
+    assert resp.status_code == 200
+
+    # Step 2: scanner-style save — preserve existing group, update ungrouped only
+    scanner_save = {
+        "groups": [{"id": "g1", "name": "Tech", "tickers": ["AAPL", "MSFT"], "collapsed": False}],
+        "ungrouped": ["NVDA", "SPY"],
+    }
+    resp2 = client.post("/api/trading/watchlist", json=scanner_save)
+    assert resp2.status_code == 200
+    body = resp2.json()
+    # Groups must be preserved
+    assert len(body["groups"]) == 1
+    assert body["groups"][0]["tickers"] == ["AAPL", "MSFT"]
+    # ungrouped updated (AAPL/MSFT already in group so they're deduped out)
+    assert "NVDA" in body["ungrouped"]
+    assert "SPY" in body["ungrouped"]
+
+
 def test_watchlist_validation_rejects_invalid_chars(client, tmp_path, monkeypatch):
     """F38/F85: a symbol containing chars outside [A-Z0-9.-] fails the whole
     request with 422.
@@ -457,3 +502,76 @@ def test_performance_normalizes_symbol_via_pydantic():
         sell_rules=[],
     )
     assert req.symbol == "AAPL"
+
+
+# ---------------------------------------------------------------------------
+# DI-02/DI-05 — _watchlist_lock regression tests
+# ---------------------------------------------------------------------------
+
+def test_watchlist_legacy_post_still_422s(client, tmp_path, monkeypatch):
+    """Regression: legacy POST {symbols:[...]} must still 422 after the lock was added.
+
+    This verifies the lock addition in save_watchlist did not accidentally
+    change the Pydantic extra='forbid' validation behaviour.
+    """
+    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", tmp_path / "watchlist.json")
+    resp = client.post("/api/trading/watchlist", json={"symbols": ["AAPL", "TSLA"]})
+    assert resp.status_code == 422
+
+
+def test_watchlist_sequential_saves_preserve_groups(client, tmp_path, monkeypatch):
+    """DI-02 regression: sequential saves (simulating concurrent-ish clients) preserve group membership.
+
+    Two back-to-back POSTs where the second carries a group must result in
+    the group surviving — the lock ensures neither writer sees stale state.
+    """
+    watchlist_file = tmp_path / "watchlist.json"
+    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", watchlist_file)
+
+    # First save — ungrouped only (simulates one client)
+    resp1 = client.post("/api/trading/watchlist", json={
+        "groups": [],
+        "ungrouped": ["AAPL", "MSFT"],
+    })
+    assert resp1.status_code == 200
+
+    # Second save — adds a group (simulates another client completing after first)
+    resp2 = client.post("/api/trading/watchlist", json={
+        "groups": [{"id": "g1", "name": "Tech", "tickers": ["AAPL", "MSFT"], "collapsed": False}],
+        "ungrouped": ["TSLA"],
+    })
+    assert resp2.status_code == 200
+    body = resp2.json()
+    assert len(body["groups"]) == 1
+    assert body["groups"][0]["name"] == "Tech"
+    # AAPL/MSFT deduped out of ungrouped (they're in the group)
+    assert "AAPL" not in body["ungrouped"]
+    assert "MSFT" not in body["ungrouped"]
+    assert "TSLA" in body["ungrouped"]
+
+
+def test_seed_watchlist_skips_when_populated_under_lock(client, tmp_path, monkeypatch):
+    """DI-05 regression: seed_watchlist check+write happens under the lock.
+
+    Verify that a seed after a successful save returns already_populated,
+    not seeded — the lock protects the TOCTOU read-check-write sequence.
+    """
+    watchlist_file = tmp_path / "watchlist.json"
+    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", watchlist_file)
+
+    # Populate via save
+    resp = client.post("/api/trading/watchlist", json={
+        "groups": [],
+        "ungrouped": ["NVDA"],
+    })
+    assert resp.status_code == 200
+
+    # Seed must see the existing data and decline to write
+    seed_resp = client.post("/api/trading/watchlist/seed", json={
+        "groups": [],
+        "ungrouped": ["AAPL"],
+    })
+    assert seed_resp.status_code == 200
+    body = seed_resp.json()
+    assert body["seeded"] is False
+    assert body["reason"] == "already_populated"

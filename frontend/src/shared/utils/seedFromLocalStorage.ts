@@ -10,7 +10,7 @@
  * to prevent re-attempts. localStorage data is intentionally kept as a backup.
  */
 
-import { WATCHLIST_KEY } from '../../features/watchlist/watchlistStorage'
+import { WATCHLIST_KEY, parseWatchlistPayload, migrateLegacy } from '../../features/watchlist/watchlistStorage'
 import { SAVED_STRATEGIES_KEY } from '../../features/strategy/savedStrategies'
 
 // Version-suffixed key so this deploy retries any browser whose previous
@@ -42,16 +42,40 @@ export async function seedFromLocalStorageIfAny(): Promise<void> {
 
   if (watchlistRaw) {
     try {
-      const state = JSON.parse(watchlistRaw)
-      const resp = await fetch(`${API_BASE}/api/trading/watchlist/seed`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(state),
-      })
-      if (resp.ok) {
-        const result: { seeded: boolean } = await resp.json()
-        if (result.seeded) watchlistSeeded = true
+      const rawParsed: unknown = JSON.parse(watchlistRaw)
+
+      // Normalize legacy shapes before POSTing so the server's extra='forbid'
+      // validator doesn't 422 on legacy {symbols: [...]} or flat string[] payloads.
+      // A 422 would be silently swallowed by the catch below, the attempted-flag
+      // would never be set, and the seed would retry on every page load forever
+      // (DI-05b). We normalize here instead:
+      //   - flat string[]      → migrateLegacy → { groups: [], ungrouped: [...] }
+      //   - {symbols: [...]}   → unrecognised by parseWatchlistPayload → stop,
+      //     set attempted flag to avoid the infinite retry loop
+      //   - valid WatchlistState → pass through unchanged
+      let state: ReturnType<typeof parseWatchlistPayload>
+      if (Array.isArray(rawParsed) && rawParsed.every(x => typeof x === 'string')) {
+        // Legacy flat string[] — migrate to current schema
+        state = migrateLegacy(rawParsed as string[])
+      } else {
+        state = parseWatchlistPayload(rawParsed)
+      }
+
+      if (state === null) {
+        // Unrecognisable legacy shape (e.g. {symbols: [...]}) that would
+        // cause a 422. Mark attempted to stop the infinite-retry loop.
         watchlistAck = true
+      } else {
+        const resp = await fetch(`${API_BASE}/api/trading/watchlist/seed`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(state),
+        })
+        if (resp.ok) {
+          const result: { seeded: boolean } = await resp.json()
+          if (result.seeded) watchlistSeeded = true
+          watchlistAck = true
+        }
       }
     } catch {
       // Network failure — skip silently; flag remains unset → retry next load
