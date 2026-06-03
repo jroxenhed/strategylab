@@ -189,6 +189,14 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
 
   useEffect(() => {
     if (activeTab !== 'equity' || bucket !== null || !chartRef.current || equity_curve.length === 0) return
+    // lw-charts does not resolve CSS custom properties, so hex literals are
+    // required here. Cross-reference to CSS vars (K-05):
+    //   '#0d1117' → var(--gh-bg-deep)
+    //   '#8b949e' → var(--gh-text-muted)
+    //   '#1c2128' → var(--gh-bg-card)
+    //   '#30363d' → var(--gh-border)
+    // If the palette changes (e.g. light-mode theme), update both here and
+    // the corresponding CSS variable definitions.
     const chart = createChart(chartRef.current, {
       autoSize: true,
       layout: { background: { type: ColorType.Solid, color: '#0d1117' }, textColor: '#8b949e' },
@@ -504,7 +512,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
                   padding: '4px 8px',
                   fontSize: 11,
                   fontWeight: 600,
-                  color: isActive ? '#58a6ff' : isRecommended ? '#58a6ff' : '#8b949e',
+                  color: isActive ? 'var(--gh-blue)' : isRecommended ? 'var(--gh-blue)' : 'var(--gh-text-muted)',
                   background: isActive ? 'rgba(88, 166, 255, 0.1)' : 'none',
                   border: 'none',
                   borderBottom: isRecommended && !isActive ? '2px solid rgba(88, 166, 255, 0.3)' : '2px solid transparent',
@@ -519,14 +527,14 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
           })}
           {activeTab === 'equity' && (
             <>
-              <div style={{ width: 1, height: 16, background: '#30363d', margin: '0 6px' }} />
+              <div style={{ width: 1, height: 16, background: 'var(--gh-border)', margin: '0 6px' }} />
               <button
                 onClick={() => onShowBaselineChange(!showBaseline)}
                 style={{
                   padding: '4px 8px',
                   fontSize: 11,
                   fontWeight: 600,
-                  color: showBaseline ? '#58a6ff' : '#8b949e',
+                  color: showBaseline ? 'var(--gh-blue)' : 'var(--gh-text-muted)',
                   background: showBaseline ? 'rgba(88, 166, 255, 0.1)' : 'none',
                   border: 'none',
                   borderRadius: 3,
@@ -541,7 +549,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
                   padding: '4px 8px',
                   fontSize: 11,
                   fontWeight: 600,
-                  color: logScale ? '#58a6ff' : '#8b949e',
+                  color: logScale ? 'var(--gh-blue)' : 'var(--gh-text-muted)',
                   background: logScale ? 'rgba(88, 166, 255, 0.1)' : 'none',
                   border: 'none',
                   borderRadius: 3,
@@ -558,17 +566,17 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       {activeTab === 'summary' && (
         <div style={styles.metricsGrid}>
           {[
-            { label: 'Return', value: `${summary.total_return_pct > 0 ? '+' : ''}${summary.total_return_pct}%`, color: summary.total_return_pct >= 0 ? '#26a641' : '#f85149', primary: true },
-            { label: 'Final Value', value: `$${summary.final_value.toLocaleString('en-US')}`, color: '#e6edf3', primary: true },
-            { label: 'B&H', value: `${summary.buy_hold_return_pct > 0 ? '+' : ''}${summary.buy_hold_return_pct}%`, color: summary.buy_hold_return_pct >= 0 ? '#26a641' : '#f85149', primary: false },
-            { label: 'Alpha', value: `${(summary.total_return_pct - summary.buy_hold_return_pct) >= 0 ? '+' : ''}${(summary.total_return_pct - summary.buy_hold_return_pct).toFixed(1)}%`, color: (summary.total_return_pct - summary.buy_hold_return_pct) >= 0 ? '#26a641' : '#f85149', primary: false },
-            { label: 'Trades', value: summary.num_trades, color: '#e6edf3', primary: false },
-            { label: 'Win Rate', value: `${summary.win_rate_pct}%`, color: summary.win_rate_pct >= 50 ? '#26a641' : '#f85149', primary: false },
-            { label: 'Sharpe', value: summary.sharpe_ratio, color: summary.sharpe_ratio >= 1 ? '#26a641' : summary.sharpe_ratio >= 0.5 ? '#d29922' : summary.sharpe_ratio < 0 ? '#f85149' : '#8b949e', primary: false },
-            { label: 'Max DD', value: `${summary.max_drawdown_pct}%`, color: Math.abs(summary.max_drawdown_pct) >= 10 ? '#f85149' : '#8b949e', primary: false },
+            { label: 'Return', value: `${summary.total_return_pct > 0 ? '+' : ''}${summary.total_return_pct}%`, color: summary.total_return_pct >= 0 ? 'var(--gh-green)' : 'var(--gh-red)', primary: true },
+            { label: 'Final Value', value: `$${summary.final_value.toLocaleString('en-US')}`, color: 'var(--gh-text-primary)', primary: true },
+            { label: 'B&H', value: `${summary.buy_hold_return_pct > 0 ? '+' : ''}${summary.buy_hold_return_pct}%`, color: summary.buy_hold_return_pct >= 0 ? 'var(--gh-green)' : 'var(--gh-red)', primary: false },
+            { label: 'Alpha', value: `${(summary.total_return_pct - summary.buy_hold_return_pct) >= 0 ? '+' : ''}${(summary.total_return_pct - summary.buy_hold_return_pct).toFixed(1)}%`, color: (summary.total_return_pct - summary.buy_hold_return_pct) >= 0 ? 'var(--gh-green)' : 'var(--gh-red)', primary: false },
+            { label: 'Trades', value: summary.num_trades, color: 'var(--gh-text-primary)', primary: false },
+            { label: 'Win Rate', value: `${summary.win_rate_pct}%`, color: summary.win_rate_pct >= 50 ? 'var(--gh-green)' : 'var(--gh-red)', primary: false },
+            { label: 'Sharpe', value: summary.sharpe_ratio, color: summary.sharpe_ratio >= 1 ? 'var(--gh-green)' : summary.sharpe_ratio >= 0.5 ? 'var(--gh-yellow)' : summary.sharpe_ratio < 0 ? 'var(--gh-red)' : 'var(--gh-text-muted)', primary: false },
+            { label: 'Max DD', value: `${summary.max_drawdown_pct}%`, color: Math.abs(summary.max_drawdown_pct) >= 10 ? 'var(--gh-red)' : 'var(--gh-text-muted)', primary: false },
           ].map(({ label, value, color, primary }) => (
             <div key={label} style={{ ...styles.metric, minWidth: primary ? 140 : 90 }}>
-              <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>{label}</div>
+              <div style={{ fontSize: 10, color: 'var(--gh-text-muted)', marginBottom: 2 }}>{label}</div>
               <div style={{ fontSize: primary ? 22 : 13, fontWeight: 700, color }}>{value}</div>
             </div>
           ))}
@@ -578,11 +586,11 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       {activeTab === 'equity' && (
         <div style={{ ...styles.metricsGrid, padding: '8px 16px' }}>
           {[
-            { label: 'Return', value: `${summary.total_return_pct > 0 ? '+' : ''}${summary.total_return_pct}%`, color: summary.total_return_pct >= 0 ? '#26a641' : '#f85149', primary: true },
-            { label: 'Sharpe', value: summary.sharpe_ratio, color: summary.sharpe_ratio >= 1 ? '#26a641' : summary.sharpe_ratio >= 0.5 ? '#d29922' : summary.sharpe_ratio < 0 ? '#f85149' : '#8b949e', primary: false },
+            { label: 'Return', value: `${summary.total_return_pct > 0 ? '+' : ''}${summary.total_return_pct}%`, color: summary.total_return_pct >= 0 ? 'var(--gh-green)' : 'var(--gh-red)', primary: true },
+            { label: 'Sharpe', value: summary.sharpe_ratio, color: summary.sharpe_ratio >= 1 ? 'var(--gh-green)' : summary.sharpe_ratio >= 0.5 ? 'var(--gh-yellow)' : summary.sharpe_ratio < 0 ? 'var(--gh-red)' : 'var(--gh-text-muted)', primary: false },
           ].map(({ label, value, color, primary }) => (
             <div key={label} style={{ ...styles.metric, minWidth: primary ? 140 : 90 }}>
-              <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>{label}</div>
+              <div style={{ fontSize: 10, color: 'var(--gh-text-muted)', marginBottom: 2 }}>{label}</div>
               <div style={{ fontSize: primary ? 22 : 13, fontWeight: 700, color }}>{value}</div>
             </div>
           ))}
@@ -592,9 +600,9 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       {activeTab === 'summary' && (
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'auto' }}>
           {summary.num_trades > 0 && (summary.gain_stats || summary.loss_stats) && (
-            <div style={{ display: 'flex', flexDirection: 'column', padding: '12px 16px', borderTop: '1px solid #21262d' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', padding: '12px 16px', borderTop: '1px solid var(--gh-bg-element)' }}>
               <div style={{ marginBottom: 8 }}>
-                <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase', letterSpacing: 0.5 }}>P&amp;L Distribution</span>
+                <span style={{ fontSize: 10, color: 'var(--gh-text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>P&amp;L Distribution</span>
               </div>
 
               <EvPfHeader
@@ -633,38 +641,38 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
             const hasShorts = sellsList.some(t => t.type === 'cover')
             if (summary.num_trades === 0) return null
             return (
-              <div style={{ display: 'flex', flexDirection: 'column', padding: '12px 16px', borderTop: '1px solid #21262d', gap: 4 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', padding: '12px 16px', borderTop: '1px solid var(--gh-bg-element)', gap: 4 }}>
                 <div style={{ marginBottom: 4 }}>
-                  <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase', letterSpacing: 0.5 }}>Cost Breakdown</span>
+                  <span style={{ fontSize: 10, color: 'var(--gh-text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Cost Breakdown</span>
                 </div>
                 <CostRow label="Total commission" value={totalComm} />
                 {hasShorts && <CostRow label="Total borrow cost" value={totalBorrow} />}
                 <CostRow label="Total slippage" value={totalSlip} />
                 <CostRow label="Total all-in costs" value={totalAll} bold />
-                <CostRow label="Cost drag" value={dragPct} suffix="%" color="#f0883e" bold />
+                <CostRow label="Cost drag" value={dragPct} suffix="%" color="var(--gh-orange)" bold />
               </div>
             )
           })()}
           <StreakPanel trades={result.trades} />
           {summary.num_trades >= 5 && <KellySizing summary={summary} />}
           {summary.beta != null && (
-            <div style={{ display: 'flex', flexDirection: 'column', padding: '12px 16px', borderTop: '1px solid #21262d', gap: 6 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', padding: '12px 16px', borderTop: '1px solid var(--gh-bg-element)', gap: 6 }}>
               <div style={{ marginBottom: 2 }}>
-                <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase', letterSpacing: 0.5 }}>Benchmark Correlation (SPY)</span>
+                <span style={{ fontSize: 10, color: 'var(--gh-text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Benchmark Correlation (SPY)</span>
               </div>
               <div style={{ display: 'flex', gap: 28 }}>
                 <div>
-                  <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>Beta (β)</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: '#e6edf3' }}>{summary.beta.toFixed(2)}</div>
-                  <div style={{ fontSize: 10, color: '#8b949e', marginTop: 2 }}>
+                  <div style={{ fontSize: 10, color: 'var(--gh-text-muted)', marginBottom: 2 }}>Beta (β)</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--gh-text-primary)' }}>{summary.beta.toFixed(2)}</div>
+                  <div style={{ fontSize: 10, color: 'var(--gh-text-muted)', marginTop: 2 }}>
                     {summary.beta > 1.2 ? 'Amplified' : summary.beta < 0 ? 'Inverse' : summary.beta < 0.3 ? 'Low corr.' : 'Tracking'}
                   </div>
                 </div>
                 {summary.r_squared != null && (
                   <div>
-                    <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>R² (Fit)</div>
-                    <div style={{ fontSize: 20, fontWeight: 700, color: '#e6edf3' }}>{(summary.r_squared * 100).toFixed(1)}%</div>
-                    <div style={{ fontSize: 10, color: '#8b949e', marginTop: 2 }}>
+                    <div style={{ fontSize: 10, color: 'var(--gh-text-muted)', marginBottom: 2 }}>R² (Fit)</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--gh-text-primary)' }}>{(summary.r_squared * 100).toFixed(1)}%</div>
+                    <div style={{ fontSize: 10, color: 'var(--gh-text-muted)', marginTop: 2 }}>
                       {summary.r_squared > 0.7 ? 'High' : summary.r_squared > 0.3 ? 'Moderate' : 'Low'}
                     </div>
                   </div>
@@ -691,8 +699,8 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
               baselineCurve={result.baseline_curve}
             />
           ) : (
-            <div style={{ height: 250, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0d1117' }}>
-              <span style={{ color: '#8b949e', fontSize: 12 }}>{macroLoading ? 'Loading…' : 'No macro data'}</span>
+            <div style={{ height: 250, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--gh-bg-deep)' }}>
+              <span style={{ color: 'var(--gh-text-muted)', fontSize: 12 }}>{macroLoading ? 'Loading…' : 'No macro data'}</span>
             </div>
           )
         ) : (
@@ -707,23 +715,23 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
         return (
           <div style={{
             display: 'flex', flexWrap: 'wrap', gap: 0, padding: '10px 16px',
-            background: '#0d1117', borderTop: '1px solid #21262d', borderBottom: '1px solid #21262d',
+            background: 'var(--gh-bg-deep)', borderTop: '1px solid var(--gh-bg-element)', borderBottom: '1px solid var(--gh-bg-element)',
             flexShrink: 0,
           }}>
             <div style={{ width: '100%', marginBottom: 6 }}>
-              <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              <span style={{ fontSize: 10, color: 'var(--gh-text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
                 {ps.label} Stats
               </span>
             </div>
             {[
-              { label: `Winning ${pn}s`, value: `${ps.winning_pct}%`, color: ps.winning_pct >= 50 ? '#26a641' : '#f85149' },
-              { label: 'Avg Return', value: `${ps.avg_return_pct > 0 ? '+' : ''}${ps.avg_return_pct}%`, color: ps.avg_return_pct >= 0 ? '#26a641' : '#f85149' },
-              { label: `Best ${pn}`, value: `+${ps.best_return_pct}%`, color: '#26a641' },
-              { label: `Worst ${pn}`, value: `${ps.worst_return_pct}%`, color: '#f85149' },
-              { label: `Trades/${pn.charAt(0)}`, value: ps.avg_trades.toFixed(1), color: '#e6edf3' },
+              { label: `Winning ${pn}s`, value: `${ps.winning_pct}%`, color: ps.winning_pct >= 50 ? 'var(--gh-green)' : 'var(--gh-red)' },
+              { label: 'Avg Return', value: `${ps.avg_return_pct > 0 ? '+' : ''}${ps.avg_return_pct}%`, color: ps.avg_return_pct >= 0 ? 'var(--gh-green)' : 'var(--gh-red)' },
+              { label: `Best ${pn}`, value: `+${ps.best_return_pct}%`, color: 'var(--gh-green)' },
+              { label: `Worst ${pn}`, value: `${ps.worst_return_pct}%`, color: 'var(--gh-red)' },
+              { label: `Trades/${pn.charAt(0)}`, value: ps.avg_trades.toFixed(1), color: 'var(--gh-text-primary)' },
             ].map(({ label, value, color }) => (
               <div key={label} style={{ padding: '4px 20px 4px 0', minWidth: 100 }}>
-                <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 2 }}>{label}</div>
+                <div style={{ fontSize: 10, color: 'var(--gh-text-muted)', marginBottom: 2 }}>{label}</div>
                 <div style={{ fontSize: 13, fontWeight: 700, color }}>{value}</div>
               </div>
             ))}
@@ -734,7 +742,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       {activeTab === 'trades' && (
         <div style={styles.tradeList}>
           {sells.length === 0 ? (
-            <div style={{ color: '#8b949e', fontSize: 12, padding: 8 }}>No completed trades</div>
+            <div style={{ color: 'var(--gh-text-muted)', fontSize: 12, padding: 8 }}>No completed trades</div>
           ) : (<>
             {(() => {
               const hasMixedDirection = sells.some(t => t.type === 'cover') && sells.some(t => t.type === 'sell')
@@ -746,7 +754,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
               const headerStyle = (col: SortCol, width: number): React.CSSProperties => ({
                 ...styles.tradeCell,
                 width,
-                color: tradesSort?.col === col ? '#e6edf3' : '#8b949e',
+                color: tradesSort?.col === col ? 'var(--gh-text-primary)' : 'var(--gh-text-muted)',
                 fontSize: 10,
                 cursor: 'pointer',
                 userSelect: 'none',
@@ -767,7 +775,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
               ]
               return (
                 <div
-                  style={{ ...styles.tradeRow, borderBottom: '1px solid #30363d', marginBottom: 2 }}
+                  style={{ ...styles.tradeRow, borderBottom: '1px solid var(--gh-border)', marginBottom: 2 }}
                   title="Click a column to sort — click again to reverse, third click clears"
                 >
                   {cols.map(([col, width, label]) => (
@@ -786,33 +794,33 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
               const origIdx = sells.indexOf(sell)
               const buy = buysForSort[origIdx]
               const win = (sell.pnl ?? 0) >= 0
-              const color = win ? '#26a641' : '#f85149'
+              const color = win ? 'var(--gh-green)' : 'var(--gh-red)'
               const totalSlip = (buy?.slippage ?? 0) + (sell.slippage ?? 0)
               const totalComm = (buy?.commission ?? 0) + (sell.commission ?? 0)
               return (
                 <div key={i} style={{ ...styles.tradeRow, borderLeft: `3px solid ${color}` }}>
-                  <span style={{ ...styles.tradeCell, width: 24, color: '#8b949e' }}>{i + 1}</span>
-                  <span style={{ ...styles.tradeCell, width: 115, color: '#e5c07b' }}>{fmtDate(buy?.date)}</span>
-                  <span style={{ ...styles.tradeCell, width: 65, color: '#e5c07b' }}>${buy?.price.toFixed(2)}</span>
+                  <span style={{ ...styles.tradeCell, width: 24, color: 'var(--gh-text-muted)' }}>{i + 1}</span>
+                  <span style={{ ...styles.tradeCell, width: 115, color: 'var(--gh-yellow-pale)' }}>{fmtDate(buy?.date)}</span>
+                  <span style={{ ...styles.tradeCell, width: 65, color: 'var(--gh-yellow-pale)' }}>${buy?.price.toFixed(2)}</span>
                   <span style={{ ...styles.tradeCell, width: 115, color }}>{fmtDate(sell.date)}</span>
                   <span style={{ ...styles.tradeCell, width: 65, color }}>${sell.price.toFixed(2)}</span>
-                  <span style={{ ...styles.tradeCell, width: 45, color: '#8b949e' }}>{sell.shares?.toFixed(1)}</span>
+                  <span style={{ ...styles.tradeCell, width: 45, color: 'var(--gh-text-muted)' }}>{sell.shares?.toFixed(1)}</span>
                   <span style={{ ...styles.tradeCell, width: 60, color, fontWeight: 700 }}>
                     {win ? '+' : ''}{sell.pnl?.toFixed(2)}
                   </span>
                   <span style={{ ...styles.tradeCell, width: 50, color, fontWeight: 700 }}>
                     {win ? '+' : ''}{sell.pnl_pct?.toFixed(2)}%
                   </span>
-                  <span style={{ ...styles.tradeCell, width: 50, color: totalSlip > 0 ? '#f0883e' : '#484f58' }}>
+                  <span style={{ ...styles.tradeCell, width: 50, color: totalSlip > 0 ? 'var(--gh-orange)' : 'var(--gh-text-dim)' }}>
                     {totalSlip > 0 ? `$${totalSlip.toFixed(2)}` : '—'}
                   </span>
-                  <span style={{ ...styles.tradeCell, width: 50, color: totalComm > 0 ? '#f0883e' : '#484f58' }}>
+                  <span style={{ ...styles.tradeCell, width: 50, color: totalComm > 0 ? 'var(--gh-orange)' : 'var(--gh-text-dim)' }}>
                     {totalComm > 0 ? `$${totalComm.toFixed(2)}` : '—'}
                   </span>
-                  <span style={{ ...styles.tradeCell, width: 50, color: (sell.borrow_cost ?? 0) > 0 ? '#f0883e' : '#484f58' }}>
+                  <span style={{ ...styles.tradeCell, width: 50, color: (sell.borrow_cost ?? 0) > 0 ? 'var(--gh-orange)' : 'var(--gh-text-dim)' }}>
                     {(sell.borrow_cost ?? 0) > 0 ? `$${sell.borrow_cost!.toFixed(2)}` : '—'}
                   </span>
-                  <span style={{ ...styles.tradeCell, width: 40, color: sell.stop_loss ? '#f0883e' : sell.trailing_stop ? '#f0883e' : '#8b949e', fontSize: 10 }}>
+                  <span style={{ ...styles.tradeCell, width: 40, color: sell.stop_loss ? 'var(--gh-orange)' : sell.trailing_stop ? 'var(--gh-orange)' : 'var(--gh-text-muted)', fontSize: 10 }}>
                     {sell.stop_loss ? 'SL' : sell.trailing_stop ? 'TSL' : 'Signal'}
                   </span>
                 </div>
@@ -824,12 +832,12 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
 
       {activeTab === 'monte_carlo' && (
         <div style={{ padding: '0 16px 16px' }}>
-          {mcLoading && <div style={{ color: '#8b949e', fontSize: 12, padding: 16 }}>Running {(1000).toLocaleString('en-US')} simulations…</div>}
+          {mcLoading && <div style={{ color: 'var(--gh-text-muted)', fontSize: 12, padding: 16 }}>Running {(1000).toLocaleString('en-US')} simulations…</div>}
           {!mcLoading && !mcResult && (
             <div style={{ padding: 16 }}>
               <button
                 onClick={fetchMonteCarlo}
-                style={{ padding: '6px 14px', fontSize: 12, background: '#21262d', border: '1px solid #30363d', borderRadius: 6, color: '#e6edf3', cursor: 'pointer' }}
+                style={{ padding: '6px 14px', fontSize: 12, background: 'var(--gh-bg-element)', border: '1px solid var(--gh-border)', borderRadius: 6, color: 'var(--gh-text-primary)', cursor: 'pointer' }}
               >
                 Run Monte Carlo (1,000 simulations)
               </button>
@@ -875,31 +883,31 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       {activeTab === 'trace' && signal_trace && (
         <div style={styles.tradeList}>
           {signal_trace.length === 0 ? (
-            <div style={{ color: '#8b949e', fontSize: 12, padding: 8 }}>No signal events recorded</div>
+            <div style={{ color: 'var(--gh-text-muted)', fontSize: 12, padding: 8 }}>No signal events recorded</div>
           ) : (<>
-            <div style={{ ...styles.tradeRow, borderBottom: '1px solid #30363d', marginBottom: 2 }}>
-              <span style={{ ...styles.traceCell, width: 140, color: '#8b949e', fontSize: 10 }}>Date</span>
-              <span style={{ ...styles.traceCell, width: 65, color: '#8b949e', fontSize: 10 }}>Price</span>
-              <span style={{ ...styles.traceCell, width: 65, color: '#8b949e', fontSize: 10 }}>Position</span>
-              <span style={{ ...styles.traceCell, width: 140, color: '#8b949e', fontSize: 10 }}>Action</span>
-              <span style={{ ...styles.traceCell, flex: 1, color: '#8b949e', fontSize: 10 }}>Rule Details</span>
+            <div style={{ ...styles.tradeRow, borderBottom: '1px solid var(--gh-border)', marginBottom: 2 }}>
+              <span style={{ ...styles.traceCell, width: 140, color: 'var(--gh-text-muted)', fontSize: 10 }}>Date</span>
+              <span style={{ ...styles.traceCell, width: 65, color: 'var(--gh-text-muted)', fontSize: 10 }}>Price</span>
+              <span style={{ ...styles.traceCell, width: 65, color: 'var(--gh-text-muted)', fontSize: 10 }}>Position</span>
+              <span style={{ ...styles.traceCell, width: 140, color: 'var(--gh-text-muted)', fontSize: 10 }}>Action</span>
+              <span style={{ ...styles.traceCell, flex: 1, color: 'var(--gh-text-muted)', fontSize: 10 }}>Rule Details</span>
             </div>
             {signal_trace.map((entry: SignalTraceEntry, i: number) => {
-              const actionColor = entry.action === 'BUY' ? '#26a641'
-                : entry.action === 'SELL' ? '#f85149'
-                : entry.action === 'STOP_LOSS' ? '#f0883e'
-                : entry.action.startsWith('MISSED') ? '#e5c07b'
-                : '#8b949e'
+              const actionColor = entry.action === 'BUY' ? 'var(--gh-green)'
+                : entry.action === 'SELL' ? 'var(--gh-red)'
+                : entry.action === 'STOP_LOSS' ? 'var(--gh-orange)'
+                : entry.action.startsWith('MISSED') ? 'var(--gh-yellow-pale)'
+                : 'var(--gh-text-muted)'
               const rules = entry.sell_rules ?? entry.buy_rules ?? []
               return (
                 <div key={i} style={styles.tradeRow}>
-                  <span style={{ ...styles.traceCell, width: 140, color: '#e6edf3' }}>{fmtDate(entry.date)}</span>
-                  <span style={{ ...styles.traceCell, width: 65, color: '#e6edf3' }}>${entry.price.toFixed(2)}</span>
-                  <span style={{ ...styles.traceCell, width: 65, color: '#8b949e' }}>{entry.position}</span>
+                  <span style={{ ...styles.traceCell, width: 140, color: 'var(--gh-text-primary)' }}>{fmtDate(entry.date)}</span>
+                  <span style={{ ...styles.traceCell, width: 65, color: 'var(--gh-text-primary)' }}>${entry.price.toFixed(2)}</span>
+                  <span style={{ ...styles.traceCell, width: 65, color: 'var(--gh-text-muted)' }}>{entry.position}</span>
                   <span style={{ ...styles.traceCell, width: 140, color: actionColor, fontWeight: 600 }}>{entry.action}</span>
-                  <span style={{ ...styles.traceCell, flex: 1, color: '#8b949e' }}>
+                  <span style={{ ...styles.traceCell, flex: 1, color: 'var(--gh-text-muted)' }}>
                     {rules.map((r, j) => (
-                      <span key={j} style={{ marginRight: 10, color: r.muted ? '#484f58' : r.result ? '#26a641' : '#f85149' }}>
+                      <span key={j} style={{ marginRight: 10, color: r.muted ? 'var(--gh-text-dim)' : r.result ? 'var(--gh-green)' : 'var(--gh-red)' }}>
                         {r.muted ? '🔇 ' : r.result ? '✓ ' : '✗ '}
                         {r.rule.trim()}
                         {!r.muted && r.v_now != null ? ` [${r.v_prev}→${r.v_now}]` : ''}
@@ -922,8 +930,8 @@ function CostRow({ label, value, suffix, color, bold }: {
   const formatted = suffix === '%' ? `${value.toFixed(2)}%` : `$${value.toFixed(2)}`
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-      <span style={{ color: '#8b949e', fontWeight: bold ? 600 : 400 }}>{label}</span>
-      <span style={{ color: color ?? '#e6edf3', fontWeight: bold ? 700 : 500 }}>{formatted}</span>
+      <span style={{ color: 'var(--gh-text-muted)', fontWeight: bold ? 600 : 400 }}>{label}</span>
+      <span style={{ color: color ?? 'var(--gh-text-primary)', fontWeight: bold ? 700 : 500 }}>{formatted}</span>
     </div>
   )
 }
@@ -938,7 +946,7 @@ function EvPfHeader({
   profitFactor: number | null
   grossProfit: number
 }) {
-  const evColor = evPerTrade == null ? '#8b949e' : evPerTrade > 0 ? '#26a641' : '#f85149'
+  const evColor = evPerTrade == null ? 'var(--gh-text-muted)' : evPerTrade > 0 ? 'var(--gh-green)' : 'var(--gh-red)'
   const evText =
     evPerTrade == null
       ? '—'
@@ -948,25 +956,25 @@ function EvPfHeader({
   let pfText: string
   if (profitFactor == null) {
     if (grossProfit > 0) {
-      pfColor = '#26a641'
+      pfColor = 'var(--gh-green)'
       pfText = '∞'
     } else {
-      pfColor = '#8b949e'
+      pfColor = 'var(--gh-text-muted)'
       pfText = '—'
     }
   } else {
-    pfColor = profitFactor > 1 ? '#26a641' : '#f85149'
+    pfColor = profitFactor > 1 ? 'var(--gh-green)' : 'var(--gh-red)'
     pfText = profitFactor.toFixed(2)
   }
 
   return (
     <div style={{ display: 'flex', gap: 32, alignItems: 'baseline', marginBottom: 8 }}>
       <div>
-        <span style={{ fontSize: 10, color: '#8b949e', marginRight: 6 }}>EV</span>
+        <span style={{ fontSize: 10, color: 'var(--gh-text-muted)', marginRight: 6 }}>EV</span>
         <span style={{ fontSize: 16, fontWeight: 700, color: evColor }}>{evText}</span>
       </div>
       <div>
-        <span style={{ fontSize: 10, color: '#8b949e', marginRight: 6 }}>PF</span>
+        <span style={{ fontSize: 10, color: 'var(--gh-text-muted)', marginRight: 6 }}>PF</span>
         <span style={{ fontSize: 16, fontWeight: 700, color: pfColor }}>{pfText}</span>
       </div>
     </div>
@@ -1006,7 +1014,7 @@ function RangeBar({
         marginTop: -2,
       }}
     >
-      <span style={{ fontSize: 9, color: '#484f58', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
+      <span style={{ fontSize: 9, color: 'var(--gh-text-dim)', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
         {fmtVal(min)}
       </span>
       <div style={{ flex: 1, position: 'relative', height: 4 }}>
@@ -1024,7 +1032,7 @@ function RangeBar({
           }}
         />
       </div>
-      <span style={{ fontSize: 9, color: '#484f58', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
+      <span style={{ fontSize: 9, color: 'var(--gh-text-dim)', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
         {fmtVal(max)}
       </span>
     </div>
@@ -1071,7 +1079,7 @@ function EvWaterfall({
 
   const fmtSigned = (v: number) => `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`
   const fmtUnsigned = (v: number) => `$${Math.abs(v).toFixed(2)}`
-  const netColor = netContribution > 0 ? '#26a641' : netContribution < 0 ? '#f85149' : '#8b949e'
+  const netColor = netContribution > 0 ? 'var(--gh-green)' : netContribution < 0 ? 'var(--gh-red)' : 'var(--gh-text-muted)'
 
   return (
     <div
@@ -1089,12 +1097,12 @@ function EvWaterfall({
     >
       {showWins && (
         <>
-          <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase' }}>Wins</span>
-          <div style={{ ...barFor(winContribution, maxContribution), background: '#26a641' }} />
-          <span style={{ color: '#8b949e' }}>
+          <span style={{ fontSize: 10, color: 'var(--gh-text-muted)', textTransform: 'uppercase' }}>Wins</span>
+          <div style={{ ...barFor(winContribution, maxContribution), background: 'var(--gh-green)' }} />
+          <span style={{ color: 'var(--gh-text-muted)' }}>
             {winRatePct.toFixed(1)}% × {fmtUnsigned(avgGain)} =
           </span>
-          <span style={{ color: '#26a641', textAlign: 'right' }}>{fmtSigned(winContribution)}</span>
+          <span style={{ color: 'var(--gh-green)', textAlign: 'right' }}>{fmtSigned(winContribution)}</span>
           {gainStats?.min != null && gainStats?.max != null && gainStats?.mean != null && (
             <RangeBar
               min={gainStats.min}
@@ -1108,12 +1116,12 @@ function EvWaterfall({
 
       {showLosses && (
         <>
-          <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase' }}>Losses</span>
-          <div style={{ ...barFor(lossContribution, maxContribution), background: '#f85149' }} />
-          <span style={{ color: '#8b949e' }}>
+          <span style={{ fontSize: 10, color: 'var(--gh-text-muted)', textTransform: 'uppercase' }}>Losses</span>
+          <div style={{ ...barFor(lossContribution, maxContribution), background: 'var(--gh-red)' }} />
+          <span style={{ color: 'var(--gh-text-muted)' }}>
             {lossRatePct.toFixed(1)}% × {fmtUnsigned(avgLoss)} =
           </span>
-          <span style={{ color: '#f85149', textAlign: 'right' }}>{fmtSigned(-lossContribution)}</span>
+          <span style={{ color: 'var(--gh-red)', textAlign: 'right' }}>{fmtSigned(-lossContribution)}</span>
           {lossStats?.min != null && lossStats?.max != null && lossStats?.mean != null && (
             <RangeBar
               min={lossStats.min}
@@ -1128,9 +1136,9 @@ function EvWaterfall({
       <span
         style={{
           fontSize: 10,
-          color: '#8b949e',
+          color: 'var(--gh-text-muted)',
           textTransform: 'uppercase',
-          borderTop: '1px solid #30363d',
+          borderTop: '1px solid var(--gh-border)',
           paddingTop: 4,
           marginTop: 2,
         }}
@@ -1144,12 +1152,12 @@ function EvWaterfall({
           marginTop: 6,
         }}
       />
-      <span style={{ borderTop: '1px solid #30363d', paddingTop: 4, marginTop: 2 }} />
+      <span style={{ borderTop: '1px solid var(--gh-border)', paddingTop: 4, marginTop: 2 }} />
       <span
         style={{
           color: netColor,
           textAlign: 'right',
-          borderTop: '1px solid #30363d',
+          borderTop: '1px solid var(--gh-border)',
           paddingTop: 4,
           marginTop: 2,
         }}
@@ -1161,7 +1169,7 @@ function EvWaterfall({
 }
 
 function winRateColor(rate: number): string {
-  // Interpolate: 0% = red (#f85149), 50% = #8b949e (gray), 100% = green (#26a641)
+  // Interpolate: 0% = red (var(--gh-red)), 50% = var(--gh-text-muted) (gray), 100% = green (var(--gh-green))
   if (rate <= 50) {
     const t = rate / 50
     const r = Math.round(248 + (139 - 248) * t)
@@ -1198,9 +1206,9 @@ function SessionAnalytics({ data }: { data?: SessionAnalyticsBucket[] | null }) 
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', padding: '12px 16px', borderTop: '1px solid #21262d', gap: 6 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', padding: '12px 16px', borderTop: '1px solid var(--gh-bg-element)', gap: 6 }}>
       <div style={{ marginBottom: 4 }}>
-        <span style={{ fontSize: 10, color: '#8b949e', textTransform: 'uppercase', letterSpacing: 0.5 }}>Session Analytics</span>
+        <span style={{ fontSize: 10, color: 'var(--gh-text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Session Analytics</span>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
         {data.map(b => {
@@ -1208,25 +1216,25 @@ function SessionAnalytics({ data }: { data?: SessionAnalyticsBucket[] | null }) 
           const color = winRateColor(b.win_rate)
           return (
             <div key={b.bucket} style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 20 }}>
-              <span style={{ fontSize: 11, color: '#8b949e', width: 90, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{fmtBucketRange(b.bucket)}</span>
-              <div style={{ flex: 1, height: 14, background: '#21262d', borderRadius: 2, overflow: 'hidden' }}>
+              <span style={{ fontSize: 11, color: 'var(--gh-text-muted)', width: 90, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{fmtBucketRange(b.bucket)}</span>
+              <div style={{ flex: 1, height: 14, background: 'var(--gh-bg-element)', borderRadius: 2, overflow: 'hidden' }}>
                 {b.trade_count > 0 && (
                   <div style={{ width: `${barWidth}%`, height: '100%', background: color, borderRadius: 2 }} />
                 )}
               </div>
               {b.trade_count > 0 ? (
                 <div style={{ display: 'flex', gap: 8, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
-                  <span style={{ fontSize: 11, color: '#8b949e', width: 18, textAlign: 'right' }}>{b.trade_count}</span>
+                  <span style={{ fontSize: 11, color: 'var(--gh-text-muted)', width: 18, textAlign: 'right' }}>{b.trade_count}</span>
                   <span style={{ fontSize: 11, color: color, width: 38, textAlign: 'right' }}>{b.win_rate.toFixed(0)}%</span>
-                  <span style={{ fontSize: 11, color: b.avg_pnl >= 0 ? '#26a641' : '#f85149', width: 52, textAlign: 'right' }}>
+                  <span style={{ fontSize: 11, color: b.avg_pnl >= 0 ? 'var(--gh-green)' : 'var(--gh-red)', width: 52, textAlign: 'right' }}>
                     {b.avg_pnl >= 0 ? '+' : ''}${b.avg_pnl.toFixed(2)}
                   </span>
                 </div>
               ) : (
                 <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-                  <span style={{ fontSize: 11, color: '#30363d', width: 18, textAlign: 'right' }}>—</span>
-                  <span style={{ fontSize: 11, color: '#30363d', width: 38, textAlign: 'right' }}>—</span>
-                  <span style={{ fontSize: 11, color: '#30363d', width: 52, textAlign: 'right' }}>—</span>
+                  <span style={{ fontSize: 11, color: 'var(--gh-border)', width: 18, textAlign: 'right' }}>—</span>
+                  <span style={{ fontSize: 11, color: 'var(--gh-border)', width: 38, textAlign: 'right' }}>—</span>
+                  <span style={{ fontSize: 11, color: 'var(--gh-border)', width: 52, textAlign: 'right' }}>—</span>
                 </div>
               )}
             </div>
@@ -1234,14 +1242,14 @@ function SessionAnalytics({ data }: { data?: SessionAnalyticsBucket[] | null }) 
         })}
       </div>
       {withTrades.length >= 2 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 4, paddingTop: 6, borderTop: '1px solid #21262d' }}>
-          <div style={{ fontSize: 11, color: '#8b949e' }}>
-            <span style={{ color: '#26a641', fontWeight: 600 }}>Best: </span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 4, paddingTop: 6, borderTop: '1px solid var(--gh-bg-element)' }}>
+          <div style={{ fontSize: 11, color: 'var(--gh-text-muted)' }}>
+            <span style={{ color: 'var(--gh-green)', fontWeight: 600 }}>Best: </span>
             {fmtBucketRange(best.bucket)} ({best.win_rate.toFixed(0)}% win rate,{' '}
             {best.avg_pnl >= 0 ? '+' : ''}${best.avg_pnl.toFixed(2)} avg)
           </div>
-          <div style={{ fontSize: 11, color: '#8b949e' }}>
-            <span style={{ color: '#f85149', fontWeight: 600 }}>Worst: </span>
+          <div style={{ fontSize: 11, color: 'var(--gh-text-muted)' }}>
+            <span style={{ color: 'var(--gh-red)', fontWeight: 600 }}>Worst: </span>
             {fmtBucketRange(worst.bucket)} ({worst.win_rate.toFixed(0)}% win rate,{' '}
             {worst.avg_pnl >= 0 ? '+' : ''}${worst.avg_pnl.toFixed(2)} avg)
           </div>
@@ -1254,20 +1262,20 @@ function SessionAnalytics({ data }: { data?: SessionAnalyticsBucket[] | null }) 
 const styles: Record<string, React.CSSProperties> = {
   container: {
     display: 'flex', flexDirection: 'column',
-    background: '#161b22', borderTop: '1px solid #30363d',
+    background: 'var(--gh-bg-panel)', borderTop: '1px solid var(--gh-border)',
     flex: 1, minHeight: 0,
   },
-  tabBar: { display: 'flex', borderBottom: '1px solid #30363d', flexShrink: 0 },
+  tabBar: { display: 'flex', borderBottom: '1px solid var(--gh-border)', flexShrink: 0 },
   tab: {
-    padding: '6px 14px', fontSize: 12, color: '#8b949e',
+    padding: '6px 14px', fontSize: 12, color: 'var(--gh-text-muted)',
     background: 'none', border: 'none', borderBottom: '2px solid transparent', cursor: 'pointer',
     whiteSpace: 'nowrap' as const, flexShrink: 0,
   },
-  tabActive: { color: '#58a6ff', borderBottomColor: '#58a6ff' },
+  tabActive: { color: 'var(--gh-blue)', borderBottomColor: 'var(--gh-blue)' },
   metricsGrid: { display: 'flex', flexWrap: 'wrap', padding: '12px 16px', gap: 0, alignContent: 'flex-start', flexShrink: 0 },
   metric: { padding: '6px 20px 6px 0', minWidth: 110 },
   tradeList: { flex: 1, overflowY: 'auto', padding: '8px 12px' },
-  tradeRow: { display: 'flex', gap: 4, alignItems: 'center', padding: '3px 0', borderBottom: '1px solid #21262d' },
+  tradeRow: { display: 'flex', gap: 4, alignItems: 'center', padding: '3px 0', borderBottom: '1px solid var(--gh-bg-element)' },
   tradeCell: { fontSize: 11, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
   traceCell: { fontSize: 11, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
 }

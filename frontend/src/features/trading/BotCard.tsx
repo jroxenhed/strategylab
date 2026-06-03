@@ -23,31 +23,38 @@ function ActivityLog({ entries, status }: { entries: BotActivityEntry[], status?
     : 'No activity yet.'
   return (
     <div style={{
-      maxHeight: 160, overflowY: 'auto', background: '#0d1117',
-      border: '1px solid #1e2530', borderRadius: 4, padding: '6px 8px',
+      maxHeight: 160, overflowY: 'auto', background: 'var(--gh-bg-deep)',
+      border: '1px solid var(--gh-bg-alt)', borderRadius: 4, padding: '6px 8px',
       fontFamily: 'monospace', fontSize: 11,
     }}>
-      {entries.length === 0 && <span style={{ color: '#555' }}>{emptyText}</span>}
+      {entries.length === 0 && <span style={{ color: 'var(--gh-text-placeholder)' }}>{emptyText}</span>}
       {entries.map((e, i) => (
         <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 2 }}>
-          <span style={{ color: '#444', flexShrink: 0 }}>
+          <span style={{ color: 'var(--gh-text-disabled)', flexShrink: 0 }}>
             {fmtTimeET(e.time)}
           </span>
           <span style={{ color: levelColor(e.level), flexShrink: 0 }}>[{e.level}]</span>
-          <span style={{ color: '#ccc' }}>{e.msg}</span>
+          <span style={{ color: 'var(--gh-text-light)' }}>{e.msg}</span>
         </div>
       ))}
     </div>
   )
 }
 
+/**
+ * Returns a CSS custom-property reference string (e.g. 'var(--gh-green)'),
+ * NOT a hex/rgb colour value. Browsers resolve var() correctly in inline
+ * styles (background, boxShadow). Do NOT pass this return value to a
+ * lw-charts addSeries colour option — lw-charts does not resolve CSS vars
+ * and will silently render the string as an invalid colour (K-01).
+ */
 function heartbeatColor(summary: BotSummary, detail: BotDetail | null): string {
-  if (summary.status === 'stopped') return '#484f58'  // grey
+  if (summary.status === 'stopped') return 'var(--gh-text-dim)'  // grey
   const lastTick = detail?.state?.last_tick ?? summary.last_tick
-  if (!lastTick) return '#484f58'
+  if (!lastTick) return 'var(--gh-text-dim)'
   const elapsed = (Date.now() - new Date(lastTick).getTime()) / 1000
   const interval = POLL_SECONDS[summary.interval] ?? 60
-  return elapsed <= interval * 2 ? '#26a641' : '#f85149'  // green or red
+  return elapsed <= interval * 2 ? 'var(--gh-green)' : 'var(--gh-red)'  // green or red
 }
 
 // ---------------------------------------------------------------------------
@@ -81,12 +88,12 @@ function StatusBadge({ status, tooltip, style }: { status: string; tooltip: stri
           left: popPos.left,
           bottom: popPos.bottom,
           transform: 'translateX(-50%)',
-          background: '#1c2128',
-          border: '1px solid #30363d',
+          background: 'var(--gh-bg-card)',
+          border: '1px solid var(--gh-border)',
           borderRadius: 6,
           padding: '6px 10px',
           fontSize: 11,
-          color: '#e6edf3',
+          color: 'var(--gh-text-primary)',
           whiteSpace: 'pre',
           zIndex: 9999,
           pointerEvents: 'none',
@@ -168,7 +175,7 @@ export default function BotCard({
     return () => { active = false; clearInterval(id) }
   }, [expanded, summary.bot_id, adaptiveInterval])
 
-  const pnlColor = summary.total_pnl >= 0 ? '#26a69a' : '#ef5350'
+  const pnlColor = summary.total_pnl >= 0 ? 'var(--gh-teal)' : 'var(--gh-red-alt)'
   const dir = summary.direction ?? 'long'
   const bgTint = dir === 'short' ? 'rgba(239, 83, 80, 0.08)' : 'rgba(38, 166, 154, 0.05)'
 
@@ -189,8 +196,8 @@ export default function BotCard({
   if (compact) {
     return (
       <div style={{
-        background: `linear-gradient(135deg, ${bgTint}, #161b22)`,
-        border: '1px solid #1e2530', borderRadius: 4,
+        background: `linear-gradient(135deg, ${bgTint}, var(--gh-bg-panel))`,
+        border: '1px solid var(--gh-bg-alt)', borderRadius: 4,
         display: 'flex', flexDirection: 'column',
       }}>
         {/* Compact two-column row */}
@@ -209,7 +216,7 @@ export default function BotCard({
                 {...dragHandleProps}
                 onClick={e => e.stopPropagation()}
                 style={{
-                  cursor: 'grab', color: '#484f58', fontSize: 14,
+                  cursor: 'grab', color: 'var(--gh-text-dim)', fontSize: 14,
                   userSelect: 'none', flexShrink: 0, lineHeight: 1,
                 }}
                 title="Drag to reorder"
@@ -230,15 +237,15 @@ export default function BotCard({
 
             {/* Symbol + badge + strategy name */}
             <span style={{ fontSize: 12, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-              <span style={{ color: '#e6edf3', fontWeight: 600 }}>{summary.symbol}</span>
+              <span style={{ color: 'var(--gh-text-primary)', fontWeight: 600 }}>{summary.symbol}</span>
               {dir === 'short' && (
                 <span style={{
                   fontSize: 9, fontWeight: 700, padding: '0px 4px', borderRadius: 2,
-                  background: 'rgba(239,83,80,0.15)', color: '#ef5350',
+                  background: 'rgba(239,83,80,0.15)', color: 'var(--gh-red-alt)',
                   lineHeight: '16px', marginLeft: 4, verticalAlign: 'middle',
                 }}>S</span>
               )}
-              <span style={{ color: '#666', marginLeft: 6 }}>{summary.strategy_name}</span>
+              <span style={{ color: 'var(--gh-text-faint2)', marginLeft: 6 }}>{summary.strategy_name}</span>
             </span>
 
             {/* P&L: dollar + percentage */}
@@ -256,7 +263,7 @@ export default function BotCard({
               style={{ fontSize: 10, color: statusColor(summary.status), textTransform: 'capitalize', flexShrink: 0 }}
             />
             {stopped && summary.was_running && (
-              <span style={{ fontSize: 10, color: '#f0b74e', flexShrink: 0 }} title="Was running before restart">
+              <span style={{ fontSize: 10, color: 'var(--gh-yellow-warm)', flexShrink: 0 }} title="Was running before restart">
                 ⚡ Was running
               </span>
             )}
@@ -270,8 +277,8 @@ export default function BotCard({
               <button
                 onClick={() => setMenuOpen(o => !o)}
                 style={{
-                  background: 'none', border: '1px solid #2a3040', borderRadius: 4,
-                  color: '#8b949e', cursor: 'pointer', padding: '1px 4px',
+                  background: 'none', border: '1px solid var(--gh-border-btn)', borderRadius: 4,
+                  color: 'var(--gh-text-muted)', cursor: 'pointer', padding: '1px 4px',
                   display: 'flex', alignItems: 'center',
                 }}
                 title="Actions"
@@ -282,7 +289,7 @@ export default function BotCard({
               {menuOpen && (
                 <div style={{
                   position: 'absolute', top: '100%', right: 0,
-                  background: '#161b22', border: '1px solid #2a3040',
+                  background: 'var(--gh-bg-panel)', border: '1px solid var(--gh-border-btn)',
                   borderRadius: 4, boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
                   zIndex: 100, minWidth: 120, marginTop: 2,
                 }}>
@@ -328,10 +335,10 @@ export default function BotCard({
                       style={{
                         display: 'block', width: '100%', textAlign: 'left',
                         background: 'none', border: 'none', padding: '6px 12px',
-                        fontSize: 12, color: item.disabled ? '#444' : '#ccc',
+                        fontSize: 12, color: item.disabled ? 'var(--gh-text-disabled)' : 'var(--gh-text-light)',
                         cursor: item.disabled ? 'not-allowed' : 'pointer',
                       }}
-                      onMouseEnter={e => { if (!item.disabled) (e.target as HTMLElement).style.background = '#1e2530' }}
+                      onMouseEnter={e => { if (!item.disabled) (e.target as HTMLElement).style.background = 'var(--gh-bg-alt)' }}
                       onMouseLeave={e => { (e.target as HTMLElement).style.background = 'none' }}
                     >
                       {item.label}
@@ -357,9 +364,9 @@ export default function BotCard({
         {/* Inline reset-P&L confirm (triggered from menu) */}
         {confirmingResetPnl && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', background: 'rgba(240,183,78,0.08)', borderTop: '1px solid rgba(240,183,78,0.2)' }} onClick={e => e.stopPropagation()}>
-            <span style={{ fontSize: 11, color: '#ccc', flex: 1 }}>Reset P&L for this bot? Journal rows are kept; the display starts fresh from now.</span>
-            <button onClick={() => { onResetPnl(); setConfirmingResetPnl(false) }} style={btnStyle('#3a1a1a')}>Confirm</button>
-            <button onClick={() => setConfirmingResetPnl(false)} style={btnStyle('#1e2530')}>Cancel</button>
+            <span style={{ fontSize: 11, color: 'var(--gh-text-light)', flex: 1 }}>Reset P&L for this bot? Journal rows are kept; the display starts fresh from now.</span>
+            <button onClick={() => { onResetPnl(); setConfirmingResetPnl(false) }} style={btnStyle('var(--gh-red-bg)')}>Confirm</button>
+            <button onClick={() => setConfirmingResetPnl(false)} style={btnStyle('var(--gh-bg-alt)')}>Cancel</button>
           </div>
         )}
       </div>
@@ -369,7 +376,7 @@ export default function BotCard({
   // ---- Expanded (default) layout ----
   return (
     <div style={{
-      background: `linear-gradient(135deg, ${bgTint}, #161b22)`, border: '1px solid #1e2530', borderRadius: 6,
+      background: `linear-gradient(135deg, ${bgTint}, var(--gh-bg-panel))`, border: '1px solid var(--gh-bg-alt)', borderRadius: 6,
       padding: 12, display: 'flex', flexDirection: 'column', gap: 8,
     }}>
       {/* Two-column layout */}
@@ -380,7 +387,7 @@ export default function BotCard({
             {...dragHandleProps}
             style={{
               display: 'flex', alignItems: 'center', cursor: 'grab',
-              color: '#484f58', fontSize: 16, padding: '0 2px',
+              color: 'var(--gh-text-dim)', fontSize: 16, padding: '0 2px',
               userSelect: 'none', flexShrink: 0, alignSelf: 'stretch',
             }}
             title="Drag to reorder"
@@ -401,7 +408,7 @@ export default function BotCard({
                 boxShadow: running ? `0 0 6px ${heartbeatColor(summary, detail)}` : 'none',
               }}
             />
-            <span style={{ color: '#e6edf3', fontWeight: 600 }}>
+            <span style={{ color: 'var(--gh-text-primary)', fontWeight: 600 }}>
               {editingStrategy ? (
                 <select
                   autoFocus
@@ -424,7 +431,7 @@ export default function BotCard({
                     setEditingStrategy(false)
                   }}
                   onBlur={() => setEditingStrategy(false)}
-                  style={{ fontSize: 12, background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3 }}
+                  style={{ fontSize: 12, background: 'var(--gh-bg-deep)', color: 'var(--gh-text-primary)', border: '1px solid var(--gh-border)', borderRadius: 3 }}
                 >
                   <option value={-1}>Select strategy…</option>
                   {(() => { try { return JSON.parse(localStorage.getItem(SAVED_KEY) || '[]') } catch { return [] } })()
@@ -432,7 +439,7 @@ export default function BotCard({
                 </select>
               ) : (
                 <span
-                  style={{ cursor: stopped ? 'pointer' : 'default', borderBottom: stopped ? '1px dashed #58a6ff' : 'none' }}
+                  style={{ cursor: stopped ? 'pointer' : 'default', borderBottom: stopped ? '1px dashed var(--gh-blue)' : 'none' }}
                   onClick={() => { if (stopped) setEditingStrategy(true) }}
                   title={stopped ? 'Click to change strategy' : 'Stop bot to edit'}
                 >{summary.strategy_name}</span>
@@ -441,24 +448,24 @@ export default function BotCard({
                 fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 3,
                 marginLeft: 6,
                 background: dir === 'short' ? 'rgba(239,83,80,0.15)' : 'rgba(38,166,154,0.15)',
-                color: dir === 'short' ? '#ef5350' : '#26a69a',
+                color: dir === 'short' ? 'var(--gh-red-alt)' : 'var(--gh-teal)',
                 textTransform: 'uppercase', letterSpacing: 0.5,
               }}>
                 {dir}
               </span>
             </span>
-            <span style={{ color: '#888', fontSize: 12 }}>
+            <span style={{ color: 'var(--gh-text-faint)', fontSize: 12 }}>
               {summary.symbol} · {summary.interval} · {summary.data_source ?? 'alpaca-iex'}
               {' · '}
-              <span style={{ color: (summary.broker ?? 'alpaca') === 'ibkr' ? '#f0b74e' : '#58a6ff' }}>
+              <span style={{ color: (summary.broker ?? 'alpaca') === 'ibkr' ? 'var(--gh-yellow-warm)' : 'var(--gh-blue-alt)' }}>
                 via {(summary.broker ?? 'alpaca') === 'ibkr' ? 'IBKR' : 'Alpaca'}
               </span>
               {summary.kind === 'graph' && (
                 <span style={{
                   marginLeft: 6,
-                  background: '#1a3a2a',
-                  color: '#3fb950',
-                  border: '1px solid #2ea043',
+                  background: 'var(--gh-green-bg)',
+                  color: 'var(--gh-green-bright)',
+                  border: '1px solid var(--gh-green-dim)',
                   borderRadius: 3,
                   padding: '1px 5px',
                   fontSize: 10,
@@ -495,17 +502,17 @@ export default function BotCard({
                     if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
                     if (e.key === 'Escape') setEditingAlloc(false)
                   }}
-                  style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3, padding: '1px 4px' }}
+                  style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, background: 'var(--gh-bg-deep)', color: 'var(--gh-text-primary)', border: '1px solid var(--gh-border)', borderRadius: 3, padding: '1px 4px' }}
                 />
               ) : (
                 <span
-                  style={{ color: stopped ? '#58a6ff' : '#aaa', cursor: stopped ? 'pointer' : 'default', borderBottom: stopped ? '1px dashed #58a6ff' : 'none' }}
+                  style={{ color: stopped ? 'var(--gh-blue)' : 'var(--gh-text-mid)', cursor: stopped ? 'pointer' : 'default', borderBottom: stopped ? '1px dashed var(--gh-blue)' : 'none' }}
                   onClick={() => { if (stopped) { setAllocValue(String(summary.allocated_capital)); setEditingAlloc(true) } }}
                   title={stopped ? 'Click to edit' : 'Stop bot to edit'}
                 >{fmtUsd(summary.allocated_capital)}</span>
               )}
             />
-            <StatCell label="Trades" value={<span style={{ color: '#aaa' }}>{summary.trades_count}</span>} />
+            <StatCell label="Trades" value={<span style={{ color: 'var(--gh-text-mid)' }}>{summary.trades_count}</span>} />
             <StatCell
               label="P&L"
               value={<span style={{ color: pnlColor }}>{fmtPnl(summary.total_pnl)} ({pnlPct}%)</span>}
@@ -517,7 +524,7 @@ export default function BotCard({
             {stopped && summary.was_running && (
               <StatCell
                 label=""
-                value={<span style={{ color: '#f0b74e', fontSize: 11 }} title="This bot was running before the server restarted">⚡ Was running before restart</span>}
+                value={<span style={{ color: 'var(--gh-yellow-warm)', fontSize: 11 }} title="This bot was running before the server restarted">⚡ Was running before restart</span>}
               />
             )}
             {summary.regime_direction != null && (
@@ -525,12 +532,12 @@ export default function BotCard({
                 label="Regime"
                 value={
                   summary.pending_regime_flip ? (
-                    <span style={{ color: '#f0b74e' }}>⏳ Pending flip</span>
+                    <span style={{ color: 'var(--gh-yellow-warm)' }}>⏳ Pending flip</span>
                   ) : (
                     <span style={{
-                      color: summary.regime_direction === 'long' ? '#26a69a'
-                           : summary.regime_direction === 'short' ? '#ef5350'
-                           : '#666',
+                      color: summary.regime_direction === 'long' ? 'var(--gh-teal)'
+                           : summary.regime_direction === 'short' ? 'var(--gh-red-alt)'
+                           : 'var(--gh-text-faint2)',
                     }}>
                       {summary.regime_direction === 'long' ? '▲ Long'
                        : summary.regime_direction === 'short' ? '▼ Short'
@@ -543,7 +550,7 @@ export default function BotCard({
             {summary.avg_cost_bps != null && (
               <StatCell
                 label="Slippage"
-                value={<span style={{ color: summary.avg_cost_bps > 5 ? '#f85149' : '#8b949e' }}>{summary.avg_cost_bps.toFixed(1)} bps</span>}
+                value={<span style={{ color: summary.avg_cost_bps > 5 ? 'var(--gh-red)' : 'var(--gh-text-muted)' }}>{summary.avg_cost_bps.toFixed(1)} bps</span>}
               />
             )}
             <StatCell
@@ -564,11 +571,11 @@ export default function BotCard({
                     if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
                     if (e.key === 'Escape') setEditingSpread(false)
                   }}
-                  style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3, padding: '1px 4px' }}
+                  style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, background: 'var(--gh-bg-deep)', color: 'var(--gh-text-primary)', border: '1px solid var(--gh-border)', borderRadius: 3, padding: '1px 4px' }}
                 />
               ) : (
                 <span
-                  style={{ color: stopped ? '#58a6ff' : '#aaa', cursor: stopped ? 'pointer' : 'default', borderBottom: stopped ? '1px dashed #58a6ff' : 'none' }}
+                  style={{ color: stopped ? 'var(--gh-blue)' : 'var(--gh-text-mid)', cursor: stopped ? 'pointer' : 'default', borderBottom: stopped ? '1px dashed var(--gh-blue)' : 'none' }}
                   onClick={() => { if (stopped) { setSpreadValue(summary.max_spread_bps ? String(summary.max_spread_bps) : ''); setEditingSpread(true) } }}
                   title={stopped ? 'Click to edit (empty = disabled)' : 'Stop bot to edit'}
                 >{summary.max_spread_bps ? `${summary.max_spread_bps} bps` : 'off'}</span>
@@ -593,11 +600,11 @@ export default function BotCard({
                     if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
                     if (e.key === 'Escape') setEditingDD(false)
                   }}
-                  style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, background: '#0d1117', color: '#e6edf3', border: '1px solid #30363d', borderRadius: 3, padding: '1px 4px' }}
+                  style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, background: 'var(--gh-bg-deep)', color: 'var(--gh-text-primary)', border: '1px solid var(--gh-border)', borderRadius: 3, padding: '1px 4px' }}
                 />
               ) : (
                 <span
-                  style={{ color: stopped ? '#58a6ff' : '#aaa', cursor: stopped ? 'pointer' : 'default', borderBottom: stopped ? '1px dashed #58a6ff' : 'none' }}
+                  style={{ color: stopped ? 'var(--gh-blue)' : 'var(--gh-text-mid)', cursor: stopped ? 'pointer' : 'default', borderBottom: stopped ? '1px dashed var(--gh-blue)' : 'none' }}
                   onClick={() => { if (stopped) { setDdValue(summary.drawdown_threshold_pct ? String(summary.drawdown_threshold_pct) : ''); setEditingDD(true) } }}
                   title={stopped ? 'Click to edit (empty = disabled)' : 'Stop bot to edit'}
                 >{summary.drawdown_threshold_pct ? `${summary.drawdown_threshold_pct}%` : '—'}</span>
@@ -607,20 +614,20 @@ export default function BotCard({
 
           {/* Pause reason (structural IBKR reject) */}
           {(detail?.state?.pause_reason ?? summary.pause_reason) && (
-            <div style={{ fontSize: 11, color: '#f0b74e', background: 'rgba(240,183,78,0.08)', padding: '3px 8px', borderRadius: 3 }}>
+            <div style={{ fontSize: 11, color: 'var(--gh-yellow-warm)', background: 'rgba(240,183,78,0.08)', padding: '3px 8px', borderRadius: 3 }}>
               {detail?.state?.pause_reason ?? summary.pause_reason}
             </div>
           )}
 
           {/* Backtest summary (always visible if available) */}
           {summary.backtest_summary && (
-            <div style={{ display: 'flex', gap: 12, fontSize: 11, color: '#666' }}>
+            <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--gh-text-faint2)' }}>
               {(() => {
                 const s = summary.backtest_summary
                 return <>
-                  <span>BT Return: <span style={{ color: '#aaa' }}>{s.total_return_pct != null ? s.total_return_pct.toFixed(1) : '—'}%</span></span>
-                  <span>Sharpe: <span style={{ color: '#aaa' }}>{s.sharpe_ratio != null ? s.sharpe_ratio.toFixed(2) : '—'}</span></span>
-                  <span>MDD: <span style={{ color: '#ef5350' }}>{s.max_drawdown_pct != null ? s.max_drawdown_pct.toFixed(1) : '—'}%</span></span>
+                  <span>BT Return: <span style={{ color: 'var(--gh-text-mid)' }}>{s.total_return_pct != null ? s.total_return_pct.toFixed(1) : '—'}%</span></span>
+                  <span>Sharpe: <span style={{ color: 'var(--gh-text-mid)' }}>{s.sharpe_ratio != null ? s.sharpe_ratio.toFixed(2) : '—'}</span></span>
+                  <span>MDD: <span style={{ color: 'var(--gh-red-alt)' }}>{s.max_drawdown_pct != null ? s.max_drawdown_pct.toFixed(1) : '—'}%</span></span>
                 </>
               })()}
             </div>
@@ -628,40 +635,40 @@ export default function BotCard({
 
           {/* Action buttons */}
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            <button onClick={onBacktest} disabled={running} style={btnStyle('#1e3a5f', running)}>
+            <button onClick={onBacktest} disabled={running} style={btnStyle('var(--gh-blue-bg)', running)}>
               Backtest
             </button>
             {stopped ? (
-              <button onClick={onStart} style={btnStyle('#1a3a2a')}>Start</button>
+              <button onClick={onStart} style={btnStyle('var(--gh-green-bg)')}>Start</button>
             ) : (
-              <button onClick={onStop} style={btnStyle('#3a1a1a')}>Stop</button>
+              <button onClick={onStop} style={btnStyle('var(--gh-red-bg)')}>Stop</button>
             )}
             <button
               onClick={onManualBuy}
               disabled={!running || summary.has_position}
-              style={btnStyle('#1a3a2a', !running || summary.has_position)}
+              style={btnStyle('var(--gh-green-bg)', !running || summary.has_position)}
             >{dir === 'short' ? 'Short' : 'Buy'}</button>
             <button
               onClick={() => setExpanded(e => !e)}
-              style={btnStyle('#1e2530')}
+              style={btnStyle('var(--gh-bg-alt)')}
             >
               {expanded ? 'Hide Log' : 'Show Log'}
             </button>
             {confirmingResetPnl ? (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ fontSize: 11, color: '#ccc' }}>Reset P&L for this bot? Journal rows are kept; the display starts fresh from now.</span>
-                <button onClick={() => { onResetPnl(); setConfirmingResetPnl(false) }} style={btnStyle('#3a1a1a')}>Confirm</button>
-                <button onClick={() => setConfirmingResetPnl(false)} style={btnStyle('#1e2530')}>Cancel</button>
+                <span style={{ fontSize: 11, color: 'var(--gh-text-light)' }}>Reset P&L for this bot? Journal rows are kept; the display starts fresh from now.</span>
+                <button onClick={() => { onResetPnl(); setConfirmingResetPnl(false) }} style={btnStyle('var(--gh-red-bg)')}>Confirm</button>
+                <button onClick={() => setConfirmingResetPnl(false)} style={btnStyle('var(--gh-bg-alt)')}>Cancel</button>
               </span>
             ) : (
               <button
                 onClick={() => setConfirmingResetPnl(true)}
-                style={btnStyle('#3a2e1a')}
+                style={btnStyle('var(--gh-yellow-bg)')}
                 title="Soft reset: marks an epoch so only trades from now on count toward P&L"
               >Reset P&L</button>
             )}
             {stopped && (
-              <button onClick={onDelete} style={btnStyle('#3a1a1a')}>Delete</button>
+              <button onClick={onDelete} style={btnStyle('var(--gh-red-bg)')}>Delete</button>
             )}
           </div>
         </div>

@@ -27,6 +27,40 @@
   --accent-purple: #8B5CF6;
   --accent-orange: #F59E0B;
   
+  /* GitHub-dark palette (Results/BotCard) — F34; candidates for unification with the core palette later */
+  --gh-green: #26a641;          /* profit, wins, BUY action */
+  --gh-green-bright: #3fb950;   /* graph-badge text */
+  --gh-green-dim: #2ea043;      /* graph-badge border */
+  --gh-teal: #26a69a;           /* long-direction P&L */
+  --gh-green-bg: #1a3a2a;       /* Start / Buy button bg */
+  --gh-red: #f85149;            /* loss, SELL action */
+  --gh-red-alt: #ef5350;        /* short-direction P&L / badge */
+  --gh-red-bg: #3a1a1a;         /* Stop / Delete / Confirm button bg */
+  --gh-blue: #58a6ff;           /* active tabs, edit-dashed links */
+  --gh-blue-alt: #59b0f4;       /* Alpaca broker label */
+  --gh-blue-bg: #1e3a5f;        /* Backtest button bg */
+  --gh-orange: #f0883e;         /* cost drag, stop-loss exit type */
+  --gh-yellow: #d29922;         /* mid Sharpe */
+  --gh-yellow-warm: #f0b74e;    /* was-running warning, IBKR label */
+  --gh-yellow-bg: #3a2e1a;      /* Reset P&L button bg */
+  --gh-yellow-pale: #e5c07b;    /* entry-date cells in trades */
+  --gh-bg-deep: #0d1117;        /* deepest bg (chart canvas, macro loading) */
+  --gh-bg-panel: #161b22;       /* card / container panel */
+  --gh-bg-card: #1c2128;        /* tooltip bg, chart grid lines */
+  --gh-bg-element: #21262d;     /* separators, session bar bg */
+  --gh-bg-alt: #1e2530;         /* button hover, kebab menu bg */
+  --gh-border-btn: #2a3040;     /* button border (dark blue-gray) */
+  --gh-border: #30363d;         /* tab/row dividers, trade borders */
+  --gh-text-primary: #e6edf3;   /* near-white values / cells */
+  --gh-text-muted: #8b949e;     /* label / metadata gray */
+  --gh-text-dim: #484f58;       /* range-bar ends, disabled cells */
+  --gh-text-light: #ccc;        /* log messages, kebab button text */
+  --gh-text-mid: #aaa;          /* StatCell values, editable-stop state */
+  --gh-text-faint: #888;        /* symbol · interval line */
+  --gh-text-faint2: #666;       /* StatCell label */
+  --gh-text-placeholder: #555;  /* empty-state text */
+  --gh-text-disabled: #444;     /* timestamp col, disabled-button text */
+
   /* Shadows */
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.2);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -2px rgba(0, 0, 0, 0.2);
