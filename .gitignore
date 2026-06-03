@@ -38,5 +38,8 @@ CLAUDE.local.md
 docs/ideas/
 docs/ideation/
 
+# Private personal-workflow playbooks (companions to gitignored CLAUDE.local.md)
+docs/private/
+
 # Externalized orchestrator run-state (lean-context contract; per-task work product)
 .run/
