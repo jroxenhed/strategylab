@@ -299,7 +299,7 @@ Tasks to skip even if tagged `[next]`:
 
 **Builder env notes:**
 1. **`ce:review` skill names still unavailable** (3rd run in a row) — `compound-engineering:ce-review`, `ce-review`, `ce:review` all fail to resolve. F80 documents the action items; the routine container needs a plugin sync to match the interactive session.
-2. **`backend/venv/` missing** — Section 3.5 smoke test in `docs/overnight-builder-prompt-patch.md` requires `backend/venv/bin/uvicorn` and pytest. Every backend-touching run hits this. Either provision the venv in the container or refactor the smoke step to use system python + a constrained import test.
+2. **`backend/venv/` missing** — Section 3.5 smoke test in `docs/overnight-builder-guide.md` requires `backend/venv/bin/uvicorn` and pytest. Every backend-touching run hits this. Either provision the venv in the container or refactor the smoke step to use system python + a constrained import test.
 
 **Next up:**
 - **F81** [easy] [next] Shared `SymbolField` type alias — unblocks F82 + F85, dedupes 3 inline call sites.
@@ -329,7 +329,7 @@ Tasks to skip even if tagged `[next]`:
 - **Deferred → TODO (F68–F78):** F68 round-trip+crash tests for atomic writes, F69 `WatchlistRequest` disk-fill DoS (Pydantic length cap), F70 `_persist_env` lost-update lock, **F71 atomic_write_text shared helper across the now-4 sites (umbrella for the OSError-guard divergence + bare-except in `bot_manager.py`)**, F72 Pydantic `response_model` for `/api/quotes`, F73 orphan `.tmp` cleanup on startup, F74 missing `fsync` before `os.replace`, F75 sanitize internal exception messages reflected via the new `error` field, F76 `_persist_env` `.env` exists/read TOCTOU, F77 newline guard on `_persist_env(key,value)`, F78 watchlist UI red-tint indicator for permanently-failed quotes (tooltip is wired but no visual distinction yet).
 - **Reviewers' "fix journal.py / bot_manager.py to match the new code" directives:** declined for this PR — the new code is strictly more defensive (OSError guard around `os.unlink`, `except Exception:` over bare `except:`). Updating the old sites is the right call but it's exactly what F71's helper extraction will do atomically across all four sites; landing it piecemeal here would temporarily diverge the patterns again. Tracked under F71.
 
-**Build:** frontend `npm run build` pass. **Smoke test:** N/A — no Python venv in this environment, AST checks only. The runtime smoke-test step in `docs/overnight-builder-prompt-patch.md` Section 3.5 assumes `backend/venv/bin/uvicorn` exists; flagging because every overnight run that touches backend code is going to hit this until the venv is provisioned in the routine container.
+**Build:** frontend `npm run build` pass. **Smoke test:** N/A — no Python venv in this environment, AST checks only. The runtime smoke-test step in `docs/overnight-builder-guide.md` Section 3.5 assumes `backend/venv/bin/uvicorn` exists; flagging because every overnight run that touches backend code is going to hit this until the venv is provisioned in the routine container.
 
 **Visual verification:** Not visually verified — the only frontend change is one type field + one `title` attribute. Flagged in PR description.
 
@@ -346,7 +346,7 @@ Tasks to skip even if tagged `[next]`:
 - **A14a** SubPane loading state — `useInstanceIndicators` exposes `isLoading` aggregated across all active queries (regular + htf groups), threaded `App → Chart → SubPanelEntry → SubPane`. Overlay uses a constant-opacity scrim with the animated `<span>` only (backdrop pulse caused chart-content flicker).
 - **C25a** Optimizer NaN guard improvements — split `runOptimizer()` validation into per-field checks; `isNaN(stepsN)` guard fires before `< 2`; "system default ... is missing" message when blank field meets a NaN default.
 
-**Review:** 4 manual personas (correctness, maintainability, project-standards, kieran-typescript). The `compound-engineering:ce-review` skill name from `docs/overnight-builder-prompt-patch.md` is not in the available-skills list for this environment — fell back to manual persona dispatch. Plain `review` skill IS listed but its description ("Review a pull request") suggests it expects an existing PR; was not used. **Builder env note for human:** debug the ce-review skill alias / install state so future runs can use the consolidated Skill call.
+**Review:** 4 manual personas (correctness, maintainability, project-standards, kieran-typescript). The `compound-engineering:ce-review` skill name from `docs/overnight-builder-guide.md` is not in the available-skills list for this environment — fell back to manual persona dispatch. Plain `review` skill IS listed but its description ("Review a pull request") suggests it expects an existing PR; was not used. **Builder env note for human:** debug the ce-review skill alias / install state so future runs can use the consolidated Skill call.
 
 **Findings summary:** 2 P2 + 6 P3 across both tasks.
 - Fixed: P2 `useOHLCV.ts` `isLoading` semantics (only-first-query bug + empty-success lock); P2 `SubPane.tsx` animation flicker (moved animation off backdrop); P3 inline rgba/hex colors in SubPane (now use existing `CHART_BG_SCRIM`/`TEXT` constants).

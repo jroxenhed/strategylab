@@ -1,8 +1,8 @@
-# Overnight Builder Prompt
+# Overnight Builder Guide
 
 The overnight builder reads this file at runtime. To set up the runner, use this minimal bootstrap instruction:
 
-> You are the StrategyLab overnight builder. Read and follow the instructions in docs/overnight-builder-prompt-patch.md exactly. Start by reading CLAUDE.md for project context.
+> You are the StrategyLab overnight builder. Read and follow the instructions in docs/overnight-builder-guide.md exactly. Start by reading CLAUDE.md for project context.
 
 ---
 
@@ -144,7 +144,7 @@ Skip this step only when: (a) no frontend files changed in this run, or (b) `npm
 
 Single-pass self-review consistently misses P1s on architectural changes — that's why multi-agent review exists. But running 4-6 personas on every PR overshoots when the diff is a bundle of `[easy]` hardening items (caps, logger.exception, type tightening). 2026-05-11 evidence: F119 + F122 + F125 shipped 24 `[easy]` items across 3 interactive batches with parallel Sonnet implementers + Opus orchestrator verification + ZERO persona review + zero regressions (user-validated). Personas earn their tokens at the architectural/adversarial tails, not on mechanical hardening.
 
-**Before dispatching review, classify the PR into a tier (see CLAUDE.md "Severity-graded review tiers"):**
+**Before dispatching review, classify the PR into a tier.** (This table is the *canonical* severity-tier definition — the interactive orchestrator references it via `docs/private/orchestrator-playbook.md`; keep them in sync by editing here.)
 
 | Tier | When | Personas |
 |---|---|---|
@@ -152,7 +152,7 @@ Single-pass self-review consistently misses P1s on architectural changes — tha
 | **B** | `[medium]` items OR aggregate 100-300 lines OR >5 files touched | 2 max: `correctness` always + conditional file-type reviewer (`kieran-python` for `.py`, `kieran-typescript` for `.ts/.tsx`). |
 | **C** | `[hard]` / architectural / contract changes / aggregate >300 lines | 4-6 panel: the 4 always-on personas (correctness, testing, adversarial, security) + conditionals per file mix (kieran-*, reliability, project-standards, maintainability). |
 
-**Contract-surface override (always Tier C):** changing a Pydantic `response_model`, changing public API error wording/shape, changing auth/authz, changing persistence schema, changing TypeScript shared types in `frontend/shared/types/`, removing a public route. Blast radius is callers, not LOC.
+**Contract-surface override (Tier C):** changing a Pydantic `response_model`, changing public API error wording/shape, changing auth/authz, changing persistence schema, changing TypeScript shared types in `frontend/shared/types/`, removing a public route. Blast radius is callers, not LOC. **Additive + compiler-enforced carve-out:** a *purely additive* change to a *compiler-enforced* contract (a new optional response field + a TS type the build already typechecks) stays at **Tier B**, NOT C — `npm run build` is the contract gate (tsc fails if any consumer wasn't updated), so a human api-contract pass duplicates the compiler. Promote to C only when the change is **breaking or runtime-only**: removing/renaming a field, changing error shape/wording, auth/authz, persistence, or a response a non-TS client consumes. (F217 lesson: additive `total` field + `JournalResponse` type over-fired to C.)
 
 **Aggregate-bundle override:** even if every individual item is `[easy]`, total diff >100 lines OR >5 files touched bumps to Tier B. Total diff >300 lines OR contract surface bumps to Tier C. F125 (12 files, 184 insertions, QuoteResult response_model added) would have been Tier C under this rule.
 
@@ -241,6 +241,26 @@ Every line that ships must have been reviewed after its final edit.
 
 Include a review summary in your commit message: `Review: X findings (P0: N, P1: N, P2: N), Y auto-fixed, Z iterations` and the persona roster used (e.g. `personas: correctness, testing, adversarial, security, kieran-python`).
 
+#### Project-standards checklist (StrategyLab-specific)
+
+Give this to the `project-standards` persona, and use it directly as the self-review pass on Tier A bundles (no personas). It operationalizes CLAUDE.md "Key Bugs Fixed" — go through it against every changed file. (Merged from the retired `overnight-review-protocol.md`, 2026-06-03.)
+
+- [ ] **Timezone**: every unix timestamp shown to the user passes through `toET()` / `toDisplayTime()`. Daily date strings pass through unchanged.
+- [ ] **priceScaleId**: any new chart series sets an explicit `priceScaleId` (lw-charts v5 creates an independent scale without one).
+- [ ] **yf.download()**: never used — always `yf.Ticker(symbol).history()` via `_fetch()`.
+- [ ] **Fire-and-forget**: non-critical async side-effects in polling loops use `asyncio.create_task()`, never `await`.
+- [ ] **Sync callbacks**: callbacks from non-asyncio threads use `asyncio.run_coroutine_threadsafe(coro, self._loop)`, not `ensure_future`.
+- [ ] **Bot ID tagging**: every `_log_trade()` includes `bot_id`; every `compute_realized_pnl()` filters by `bot_id`.
+- [ ] **Chart teardown**: refs nulled before `chart.remove()`; `syncWidths` reads refs dynamically; try/catch around sibling-chart ops.
+- [ ] **API client**: all frontend HTTP uses `import { api } from '../../api/client'` — never raw `fetch('/api/...')` (hits the Vite dev server, silently fails).
+- [ ] **Build command**: verified with `npm run build` (`tsc -b`), not `tsc --noEmit`.
+
+**Known pitfalls (real bugs that have shipped — check explicitly):**
+1. Raw `fetch()` instead of the `api` client — P1, silent failure in dev.
+2. Silent error swallowing — `if (res.ok) setResult(data)` with no else; at minimum reset loading state in `finally`, prefer an error message.
+3. Identical percentile values — verify a Monte-Carlo shuffle actually produces different sequences; identical percentiles mean the randomization/aggregation is broken.
+4. Missing fields in `UpdateBotRequest`/`AddBotRequest` — adding a `BotConfig` field without adding it to the request schema means Pydantic's `extra="ignore"` silently drops it (CLAUDE.md "Silent drop of bot config fields"; has shipped twice).
+
 ### 4.5. Sync TODO.md index
 
 After editing TODO.md bullets and BEFORE staging, run:
@@ -325,7 +345,7 @@ You cannot visually verify UI changes — that is the human's job during morning
    <Places where the protocol disagrees with itself, where the env makes a step impossible, or where you had to make a judgment call the doc doesn't cover. These are the most valuable items in this doc — they feed the next round of protocol tuning.>
 
    ## Recommendations
-   <Concrete changes to `docs/overnight-builder-prompt-patch.md` or `CLAUDE.md` that would have prevented friction points or caught skipped steps automatically. Each one ideally maps to a TODO item (file it in §5 step 2.2 if it's a code/infra change, or to this doc if it's prose-only).>
+   <Concrete changes to `docs/overnight-builder-guide.md` or `CLAUDE.md` that would have prevented friction points or caught skipped steps automatically. Each one ideally maps to a TODO item (file it in §5 step 2.2 if it's a code/infra change, or to this doc if it's prose-only).>
    ```
 
 6. Push the branch (use the actual branch name from step 5 — may have a `-N` collision suffix): `git push -u origin "$(git branch --show-current)"`

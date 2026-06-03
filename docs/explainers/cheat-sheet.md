@@ -89,7 +89,7 @@ git revert <hash>             # undo a bad commit
 | `JOURNAL.md` | Ship log. What was built and when. |
 | `NEXT_RUN.md` | Steer overnight runs + see run reports. |
 | `backend/.env` | Secrets (API keys, webhook URLs). Gitignored. |
-| `docs/overnight-review-protocol.md` | How the builder reviews code. |
+| `docs/overnight-builder-guide.md` §4 | How the builder reviews code (severity tiers). |
 | `bin/slack-report.sh` | Sends Slack notifications. |
 | `.claude/settings.json` | Claude Code hooks (auto build check on .ts edits). |
 

@@ -85,15 +85,15 @@ The builder reads this before picking tasks. If you don't edit it, it defaults t
 
 ### 3. The Review Protocol
 
-Lives at `docs/overnight-review-protocol.md`. Distilled from ce:review (the interactive session's 8-persona review system). The overnight builder uses it to prompt 3-4 parallel review agents:
+Lives in `docs/overnight-builder-guide.md` §4 (severity-graded review). The builder dispatches a severity-tiered persona panel (manual `general-purpose` + persona-prompt injection — the `ce:review` skill and dedicated reviewer agent types don't resolve in the routine env):
 
-**Always-on reviewers:**
+**Always-on reviewers (Tier C):**
 - **Correctness** — logic errors, edge cases, state bugs
-- **Maintainability** — dead code, duplication, naming, coupling
-- **Project Standards** — CLAUDE.md compliance, Key Bugs Fixed patterns
+- **Testing** — coverage gaps, weak assertions, brittle tests
+- **Adversarial** — failure-scenario construction, breaking the implementation
+- **Security** — input validation, auth/authz, exploitable surface
 
-**Conditional reviewers** (added when the diff warrants it):
-- Security, Reliability, TypeScript, Python
+**Conditional reviewers** (added by diff/file mix): kieran-python, kieran-typescript, reliability, project-standards, maintainability. Tier A runs no personas (orchestrator self-review via the §4 project-standards checklist); Tier B runs 1-2.
 
 Each reviewer returns structured JSON with severity (P0-P3), confidence (0.0-1.0), and autofix classification. Findings below 0.60 confidence are suppressed. The builder synthesizes, deduplicates, and routes:
 
@@ -176,7 +176,7 @@ The overnight builder handles the "known work" — tasks with clear scope that d
 | File | Purpose |
 |------|---------|
 | `NEXT_RUN.md` | Steering file — task overrides, skip list, constraints, run report |
-| `docs/overnight-review-protocol.md` | Review methodology for the builder's review agents |
+| `docs/overnight-builder-guide.md` §4 | Review methodology (severity tiers + persona panel) for the builder's review agents |
 | `bin/slack-report.sh` | Sends formatted message to Slack webhook |
 | `CLAUDE.md` | Project context and orchestrator workflow (builder reads this) |
 | `TODO.md` | Task backlog — `[next]` tags queue work for the builder |

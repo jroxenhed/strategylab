@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*266 / 283 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*266 / 284 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 - [F212](#f212) — [next] F210 inline-confirm browser smoke remains partially open [easy]
 
-## Open Work — 40 items
+## Open Work — 41 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -24,7 +24,7 @@ _(none open)_
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 13 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F216](#f216), [F272](#f272) |
 | [F · Hardening](#f-hardening) | Security, reliability, validation | 2 | [F187](#f187), [F211](#f211) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 8 | [F34](#f34)–[F35](#f35), [F140](#f140), [F210](#f210), [F212](#f212), [F217b](#f217b), [F249c](#f249c), [F250](#f250) |
-| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 7 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219), [F249b](#f249b), [F279b](#f279b) |
+| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 8 | [F51](#f51), [F97](#f97), [F144](#f144), [F161](#f161), [F219](#f219), [F249b](#f249b), [F279b](#f279b), [F280](#f280) |
 
 ## A — Charts & Indicators
 
@@ -253,3 +253,4 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f267"></a> **F267** Docs reorg: retire `docs/superpowers/` — plugin-specific holdover folder. ~45 plan + spec files moved via `git mv` into the existing `docs/plans/` and `docs/specs/` (plugin-agnostic, already where recent work lived). All cross-references in `.md` files updated via sed. CLAUDE.md "On Start" handoff contract updated to point at the new locations. [easy] [infra] (resolved 2026-05-25)
 - [x] <a id="f277"></a> **F277** Catalog drift test added in `catalog.test.ts` ("F277 — drift guard"): three assertions — (a) every `paramTypes` key is also in `defaults.params`, (b) every select-typed entry has a non-empty options array, (c) every numeric default has an explicit `paramTypes` entry (no silent inference). Backend-side validation (cross-checking against Python's actual accepted params) deferred — frontend test catches the high-leverage typo + drift cases. 17/17 catalog tests pass. (resolved 2026-05-25) [easy] [testing]
 - [ ] <a id="f279b"></a> **F279b** Manual/automated integration test for the F279 orphan-kill — the unit test (`test_wfa_pool_cleanup.py`) proves `_force_kill_executor` kills a real spawned worker, but the full failure path (start a real WFA run, SIGKILL the backend mid-flight, then `ps -ef | grep multiprocessing.spawn` → expect zero orphans) is still a manual residual. Worth a scripted check, ideally folded into the F51 headless render probe once that lands. [testing] (from F279)
+- [ ] <a id="f280"></a> **F280** Validate (or fix) the Slack "Review cost" measurement before deciding overnight review parallel-vs-sequential — the overnight builder defaults to **parallel** persona dispatch; sequencing-within-5-min to save cache writes is only worth adopting if the data shows it pays off, and the empirical signal is the Slack-report "Review cost" line (`bin/slack-report.sh` + the per-persona `usage` token sums). That measurement path is currently unverified (the webhook may not be configured; the token-summing is manual/by-hand). Confirm the Slack webhook works, automate summing each persona dispatch's input/output tokens into the report, and run a few overnight builds each way to get real numbers. Until then, parallel stays the default — don't serialize reviews on the unvalidated cache-cost hypothesis. (from the 2026-06-03 doc-cleanup; resolves the C1 collision between the old prompt-patch and the playbook.) [infra]
