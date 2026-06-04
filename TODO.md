@@ -10,7 +10,8 @@ _(none open)_
 
 ## Up Next
 
-_(none tagged)_
+- [F303](#f303) — [next] Tracking-toolchain self-test [easy]
+- [F304](#f304) — [next] close-batch `## New` support for [gated:] items [easy]
 
 ## Open Work — 27 items
 
@@ -64,7 +65,7 @@ _(none open)_
 - [ ] <a id="f161"></a> **F161** Visual smoke verification for C28 walk-forward — manual QA. Run a known overfit strategy (e.g. over-tuned RSI threshold on AAPL daily 2020-2024) and confirm: WFE < 0.5, multiple windows tagged `"spike"`, stitched equity chart renders without sawtooth, per-window table shows IS/OOS Sharpe divergence, `low_windows_warn` callout appears when configured for ≤5 windows. Then run a robust 50/200 MA crossover and confirm WFE > 0.5 with some `"stable_plateau"` tags. C28 shipped with `npm run build` clean + 39 backend + 8 frontend tests but was not visually verified in-session. [easy] [testing] (added 2026-05-12)
 
 - [ ] <a id="f211"></a> **F211** F206 audit found `close_all_positions` (line ~258) delegates to `provider.close_all_positions()` (a broker primitive) with no per-symbol direction probe. Verify the IBKR and Alpaca primitives actually buy-to-cover shorts correctly when called from this endpoint — particularly IBKR's `close_all` if it exists, since the SMART-routing trap previously hid this kind of bug. May require a paper-trading test (open one long + one short on the same broker, then hit the Close-All button, check both close cleanly + journal correctly). (from F206 audit follow-up 2026-05-15) [medium] [hardening]
-- [ ] <a id="f303"></a> **F303** Tracking-toolchain self-test — fixture-based test (tmp copies) that runs sync-todo-index + close-batch (Close+New) + archive-todo end-to-end and asserts structure invariants; the TODO-REDESIGN review found a P0 (close-batch targeting a dissolved section) that a fixture test would have caught pre-review. [easy] [testing]
+- [ ] <a id="f303"></a> **F303** [next] Tracking-toolchain self-test — fixture-based test (tmp copies) that runs sync-todo-index + close-batch (Close+New) + archive-todo end-to-end and asserts structure invariants; the TODO-REDESIGN review found a P0 (close-batch targeting a dissolved section) that a fixture test would have caught pre-review. [easy] [testing]
 
 ## Infra
 
@@ -75,7 +76,7 @@ _(none open)_
 - [ ] <a id="f301"></a> **F301** executeTrigger drag support in render-probe.mjs — manifest triggers are click/input/navigate only, so drag-based panel-resize checks (the original F249c resize-delta) aren't replayable; F-BATCH-0604C had to substitute a collapse/expand round-trip. Add a `drag` trigger (mouse down/move/up between two selectors/offsets). (from F-BATCH-0604C manifest authoring) [medium] [infra]
 
 - [ ] <a id="f302"></a> **F302** Per-reviewer effort cap in dispatch prompts — F-BATCH-0604C's correctness reviewer ran 5m47s / 60k tokens / 55 tool-uses vs siblings' ~2m / ~13-29, and with no agent-messaging tool the orchestrator could only poll (~15 min of wall-clock went to waits). Add a standard cap clause to review dispatch prompts (e.g. "≤25 tool calls / ~3 min; if hit, return partial findings + status token") and record cap-hits in run-state so chronic offenders surface in the report. [easy] [infra]
-- [ ] <a id="f304"></a> **F304** close-batch `## New` support for [gated:] items — manifest items carrying a [gated: …] tag should insert under `## Deferred (gated)` instead of their bucket section. [easy] [infra]
+- [ ] <a id="f304"></a> **F304** [next] close-batch `## New` support for [gated:] items — manifest items carrying a [gated: …] tag should insert under `## Deferred (gated)` instead of their bucket section. [easy] [infra]
 
 ## Deferred (gated)
 
