@@ -233,6 +233,11 @@ export default function BotControlCenter() {
   }, [orderedBots, invalidateBots])
 
   const [confirmingStopClose, setConfirmingStopClose] = useState(false)
+  // F297: restore focus to "Stop and Close" button when confirm is cancelled.
+  // The ternary unmounts the trigger button while confirming, so the button remounts on cancel.
+  // requestAnimationFrame defers the focus call until after React has flushed the remount to DOM.
+  const stopCloseBtnRef = useRef<HTMLButtonElement>(null)
+  const cancelStopClose = () => { setConfirmingStopClose(false); requestAnimationFrame(() => { stopCloseBtnRef.current?.focus() }) }
   const [sparklineScale, setSparklineScale] = useState<'local' | 'aligned'>(() => {
     const v = localStorage.getItem('sparklineScale')
     return v === 'aligned' ? 'aligned' : 'local'
@@ -377,10 +382,10 @@ export default function BotControlCenter() {
                 {`Close ${bots.filter(b => b.has_position).length} open position${bots.filter(b => b.has_position).length === 1 ? '' : 's'} at market and stop ${bots.filter(b => b.status === 'running').length} running bot${bots.filter(b => b.status === 'running').length === 1 ? '' : 's'}?`}
               </span>
               <button onClick={doStopAndCloseAll} style={btnStyle('#5a1a1a')}>Confirm</button>
-              <button onClick={() => setConfirmingStopClose(false)} style={btnStyle('#1e2530')}>Cancel</button>
+              <button onClick={cancelStopClose} style={btnStyle('#1e2530')}>Cancel</button>
             </>
           ) : (
-            <button onClick={handleStopAndCloseAll} style={btnStyle('#5a1a1a')}>Stop and Close</button>
+            <button ref={stopCloseBtnRef} onClick={handleStopAndCloseAll} style={btnStyle('#5a1a1a')}>Stop and Close</button>
           )}
         </div>
         <div style={{ flex: 1 }} />

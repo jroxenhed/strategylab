@@ -143,6 +143,15 @@ export default function BotCard({
   const [menuOpen, setMenuOpen] = useState(false)
   const [confirmingResetPnl, setConfirmingResetPnl] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+  // F297: restore focus when Reset P&L confirm is cancelled.
+  // Compact layout: the confirm panel is additive ({confirmingResetPnl && ...}) — the kebab
+  //   button stays mounted throughout, so direct .focus() works.
+  // Expanded layout: the ternary unmounts the "Reset P&L" trigger button while confirming,
+  //   so the button remounts on cancel — requestAnimationFrame defers focus until after DOM flush.
+  const menuBtnRef = useRef<HTMLButtonElement>(null)
+  const resetPnlBtnRef = useRef<HTMLButtonElement>(null)
+  const cancelResetPnlCompact = () => { setConfirmingResetPnl(false); menuBtnRef.current?.focus() }
+  const cancelResetPnlExpanded = () => { setConfirmingResetPnl(false); requestAnimationFrame(() => { resetPnlBtnRef.current?.focus() }) }
 
   const running = summary.status === 'running'
   const stopped = summary.status === 'stopped'
@@ -275,6 +284,7 @@ export default function BotCard({
               onClick={e => e.stopPropagation()}
             >
               <button
+                ref={menuBtnRef}
                 onClick={() => setMenuOpen(o => !o)}
                 style={{
                   background: 'none', border: '1px solid var(--gh-border-btn)', borderRadius: 4,
@@ -366,7 +376,7 @@ export default function BotCard({
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', background: 'rgba(240,183,78,0.08)', borderTop: '1px solid rgba(240,183,78,0.2)' }} onClick={e => e.stopPropagation()}>
             <span style={{ fontSize: 11, color: 'var(--gh-text-light)', flex: 1 }}>Reset P&L for this bot? Journal rows are kept; the display starts fresh from now.</span>
             <button onClick={() => { onResetPnl(); setConfirmingResetPnl(false) }} style={btnStyle('var(--gh-red-bg)')}>Confirm</button>
-            <button onClick={() => setConfirmingResetPnl(false)} style={btnStyle('var(--gh-bg-alt)')}>Cancel</button>
+            <button onClick={cancelResetPnlCompact} style={btnStyle('var(--gh-bg-alt)')}>Cancel</button>
           </div>
         )}
       </div>
@@ -658,10 +668,11 @@ export default function BotCard({
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                 <span style={{ fontSize: 11, color: 'var(--gh-text-light)' }}>Reset P&L for this bot? Journal rows are kept; the display starts fresh from now.</span>
                 <button onClick={() => { onResetPnl(); setConfirmingResetPnl(false) }} style={btnStyle('var(--gh-red-bg)')}>Confirm</button>
-                <button onClick={() => setConfirmingResetPnl(false)} style={btnStyle('var(--gh-bg-alt)')}>Cancel</button>
+                <button onClick={cancelResetPnlExpanded} style={btnStyle('var(--gh-bg-alt)')}>Cancel</button>
               </span>
             ) : (
               <button
+                ref={resetPnlBtnRef}
                 onClick={() => setConfirmingResetPnl(true)}
                 style={btnStyle('var(--gh-yellow-bg)')}
                 title="Soft reset: marks an epoch so only trades from now on count toward P&L"

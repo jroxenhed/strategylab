@@ -9,6 +9,7 @@ import { useSlippage } from '../../shared/hooks/useSlippage'
 import { apiErrorDetail } from '../../shared/utils/errors'
 
 import { migrateRule, loadSavedStrategies, saveSavedStrategies } from './savedStrategies'
+import { BOT_DEPLOYABLE_INTERVALS } from '../../shared/constants'
 
 interface Props {
   ticker: string
@@ -131,6 +132,9 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
   // otherwise document.activeElement falls back to <body> (browser-verified regression).
   const renameBtnRef = useRef<HTMLButtonElement>(null)
   const cancelRename = () => { setRenamingStrategy(null); setRenameError(null); renameBtnRef.current?.focus() }
+  // F297: restore focus to the Save As button when Save-As is cancelled (same pattern as F210).
+  const saveAsBtnRef = useRef<HTMLButtonElement>(null)
+  const cancelSaveAs = () => { setShowSaveAs(false); setSaveAsName(''); saveAsBtnRef.current?.focus() }
   const [renameValue, setRenameValue] = useState('')
   const [pendingDelete, setPendingDelete] = useState<{ name: string; snapshot: SavedStrategy[] } | null>(null)
   const pendingDeleteTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -185,6 +189,10 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
     regimeBuyRules,
   )
 
+  // F188b: intervals that support live bot deployment — imported from shared/constants (source of truth)
+  const isDeployable = (BOT_DEPLOYABLE_INTERVALS as readonly string[]).includes(interval)
+  const showDailyWarning = activeStrategyName !== null && !isDeployable
+
   function currentSnapshot(name: string): SavedStrategy {
     const strategyType: SavedStrategy['strategyType'] =
       regimeEnabled === true ? 'regime' : direction === 'short' ? 'short' : 'long'
@@ -222,14 +230,24 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
   }
 
   function loadSavedStrategy(s: SavedStrategy) {
-    setBuyRules(s.buyRules); setSellRules(s.sellRules)
-    setBuyLogic(s.buyLogic); setSellLogic(s.sellLogic)
-    setCapital(s.capital); setPosSize(s.posSize); setStopLoss(s.stopLoss); setMaxBarsHeld(s.maxBarsHeld ?? '')
-    setTrailingEnabled(s.trailingEnabled); setTrailingConfig(s.trailingConfig)
-    setDynamicSizing(s.dynamicSizing ?? { enabled: false, consec_sls: 2, reduced_pct: 25, trigger: 'sl' })
+    // F296: normalize at load time — merge over complete defaults so older strategies
+    // that lack newer fields (slippageBps, commission, activate_pct, etc.) never feed
+    // undefined into controlled inputs. Each fallback matches the useState initial value.
+    const DEFAULT_TRAILING: TrailingStopConfig = { type: 'pct', value: 5, source: 'high', activate_on_profit: false, activate_pct: 0 }
+    const normalTrailing = (t: TrailingStopConfig | undefined): TrailingStopConfig =>
+      t ? { ...DEFAULT_TRAILING, ...t } : DEFAULT_TRAILING
+
+    setBuyRules((s.buyRules ?? [{ indicator: 'macd', condition: 'crossover_up' }]).map(migrateRule))
+    setSellRules((s.sellRules ?? [{ indicator: 'macd', condition: 'crossover_down' }]).map(migrateRule))
+    setBuyLogic(s.buyLogic ?? 'AND'); setSellLogic(s.sellLogic ?? 'AND')
+    setCapital(s.capital ?? 10000); setPosSize(s.posSize ?? 100); setStopLoss(s.stopLoss ?? ''); setMaxBarsHeld(s.maxBarsHeld ?? '')
+    setTrailingEnabled(s.trailingEnabled ?? false); setTrailingConfig(normalTrailing(s.trailingConfig))
+    setDynamicSizing(s.dynamicSizing
+      ? { enabled: s.dynamicSizing.enabled, consec_sls: s.dynamicSizing.consec_sls ?? 2, reduced_pct: s.dynamicSizing.reduced_pct ?? 25, trigger: s.dynamicSizing.trigger ?? 'sl' }
+      : { enabled: false, consec_sls: 2, reduced_pct: 25, trigger: 'sl' })
     setSkipAfterStop(s.skipAfterStop ?? { enabled: false, count: 1, trigger: 'sl' })
     setTradingHours(s.tradingHours ?? { enabled: false, start_time: '09:30', end_time: '16:00', skip_ranges: [] })
-    setSlippageBps(s.slippageBps); setCommission(s.commission)
+    setSlippageBps(s.slippageBps ?? ''); setCommission(s.commission ?? '')
     setPerShareRate(s.perShareRate ?? 0)
     setMinPerOrder(s.minPerOrder ?? 0)
     setBorrowRateAnnual(s.borrowRateAnnual ?? 0.5)
@@ -252,13 +270,13 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
     setLongStopLoss(s.longStopLoss ?? '')
     setShortStopLoss(s.shortStopLoss ?? '')
     setLongTrailingEnabled(s.longTrailingEnabled ?? false)
-    setLongTrailingConfig(s.longTrailingConfig ?? s.trailingConfig)
+    setLongTrailingConfig(normalTrailing(s.longTrailingConfig ?? s.trailingConfig))
     setShortTrailingEnabled(s.shortTrailingEnabled ?? false)
-    setShortTrailingConfig(s.shortTrailingConfig ?? s.trailingConfig)
+    setShortTrailingConfig(normalTrailing(s.shortTrailingConfig ?? s.trailingConfig))
     setLongMaxBarsHeld(s.longMaxBarsHeld ?? '')
     setShortMaxBarsHeld(s.shortMaxBarsHeld ?? '')
-    setLongPosSize(s.longPosSize ?? s.posSize)
-    setShortPosSize(s.shortPosSize ?? s.posSize)
+    setLongPosSize(s.longPosSize ?? s.posSize ?? 100)
+    setShortPosSize(s.shortPosSize ?? s.posSize ?? 100)
     setActiveStrategyName(s.name)
   }
 
@@ -1032,7 +1050,7 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
           {activeStrategyName && (
             <button onClick={() => saveStrategy(activeStrategyName)} style={styles.strategyBtn}>Save</button>
           )}
-          <button onClick={() => { setShowSaveAs(true); setSaveAsName(activeStrategyName ?? '') }} style={styles.strategyBtn}>Save As</button>
+          <button ref={saveAsBtnRef} onClick={() => { setShowSaveAs(true); setSaveAsName(activeStrategyName ?? '') }} style={styles.strategyBtn}>Save As</button>
           {activeStrategyName && (
             <>
               <button
@@ -1054,12 +1072,12 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
                 autoFocus
                 value={saveAsName}
                 onChange={e => setSaveAsName(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && saveAsName.trim()) saveStrategy(saveAsName.trim()); if (e.key === 'Escape') setShowSaveAs(false) }}
+                onKeyDown={e => { if (e.key === 'Enter' && saveAsName.trim()) saveStrategy(saveAsName.trim()); if (e.key === 'Escape') cancelSaveAs() }}
                 placeholder="Strategy name"
                 style={styles.saveAsInput}
               />
               <button onClick={() => { if (saveAsName.trim()) saveStrategy(saveAsName.trim()) }} style={styles.strategyBtn}>OK</button>
-              <button onClick={() => setShowSaveAs(false)} style={styles.strategyBtn}>Cancel</button>
+              <button onClick={cancelSaveAs} style={styles.strategyBtn}>Cancel</button>
             </div>
           )}
           {renamingStrategy && (
@@ -1082,6 +1100,12 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 16px', background: 'rgba(196,68,68,0.08)', borderBottom: '1px solid rgba(196,68,68,0.2)' }}>
             <span style={{ color: 'var(--accent-red)', fontSize: 12, flex: 1 }}>{migrationNotice}</span>
             <button onClick={() => setMigrationNotice(null)} style={{ fontSize: 11, padding: '1px 8px', background: 'var(--bg-input)', color: 'var(--text-secondary)', border: '1px solid var(--border-light)', borderRadius: 3, cursor: 'pointer', flexShrink: 0 }}>Dismiss</button>
+          </div>
+        )}
+        {/* F188b: daily/weekly intervals cannot be deployed as live bots — surface hint when a saved strategy is active */}
+        {showDailyWarning && (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 16px', background: 'rgba(196,68,68,0.08)', borderBottom: '1px solid rgba(196,68,68,0.2)' }}>
+            <span style={{ color: 'var(--accent-red)', fontSize: 12, flex: 1 }}>Daily/weekly strategies are backtestable only — cannot deploy as live bots. Use 1m–1h intervals for live trading.</span>
           </div>
         )}
         {pendingDelete && createPortal(

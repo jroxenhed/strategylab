@@ -122,12 +122,18 @@ export interface SavedStrategy {
   shortSellLogic?: 'AND' | 'OR'
   capital: number
   posSize: number
+  // Required since F296/F295 era; legacy localStorage records may omit this field.
+  // loadSavedStrategy normalises with `?? ''` — do NOT remove that guard even
+  // though the type says non-optional (TypeScript won't warn; the runtime needs it).
   stopLoss: number | ''
   trailingEnabled: boolean
   trailingConfig: TrailingStopConfig
   dynamicSizing: DynamicSizingConfig
   skipAfterStop?: SkipAfterStopConfig
   tradingHours: TradingHoursConfig
+  // Required since F296 (added post-launch); legacy localStorage records may omit these.
+  // loadSavedStrategy normalises with `?? ''` — do NOT remove those guards even
+  // though the type says non-optional (TypeScript won't warn; the runtime needs them).
   slippageBps: number | ''
   commission: number | ''
   perShareRate?: number

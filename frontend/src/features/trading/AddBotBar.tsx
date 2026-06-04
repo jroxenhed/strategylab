@@ -3,10 +3,12 @@ import type { BotFundStatus, SavedStrategy } from '../../shared/types'
 import { fmtUsd } from '../../shared/utils/format'
 import { apiErrorDetail } from '../../shared/utils/errors'
 import { btnStyle } from './ui'
+import { BOT_DEPLOYABLE_INTERVALS } from '../../shared/constants'
 
 const SAVED_KEY = 'strategylab-saved-strategies'
 const SAVED_GRAPHS_KEY = 'strategylab-saved-graphs'
-const INTERVALS = ['1m', '5m', '15m', '30m', '1h']
+// INTERVALS is the set of deployable intraday intervals — shared source of truth in shared/constants.ts
+const INTERVALS = BOT_DEPLOYABLE_INTERVALS
 
 interface SavedGraph {
   name: string
