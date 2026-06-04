@@ -31,6 +31,8 @@ Rules:
     - Start with `- [ ] **<ID>**`
     - Carry one bucket tag: [arch] / [hardening] / [polish] / [testing] / [infra]
     - NOT carry an `(added YYYY-MM-DD)` stamp — the pre-commit hook adds it on commit.
+    - To file in `## Deferred (gated)`, add `[gated: <condition>]` on the same opening
+      bullet line — the tag must be on that line for the parser to detect it.
   Lines are appended to the end of the matching F-bucket H3 sub-section.
   sync-todo-index.py re-sorts and re-groups them, so exact placement is
   not critical — they just need to land inside the F section body.
@@ -135,6 +137,7 @@ NEW_BULLET_RE = re.compile(
     r'^- \[ \] \*\*([A-Z]+\d+[a-z0-9\-]*)\*\*'
 )
 BUCKET_TAG_RE = re.compile(r'\[(arch|hardening|polish|testing|infra|features)\]', re.IGNORECASE)
+GATED_TAG_RE = re.compile(r'\[gated:[^\]]*\]', re.IGNORECASE)
 H3_RE = re.compile(r'^### (.+)$')
 H2_RE = re.compile(r'^## (.+)$')
 
@@ -352,6 +355,13 @@ def apply_new(lines: list[str], bullet: str, dry_run: bool) -> list[str]:
 
     section_name = BUCKET_H2.get(bucket, 'Infra')
 
+    # F304: if the bullet carries a [gated: ...] tag, route to Deferred (gated)
+    # regardless of its bucket.  A missing bucket tag warns and defaults to Infra
+    # (same behaviour as non-gated items — the section_name override below takes
+    # precedence so the item still lands in Deferred, not Infra).
+    if GATED_TAG_RE.search(bullet):
+        section_name = 'Deferred (gated)'
+
     sec_start, sec_end = find_h2_section_bounds(lines, section_name)
     if sec_start == -1:
         raise ValueError(f'Could not find H2 section "{section_name}" in TODO.md')
@@ -415,6 +425,19 @@ def validate_manifest(
         idx = find_item_line(lines, item_id)
         if idx != -1:
             errors.append(f'New: {item_id} already exists in TODO.md')
+
+    # Pre-flight: if any new item carries a [gated:] tag it will be routed to
+    # "## Deferred (gated)".  Verify that section exists NOW so the error is
+    # surfaced here (clear name + context) rather than as a raw ValueError
+    # mid-apply after all other validations pass.
+    has_gated = any(GATED_TAG_RE.search(b) for b in new_items)
+    if has_gated:
+        deferred_start, _ = find_h2_section_bounds(lines, 'Deferred (gated)')
+        if deferred_start == -1:
+            errors.append(
+                'TODO.md is missing the "## Deferred (gated)" section, which is '
+                'required to file gated items. Add the section before running this manifest.'
+            )
 
     if errors:
         for e in errors:

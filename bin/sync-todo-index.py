@@ -422,13 +422,21 @@ def _build_id_ranges(items: list[dict]) -> str:
 
 def render_open_work(bullets: list[dict], h2_headers: list[tuple[int, str]]) -> str:
     open_items = [b for b in bullets if not b['checked']]
-    total = len(open_items)
 
     # Sections to skip in the table (generated/navigation sections).
-    # All other H2 sections that hold items get one row in file order.
+    # COR-06: Deferred (gated) items are intentionally excluded from the Open Work
+    # count — they're gated and not actionable, so they should not inflate the count.
+    # Reuse module-level DEFERRED_SECTION_RE for the exact section name so a
+    # hypothetical "Deferred Work" or similar future section is NOT silently excluded.
     SKIP_SECTION_RE = re.compile(
-        r'^(Critical \(P1\)|Up Next|Open Work)',
+        r'^(Critical \(P1\)|Up Next|Open Work|Deferred \(gated\))$',
         re.IGNORECASE,
+    )
+
+    # Total excludes deferred items (COR-06)
+    total = sum(
+        1 for b in open_items
+        if not SKIP_SECTION_RE.match(b.get('h2_section', ''))
     )
 
     # Collect item sections in file order (deduplicated, preserving order)
