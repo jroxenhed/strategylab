@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*286 / 295 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*286 / 297 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,8 +12,9 @@ _(none open)_
 
 - [F288](#f288) — [next] SIGKILL-orphan gap in WFA pool [medium]
 - [F289](#f289) — [next] `autoSaveId`/`onLayout` React unknown-prop warnings [easy]
+- [F292](#f292) — [next] `bin/verify-batch.sh` [easy]
 
-## Open Work — 32 items
+## Open Work — 34 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -25,7 +26,7 @@ _(none open)_
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 12 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F272](#f272) |
 | [F · Hardening](#f-hardening) | Security, reliability, validation | 2 | [F211](#f211), [F288](#f288) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 3 | [F210](#f210), [F249c](#f249c), [F289](#f289) |
-| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 5 | [F97](#f97), [F161](#f161), [F280](#f280), [F290](#f290)–[F291](#f291) |
+| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 7 | [F97](#f97), [F161](#f161), [F280](#f280), [F290](#f290)–[F293](#f293) |
 
 ## A — Charts & Indicators
 
@@ -266,3 +267,5 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f287"></a> **F287** Auto-capture subagent usage telemetry via a Claude Code `SubagentStop` hook — the F280 telemetry currently requires hand-transcribing each Agent result's usage block into `run-state.py add-agent --tokens ...` (17 manual transcriptions in the 2026-06-04 batch; works, but is toil and typo-prone). A SubagentStop hook in `.claude/settings.json` can append `{agent_id, tokens, tool_uses, duration_ms, timestamp}` to `.run/current-session-usage.jsonl`; `run-state.py report` (or a small merge step) joins it against the agent rows. Investigate what payload SubagentStop actually receives before building. [medium] [infra] (from F-BATCH-0604 retro) (added 2026-06-04) (resolved 2026-06-04 — bin/hooks/subagent-usage.py SubagentStop hook, streams transcript JSONL, flock'd append to .run/current-session-usage.jsonl, null-row contract; report footer joins it)
 - [ ] <a id="f290"></a> **F290** Wire `bin/render-probe.mjs` into the overnight builder guide — probe exists and gates 10/10 on preview; remaining: add to overnight §3.5 (start preview server, run probe, fail build on exit 1), decide dev-mode known-warning policy (F289 makes dev runs 9/10), and screenshot retention. [easy] [infra] (F51 follow-up 2026-06-04)
 - [ ] <a id="f291"></a> **F291** Behavioral check for F250 sparkline resize — the probe doesn't drag panel dividers; verify a BotCard column resize between data ticks triggers exactly one fitContent (no 60Hz loop, no stretched bars). chrome-devtools-mcp drag or manual. [easy] [testing] (F250 follow-up 2026-06-04)
+- [ ] <a id="f292"></a> **F292** [next] `bin/verify-batch.sh` — single-call verification gate: frontend build (`npm --prefix frontend run build`), start preview if not running, `node bin/render-probe.mjs --url :4173`, backend AST/import smoke; one PASS/FAIL table to stdout + `.run/<id>/verify.md`, exit 0/1. Kills the 5-6 separate main-context gate calls per verify pass and the cd-poisoning failure class (2 of 5 probe runs failed on cwd 2026-06-04). [easy] [infra] (from lean-verify playbook change) (added 2026-06-04)
+- [ ] <a id="f293"></a> **F293** `bin/close-batch.py` — applies a `.run/<id>/closeout.md` manifest: flips TODO checkboxes + appends resolved notes, inserts new items into bucket sections, runs sync-todo-index. Orchestrator authors the manifest once; script does the mechanical edits (8 checkbox edits composed in main context cost ~20k on 2026-06-04). [medium] [infra] (from lean-verify playbook change) (added 2026-06-04)
