@@ -516,15 +516,18 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0, boxShadow: 'var(--shadow-sm)', zIndex: 10,
   },
   logo: { fontWeight: 800, fontSize: 18, color: 'var(--accent-primary)', letterSpacing: '-0.03em' },
-  tabs: { display: 'flex', gap: 4, background: 'var(--bg-input)', padding: 4, borderRadius: 'var(--radius-md)' },
+  tabs: { display: 'flex', gap: 4 },
   tab: {
-    fontSize: 13, padding: '6px 16px', borderRadius: 'var(--radius-sm)',
+    fontSize: 13, padding: '6px 16px',
     background: 'transparent', color: 'var(--text-secondary)',
-    cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s ease', border: 'none',
+    cursor: 'pointer', fontWeight: 600, transition: 'color 0.15s ease',
+    border: 'none', borderBottom: '2px solid transparent',
   },
   tabActive: {
-    background: 'var(--bg-panel-hover)', color: 'var(--text-primary)',
-    boxShadow: 'var(--shadow-sm)',
+    color: '#58a6ff',
+    // full shorthand (not borderBottomColor) — mixing shorthand base + longhand
+    // override across rerenders triggers React's conflicting-style warning
+    borderBottom: '2px solid #58a6ff',
   },
   empty: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 14 },
   chartDisabled: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12 },

@@ -513,10 +513,9 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
                   fontSize: 11,
                   fontWeight: 600,
                   color: isActive ? 'var(--gh-blue)' : isRecommended ? 'var(--gh-blue)' : 'var(--gh-text-muted)',
-                  background: isActive ? 'rgba(88, 166, 255, 0.1)' : 'none',
+                  background: 'none',
                   border: 'none',
-                  borderBottom: isRecommended && !isActive ? '2px solid rgba(88, 166, 255, 0.3)' : '2px solid transparent',
-                  borderRadius: 3,
+                  borderBottom: isActive ? '2px solid var(--gh-blue)' : isRecommended ? '2px solid rgba(88, 166, 255, 0.3)' : '2px solid transparent',
                   cursor: 'pointer',
                 }}
               >
@@ -1271,7 +1270,7 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'none', border: 'none', borderBottom: '2px solid transparent', cursor: 'pointer',
     whiteSpace: 'nowrap' as const, flexShrink: 0,
   },
-  tabActive: { color: 'var(--gh-blue)', borderBottomColor: 'var(--gh-blue)' },
+  tabActive: { color: 'var(--gh-blue)', borderBottom: '2px solid var(--gh-blue)' },
   metricsGrid: { display: 'flex', flexWrap: 'wrap', padding: '12px 16px', gap: 0, alignContent: 'flex-start', flexShrink: 0 },
   metric: { padding: '6px 20px 6px 0', minWidth: 110 },
   tradeList: { flex: 1, overflowY: 'auto', padding: '8px 12px' },

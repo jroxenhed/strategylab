@@ -1202,9 +1202,11 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
               {(['regime', 'long', 'short'] as const).map(tab => (
                 <button key={tab} onClick={() => setActiveRuleTab(tab)}
                   style={{
-                    fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, border: 'none',
-                    cursor: 'pointer', textTransform: 'uppercase',
-                    background: activeRuleTab === tab ? '#1a2a3a' : '#161b22',
+                    fontSize: 11, fontWeight: 600, padding: '2px 8px', border: 'none',
+                    cursor: 'pointer', textTransform: 'uppercase', background: 'transparent',
+                    borderBottom: activeRuleTab === tab
+                      ? `2px solid ${tab === 'long' ? '#3fb950' : tab === 'short' ? '#f85149' : '#58a6ff'}`
+                      : '2px solid transparent',
                     color: activeRuleTab === tab
                       ? (tab === 'long' ? '#3fb950' : tab === 'short' ? '#f85149' : '#58a6ff')
                       : '#555',
