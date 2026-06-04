@@ -68,6 +68,47 @@ RUN_DIR="$REPO_ROOT/.run/$TASK_ID"
 mkdir -p "$RUN_DIR"
 REPORT_FILE="$RUN_DIR/verify.md"
 
+# ── Concurrent-run guard (F295) ───────────────────────────────────────────────
+# Use mkdir-based atomic lock (POSIX-guaranteed race-free; no flock needed).
+# A second invocation waits up to 30s then fails with a clear message.
+# The lock is released unconditionally on exit via the EXIT trap below.
+
+LOCK_DIR="$REPO_ROOT/.run/.verify-batch.lock"
+LOCK_MAX_WAIT=30
+LOCK_WAITED=0
+
+while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+  # REL-01: stale-lock detection — if the PID file exists and the process is
+  # gone (SIGKILL'd runs leave the lock dir behind), reclaim the lock.
+  if [[ -f "$LOCK_DIR/pid" ]]; then
+    LOCK_PID=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+    if [[ -n "$LOCK_PID" ]] && ! kill -0 "$LOCK_PID" 2>/dev/null; then
+      echo "==> Stale lock detected (PID $LOCK_PID no longer running); reclaiming…"
+      rm -rf "$LOCK_DIR"
+      continue
+    fi
+  fi
+  if [[ $LOCK_WAITED -ge $LOCK_MAX_WAIT ]]; then
+    echo "ERROR: Another verify-batch.sh instance has been running for >${LOCK_MAX_WAIT}s." >&2
+    echo "Lock: $LOCK_DIR" >&2
+    echo "To force-unlock (only if the other invocation has definitely exited): rm -rf $LOCK_DIR" >&2
+    exit 1
+  fi
+  if [[ $LOCK_WAITED -eq 0 ]]; then
+    echo "==> Waiting for concurrent verify-batch.sh to finish (lock: $LOCK_DIR) …"
+  fi
+  sleep 1
+  (( LOCK_WAITED++ )) || true
+done
+
+# Lock acquired — write PID file for stale-lock detection (REL-01).
+echo $$ > "$LOCK_DIR/pid"
+
+# Lock acquired — release on all exit paths.
+# NOTE: this trap replaces any earlier EXIT trap; place any future EXIT-trap
+# additions here or chain them (trap '…; rm -rf "$LOCK_DIR"' EXIT).
+trap 'rm -rf "$LOCK_DIR" 2>/dev/null || true' EXIT
+
 # ── Gate tracking ─────────────────────────────────────────────────────────────
 
 declare -a GATE_NAMES=()
@@ -221,17 +262,59 @@ if [[ "$BUILD_OK" -eq 0 || "$PREVIEW_OK" -eq 0 ]]; then
   record_gate "3. render probe" "FAIL" "skipped — build or preview failed"
   echo "    SKIPPED (build or preview not ready)"
 else
-  if node "$BIN_DIR/render-probe.mjs" --url "http://localhost:$PORT" > "$PROBE_LOG" 2>&1; then
+  # F295: bash-native watchdog (macOS has no coreutils timeout).
+  # Spawn probe in background, kill it after 135s if still running
+  # (render-probe.mjs has a 120s internal deadline; 15s grace on top).
+  # We use a process-group kill so any Chromium child spawned by Node
+  # is also cleaned up when the watchdog fires.
+  #
+  # REL-02: flag-file disarm pattern prevents PID-reuse false kills.
+  # Watchdog polls every 1s and checks for the disarm flag before firing,
+  # so even if kill $WATCHDOG_PID races (e.g. sleep not yet started), the
+  # subshell will see the flag and exit cleanly without firing at a recycled PID.
+  WATCHDOG_DISARM="$RUN_DIR/.watchdog-disarm"
+  rm -f "$WATCHDOG_DISARM"
+
+  set -m  # enable job control so the background node gets its own pgid
+  node "$BIN_DIR/render-probe.mjs" --url "http://localhost:$PORT" > "$PROBE_LOG" 2>&1 &
+  PROBE_PID=$!
+
+  # Watchdog: sleeps in 1s increments, checks disarm flag each tick.
+  (
+    for _w in $(seq 1 135); do
+      sleep 1
+      if [[ -e "$WATCHDOG_DISARM" ]]; then exit 0; fi
+    done
+    # Disarm flag not seen within 135s — probe is stuck, kill it.
+    kill -- -"$PROBE_PID" 2>/dev/null || kill "$PROBE_PID" 2>/dev/null || true
+  ) &
+  WATCHDOG_PID=$!
+
+  # Wait for probe; capture exit code without letting pipefail abort the script.
+  PROBE_EXIT=0
+  wait "$PROBE_PID" || PROBE_EXIT=$?
+
+  # Disarm watchdog: touch flag first (prevents late fire), then reap.
+  touch "$WATCHDOG_DISARM"
+  kill "$WATCHDOG_PID" 2>/dev/null || true
+  wait "$WATCHDOG_PID" 2>/dev/null || true
+  rm -f "$WATCHDOG_DISARM"
+  set +m  # restore default job control
+
+  if [[ "$PROBE_EXIT" -eq 0 ]]; then
     record_gate "3. render probe" "PASS"
     echo "    PASS"
+  elif [[ "$PROBE_EXIT" -ge 128 ]]; then
+    # Killed by a signal (SIGKILL=137, SIGTERM=143, etc.) → timeout fired.
+    record_gate "3. render probe" "FAIL" "render-probe timeout (>135s) — Chromium killed"
+    echo "    FAIL — render-probe timeout (>135s); Chromium was killed."
+  elif [[ "$PROBE_EXIT" -eq 2 ]]; then
+    record_gate "3. render probe" "FAIL" "environment unreachable (exit 2)"
+    echo "    FAIL (exit 2) — tail -20:"
+    tail -20 "$PROBE_LOG" | sed 's/^/    /'
   else
-    EXIT_CODE=$?
-    if [[ "$EXIT_CODE" -eq 2 ]]; then
-      record_gate "3. render probe" "FAIL" "environment unreachable (exit 2)"
-    else
-      record_gate "3. render probe" "FAIL" "one or more probe checks failed (exit $EXIT_CODE)"
-    fi
-    echo "    FAIL (exit $EXIT_CODE) — tail -20:"
+    record_gate "3. render probe" "FAIL" "one or more probe checks failed (exit $PROBE_EXIT)"
+    echo "    FAIL (exit $PROBE_EXIT) — tail -20:"
     tail -20 "$PROBE_LOG" | sed 's/^/    /'
   fi
 fi
