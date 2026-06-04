@@ -12,16 +12,17 @@ _(none open)_
 
 - [F305](#f305) — [next] sync-todo-index.py writes TODO.md with bare write_text() [easy]
 - [F313](#f313) — [next] Turnaround validation wall-clock budget + cancellation + progress [medium]
+- [F321](#f321) — [next] Conviction pillar is a silent dud [medium]
 - [F319](#f319) — [next] Turnaround universe hygiene v2 [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 23 items
+## Open Work — 26 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 2 | [B9](#b9), [F316](#f316) |
 | [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320) |
-| [Hardening](#hardening) | 5 | [F305](#f305), [F313](#f313)–[F315](#f315), [F319](#f319) |
+| [Hardening](#hardening) | 8 | [F305](#f305), [F313](#f313)–[F315](#f315), [F319](#f319), [F321](#f321)–[F323](#f323) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 4 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307) |
 | [Infra](#infra) | 4 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309) |
@@ -66,6 +67,12 @@ _(none open)_
 - [ ] <a id="f314"></a> **F314** EDGAR cache eviction/size cap — backend/data/turnaround/edgar_cache/ grows unboundedly (companyfacts are MB-scale; full-universe worst case GB-scale; expired files refreshed in place, never pruned) (DI-05/DI-10, F311 review). Measured 2026-06-05: 134MB at just 77 facts files (~1.8MB avg); full-run projection 2–5GB. Age-based prune on scan start + total-size cap. Largely superseded by F320 if that ships first (derived cache makes raw facts prunable). [easy] [hardening]
 
 - [ ] <a id="f315"></a> **F315** Schema version field on persisted turnaround payloads (watchlist.json, validation_result.json) so future field changes don't break GET readers of old files (DI-06, F311 review). [easy] [hardening]
+
+- [ ] <a id="f321"></a> **F321** [next] Conviction pillar is a silent dud — 4 stacked bugs, all masked by graceful degradation (found by AAPL positive control 2026-06-05): (1) EFTS `ciks` param sent as bare int → silent 0 hits, needs zero-padded 10-digit; (2) `dateRange=custom` required alongside startdt/enddt+forms, else HTTP 500; (3) hit parser reads `accession_no`/`form_type` but real fields are `adsh`/`root_forms`/`file_date`; (4) fetch_form4_xml requests `{accession}-index.json` (404) — real listing is `index.json` with `directory.item[]` (contains `form4.xml` directly). Fix all four + REQUIRED positive-control tests pinned to recorded real fixtures: AAPL has_buyback_authorization(12m)=True (8-K 2026-04-30 EX-99.1), AAPL get_form4_net_buys(6m)≠0.0 (587 Form 4s in window). Regenerate live watchlist after (conviction bonuses currently flattened; running F312 validation unaffected — conviction skipped by design). [medium] [hardening]
+
+- [ ] <a id="f322"></a> **F322** get_shares_outstanding fails on dual-class filers — P/S = None (data gap, fail-closed) for PTON, NKE, EL (all class A/B structures); single-class AAPL/INTC/TGT/MRNA compute fine. Sum dei:EntityCommonStockSharesOutstanding across share-class contexts (or fall back to CommonStockSharesIssued per class) at the same as_of. 3 of 7 live-tested names hit this — material coverage gap for the valuation pillar. [medium] [hardening]
+
+- [ ] <a id="f323"></a> **F323** archive-todo.py hard-fails on same-session items: verifies by anchor slug, but freshly added `[x]` items have no anchor until sync-todo-index runs (hook runs it at commit, not at archive time). Error message names the missing slugs but not the cure. Fix: archive-todo runs sync first (or its error says "run bin/sync-todo-index.py first"). Hit live 2026-06-05 closing F311/F312. [easy] [infra]
 
 - [ ] <a id="f319"></a> **F319** [next] Turnaround universe hygiene v2 — build_universe still admits SPAC warrants/units/rights (5-char W/U/R suffixes: MDAIW, KORGW, BDMDW, AACBU), Q-suffix bankruptcy shells (QVCDQ), and F/Y-suffix foreign OTC (AAMTF, KOZAY, YGSHY) — all seen in the live full-universe run (8,909 names). Signal set is mostly immune (no XBRL revenue → dies at fundamentals gate) but the NULL set is not: junk trading 90% off its high passes the washed-out price gate and deflates the null hit rate, making the Phase-2 gate easier to pass — biased in the wrong direction. Use SEC company_tickers_exchange.json (exchange-listed only) or suffix-class exclusion. **A Phase-2 PASS verdict doesn't count until validation is re-run after this fix** (a kill verdict still counts — junk null only makes the test easier). [easy] [hardening] (added 2026-06-05)
 
