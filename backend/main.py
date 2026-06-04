@@ -39,6 +39,7 @@ from routes.backtest_optimizer import router as backtest_optimizer_router
 from routes.walk_forward import router as walk_forward_router
 from routes.strategies import router as strategies_router
 from routes.nodebuilder import router as nodebuilder_router
+from routes.turnaround import router as turnaround_router
 import routes.bots as bots_module
 from bot_manager import BotManager
 from middleware import BodySizeLimitMiddleware, DEFAULT_MAX_BYTES, parse_max_body_env
@@ -139,6 +140,7 @@ app.include_router(backtest_optimizer_router)
 app.include_router(walk_forward_router)
 app.include_router(strategies_router)
 app.include_router(nodebuilder_router)
+app.include_router(turnaround_router)
 
 
 @app.get("/api/cache")

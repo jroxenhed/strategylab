@@ -27,6 +27,7 @@ frontend/dist/
 # Runtime data (user-specific, not code)
 backend/data/*.json
 backend/data/*.bak*
+backend/data/turnaround/
 
 # Misc
 .env

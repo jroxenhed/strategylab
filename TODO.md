@@ -13,13 +13,13 @@ _(none open)_
 - [F305](#f305) — [next] sync-todo-index.py writes TODO.md with bare write_text() [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 17 items
+## Open Work — 21 items
 
 | Section | Open | IDs |
 |---|---|---|
-| [Features](#features) | 1 | [B9](#b9) |
+| [Features](#features) | 2 | [B9](#b9), [F316](#f316) |
 | [Architecture](#architecture) | 6 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272) |
-| [Hardening](#hardening) | 1 | [F305](#f305) |
+| [Hardening](#hardening) | 4 | [F305](#f305), [F313](#f313)–[F315](#f315) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 4 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307) |
 | [Infra](#infra) | 4 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309) |
@@ -31,6 +31,8 @@ _(none open)_
   - IBKR Tiered pricing (exchange fees, SEC fee, FINRA TAF, clearing pass-throughs)
   - Hard-to-borrow dynamic rate feed
   - FX conversion cost
+
+- [ ] <a id="f316"></a> **F316** Turnaround valuation: implement P/S vs own 5-year historical median fallback (spec §4 "below its own historical median") — needs historical shares×price×TTM-revenue series; current gate is absolute P/S threshold only (ADV-10, F311 review). [medium] [features]
 
 ## Architecture
 
@@ -55,6 +57,12 @@ _(none open)_
 _(none open)_
 - [ ] <a id="f305"></a> **F305** [next] sync-todo-index.py writes TODO.md with bare write_text() — not atomic; adopt the tempfile+fsync+os.replace pattern close-batch.py already uses (DI-03, F-BATCH-0604D review). [easy] [hardening]
 
+- [ ] <a id="f313"></a> **F313** Turnaround validation wall-clock budget + cancellation — run_validation has no timeout/cancel path; a wide run can hold the to_thread slot for hours (REL-06, F311 review). Mirror the `_WFA_TIMEOUT_SECS` pattern incl. the partial-window drop rule. [medium] [hardening]
+
+- [ ] <a id="f314"></a> **F314** EDGAR cache eviction/size cap — backend/data/turnaround/edgar_cache/ grows unboundedly (companyfacts are MB-scale; full-universe worst case GB-scale; expired files refreshed in place, never pruned) (DI-05/DI-10, F311 review). Age-based prune on scan start + total-size cap. [easy] [hardening]
+
+- [ ] <a id="f315"></a> **F315** Schema version field on persisted turnaround payloads (watchlist.json, validation_result.json) so future field changes don't break GET readers of old files (DI-06, F311 review). [easy] [hardening]
+
 ## Polish
 
 - [ ] <a id="f310"></a> **F310** One-frame crosshair/pane misalignment possible during render-interval swap — main-pane and SubPane setData run in separate effects on the same commit; lw-charts may emit a range event between them and sync a logical range onto a sub-pane still holding the old bar count (try/catch prevents errors; visual blip only). Structural fix needs shared dep-chain plumbing. (RACE-04, A8-render-resample review, rated acceptable-as-is.) [medium] [polish]
@@ -76,6 +84,10 @@ _(none open)_
 - [ ] <a id="f309"></a> **F309** Promote the A8 zoom→auto-switch verification recipe to a scripted render-probe check (F298 rule): seed Alpaca 5m multi-year settings, drive `window.__chartDebug.setVisibleLogicalRange(0, N)`, assert lastSetDataPoints drops ≥10x + 'Auto (…)' badge, then narrow range and assert full-resolution restore. Needs DEV-build probe target or exposing the hook in preview builds behind a flag. [easy] [infra]
 
 ## Deferred (gated)
+
+- [ ] <a id="f317"></a> **F317** Turnaround Phases 3+4 — Stage-2 catalyst monitor (upgrades/earnings/technical-confirmation alerts on watchlist names only) + the screen UI (candidate table, catalyst feed, validation panel, miss list one click away). Spec §5/§7/§8. [hard] [features] [gated: F312 validation shows the filter beating the null out-of-sample — spec §8 "Phase 2 is the gate"]
+
+- [ ] <a id="f318"></a> **F318** Survivorship-corrected validation universe — include delisted/failed names in the historical test universe (spec §9; ADV-02/ADV-09: biases are asymmetric, null inflated more than signal, so the measured edge is understated-to-unknown). [hard] [features] [gated: a delisted-names data source (CRSP/Tiingo/Sharadar) is selected and available]
 
 - [ ] <a id="c29"></a> **C29** Cluster-centroid IS selector — upgrade C28's neighborhood-stability tag to true cluster-based parameter selection (k-means on the IS grid with Silhouette Score to pick k, k=1 fallback to median). Practitioner-preferred over Sharpe-peak per Harbourfrontquant / QuantBeckman / BuildAlpha; centroid of the largest high-performing cluster is more robust than the peak point. Justification gate: ship only once C28's `"spike"` tag rate in practice is high enough to warrant the added complexity (k-means + Silhouette + k=1 handling on a 1000-point max grid). Until then C28's cheap neighborhood tag covers the same anti-overfit signal. [medium] (from C28 deferred design decision) (added 2026-05-12) [gated: C28 spike-tag rate proves high in practice]
 
