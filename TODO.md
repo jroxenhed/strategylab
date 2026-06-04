@@ -13,15 +13,15 @@ _(none open)_
 - [F305](#f305) — [next] sync-todo-index.py writes TODO.md with bare write_text() [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 15 items
+## Open Work — 17 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
 | [Architecture](#architecture) | 6 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272) |
-| [Hardening](#hardening) | 1 | [F305](#f305) |
+| [Hardening](#hardening) | 2 | [F305](#f305), [F308](#f308) |
 | [Testing](#testing) | 4 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307) |
-| [Infra](#infra) | 3 | [F97](#f97), [F302](#f302), [F306](#f306) |
+| [Infra](#infra) | 4 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309) |
 
 ## Features
 
@@ -37,7 +37,7 @@ _(none open)_
   - [x] Equity curve detail mode downsample: root cause was missing `toDisplayTime()` shift on equity timestamps — raw UTC timestamps didn't match the main chart's ET-shifted timestamps, breaking crosshair sync and bucket alignment. Fixed by adding `toDisplayTime` to `shared/utils/time.ts` (mirrors Chart.tsx `toET`) and applying it to equity/baseline/trade-tick timestamps in Results.tsx before downsampling. `downsampleEquity()` itself was always correct.
   - [x] Equity curve detail mode sync: pixel-perfect alignment with main chart via bar-count matching. Passed OHLCV timestamps (`mainTimestamps` prop) from App.tsx, built equity/baseline/tick data with same bar positions (whitespace entries for missing values), logical-range sync. Five sub-fixes: `timeVisible`, baseline bar-matching, tick snapping, deferred width sync, invisible left axis.
   - [ ] Viewport-only rendering — only pass the visible bar range to indicator series and markers instead of all 100K bars. lightweight-charts handles panning via `subscribeVisibleLogicalRangeChange`; feed data on demand. Estimated 500-700 lines across 5-6 files (Chart.tsx, SubPane.tsx, useOHLCV.ts, chartUtils.ts, backend /api/indicators); multi-session task. [hard]
-  - [ ] Off-screen downsampling — when zoomed out to show all bars, aggregate to coarser resolution (e.g. 15m/1h) for rendering, switch to full resolution on zoom-in. Reduces object count 10-50x at wide zoom. [next][medium]
+  - [x] Off-screen downsampling — when zoomed out to show all bars, aggregate to coarser resolution (e.g. 15m/1h) for rendering, switch to full resolution on zoom-in. Reduces object count 10-50x at wide zoom. [medium] (resolved 2026-06-04 — auto-drives the existing viewInterval pipeline: evaluateAutoInterval pure helper (8000-on/6000-off base-equivalent bars, debounced 150ms, pendingSince guard), onAutoInterval callback to App.tsx, getVisibleRange capture/restore, 'Auto (iv)' badge; minBarSpacing 0.01 on all 3 charts (lw-charts 0.5 default made the threshold unreachable — caught live); browser-verified 47,255→3,636 pts (13x) on AAPL alpaca 5m 2.4yr incl. restore round-trip)
 
 - [ ] <a id="f25"></a> **F25** WebSocket bar streaming — replace `_fetch()` polling with Alpaca's real-time bar/quote WebSocket streams. Bots react on each new bar instantly instead of polling. Eliminates the `_fetch()` network latency bottleneck (~200-500ms) that currently caps effective tick rate regardless of poll interval. [hard] [arch]
 
@@ -53,6 +53,7 @@ _(none open)_
 
 _(none open)_
 - [ ] <a id="f305"></a> **F305** [next] sync-todo-index.py writes TODO.md with bare write_text() — not atomic; adopt the tempfile+fsync+os.replace pattern close-batch.py already uses (DI-03, F-BATCH-0604D review). [easy] [hardening]
+- [ ] <a id="f308"></a> **F308** A8 auto-downsample: stranded view observed once on the first-ever interval switch of a session (logical range left past the coarse data's right edge — blank pane, recoverable by zoom-in). 1-of-4 occurrences, not reproducible incl. cold-fetch mount; hypothesis: slow coarse refetch interacting with the autoRangeRef restore. DEV `window.__chartDebug.getRanges()` hook is in place for diagnosis. Repro recipe in .run/A8-downsample/browser-assertions.json. [medium] [hardening]
 
 ## Polish
 
@@ -71,6 +72,7 @@ _(none open)_
 
 - [ ] <a id="f302"></a> **F302** Per-reviewer effort cap in dispatch prompts — F-BATCH-0604C's correctness reviewer ran 5m47s / 60k tokens / 55 tool-uses vs siblings' ~2m / ~13-29, and with no agent-messaging tool the orchestrator could only poll (~15 min of wall-clock went to waits). Add a standard cap clause to review dispatch prompts (e.g. "≤25 tool calls / ~3 min; if hit, return partial findings + status token") and record cap-hits in run-state so chronic offenders surface in the report. [easy] [infra]
 - [ ] <a id="f306"></a> **F306** [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) — replaces the collapse/expand substitute from F-BATCH-0604C. [easy] [infra]
+- [ ] <a id="f309"></a> **F309** Promote the A8 zoom→auto-switch verification recipe to a scripted render-probe check (F298 rule): seed Alpaca 5m multi-year settings, drive `window.__chartDebug.setVisibleLogicalRange(0, N)`, assert lastSetDataPoints drops ≥10x + 'Auto (…)' badge, then narrow range and assert full-resolution restore. Needs DEV-build probe target or exposing the hook in preview builds behind a flag. [easy] [infra]
 
 ## Deferred (gated)
 

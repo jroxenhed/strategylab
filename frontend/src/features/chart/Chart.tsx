@@ -8,7 +8,7 @@ import {
   ColorType,
   LineType,
 } from 'lightweight-charts'
-import type { IChartApi, ISeriesApi } from 'lightweight-charts'
+import type { IChartApi, ISeriesApi, IRange, Time } from 'lightweight-charts'
 import type { OHLCVBar, IndicatorInstance, EMAOverlay, Trade, RuleSignal } from '../../shared/types'
 import { INDICATOR_DEFS } from '../../shared/types/indicators'
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels'
@@ -17,6 +17,7 @@ import type { PaneRegistry } from './SubPane'
 import { toLineData, aggregateMarkers, snapTimestamp } from './chartUtils'
 import TradeTooltip from './TradeTooltip'
 import { getTimezone, useTimezone } from '../../shared/utils/time'
+import { calcVisibleBaseBars, evaluateAutoInterval } from '../../shared/utils/intervals'
 
 interface ChartProps {
   data: OHLCVBar[]
@@ -38,11 +39,27 @@ interface ChartProps {
   viewInterval: string
   backtestInterval: string
   onChartReady?: (chart: IChartApi | null) => void
+  /** Called when auto-downsampling wants to switch to a coarser interval (or back to base).
+   *  App.tsx receives this and sets viewInterval, triggering a backend-resampled refetch. */
+  onAutoInterval?: (interval: string) => void
+  /** True when viewInterval was set by auto-downsampling (not by the user). Used to gate
+   *  the de-aggregate branch so zoom-in doesn't clobber a manually selected coarse view. */
+  autoIntervalActive?: boolean
   /** Used to detect ticker/interval/date changes so fitContent fires on symbol switches but not on auto-refresh polls. */
   ticker?: string
   interval?: string
   from?: string
   to?: string
+}
+
+declare global {
+  interface Window {
+    __chartDebug?: {
+      lastSetDataPoints: number
+      setVisibleLogicalRange?: (from: number, to: number) => void
+      getRanges?: () => { logical: unknown; time: unknown } | null
+    }
+  }
 }
 
 const CHART_BG = '#0d1117'
@@ -123,7 +140,7 @@ function buildMarkers(trades: Trade[], subPane = false) {
   })
 }
 
-export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, instanceLoading, loadingByInstance, instanceError, instanceErrorMessage, onRetryIndicators, trades, emaOverlays, ruleSignals, regimeSeries, viewInterval, backtestInterval, onChartReady, ticker, interval, from, to }: ChartProps) {
+export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, instanceLoading, loadingByInstance, instanceError, instanceErrorMessage, onRetryIndicators, trades, emaOverlays, ruleSignals, regimeSeries, viewInterval, backtestInterval, onChartReady, onAutoInterval, autoIntervalActive, ticker, interval, from, to }: ChartProps) {
   const [tzMode] = useTimezone()
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -135,6 +152,25 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   const lastFitParamsRef = useRef<string | null>(null)
   const onChartReadyRef = useRef(onChartReady)
   useEffect(() => { onChartReadyRef.current = onChartReady })
+
+  // Stable refs for auto-downsampling — kept in sync each render so the
+  // syncHandler closure (created once at chart-mount) always reads current values
+  // without needing to be re-subscribed (which would tear down and recreate the chart).
+  const onAutoIntervalRef = useRef(onAutoInterval)
+  useEffect(() => { onAutoIntervalRef.current = onAutoInterval })
+  const viewIntervalRef = useRef(viewInterval)
+  useEffect(() => { viewIntervalRef.current = viewInterval })
+  const baseIntervalRef = useRef(backtestInterval)
+  useEffect(() => { baseIntervalRef.current = backtestInterval })
+  const autoIntervalActiveRef = useRef(autoIntervalActive)
+  useEffect(() => { autoIntervalActiveRef.current = autoIntervalActive })
+  /** Stores the timestamp (Date.now()) when an auto-interval switch was initiated,
+   *  or null when idle. A pending switch older than 5s is treated as expired (FIX-A).
+   *  Replaces the bare boolean: expiry safety valve covers COR-01, RACE-03, and RACE-01. */
+  const autoSwitchingRef = useRef<number | null>(null)
+  /** Captured getVisibleRange() just before an auto-interval switch; restored after
+   *  new data lands (takes priority over sessionStorage range restore). */
+  const autoRangeRef = useRef<IRange<Time> | null>(null)
   const mainOverlaySeriesRef = useRef<Map<string, ISeriesApi<any>> | null>(null)
   const regimeBgSeriesRef = useRef<ISeriesApi<any> | null>(null)
   const paneRegistryRef = useRef<PaneRegistry>(new Map())
@@ -295,7 +331,11 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     const showMainTimeAxis = subPaneCount === 0
     const chart = createChart(containerRef.current, {
       ...chartOptionsBase,
-      timeScale: { borderColor: GRID, timeVisible: true, visible: showMainTimeAxis },
+      // minBarSpacing: lw-charts default 0.5px clamps zoom-out at ~2x chart width in
+      // bars (~2.3K on a 1150px pane), which made the 8000-bar auto-downsample
+      // threshold unreachable (found in A8 live verification). 0.01 allows deep
+      // zoom-out; the auto-interval switch bounds the rendered object count.
+      timeScale: { borderColor: GRID, timeVisible: true, visible: showMainTimeAxis, minBarSpacing: 0.01 },
     })
     chartRef.current = chart
     onChartReadyRef.current?.(chart)
@@ -337,6 +377,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     // was the dominant cost during drag.
     let widthsRaf: number | null = null
     let sessionWriteTimer: number | null = null
+    let autoIntervalTimer: number | null = null
     const syncHandler = (range: any) => {
       if (!range) return
       for (const entry of paneRegistryRef.current.values()) {
@@ -350,9 +391,61 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       }
       if (sessionWriteTimer !== null) window.clearTimeout(sessionWriteTimer)
       sessionWriteTimer = window.setTimeout(() => {
+        // FIX-E (RACE-05): suppress sessionStorage write while a switch is pending —
+        // the current logical range belongs to the coarse series and would be misapplied
+        // to the base-interval series on page reload.
+        if (autoSwitchingRef.current !== null) { sessionWriteTimer = null; return }
         sessionStorage.setItem('strategylab-chart-range', JSON.stringify(range))
         sessionWriteTimer = null
       }, 200)
+
+      // Auto-downsampling: measure visible base-equivalent bars and fire onAutoInterval
+      // when the span crosses AUTOS_ON_BARS (aggregate) or AUTOS_OFF_BARS (de-aggregate).
+      // Uses stable refs (viewIntervalRef, baseIntervalRef, onAutoIntervalRef,
+      // autoIntervalActiveRef) so this closure never needs to be re-subscribed.
+      // D3 fix: compare BASE-equivalent bars via calcVisibleBaseBars() to prevent the
+      // re-aggregate loop after a 5m→15m switch (raw bars drop to ~1/3, below OFF threshold).
+      if (autoIntervalTimer !== null) window.clearTimeout(autoIntervalTimer)
+      autoIntervalTimer = window.setTimeout(() => {
+        const currentView = viewIntervalRef.current
+        const base = baseIntervalRef.current
+        // Compute base-equivalent visible bars (D3) using the shared pure helper.
+        const rawSpan = Math.round(range.to - range.from)
+        const visibleBaseBars = calcVisibleBaseBars(rawSpan, currentView, base)
+
+        // Delegate all branching logic to the pure evaluateAutoInterval helper (FIX-G).
+        // It handles: pending-switch expiry (FIX-A), reverse-zoom cancellation (RACE-01),
+        // re-escalation when autoActive (FIX-C), daily/unknown passthrough, hysteresis.
+        const decision = evaluateAutoInterval({
+          visibleBaseBars,
+          viewInterval: currentView,
+          baseInterval: base,
+          autoActive: autoIntervalActiveRef.current ?? false,
+          pendingSince: autoSwitchingRef.current,
+          now: Date.now(),
+        })
+
+        if (decision.action === 'none') {
+          // RACE-01 + FIX-A: if a switch is pending but the helper returned 'none'
+          // (user zoomed back in, or evaluation found no needed switch), cancel the
+          // pending state and clear the saved range so data landing doesn't restore
+          // to the coarse position.
+          if (autoSwitchingRef.current !== null) {
+            autoSwitchingRef.current = null
+            autoRangeRef.current = null
+          }
+          return
+        }
+
+        // Capture visible time range before the state update so we can restore it
+        // after the new data lands (B1 / D2).
+        try {
+          const vr = chart.timeScale().getVisibleRange()
+          if (vr) autoRangeRef.current = vr as IRange<Time>
+        } catch {}
+        autoSwitchingRef.current = Date.now()
+        onAutoIntervalRef.current?.(decision.target)
+      }, 150)
     }
     chart.timeScale().subscribeVisibleLogicalRangeChange(syncHandler)
 
@@ -384,6 +477,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       clearTimeout(alignTimer)
       if (widthsRaf !== null) cancelAnimationFrame(widthsRaf)
       if (sessionWriteTimer !== null) window.clearTimeout(sessionWriteTimer)
+      if (autoIntervalTimer !== null) window.clearTimeout(autoIntervalTimer)
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(syncHandler)
       chart.unsubscribeCrosshairMove(crosshairHandler)
       // Null refs before remove() so any late callback (Results' cleanup,
@@ -395,6 +489,8 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       tradeLookupRef.current = null
       setTooltip(null)
       rangeRestoredRef.current = false
+      autoRangeRef.current = null
+      autoSwitchingRef.current = null
       onChartReadyRef.current?.(null)
       chart.remove()
     }
@@ -410,8 +506,48 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   useEffect(() => {
     const series = candleSeriesRef.current
     const chart = chartRef.current
+    // FIX-A (COR-01): clear the in-flight guard BEFORE the early-return check so
+    // an empty refetch (bad date range, network error returning empty OHLCV) can't
+    // wedge autoSwitchingRef in the pending state permanently.
+    autoSwitchingRef.current = null
     if (!series || !chart || candleData.length === 0) return
     series.setData(candleData)
+
+    // Dev-only assertion surface for auto-downsampling zoom verification (D5).
+    // setVisibleLogicalRange lets scripted verification (render-probe / browser
+    // agents) drive zoom without trusted wheel events; reads chartRef dynamically
+    // so a teardown between capture and call can't hit a removed IChartApi.
+    if (import.meta.env.DEV) {
+      window.__chartDebug = {
+        lastSetDataPoints: candleData.length,
+        setVisibleLogicalRange: (from: number, to: number) => {
+          try { chartRef.current?.timeScale().setVisibleLogicalRange({ from, to }) } catch { /* removed chart */ }
+        },
+        getRanges: () => {
+          try {
+            const ts = chartRef.current?.timeScale()
+            return { logical: ts?.getVisibleLogicalRange() ?? null, time: ts?.getVisibleRange() ?? null }
+          } catch { return null }
+        },
+      }
+    }
+
+    // Auto-interval range restore: takes priority over sessionStorage (B1/D2).
+    // autoRangeRef is set just before onAutoInterval fires so the visible time
+    // window is preserved across the interval switch.
+    if (autoRangeRef.current) {
+      const savedAutoRange = autoRangeRef.current
+      autoRangeRef.current = null
+      // FIX-D (COR-03 + RACE-04): fall back to fitContent if setVisibleRange fails
+      // (e.g. saved time-domain range has endpoints not present in coarser series).
+      // chartRef read dynamically per Key Bugs Fixed teardown guard pattern.
+      try {
+        chart.timeScale().setVisibleRange(savedAutoRange)
+      } catch {
+        try { const c = chartRef.current; if (c) c.timeScale().fitContent() } catch {}
+      }
+      return
+    }
 
     // Build the tuple key so we can detect actual query-param changes.
     const fitKey = `${ticker ?? ''}|${interval ?? ''}|${from ?? ''}|${to ?? ''}`

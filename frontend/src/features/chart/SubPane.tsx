@@ -76,7 +76,10 @@ export default function SubPane({
       layout: { background: { type: ColorType.Solid, color: CHART_BG }, textColor: TEXT },
       grid: { vertLines: { color: GRID }, horzLines: { color: GRID } },
       crosshair: { mode: 1 as const },
-      timeScale: { borderColor: GRID, timeVisible: true, visible: showTimeAxis },
+      // minBarSpacing must match the main chart's (Chart.tsx) — the default 0.5px
+      // clamp would silently refuse the wide logical ranges synced from the main
+      // pane at deep zoom-out, desyncing the panes (A8 auto-downsample).
+      timeScale: { borderColor: GRID, timeVisible: true, visible: showTimeAxis, minBarSpacing: 0.01 },
       rightPriceScale: { borderColor: GRID },
       leftPriceScale: { visible: false, borderColor: GRID },
     })

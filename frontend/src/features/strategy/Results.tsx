@@ -6,6 +6,7 @@ import { api } from '../../api/client'
 import { useMacro } from '../../shared/hooks/useMacro'
 import { fmtDateTimeET, toDisplayTime, useTimezone } from '../../shared/utils/time'
 import { normaliseToPercent, applyLog } from '../../shared/utils/chartScale'
+import { INTERVAL_SECS } from '../../shared/utils/intervals'
 import PnlHistogram from './PnlHistogram'
 import MacroEquityChart from './MacroEquityChart'
 import MonteCarloChart from './MonteCarloChart'
@@ -40,10 +41,6 @@ function fmtDate(d: string | number | undefined): string {
   return d ?? '—'
 }
 
-const INTERVAL_SECS: Record<string, number> = {
-  '1m': 60, '2m': 120, '5m': 300, '15m': 900, '30m': 1800,
-  '1h': 3600, '60m': 3600,
-}
 
 function downsampleEquity(
   data: { time: any; value: number }[],

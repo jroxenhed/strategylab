@@ -6,6 +6,14 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-06-04
 
+### A8 off-screen downsampling — auto view-interval at wide zoom (full cycle + live browser verification)
+
+- **[A8](TODO.md#a8) sub-item shipped:** auto-downsampling rides the existing A8b/A8d `viewInterval` pipeline (backend resamples OHLCV + indicators — no client-side aggregators, the explore brief's dual-path Steps 1/5/6 were cut at the fork). `evaluateAutoInterval` pure helper in `intervals.ts` (8000-on/6000-off thresholds in BASE-equivalent bars, 150ms debounce, `pendingSince` timestamp guard with 5s safety valve), `onAutoInterval` → App.tsx, `getVisibleRange` capture/restore across the swap, "Auto (1h)" header badge, `INTERVAL_SECS` consolidated to one export.
+- **Orchestrator catch at spec:** the brief's hysteresis pseudocode compared raw logical span — after a 5m→15m switch the same window spans ⅓ the bars (< off-threshold) → instant restore loop. Fixed via base-equivalent normalization (D3) before any code was written.
+- **Review (correctness + julik-races + kieran-ts, effort-capped):** 19 findings, 4 P1 — guard wedged forever on empty/failed refetch (3 reviewers converged), reload trap (persisted coarse viewInterval + lost flag = stuck UI), reverse-zoom snap-back, plus tier re-escalation gap. One holistic fixer; 40 new vitest cases; 365/365 pass.
+- **Live-browser catch (the big one):** lw-charts' default `timeScale.minBarSpacing: 0.5` clamps zoom-out at ~2× pane width in bars (~2.3K) — the 8000-bar threshold was UNREACHABLE and the feature could never fire. Unit tests, build, and render-probe were all green; only live interaction exposed it. Fixed with `minBarSpacing: 0.01` on all three chart instances (SubPane too — the default would have silently refused synced wide ranges and desynced panes). Browser-verified end-to-end on AAPL alpaca 5m 2.4yr (47,255 bars): zoom-out → 3,636 pts (13×, tier-2 1h direct), "Auto (1h)" badge, persisted viewInterval stays 5m, zoom-in restores full resolution with the time window preserved, mount-time auto-coarsen works cold. Evidence: `.run/A8-downsample/browser-assertions.json` + screenshots.
+- **Filed:** F308 (stranded view 1-of-4 on first-ever switch — diagnosis hook left in place), F309 (promote the zoom recipe to a scripted probe check per F298). Viewport-only rendering remains the open A8 sub-item.
+
 ### Interactive batch (F-BATCH-0604D) — 5 items, 3 lanes, full orchestrator cycle
 
 - **[F304](TODO-archive.md#f304)** close-batch `## New` gated routing — `GATED_TAG_RE` routes `[gated: …]` manifest items to `## Deferred (gated)` instead of their bucket section; fixer added pre-flight section-existence validation in `validate_manifest` (DI P1) so a missing target section fails before the apply loop, not mid-apply.

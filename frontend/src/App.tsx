@@ -133,6 +133,11 @@ export default function App() {
   const narrowRails = useMemo(() => window.innerWidth < 1440, [])
   const [datePreset, setDatePreset] = useState<DatePreset>((saved?.datePreset as DatePreset) ?? 'Y')
   const [viewInterval, setViewInterval] = useState(saved?.viewInterval ?? interval)
+  /** True when viewInterval was set by auto-downsampling (not by the user).
+   *  Gating flag: prevents zoom-in from restoring base interval when the user
+   *  manually selected a coarse view. Cleared when user changes interval or
+   *  viewInterval is manually reset. */
+  const [autoIntervalActive, setAutoIntervalActive] = useState(false)
   const [isAggOpen, setIsAggOpen] = useState(false)
   const intervalRef = useRef(interval)
 
@@ -145,17 +150,30 @@ export default function App() {
   useEffect(() => {
     if (interval !== intervalRef.current) {
       setViewInterval(interval)
+      setAutoIntervalActive(false)
       intervalRef.current = interval
     }
   }, [interval])
 
   const viewIntervalOptions = useMemo(() => getCoarserIntervals(interval), [interval])
 
+  /** Called by Chart.tsx when auto-downsampling wants to switch viewInterval.
+   *  Sets autoIntervalActive=true when coarsening, false when restoring to base. */
+  const handleAutoInterval = useCallback((iv: string) => {
+    setViewInterval(iv)
+    setAutoIntervalActive(iv !== interval)
+  }, [interval])
+
+  // FIX-B (RACE-02): persist viewInterval only when it was set by the user, not by
+  // auto-downsampling. On page reload autoIntervalActive is always false (not persisted),
+  // so writing the auto-chosen coarse value would leave the user stuck in that interval
+  // with no UI affordance to escape. Write base interval when auto is active.
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, datePreset, viewInterval,
+      ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, datePreset,
+      viewInterval: autoIntervalActive ? interval : viewInterval,
     }))
-  }, [ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, datePreset, viewInterval])
+  }, [ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, datePreset, viewInterval, autoIntervalActive])
 
   useEffect(() => {
     if (backtestResult && lastRequest) {
@@ -183,6 +201,18 @@ export default function App() {
   const { data: ohlcv = EMPTY_OHLCV, isLoading: ohlcvLoading, isFetching: ohlcvFetching, isError: ohlcvError, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, chartInterval, dataSource, extendedHours)
   const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', start, end, chartInterval, dataSource, extendedHours, chartEnabled && showSpy)
   const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', start, end, chartInterval, dataSource, extendedHours, chartEnabled && showQqq)
+
+  // FIX-A (RACE-03): OHLCV query error during an auto-interval switch leaves
+  // autoSwitchingRef permanently pending in Chart.tsx (no setData callback fires).
+  // Reset autoIntervalActive + viewInterval to base so Chart can clear its guards
+  // via the normal interval-change → candleData effect path on the next retry.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (ohlcvError && autoIntervalActive) {
+      setViewInterval(interval)
+      setAutoIntervalActive(false)
+    }
+  }, [ohlcvError, autoIntervalActive, interval])
 
   const { data: instanceData = {}, refetch: refetchIndicators, isLoading: instanceLoading, loadingByInstance, isError: instanceError, errorMessage: instanceErrorMessage } = useInstanceIndicators(
     ticker, start, end, interval, chartEnabled ? indicators : [], dataSource, extendedHours, viewInterval,
@@ -257,7 +287,12 @@ export default function App() {
                 )
               })()}
               {chartEnabled && viewIntervalOptions.length > 1 && (
-                viewInterval === interval && !isAggOpen ? (
+                autoIntervalActive ? (
+                  <span
+                    style={{ fontSize: 11, color: '#8b949e', border: '1px solid #30363d', borderRadius: 4, padding: '2px 6px', cursor: 'default' }}
+                    title="Auto (zoomed out) — zoom in to restore base interval"
+                  >Auto ({viewInterval})</span>
+                ) : viewInterval === interval && !isAggOpen ? (
                   <button
                     onClick={() => setIsAggOpen(true)}
                     style={{ background: 'none', border: '1px solid #30363d', borderRadius: 4, color: '#8b949e', cursor: 'pointer', fontSize: 11, padding: '2px 6px' }}
@@ -268,7 +303,7 @@ export default function App() {
                     {viewInterval !== interval && <span style={{ fontSize: 11, color: '#8b949e' }}>Aggregate:</span>}
                     <select
                       value={viewInterval}
-                      onChange={e => { setViewInterval(e.target.value); if (e.target.value === interval) setIsAggOpen(false); }}
+                      onChange={e => { setViewInterval(e.target.value); setAutoIntervalActive(false); if (e.target.value === interval) setIsAggOpen(false); }}
                       onBlur={() => { if (viewInterval === interval) setIsAggOpen(false); }}
                       style={{ background: '#21262d', color: '#c9d1d9', border: '1px solid #30363d', borderRadius: 4, padding: '2px 4px', fontSize: 12 }}
                       title="Chart display interval"
@@ -302,14 +337,14 @@ export default function App() {
                 onIndicatorsChange={setIndicators}
                 showSpy={showSpy}
                 showQqq={showQqq}
-                onTickerChange={t => { setTicker(t); setBacktestResult(null) }}
-                onStartChange={d => { if (d > end) { setStart(end); setEnd(d) } else { setStart(d) }; setBacktestResult(null) }}
-                onEndChange={d => { if (d < start) { setEnd(start); setStart(d) } else { setEnd(d) }; setBacktestResult(null) }}
+                onTickerChange={t => { setTicker(t); setBacktestResult(null); setAutoIntervalActive(false); setViewInterval(interval) }}
+                onStartChange={d => { if (d > end) { setStart(end); setEnd(d) } else { setStart(d) }; setBacktestResult(null); setAutoIntervalActive(false); setViewInterval(interval) }}
+                onEndChange={d => { if (d < start) { setEnd(start); setStart(d) } else { setEnd(d) }; setBacktestResult(null); setAutoIntervalActive(false); setViewInterval(interval) }}
                 onIntervalChange={v => { setInterval(v); setBacktestResult(null) }}
                 onToggleSpy={() => setShowSpy(v => !v)}
                 onToggleQqq={() => setShowQqq(v => !v)}
                 dataSource={dataSource}
-                onDataSourceChange={setDataSource}
+                onDataSourceChange={v => { setDataSource(v); setAutoIntervalActive(false); setViewInterval(interval) }}
                 extendedHours={extendedHours}
                 onExtendedHoursChange={setExtendedHours}
                 datePreset={datePreset}
@@ -370,6 +405,8 @@ export default function App() {
                           viewInterval={viewInterval}
                           backtestInterval={interval}
                           onChartReady={setMainChart}
+                          onAutoInterval={handleAutoInterval}
+                          autoIntervalActive={autoIntervalActive}
                           ticker={ticker}
                           interval={chartInterval}
                           from={start}
