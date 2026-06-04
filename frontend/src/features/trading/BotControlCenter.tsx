@@ -237,7 +237,10 @@ export default function BotControlCenter() {
   // The ternary unmounts the trigger button while confirming, so the button remounts on cancel.
   // requestAnimationFrame defers the focus call until after React has flushed the remount to DOM.
   const stopCloseBtnRef = useRef<HTMLButtonElement>(null)
-  const cancelStopClose = () => { setConfirmingStopClose(false); requestAnimationFrame(() => { stopCloseBtnRef.current?.focus() }) }
+  const stopCloseRafRef = useRef<number | null>(null)
+  const cancelStopClose = () => { setConfirmingStopClose(false); stopCloseRafRef.current = requestAnimationFrame(() => { stopCloseBtnRef.current?.focus() }) }
+  // F299: cancel any pending rAF on unmount
+  useEffect(() => { return () => { if (stopCloseRafRef.current !== null) cancelAnimationFrame(stopCloseRafRef.current) } }, [])
   const [sparklineScale, setSparklineScale] = useState<'local' | 'aligned'>(() => {
     const v = localStorage.getItem('sparklineScale')
     return v === 'aligned' ? 'aligned' : 'local'

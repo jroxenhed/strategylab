@@ -150,8 +150,11 @@ export default function BotCard({
   //   so the button remounts on cancel — requestAnimationFrame defers focus until after DOM flush.
   const menuBtnRef = useRef<HTMLButtonElement>(null)
   const resetPnlBtnRef = useRef<HTMLButtonElement>(null)
+  const rafHandleRef = useRef<number | null>(null)
   const cancelResetPnlCompact = () => { setConfirmingResetPnl(false); menuBtnRef.current?.focus() }
-  const cancelResetPnlExpanded = () => { setConfirmingResetPnl(false); requestAnimationFrame(() => { resetPnlBtnRef.current?.focus() }) }
+  const cancelResetPnlExpanded = () => { setConfirmingResetPnl(false); rafHandleRef.current = requestAnimationFrame(() => { resetPnlBtnRef.current?.focus() }) }
+  // F299: cancel any pending rAF on unmount
+  useEffect(() => { return () => { if (rafHandleRef.current !== null) cancelAnimationFrame(rafHandleRef.current) } }, [])
 
   const running = summary.status === 'running'
   const stopped = summary.status === 'stopped'
