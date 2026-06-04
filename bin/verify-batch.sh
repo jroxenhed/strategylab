@@ -268,6 +268,12 @@ else
   # We use a process-group kill so any Chromium child spawned by Node
   # is also cleaned up when the watchdog fires.
   #
+  # DEADLINE COUPLING (F300): this watchdog (135s, seq 1 135 below) MUST be
+  # render-probe.mjs GLOBAL_TIMEOUT_MS (120s) + 15s margin. If you change
+  # GLOBAL_TIMEOUT_MS in render-probe.mjs, update the seq count here to match:
+  #   bash_watchdog_secs = GLOBAL_TIMEOUT_MS/1000 + 15
+  # See matching DEADLINE COUPLING comment in bin/render-probe.mjs.
+  #
   # REL-02: flag-file disarm pattern prevents PID-reuse false kills.
   # Watchdog polls every 1s and checks for the disarm flag before firing,
   # so even if kill $WATCHDOG_PID races (e.g. sleep not yet started), the

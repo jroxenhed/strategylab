@@ -22,6 +22,24 @@
  *   0  all assertions passed
  *   1  one or more assertions failed
  *   2  environment unreachable (servers not running)
+ *
+ * Manifest trigger types (F298/F301):
+ *   click      — { type: "click", selector: "<css>" }
+ *   input      — { type: "input", selector: "<css>", value: "<text>" }
+ *   navigate   — { type: "navigate", value: "<button name regex>" }
+ *   drag       — { type: "drag",
+ *                  from: { selector: "<css>", offset?: { x, y } },
+ *                  to:   { selector: "<css>", offset?: { x, y } } }
+ *                Mouse-based multi-step drag: mousedown → intermediate moves → mouseup.
+ *                offset values are added to the element's top-left corner.
+ *
+ * DEADLINE COUPLING (F300):
+ *   render-probe.mjs GLOBAL_TIMEOUT_MS must be ≤ verify-batch.sh watchdog − 15s margin.
+ *   Node: 120s | Bash: 135s | Margin: 15s
+ *   PER_VIEW_TIMEOUT_MS limits how long any single manifest view can take;
+ *   a timed-out view records a failure and the run continues with the next view.
+ *   If increasing PER_VIEW_TIMEOUT_MS, recalculate:
+ *     new_global = per_view * max_views + overhead (≤ bash_watchdog − 15s)
  */
 
 import { mkdir, readFile } from 'node:fs/promises';
@@ -57,6 +75,12 @@ const SEED_FILE = seedFlagIdx !== -1 ? process.argv[seedFlagIdx + 1] : null;
 // Parse --manifest flag (F298)
 const manifestFlagIdx = process.argv.indexOf('--manifest');
 const MANIFEST_FILE = manifestFlagIdx !== -1 ? process.argv[manifestFlagIdx + 1] : null;
+
+// Parse --per-view-timeout flag (F300): per-view deadline in ms (default 20000)
+const perViewTimeoutFlagIdx = process.argv.indexOf('--per-view-timeout');
+const PER_VIEW_TIMEOUT_MS = perViewTimeoutFlagIdx !== -1
+  ? parseInt(process.argv[perViewTimeoutFlagIdx + 1], 10)
+  : 20_000;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -287,7 +311,19 @@ async function loadManifest(manifestFile) {
 }
 
 /**
- * Execute a trigger action on the page (click, input, navigate).
+ * Execute a trigger action on the page.
+ *
+ * Trigger types:
+ *   click      — { type: "click", selector: "<css>" }
+ *   input      — { type: "input", selector: "<css>", value: "<text>" }
+ *   navigate   — { type: "navigate", value: "<button name regex>" }
+ *   drag (F301)— { type: "drag",
+ *                  from: { selector: "<css>", offset?: { x, y } },
+ *                  to:   { selector: "<css>", offset?: { x, y } } }
+ *                Performs mousedown → intermediate moves → mouseup via the page
+ *                mouse API so apps tracking mousemove events see a real drag.
+ *                offset is added to each element's bounding-box top-left corner
+ *                (default: centre of the element, i.e. offset not required).
  */
 async function executeTrigger(trigger, page) {
   if (!trigger) return;
@@ -304,6 +340,36 @@ async function executeTrigger(trigger, page) {
       const tabBtn = page.getByRole('button', { name: new RegExp(value, 'i') });
       await tabBtn.first().click({ timeout: 5000 });
       console.log(`  [trigger] navigate: ${value}`);
+    } else if (type === 'drag') {
+      // F301: mouse-based drag — from element (+ optional offset) to target element
+      // (+ optional offset) with intermediate move steps so mousemove listeners fire.
+      const { from, to } = trigger;
+      // Resolve element positions
+      const fromEl = page.locator(from.selector).first();
+      const toEl   = page.locator(to.selector).first();
+      const fromBox = await fromEl.boundingBox({ timeout: 5000 });
+      const toBox   = await toEl.boundingBox({ timeout: 5000 });
+      if (!fromBox || !toBox) {
+        throw new Error(`drag: bounding box not found for "${!fromBox ? from.selector : to.selector}"`);
+      }
+      // Default drag origin: element centre; apply optional offset from top-left.
+      // Guard each coordinate independently so a partial offset object {x} doesn't
+      // silently produce NaN for the missing axis (fromBox.y + undefined → NaN).
+      const fx = fromBox.x + (from.offset?.x != null ? from.offset.x : fromBox.width  / 2);
+      const fy = fromBox.y + (from.offset?.y != null ? from.offset.y : fromBox.height / 2);
+      const tx = toBox.x   + (to.offset?.x   != null ? to.offset.x   : toBox.width    / 2);
+      const ty = toBox.y   + (to.offset?.y   != null ? to.offset.y   : toBox.height   / 2);
+      // Perform drag: move to start → mousedown → intermediate moves → mouseup
+      await page.mouse.move(fx, fy);
+      await page.mouse.down();
+      // Intermediate steps so applications tracking mousemove see a smooth drag
+      const STEPS = 5;
+      for (let i = 1; i <= STEPS; i++) {
+        const progress = i / STEPS;
+        await page.mouse.move(fx + (tx - fx) * progress, fy + (ty - fy) * progress);
+      }
+      await page.mouse.up();
+      console.log(`  [trigger] drag: ${from.selector} → ${to.selector}`);
     } else {
       console.log(`  [trigger] unknown type: ${type} (skipped)`);
     }
@@ -432,49 +498,94 @@ async function evaluateAssertion(assertion, page, consoleErrors, viewName) {
  * Run all views in the manifest against the live page.
  * Replaces the hardcoded probeChart/probeTrading/probeDiscovery flow.
  */
-async function runManifestProbe(manifest, page, consoleErrors) {
+async function runManifestProbe(manifest, initialPage, context, consoleErrors) {
   if (!manifest || !Array.isArray(manifest.views)) {
     console.error('[manifest] No views defined; skipping manifest probe.');
     return;
   }
 
+  // Use a local `let` so a post-timeout page reset can be reflected within the loop.
+  let page = initialPage;
+
   for (const view of manifest.views) {
     const viewName = view.name || 'Unknown';
     console.log(`\n  [manifest] View: ${viewName}`);
 
-    // COR-01: snapshot the console-error count at view start so console
-    // assertions see only THIS view's errors (same errsBefore pattern as
-    // the legacy probes) — not errors accumulated by earlier views.
-    const viewErrsBefore = consoleErrors.length;
+    // F300: per-view timeout envelope — one stuck view must not eat the global budget.
+    // Wrap the entire view (trigger + settle + assertions + screenshot) in a race.
+    // On timeout: record a failure for this view, close+recreate the page so the
+    // stale runView() can no longer interleave with subsequent views' interactions,
+    // then continue to the next view.
+    let viewTimedOut = false;
+    let timeoutId;
+    const viewTimeoutPromise = new Promise((resolve) => {
+      timeoutId = setTimeout(() => {
+        viewTimedOut = true;
+        resolve(); // resolve (not reject) so the race winner is our sentinel
+      }, PER_VIEW_TIMEOUT_MS);
+    });
 
-    // Execute trigger (navigate/click to reach this view)
-    if (view.trigger) {
-      await executeTrigger(view.trigger, page);
-    }
+    const runView = async () => {
+      // COR-01: snapshot the console-error count at view start so console
+      // assertions see only THIS view's errors (same errsBefore pattern as
+      // the legacy probes) — not errors accumulated by earlier views.
+      const viewErrsBefore = consoleErrors.length;
 
-    // Settle wait
-    const settleMs = view.before?.settleMs ?? 500;
-    if (settleMs > 0) {
-      console.log(`  [manifest] Settling ${settleMs}ms…`);
-      await page.waitForTimeout(settleMs);
-    }
-
-    // Run assertions
-    if (Array.isArray(view.assertions)) {
-      const viewErrors = consoleErrors.slice(viewErrsBefore);
-      for (const assertion of view.assertions) {
-        await evaluateAssertion(assertion, page, viewErrors, viewName);
+      // Execute trigger (navigate/click to reach this view)
+      if (view.trigger) {
+        await executeTrigger(view.trigger, page);
       }
-    }
 
-    // Screenshot
-    const screenshotName = view.screenshot || `${viewName.toLowerCase().replace(/\s+/g, '-')}.png`;
-    const screenshotPath = path.join(SCREENSHOT_DIR, screenshotName);
-    try {
-      await page.screenshot({ path: screenshotPath, fullPage: false });
-      console.log(`  [manifest] screenshot → .run/render-probe/${screenshotName}`);
-    } catch (err) {
-      console.log(`  [manifest] screenshot failed: ${err.message}`);
+      // Settle wait
+      const settleMs = view.before?.settleMs ?? 500;
+      if (settleMs > 0) {
+        console.log(`  [manifest] Settling ${settleMs}ms…`);
+        await page.waitForTimeout(settleMs);
+      }
+
+      // Run assertions
+      if (Array.isArray(view.assertions)) {
+        const viewErrors = consoleErrors.slice(viewErrsBefore);
+        for (const assertion of view.assertions) {
+          await evaluateAssertion(assertion, page, viewErrors, viewName);
+        }
+      }
+
+      // Screenshot
+      const screenshotName = view.screenshot || `${viewName.toLowerCase().replace(/\s+/g, '-')}.png`;
+      const screenshotPath = path.join(SCREENSHOT_DIR, screenshotName);
+      try {
+        await page.screenshot({ path: screenshotPath, fullPage: false });
+        console.log(`  [manifest] screenshot → .run/render-probe/${screenshotName}`);
+      } catch (err) {
+        console.log(`  [manifest] screenshot failed: ${err.message}`);
+      }
+    };
+
+    await Promise.race([viewTimeoutPromise, runView().finally(() => clearTimeout(timeoutId))]);
+
+    if (viewTimedOut) {
+      console.log(`  [manifest] TIMEOUT: view "${viewName}" exceeded ${PER_VIEW_TIMEOUT_MS / 1000}s budget — skipping remaining assertions.`);
+      record(viewName, 'per-view timeout', false,
+        `view did not complete within ${PER_VIEW_TIMEOUT_MS / 1000}s`);
+      // Neutralize the stale runView(): close the timed-out page and open a fresh
+      // one so any in-flight CDP operations cannot interleave with the next view.
+      try {
+        await page.close();
+        const newPage = await context.newPage();
+        await newPage.addInitScript(rafHookInitScript);
+        newPage.on('console', (msg) => {
+          if (msg.type() === 'error') consoleErrors.push(msg.text());
+        });
+        newPage.on('pageerror', (err) => {
+          consoleErrors.push(`[uncaught] ${err.message}`);
+        });
+        await newPage.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        // Reassign local `page` so subsequent views use the fresh page.
+        page = newPage;
+      } catch (resetErr) {
+        console.log(`  [manifest] WARNING: page reset after timeout failed: ${resetErr.message}`);
+      }
     }
   }
 }
@@ -632,11 +743,19 @@ async function main() {
   }
 
   // R-09: hard global deadline — a hung page.goto() must not leave a zombie Chrome.
-  // 120 s covers the ~10 s goto timeout + all view probes + settle waits with headroom.
+  // DEADLINE COUPLING (F300): GLOBAL_TIMEOUT_MS (120s) must be ≤ verify-batch.sh watchdog (135s) − 15s margin.
+  // See matching comment in bin/verify-batch.sh near the 135-iteration watchdog loop.
+  // If you change GLOBAL_TIMEOUT_MS, update the bash watchdog to GLOBAL_TIMEOUT_MS/1000 + 15.
   const GLOBAL_TIMEOUT_MS = 120_000;
   const timeoutPromise = new Promise((_, reject) =>
     setTimeout(() => reject(new Error(`Global probe deadline exceeded (${GLOBAL_TIMEOUT_MS / 1000}s)`)), GLOBAL_TIMEOUT_MS)
   );
+
+  // F300: Per-view timeout envelope. Each manifest view must complete within this
+  // budget. A stuck view records a timeout failure and the run moves on to the next
+  // view instead of consuming the entire global deadline.
+  // Tune PER_VIEW_TIMEOUT_MS via --per-view-timeout <ms>. Default: 20s.
+  // Invariant: PER_VIEW_TIMEOUT_MS * max_views + setup_overhead ≤ GLOBAL_TIMEOUT_MS
 
   // R-09: browser.close() is guaranteed via finally on every path after launch succeeds.
   try {
@@ -679,7 +798,7 @@ async function runProbe(browser, seed, manifest) {
   // ── F298: Manifest mode — run dynamic assertions from manifest ────────────
   if (manifest) {
     console.log('\n[manifest] Running manifest-driven probe…');
-    await runManifestProbe(manifest, page, consoleErrors);
+    await runManifestProbe(manifest, page, context, consoleErrors);
   } else {
     // ── Legacy hardcoded probe mode ─────────────────────────────────────────
 
