@@ -6,6 +6,17 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-06-04
 
+### Interactive stress batch (F-BATCH-0604C) — 6 items, full orchestrator cycle
+
+- **[F294](TODO.md#f294)** WFA bootstrap-orphan gap accept+documented — `_init_worker` docstring + test_orphan_kill.sh carry the rationale; sitecustomize rejected (venv-wide blast radius for a <0.1%-of-runtime window). Reliability reviewer's CPython-internals caveat (REL-07) folded into the docstring.
+- **[F295](TODO.md#f295)** verify-batch.sh hardened — mkdir lock with PID-file stale reclaim (REL-01 caught the implementer claiming stale handling it never shipped) + 135s disarm-flag watchdog (1s ticks; kills the REL-02 PID-reuse race and COR-03 orphaned-sleep in one design). Dogfooded as this batch's own gate, twice.
+- **[F296](TODO.md#f296)** strategy-load normalization — explorer concluded "all fallbacks present, no change needed"; orchestrator re-check found 11 unguarded setters (slippageBps/commission — the newer cost-model fields — plus whole-object trailingConfig and the longTrailingConfig ?? chain). Spread-merge over defaults, fallbacks match useState initial types.
+- **[F297](TODO.md#f297)** focus restore on all 4 cancel sites — F210 pattern; rAF-deferred where the ternary remounts the trigger, direct focus where it persists. Verified by code review (chrome-devtools focus() is inert).
+- **[F298](TODO.md#f298)** render-probe --seed/--manifest — replayable browser QA at script cost; legacy mode byte-identical; hard exit 2 on bad seed/manifest (COR-02/REL-03), seed failures fail loud (REL-04), per-view console scoping (COR-01). First manifest authored against the *real* DOM after the agent's invented selectors ([role=main], a nonexistent sidebar toggle) failed honest verification — final shape: chart render + panel collapse/expand round-trip, 10/10 PASS.
+- **[F188](TODO.md#f188)(b)** daily-strategy deploy warning — shared BOT_DEPLOYABLE_INTERVALS const (TS-01 promoted it from a per-render literal that duplicated AddBotBar's list); option (a) EOD scheduling stays open.
+- **Review:** 3 personas (correctness/typescript/reliability), 13 findings — 5 P1 (all fixed), 5 P2 fixed, 2 P2 deferred → F299/F300; F301 filed from manifest authoring. Review cost: 146k tokens across 3 dispatches.
+- **Cycle notes:** explore premise-check earned its keep again (F296); review∥verify pipelining held; fixer ran 7 findings holistic + orchestrator applied COR-01 inline post-fixer. Batch total 506k subagent tokens / ~35m agent-time across 11 dispatches.
+
 ### 8-item batch 2 (F-BATCH-0604B) — lean-verify enablers dogfooded on their own batch
 
 - **[F292](TODO.md#f292)** `bin/verify-batch.sh` — 4-gate single-call verification (build / preview / probe / backend smoke), PASS-FAIL table + `.run/<id>/verify.md`, exit 0/1. Review caught a P1 in its failure path (COR-01: `exit 1` inside a `{ }` group killed the script before the report on backend-smoke fail — the implementer had only tested all-green); fixed + failure paths tested. Used as the batch's own final gate.
