@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react'
-import { createChart, BaselineSeries, type IChartApi, type ISeriesApi } from 'lightweight-charts'
+import { createChart, BaselineSeries, type IChartApi, type ISeriesApi, type BaselineData, type WhitespaceData, type UTCTimestamp } from 'lightweight-charts'
 
 interface Props {
   equityData: { time: string; value: number }[]
@@ -71,8 +71,11 @@ export default function MiniSparkline({ equityData, alignedRange, height = 60 }:
     tooltip.style.top = `${Math.max(0, param.point.y - 28)}px`
   }, [])
 
-  // Mount once: create chart + series. autoSize observes the container — never
-  // pair with an external ResizeObserver + applyOptions (F218 trap).
+  // Mount once: create chart + series. autoSize observes the container for
+  // canvas sizing — never pair with an external ResizeObserver + applyOptions
+  // (F218 trap). A separate minimal ResizeObserver calls fitContent() only so
+  // the visible logical range adjusts when the BotCard column is resized between
+  // data ticks (F250).
   useEffect(() => {
     if (!ref.current) return
     const chart = createChart(ref.current, {
@@ -114,12 +117,26 @@ export default function MiniSparkline({ equityData, alignedRange, height = 60 }:
 
     chart.subscribeCrosshairMove(handleCrosshairMove)
 
+    // Minimal ResizeObserver: only calls fitContent() via rAF so a drag-resize
+    // doesn't fire 60×/s. Does NOT call applyOptions (F218/F250).
+    let rafId = 0
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(rafId)
+      rafId = requestAnimationFrame(() => {
+        if (!chartRef.current) return
+        try { chartRef.current.timeScale().fitContent() } catch {}
+      })
+    })
+    ro.observe(ref.current)
+
     return () => {
-      chart.unsubscribeCrosshairMove(handleCrosshairMove)
-      chart.remove()
+      ro.disconnect()
+      cancelAnimationFrame(rafId)
+      try { chart.unsubscribeCrosshairMove(handleCrosshairMove) } catch {}
       chartRef.current = null
       seriesRef.current = null
       lastSigRef.current = ''
+      chart.remove()
     }
   }, [])
 
@@ -142,15 +159,17 @@ export default function MiniSparkline({ equityData, alignedRange, height = 60 }:
     // bot's time axis spans the same range. Using whitespace + fitContent
     // avoids setVisibleRange's ensureNotNull throw when the requested range
     // extends beyond the series' real data.
-    const padded: { time: number; value?: number }[] = [...mapped]
+    const padded: (BaselineData | WhitespaceData)[] = mapped.map(
+      d => ({ time: d.time as UTCTimestamp, value: d.value })
+    )
     if (alignedRange && alignedRange.to > alignedRange.from) {
-      if (alignedRange.from < first.time) padded.unshift({ time: alignedRange.from })
-      if (alignedRange.to > last.time) padded.push({ time: alignedRange.to })
+      if (alignedRange.from < first.time) padded.unshift({ time: alignedRange.from as UTCTimestamp })
+      if (alignedRange.to > last.time) padded.push({ time: alignedRange.to as UTCTimestamp })
     }
     const sig = `${padded.length}|${padded[0].time}|${padded[padded.length - 1].time}|${last.value}`
     if (sig === lastSigRef.current) return
     lastSigRef.current = sig
-    series.setData(padded as any)
+    series.setData(padded)
     applyRange()
   }, [equityData, alignedRange?.from, alignedRange?.to])
 
