@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*294 / 301 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*294 / 302 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -14,7 +14,7 @@ _(none open)_
 - [F297](#f297) — [next] Focus restore on Cancel for the 3 bot inline-confirm sites + Save-As cancel [easy]
 - [F295](#f295) — [next] verify-batch.sh hardening pair [easy]
 
-## Open Work — 30 items
+## Open Work — 31 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -26,7 +26,7 @@ _(none open)_
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 12 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F272](#f272) |
 | [F · Hardening](#f-hardening) | Security, reliability, validation | 3 | [F211](#f211), [F294](#f294), [F296](#f296) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 1 | [F297](#f297) |
-| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 4 | [F97](#f97), [F161](#f161), [F280](#f280), [F295](#f295) |
+| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 5 | [F97](#f97), [F161](#f161), [F280](#f280), [F295](#f295), [F298](#f298) |
 
 ## A — Charts & Indicators
 
@@ -273,3 +273,4 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f292"></a> **F292** [next] `bin/verify-batch.sh` — single-call verification gate: frontend build (`npm --prefix frontend run build`), start preview if not running, `node bin/render-probe.mjs --url :4173`, backend AST/import smoke; one PASS/FAIL table to stdout + `.run/<id>/verify.md`, exit 0/1. Kills the 5-6 separate main-context gate calls per verify pass and the cd-poisoning failure class (2 of 5 probe runs failed on cwd 2026-06-04). [easy] [infra] (from lean-verify playbook change) (added 2026-06-04) (resolved 2026-06-04 — bin/verify-batch.sh shipped — 4 gates, PASS/FAIL table, .run/<id>/verify.md, exit 0/1; failure paths fixed post-review (COR-01) and tested)
 - [x] <a id="f293"></a> **F293** `bin/close-batch.py` — applies a `.run/<id>/closeout.md` manifest: flips TODO checkboxes + appends resolved notes, inserts new items into bucket sections, runs sync-todo-index. Orchestrator authors the manifest once; script does the mechanical edits (8 checkbox edits composed in main context cost ~20k on 2026-06-04). [medium] [infra] (from lean-verify playbook change) (added 2026-06-04) (resolved 2026-06-04 — bin/close-batch.py shipped — manifest-driven TODO closeout, all-or-nothing validation, atomic write via fileutil.atomic_write_text; used to close this very batch)
 - [ ] <a id="f295"></a> **F295** [next] verify-batch.sh hardening pair — (a) wrap the render-probe call in a portable timeout (macOS lacks coreutils `timeout`; bash-native watchdog or node-side --timeout flag) so a hung Chromium can't block the gate forever; (b) concurrent-run lockfile so two simultaneous invocations don't interleave preview-server management and report writes. (from F-BATCH-0604B review: REL-05 + REL-03 residue) [easy] [infra]
+- [ ] <a id="f298"></a> **F298** Recipe→script promotion for browser QA — once a browser verification recipe has been invented and passed (selectors, seeds, assertions known), promote it to a replayable script instead of ever re-driving it with an agent: extend `bin/render-probe.mjs` (or new `bin/behavior-probe.mjs`) with (a) a `--seed` mode that populates app state via backend API + localStorage injection before assertions, (b) a per-view assertion manifest (JSON: selector/eval-expression/expected) so F249c-class resize checks and F289-class console checks replay at script cost (~zero agent context). Browser agents then only ever do *first-of-its-kind* verification. Rationale: F-BATCH-0604B's 4-flow browser dispatch burned 223 tool calls/29 min, ~90% on re-drivable setup; cross-validated by user against Gemini/Antigravity hitting the same wall. [medium] [infra]
