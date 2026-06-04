@@ -31,6 +31,9 @@ BOOTSTRAP_SETTLE=5    # seconds to wait AFTER workers appear for Python import b
                       # Killing before bootstrap completes is a narrow edge case not covered by
                       # the watchdog (the pipe-read blocks until EOF anyway). Waiting here
                       # tests the real production scenario: server killed mid-computation.
+                      # F294: that bootstrap window is ACCEPTED + documented (see the
+                      # _init_worker docstring in backend/routes/wfa_pool.py) — do not
+                      # lower BOOTSTRAP_SETTLE to "cover" it; the test would just flake.
 GRACE_AFTER_KILL=3    # seconds to let the OS reap children after SIGKILL
 
 # ---------------------------------------------------------------------------

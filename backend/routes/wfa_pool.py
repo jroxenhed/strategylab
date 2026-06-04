@@ -159,7 +159,20 @@ def _init_worker(df_pickled: bytes) -> None:
     detects the re-parenting (os.getppid() != initial_ppid) and calls
     os._exit(1) — unblockable, no cleanup hangs. Using != initial_ppid
     rather than == 1 is more robust: handles subreaper re-parenting on
-    Linux (e.g. systemd user sessions where PID 1 is not init)."""
+    Linux (e.g. systemd user sessions where PID 1 is not init).
+
+    F294 (known gap, accepted): the watchdog only starts once this
+    initializer runs — SIGKILL during worker spawn-bootstrap (~2-3s of
+    interpreter start + imports before the initializer) leaves those
+    workers unprotected. Accepted because (a) the window is <0.1% of a
+    minutes-long WFA run, (b) a bootstrap-orphaned worker captures
+    initial_ppid AFTER re-parenting so the watchdog can never fire for
+    it, but it then blocks on call_queue.get() whose pipe is already
+    EOF'd by the dead parent and is expected to exit on its own (CPython
+    concurrent.futures.process behavior, not a documented API contract —
+    re-verify on Python upgrades), and (c) the only
+    earlier hook (sitecustomize/spawn-preexec) is venv-wide and was
+    rejected. test_orphan_kill.sh masks this window via BOOTSTRAP_SETTLE."""
     global _WORKER_DF
     _WORKER_DF = pickle.loads(df_pickled)
 
