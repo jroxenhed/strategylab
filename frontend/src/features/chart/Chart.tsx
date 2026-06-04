@@ -45,6 +45,10 @@ interface ChartProps {
   /** True when viewInterval was set by auto-downsampling (not by the user). Used to gate
    *  the de-aggregate branch so zoom-in doesn't clobber a manually selected coarse view. */
   autoIntervalActive?: boolean
+  /** Master enable for auto-downsampling (user checkbox). Default true; when false
+   *  the zoom-span evaluation never fires. Restoring an active auto view on
+   *  uncheck is the parent's job (it owns viewInterval). */
+  autoIntervalEnabled?: boolean
   /** Used to detect ticker/interval/date changes so fitContent fires on symbol switches but not on auto-refresh polls. */
   ticker?: string
   interval?: string
@@ -140,7 +144,7 @@ function buildMarkers(trades: Trade[], subPane = false) {
   })
 }
 
-export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, instanceLoading, loadingByInstance, instanceError, instanceErrorMessage, onRetryIndicators, trades, emaOverlays, ruleSignals, regimeSeries, viewInterval, backtestInterval, onChartReady, onAutoInterval, autoIntervalActive, ticker, interval, from, to }: ChartProps) {
+export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, instanceLoading, loadingByInstance, instanceError, instanceErrorMessage, onRetryIndicators, trades, emaOverlays, ruleSignals, regimeSeries, viewInterval, backtestInterval, onChartReady, onAutoInterval, autoIntervalActive, autoIntervalEnabled, ticker, interval, from, to }: ChartProps) {
   const [tzMode] = useTimezone()
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -164,6 +168,18 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   useEffect(() => { baseIntervalRef.current = backtestInterval })
   const autoIntervalActiveRef = useRef(autoIntervalActive)
   useEffect(() => { autoIntervalActiveRef.current = autoIntervalActive })
+  const autoIntervalEnabledRef = useRef(autoIntervalEnabled)
+  useEffect(() => { autoIntervalEnabledRef.current = autoIntervalEnabled })
+  /** Set by the chart-creation effect: runs the auto-downsample evaluation against
+   *  the current visible range. Needed because lw-charts skips no-change range
+   *  assignments, so re-enabling the checkbox can't be nudged via a fake event. */
+  const autoEvalRef = useRef<(() => void) | null>(null)
+  // When the user re-enables auto-downsampling while already zoomed out, run the
+  // evaluation immediately instead of waiting for the next pan/zoom.
+  useEffect(() => {
+    if (autoIntervalEnabled === false) return
+    autoEvalRef.current?.()
+  }, [autoIntervalEnabled])
   /** Stores the timestamp (Date.now()) when an auto-interval switch was initiated,
    *  or null when idle. A pending switch older than 5s is treated as expired (FIX-A).
    *  Replaces the bare boolean: expiry safety valve covers COR-01, RACE-03, and RACE-01. */
@@ -406,46 +422,61 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       // D3 fix: compare BASE-equivalent bars via calcVisibleBaseBars() to prevent the
       // re-aggregate loop after a 5m→15m switch (raw bars drop to ~1/3, below OFF threshold).
       if (autoIntervalTimer !== null) window.clearTimeout(autoIntervalTimer)
-      autoIntervalTimer = window.setTimeout(() => {
-        const currentView = viewIntervalRef.current
-        const base = baseIntervalRef.current
-        // Compute base-equivalent visible bars (D3) using the shared pure helper.
-        const rawSpan = Math.round(range.to - range.from)
-        const visibleBaseBars = calcVisibleBaseBars(rawSpan, currentView, base)
+      autoIntervalTimer = window.setTimeout(() => evaluateZoomSpan(range), 150)
+    }
 
-        // Delegate all branching logic to the pure evaluateAutoInterval helper (FIX-G).
-        // It handles: pending-switch expiry (FIX-A), reverse-zoom cancellation (RACE-01),
-        // re-escalation when autoActive (FIX-C), daily/unknown passthrough, hysteresis.
-        const decision = evaluateAutoInterval({
-          visibleBaseBars,
-          viewInterval: currentView,
-          baseInterval: base,
-          autoActive: autoIntervalActiveRef.current ?? false,
-          pendingSince: autoSwitchingRef.current,
-          now: Date.now(),
-        })
+    // The auto-downsample evaluation, callable from two places: the debounced
+    // range-change path in syncHandler above, and (via autoEvalRef) the
+    // checkbox-re-enable effect — lw-charts skips no-change setVisibleLogicalRange
+    // calls, so a synthetic "nudge" event can't reach this; it must be invoked.
+    function evaluateZoomSpan(range: { from: number; to: number }) {
+      // Master enable (user checkbox). undefined = enabled (default). When the
+      // user unchecks mid-auto, App restores the base interval itself.
+      if (autoIntervalEnabledRef.current === false) return
+      const currentView = viewIntervalRef.current
+      const base = baseIntervalRef.current
+      // Compute base-equivalent visible bars (D3) using the shared pure helper.
+      const rawSpan = Math.round(range.to - range.from)
+      const visibleBaseBars = calcVisibleBaseBars(rawSpan, currentView, base)
 
-        if (decision.action === 'none') {
-          // RACE-01 + FIX-A: if a switch is pending but the helper returned 'none'
-          // (user zoomed back in, or evaluation found no needed switch), cancel the
-          // pending state and clear the saved range so data landing doesn't restore
-          // to the coarse position.
-          if (autoSwitchingRef.current !== null) {
-            autoSwitchingRef.current = null
-            autoRangeRef.current = null
-          }
-          return
+      // Delegate all branching logic to the pure evaluateAutoInterval helper (FIX-G).
+      // It handles: pending-switch expiry (FIX-A), reverse-zoom cancellation (RACE-01),
+      // re-escalation when autoActive (FIX-C), daily/unknown passthrough, hysteresis.
+      const decision = evaluateAutoInterval({
+        visibleBaseBars,
+        viewInterval: currentView,
+        baseInterval: base,
+        autoActive: autoIntervalActiveRef.current ?? false,
+        pendingSince: autoSwitchingRef.current,
+        now: Date.now(),
+      })
+
+      if (decision.action === 'none') {
+        // RACE-01 + FIX-A: if a switch is pending but the helper returned 'none'
+        // (user zoomed back in, or evaluation found no needed switch), cancel the
+        // pending state and clear the saved range so data landing doesn't restore
+        // to the coarse position.
+        if (autoSwitchingRef.current !== null) {
+          autoSwitchingRef.current = null
+          autoRangeRef.current = null
         }
+        return
+      }
 
-        // Capture visible time range before the state update so we can restore it
-        // after the new data lands (B1 / D2).
-        try {
-          const vr = chart.timeScale().getVisibleRange()
-          if (vr) autoRangeRef.current = vr as IRange<Time>
-        } catch {}
-        autoSwitchingRef.current = Date.now()
-        onAutoIntervalRef.current?.(decision.target)
-      }, 150)
+      // Capture visible time range before the state update so we can restore it
+      // after the new data lands (B1 / D2).
+      try {
+        const vr = chart.timeScale().getVisibleRange()
+        if (vr) autoRangeRef.current = vr as IRange<Time>
+      } catch {}
+      autoSwitchingRef.current = Date.now()
+      onAutoIntervalRef.current?.(decision.target)
+    }
+    autoEvalRef.current = () => {
+      try {
+        const lr = chart.timeScale().getVisibleLogicalRange()
+        if (lr) evaluateZoomSpan(lr)
+      } catch { /* chart torn down */ }
     }
     chart.timeScale().subscribeVisibleLogicalRangeChange(syncHandler)
 
@@ -478,6 +509,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       if (widthsRaf !== null) cancelAnimationFrame(widthsRaf)
       if (sessionWriteTimer !== null) window.clearTimeout(sessionWriteTimer)
       if (autoIntervalTimer !== null) window.clearTimeout(autoIntervalTimer)
+      autoEvalRef.current = null
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(syncHandler)
       chart.unsubscribeCrosshairMove(crosshairHandler)
       // Null refs before remove() so any late callback (Results' cleanup,

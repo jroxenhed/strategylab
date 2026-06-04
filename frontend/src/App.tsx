@@ -138,6 +138,8 @@ export default function App() {
    *  manually selected a coarse view. Cleared when user changes interval or
    *  viewInterval is manually reset. */
   const [autoIntervalActive, setAutoIntervalActive] = useState(false)
+  /** User checkbox: enable auto-downsampling at wide zoom. Persisted in settings. */
+  const [autoDownsample, setAutoDownsample] = useState<boolean>(saved?.autoDownsample ?? true)
   const [isAggOpen, setIsAggOpen] = useState(false)
   const intervalRef = useRef(interval)
 
@@ -164,6 +166,17 @@ export default function App() {
     setAutoIntervalActive(iv !== interval)
   }, [interval])
 
+  /** Checkbox toggle for auto-downsampling. Unchecking while an auto-chosen coarse
+   *  view is active restores the base interval immediately (the user asked for
+   *  full resolution back, and Chart's evaluation is gated off from here on). */
+  const handleAutoDownsampleToggle = useCallback((enabled: boolean) => {
+    setAutoDownsample(enabled)
+    if (!enabled && autoIntervalActive) {
+      setViewInterval(interval)
+      setAutoIntervalActive(false)
+    }
+  }, [autoIntervalActive, interval])
+
   // FIX-B (RACE-02): persist viewInterval only when it was set by the user, not by
   // auto-downsampling. On page reload autoIntervalActive is always false (not persisted),
   // so writing the auto-chosen coarse value would leave the user stuck in that interval
@@ -172,8 +185,9 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, datePreset,
       viewInterval: autoIntervalActive ? interval : viewInterval,
+      autoDownsample,
     }))
-  }, [ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, datePreset, viewInterval, autoIntervalActive])
+  }, [ticker, start, end, interval, indicators, showSpy, showQqq, dataSource, extendedHours, datePreset, viewInterval, autoIntervalActive, autoDownsample])
 
   useEffect(() => {
     if (backtestResult && lastRequest) {
@@ -286,6 +300,20 @@ export default function App() {
                   </span>
                 )
               })()}
+              {chartEnabled && viewIntervalOptions.length > 1 && (
+                <label
+                  style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#8b949e', cursor: 'pointer', userSelect: 'none' }}
+                  title="Automatically aggregate to a coarser interval when zoomed out (restores full resolution on zoom-in)"
+                >
+                  <input
+                    type="checkbox"
+                    checked={autoDownsample}
+                    onChange={e => handleAutoDownsampleToggle(e.target.checked)}
+                    style={{ margin: 0 }}
+                  />
+                  Auto
+                </label>
+              )}
               {chartEnabled && viewIntervalOptions.length > 1 && (
                 autoIntervalActive ? (
                   <span
@@ -407,6 +435,7 @@ export default function App() {
                           onChartReady={setMainChart}
                           onAutoInterval={handleAutoInterval}
                           autoIntervalActive={autoIntervalActive}
+                          autoIntervalEnabled={autoDownsample}
                           ticker={ticker}
                           interval={chartInterval}
                           from={start}
