@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * render-probe.mjs — F51 headless render probe + F219 idle-rAF canary
+ * render-probe.mjs — F51 headless render probe + F219 idle-rAF canary + F298 manifest/seed
  *
  * Navigates Chart / Live Trading / Discovery via clicking tab buttons,
  * captures screenshots, asserts DOM anchors, checks for console errors,
@@ -14,6 +14,9 @@
  *
  * Usage:
  *   node bin/render-probe.mjs [--url http://localhost:4173]
+ *   node bin/render-probe.mjs --url http://localhost:4173 --seed seed.json
+ *   node bin/render-probe.mjs --url http://localhost:4173 --manifest manifest.json
+ *   node bin/render-probe.mjs --url http://localhost:4173 --seed seed.json --manifest manifest.json
  *
  * Exit codes:
  *   0  all assertions passed
@@ -21,7 +24,7 @@
  *   2  environment unreachable (servers not running)
  */
 
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +49,14 @@ const BACKEND_URL = 'http://localhost:8000';
 // Parse --url flag
 const urlFlagIdx = process.argv.indexOf('--url');
 const BASE_URL = urlFlagIdx !== -1 ? process.argv[urlFlagIdx + 1] : DEFAULT_URL;
+
+// Parse --seed flag (F298)
+const seedFlagIdx = process.argv.indexOf('--seed');
+const SEED_FILE = seedFlagIdx !== -1 ? process.argv[seedFlagIdx + 1] : null;
+
+// Parse --manifest flag (F298)
+const manifestFlagIdx = process.argv.indexOf('--manifest');
+const MANIFEST_FILE = manifestFlagIdx !== -1 ? process.argv[manifestFlagIdx + 1] : null;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -147,7 +158,328 @@ async function measureCanvasMutations(page, durationMs = 1000) {
   }, durationMs);
 }
 
-// ── Per-view probes ───────────────────────────────────────────────────────────
+// ── F298: Seed loading and application ────────────────────────────────────────
+
+/**
+ * Load and parse the seed JSON file.
+ * Returns null if no seed file was specified.
+ * REL-03: hard-exits (code 2) if --seed was given but the file cannot be read or parsed,
+ * preventing a silent fallback that would run the probe against un-seeded state.
+ */
+async function loadSeed(seedFile) {
+  if (!seedFile) return null;
+  const absPath = path.resolve(process.cwd(), seedFile);
+  try {
+    const raw = await readFile(absPath, 'utf8');
+    const seed = JSON.parse(raw);
+    console.log(`[seed] Loaded: ${absPath}`);
+    if (seed.description) console.log(`[seed] Description: ${seed.description}`);
+    return seed;
+  } catch (err) {
+    console.error(`[seed] ERROR: Cannot load seed file '${seedFile}': ${err.message}`);
+    console.error('[seed] Hard-failing — probe would run against un-seeded state (use --seed only with a valid file).');
+    process.exit(2);
+  }
+}
+
+/**
+ * Apply seed: make backend API calls and inject localStorage.
+ * - Backend calls are made before the browser navigates (no page context needed).
+ * - localStorage injection is done via page.addInitScript so it runs before
+ *   any app code on first page load.
+ *
+ * @param {object|null} seed  Parsed seed JSON (may be null — no-op).
+ * @param {object} page       Playwright Page (used for addInitScript).
+ */
+async function applySeed(seed, page) {
+  if (!seed) return;
+
+  // ── Backend API calls ────────────────────────────────────────────────────────
+  if (Array.isArray(seed.backend) && seed.backend.length > 0) {
+    console.log(`[seed] Running ${seed.backend.length} backend API call(s)…`);
+    let prevResponse = null;  // for {{ prev.id }} substitution
+
+    for (const call of seed.backend) {
+      // Simple {{ prev.id }} / {{ prev.data.id }} template substitution in body
+      let body = call.body ? JSON.parse(
+        JSON.stringify(call.body).replace(
+          /\{\{\s*prev\.data\.id\s*\}\}/g,
+          () => prevResponse?.data?.id ?? prevResponse?.id ?? ''
+        ).replace(
+          /\{\{\s*prev\.id\s*\}\}/g,
+          () => prevResponse?.id ?? ''
+        )
+      ) : undefined;
+
+      const url = `${BACKEND_URL}${call.path}`;
+      const method = (call.method || 'GET').toUpperCase();
+      // REL-04: bail_on_error (default false for backward compat) — if true, a failed
+      // call hard-fails the probe rather than continuing with empty prevResponse.
+      const bailOnError = call.bail_on_error === true;
+      try {
+        const resp = await fetch(url, {
+          method,
+          headers: body ? { 'Content-Type': 'application/json' } : undefined,
+          body: body ? JSON.stringify(body) : undefined,
+          signal: AbortSignal.timeout(10000),
+        });
+        const status = resp.status;
+        const ok = call.expect ? status === call.expect : resp.ok;
+        console.log(`[seed]   ${method} ${call.path} → ${status} ${ok ? 'OK' : 'UNEXPECTED'}`);
+        if (!ok && bailOnError) {
+          console.error(`[seed] FAIL: ${method} ${call.path} returned ${status} and bail_on_error is true.`);
+          console.error('[seed] Aborting seed — subsequent calls would use empty prevResponse, producing inconsistent state.');
+          process.exit(1);
+        }
+        if (resp.headers.get('content-type')?.includes('application/json')) {
+          try { prevResponse = await resp.json(); } catch { prevResponse = null; }
+        } else {
+          prevResponse = null;
+        }
+      } catch (err) {
+        console.log(`[seed]   ${method} ${call.path} → ERROR: ${err.message}${bailOnError ? ' (bail_on_error=true, aborting)' : ' (continuing)'}`);
+        if (bailOnError) {
+          console.error('[seed] Aborting seed — network/timeout failure with bail_on_error=true.');
+          process.exit(1);
+        }
+        prevResponse = null;
+      }
+    }
+  }
+
+  // ── localStorage injection via addInitScript ─────────────────────────────────
+  if (Array.isArray(seed.localStorage) && seed.localStorage.length > 0) {
+    console.log(`[seed] Injecting ${seed.localStorage.length} localStorage key(s)…`);
+    const items = seed.localStorage;
+    await page.addInitScript((lsItems) => {
+      lsItems.forEach(({ key, value }) => {
+        localStorage.setItem(key, value);
+      });
+    }, items);
+    for (const { key } of items) {
+      console.log(`[seed]   localStorage.${key} set`);
+    }
+  }
+}
+
+// ── F298: Manifest loading and assertion execution ────────────────────────────
+
+/**
+ * Load and parse the manifest JSON file.
+ * Returns null if no manifest file was specified.
+ * REL-03: hard-exits (code 2) if --manifest was given but the file cannot be read or parsed,
+ * preventing a misleading PASS from the legacy hardcoded probe path running instead.
+ */
+async function loadManifest(manifestFile) {
+  if (!manifestFile) return null;
+  const absPath = path.resolve(process.cwd(), manifestFile);
+  try {
+    const raw = await readFile(absPath, 'utf8');
+    const manifest = JSON.parse(raw);
+    console.log(`[manifest] Loaded: ${absPath}`);
+    if (manifest.description) console.log(`[manifest] Description: ${manifest.description}`);
+    return manifest;
+  } catch (err) {
+    console.error(`[manifest] ERROR: Cannot load manifest file '${manifestFile}': ${err.message}`);
+    console.error('[manifest] Hard-failing — would fall through to legacy probes, producing a misleading PASS.');
+    process.exit(2);
+  }
+}
+
+/**
+ * Execute a trigger action on the page (click, input, navigate).
+ */
+async function executeTrigger(trigger, page) {
+  if (!trigger) return;
+  const { type, selector, value } = trigger;
+  try {
+    if (type === 'click') {
+      await page.locator(selector).first().click({ timeout: 5000 });
+      console.log(`  [trigger] click: ${selector}`);
+    } else if (type === 'input') {
+      await page.locator(selector).first().fill(value ?? '', { timeout: 5000 });
+      console.log(`  [trigger] input: ${selector} = ${value}`);
+    } else if (type === 'navigate') {
+      // Navigate to a tab by clicking a button matching the value
+      const tabBtn = page.getByRole('button', { name: new RegExp(value, 'i') });
+      await tabBtn.first().click({ timeout: 5000 });
+      console.log(`  [trigger] navigate: ${value}`);
+    } else {
+      console.log(`  [trigger] unknown type: ${type} (skipped)`);
+    }
+  } catch (err) {
+    console.log(`  [trigger] ERROR: ${err.message} (continuing)`);
+  }
+}
+
+/**
+ * Evaluate a single assertion against the page and record result.
+ *
+ * Assertion types:
+ *   selector  — page.locator + operator (visible|hidden|count)
+ *   console   — check accumulated console messages
+ *   eval      — page.evaluate(expression) == expected
+ *   canvas-mutation — measureCanvasMutations()
+ *   raf-idle  — measureRAFCalls()
+ */
+async function evaluateAssertion(assertion, page, consoleErrors, viewName) {
+  const desc = assertion.description || assertion.type;
+  try {
+    switch (assertion.type) {
+      case 'selector': {
+        const loc = page.locator(assertion.selector);
+        const op = assertion.operator || 'visible';
+        const timeout = assertion.timeout || 5000;
+        if (op === 'visible') {
+          try {
+            await loc.first().waitFor({ state: 'visible', timeout });
+            record(viewName, desc, true);
+          } catch {
+            record(viewName, desc, false, 'element not visible within timeout');
+          }
+        } else if (op === 'hidden') {
+          try {
+            await loc.first().waitFor({ state: 'hidden', timeout });
+            record(viewName, desc, true);
+          } catch {
+            record(viewName, desc, false, 'element still visible');
+          }
+        } else if (op === 'count') {
+          const count = await loc.count();
+          const pass = count === assertion.expected;
+          record(viewName, desc, pass, `got ${count}, expected ${assertion.expected}`);
+        } else {
+          record(viewName, desc, false, `unknown operator: ${op}`);
+        }
+        break;
+      }
+
+      case 'console': {
+        // REL-05: only 'error' level is captured. 'warn' is not yet supported —
+        // reject it with a clear FAIL rather than silently checking the error array.
+        const level = assertion.level || 'error';
+        if (level !== 'error') {
+          record(viewName, desc, false,
+            `console level '${level}' not yet supported (only 'error' is tracked); assertion is a no-op`);
+          break;
+        }
+        const op = assertion.operator || 'count';
+        if (op === 'count') {
+          const count = consoleErrors.length;
+          const pass = count === assertion.expected;
+          record(viewName, desc, pass,
+            pass ? '' : `got ${count} ${level}(s): ${consoleErrors.slice(0, 2).join(' | ')}`);
+        } else if (op === 'includes') {
+          const found = consoleErrors.some(m => m.includes(assertion.expected));
+          record(viewName, desc, found, found ? '' : `"${assertion.expected}" not found in console`);
+        } else {
+          record(viewName, desc, false, `unknown console operator: ${op}`);
+        }
+        break;
+      }
+
+      case 'eval': {
+        let result;
+        try {
+          result = await page.evaluate(assertion.expression);
+        } catch (err) {
+          record(viewName, desc, false, `eval error: ${err.message}`);
+          break;
+        }
+        const pass = result === assertion.expected;
+        record(viewName, desc, pass, pass ? '' : `got ${JSON.stringify(result)}, expected ${JSON.stringify(assertion.expected)}`);
+        break;
+      }
+
+      case 'canvas-mutation': {
+        const duration = assertion.durationMs || 1000;
+        const mut = await measureCanvasMutations(page, duration);
+        if (!mut.found) {
+          record(viewName, desc, false, 'canvas not found for MutationObserver');
+          break;
+        }
+        const op = assertion.operator || 'count';
+        if (op === 'count') {
+          const pass = mut.count === assertion.expected;
+          record(viewName, desc, pass, `got ${mut.count}, expected ${assertion.expected}`);
+        } else if (op === 'max') {
+          const pass = mut.count <= assertion.expected;
+          record(viewName, desc, pass, `got ${mut.count}, max ${assertion.expected}`);
+        } else {
+          record(viewName, desc, false, `unknown canvas-mutation operator: ${op}`);
+        }
+        break;
+      }
+
+      case 'raf-idle': {
+        const duration = assertion.durationMs || 500;
+        const threshold = assertion.threshold ?? 5;
+        const rafCalls = await measureRAFCalls(page, duration);
+        const pass = rafCalls < threshold;
+        record(viewName, desc, pass, `got ${rafCalls} rAF calls in ${duration}ms, threshold <${threshold}`);
+        break;
+      }
+
+      default:
+        record(viewName, desc, false, `unknown assertion type: ${assertion.type}`);
+    }
+  } catch (err) {
+    record(viewName, desc, false, `assertion error: ${err.message}`);
+  }
+}
+
+/**
+ * Run all views in the manifest against the live page.
+ * Replaces the hardcoded probeChart/probeTrading/probeDiscovery flow.
+ */
+async function runManifestProbe(manifest, page, consoleErrors) {
+  if (!manifest || !Array.isArray(manifest.views)) {
+    console.error('[manifest] No views defined; skipping manifest probe.');
+    return;
+  }
+
+  for (const view of manifest.views) {
+    const viewName = view.name || 'Unknown';
+    console.log(`\n  [manifest] View: ${viewName}`);
+
+    // COR-01: snapshot the console-error count at view start so console
+    // assertions see only THIS view's errors (same errsBefore pattern as
+    // the legacy probes) — not errors accumulated by earlier views.
+    const viewErrsBefore = consoleErrors.length;
+
+    // Execute trigger (navigate/click to reach this view)
+    if (view.trigger) {
+      await executeTrigger(view.trigger, page);
+    }
+
+    // Settle wait
+    const settleMs = view.before?.settleMs ?? 500;
+    if (settleMs > 0) {
+      console.log(`  [manifest] Settling ${settleMs}ms…`);
+      await page.waitForTimeout(settleMs);
+    }
+
+    // Run assertions
+    if (Array.isArray(view.assertions)) {
+      const viewErrors = consoleErrors.slice(viewErrsBefore);
+      for (const assertion of view.assertions) {
+        await evaluateAssertion(assertion, page, viewErrors, viewName);
+      }
+    }
+
+    // Screenshot
+    const screenshotName = view.screenshot || `${viewName.toLowerCase().replace(/\s+/g, '-')}.png`;
+    const screenshotPath = path.join(SCREENSHOT_DIR, screenshotName);
+    try {
+      await page.screenshot({ path: screenshotPath, fullPage: false });
+      console.log(`  [manifest] screenshot → .run/render-probe/${screenshotName}`);
+    } catch (err) {
+      console.log(`  [manifest] screenshot failed: ${err.message}`);
+    }
+  }
+}
+
+// ── Per-view probes (legacy / hardcoded mode) ─────────────────────────────────
 
 async function probeChart(page, errors) {
   const view = 'Chart';
@@ -251,6 +583,10 @@ async function main() {
   // Ensure screenshot output directory exists
   await mkdir(SCREENSHOT_DIR, { recursive: true });
 
+  // ── F298: Load seed + manifest early (file errors surfaced before browser launch) ──
+  const seed = await loadSeed(SEED_FILE);
+  const manifest = await loadManifest(MANIFEST_FILE);
+
   // ── 1. Reachability check ─────────────────────────────────────────────────
   console.log(`Checking frontend: ${BASE_URL}`);
   const feOk = await checkReachable(BASE_URL);
@@ -304,14 +640,14 @@ async function main() {
 
   // R-09: browser.close() is guaranteed via finally on every path after launch succeeds.
   try {
-    await Promise.race([timeoutPromise, runProbe(browser)]);
+    await Promise.race([timeoutPromise, runProbe(browser, seed, manifest)]);
   } finally {
     await browser.close();
   }
 }
 
 /** Core probe sequence, separated so the outer finally always closes the browser. */
-async function runProbe(browser) {
+async function runProbe(browser, seed, manifest) {
   const context = await browser.newContext({
     viewport: { width: 1440, height: 900 },
   });
@@ -319,6 +655,10 @@ async function runProbe(browser) {
 
   // F219: install the rAF counting hook before any app code loads
   await page.addInitScript(rafHookInitScript);
+
+  // ── F298: Apply seed (backend API calls + localStorage injection) ──────────
+  // applySeed uses page.addInitScript for localStorage — must be called before goto()
+  await applySeed(seed, page);
 
   // ── 3. Collect console errors globally ───────────────────────────────────
   const consoleErrors = [];
@@ -336,29 +676,37 @@ async function runProbe(browser) {
   // Wait for the React tree to hydrate and initial API calls to settle
   await page.waitForTimeout(2000);
 
-  // ── 5. Chart view (default on load) ──────────────────────────────────
-  const errsBefore = consoleErrors.length;
-  await probeChart(page, consoleErrors);
+  // ── F298: Manifest mode — run dynamic assertions from manifest ────────────
+  if (manifest) {
+    console.log('\n[manifest] Running manifest-driven probe…');
+    await runManifestProbe(manifest, page, consoleErrors);
+  } else {
+    // ── Legacy hardcoded probe mode ─────────────────────────────────────────
 
-  // ── 6. Live Trading view ──────────────────────────────────────────────
-  const tradingErrsBefore = consoleErrors.length;
-  await probeTrading(page, tradingErrsBefore);
-  // Patch the placeholder Trading error-check result with real data
-  const tradingIdx = results.findLastIndex(r => r.view === 'Trading' && r.check === 'no new console errors');
-  const tradingErrs = consoleErrors.slice(tradingErrsBefore);
-  if (tradingIdx !== -1) {
-    results[tradingIdx].pass = tradingErrs.length === 0;
-    results[tradingIdx].detail = tradingErrs.length > 0
-      ? tradingErrs.slice(0, 2).join(' | ')
-      : '';
+    // ── 5. Chart view (default on load) ──────────────────────────────────
+    const errsBefore = consoleErrors.length;
+    await probeChart(page, consoleErrors);
+
+    // ── 6. Live Trading view ──────────────────────────────────────────────
+    const tradingErrsBefore = consoleErrors.length;
+    await probeTrading(page, tradingErrsBefore);
+    // Patch the placeholder Trading error-check result with real data
+    const tradingIdx = results.findLastIndex(r => r.view === 'Trading' && r.check === 'no new console errors');
+    const tradingErrs = consoleErrors.slice(tradingErrsBefore);
+    if (tradingIdx !== -1) {
+      results[tradingIdx].pass = tradingErrs.length === 0;
+      results[tradingIdx].detail = tradingErrs.length > 0
+        ? tradingErrs.slice(0, 2).join(' | ')
+        : '';
+    }
+
+    // ── 7. Discovery view ─────────────────────────────────────────────────
+    const discoveryErrsBefore = consoleErrors.length;
+    await probeDiscovery(page);
+    const discoveryErrs = consoleErrors.slice(discoveryErrsBefore);
+    record('Discovery', 'no new console errors', discoveryErrs.length === 0,
+      discoveryErrs.length > 0 ? discoveryErrs.slice(0, 2).join(' | ') : '');
   }
-
-  // ── 7. Discovery view ─────────────────────────────────────────────────
-  const discoveryErrsBefore = consoleErrors.length;
-  await probeDiscovery(page);
-  const discoveryErrs = consoleErrors.slice(discoveryErrsBefore);
-  record('Discovery', 'no new console errors', discoveryErrs.length === 0,
-    discoveryErrs.length > 0 ? discoveryErrs.slice(0, 2).join(' | ') : '');
 
   // ── 8. Print summary table ────────────────────────────────────────────────
   printTable();

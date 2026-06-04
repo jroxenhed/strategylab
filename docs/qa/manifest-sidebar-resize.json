@@ -1,0 +1,106 @@
+{
+  "description": "F249c sidebar collapse verification \u2014 chart width, canvas, rAF idle",
+  "views": [
+    {
+      "name": "Chart",
+      "before": {
+        "settleMs": 1500
+      },
+      "assertions": [
+        {
+          "type": "selector",
+          "selector": "canvas",
+          "operator": "visible",
+          "timeout": 8000,
+          "description": "Canvas renders"
+        },
+        {
+          "type": "console",
+          "level": "error",
+          "operator": "count",
+          "expected": 0,
+          "description": "No console errors"
+        },
+        {
+          "type": "eval",
+          "expression": "[...document.querySelectorAll('.tv-lightweight-charts')].filter(e=>e.offsetParent!==null).length === 3",
+          "expected": true,
+          "description": "Three visible chart roots (main + MACD + RSI; hidden tabs stay mounted per F152)"
+        },
+        {
+          "type": "eval",
+          "expression": "(window.__sbW1 = document.querySelector('.panel-fill').offsetWidth) >= 800",
+          "expected": true,
+          "description": "Chart panel width >= 800px (sidebar expanded; captures baseline)"
+        }
+      ],
+      "screenshot": "chart-expanded.png"
+    },
+    {
+      "name": "Chart Panel Collapsed",
+      "trigger": {
+        "type": "click",
+        "selector": "button[aria-label='Collapse chart panel']"
+      },
+      "before": {
+        "settleMs": 800
+      },
+      "assertions": [
+        {
+          "type": "eval",
+          "expression": "[...document.querySelectorAll('.tv-lightweight-charts')].filter(e=>e.offsetParent!==null).length === 0",
+          "expected": true,
+          "description": "All chart roots hidden after panel collapse"
+        },
+        {
+          "type": "console",
+          "operator": "count",
+          "expected": 0,
+          "level": "error",
+          "description": "No new console errors after collapse"
+        }
+      ],
+      "screenshot": "chart-panel-collapsed.png"
+    },
+    {
+      "name": "Chart Panel Re-expanded",
+      "trigger": {
+        "type": "click",
+        "selector": "button[aria-label='Expand chart panel']"
+      },
+      "before": {
+        "settleMs": 1200
+      },
+      "assertions": [
+        {
+          "type": "eval",
+          "expression": "[...document.querySelectorAll('.tv-lightweight-charts')].filter(e=>e.offsetParent!==null).length === 3",
+          "expected": true,
+          "description": "Three visible chart roots restored after expand"
+        },
+        {
+          "type": "canvas-mutation",
+          "operator": "max",
+          "expected": 0,
+          "durationMs": 500,
+          "description": "No canvas mutations during idle (post-expand, F219-class)"
+        },
+        {
+          "type": "raf-idle",
+          "operator": "lt",
+          "expected": 5,
+          "durationMs": 500,
+          "description": "Idle rAF < 5 in 500ms (no F218 repaint loop after remount)"
+        },
+        {
+          "type": "console",
+          "operator": "count",
+          "expected": 0,
+          "level": "error",
+          "description": "No new console errors after expand"
+        }
+      ],
+      "screenshot": "chart-panel-reexpanded.png"
+    }
+  ]
+}
