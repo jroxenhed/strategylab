@@ -123,22 +123,30 @@ print('Import-time check passed.')
 
 If any step fails, investigate before proceeding to review. AST + import-time covers ~80% of "compiles clean but throws on first request" bugs that `tsc --noEmit`-equivalent static checks would miss; helper-logic covers the validator-wiring regressions that builds 22 + 23 surfaced.
 
-### 3.5b. Frontend preview-server smoke test (if frontend was built)
+### 3.5b. Frontend verification gate (if frontend was built)
 
-Run this after a successful `npm run build`. It starts the Vite preview server (port 4173, separate from the dev server's 5173), fetches the root page, and asserts that the bundle is wired correctly — `<div id="root">` present, a bundled `<script src="*.js">` present, and no crash/error body markers. The server is killed on exit (trap covers the vite child process, not just the npm wrapper).
+**Canonical call — one command replaces build + preview + probe + backend smoke:**
 
 ```bash
-bash bin/preview-smoke.sh
+bin/verify-batch.sh <task-id>
 ```
 
-The script (`bin/preview-smoke.sh`) exits non-zero on any failure. Failures to watch for:
+`verify-batch.sh` (F292) runs the following gates in order and writes a PASS/FAIL table to `.run/<task-id>/verify.md`:
 
-- **Port never ready** — Vite build output is missing or the `dist/` directory was not produced. Re-run `npm run build` and check for TypeScript errors.
-- **Missing `#root` marker** — the HTML skeleton is absent, which means the bundler produced an empty or wrong entry point.
-- **No bundled script tag** — Vite didn't emit the hashed JS bundle into `index.html`; usually a Rollup output config issue.
-- **Error marker in body** — a server-side render error or a Vite 500 response leaked into the HTML.
+1. **Frontend build** — `npm run build` in `frontend/`
+2. **Preview server** — starts Vite preview on `:4173` (or reuses if already up)
+3. **Render probe** — `node bin/render-probe.mjs --url http://localhost:4173`
+4. **Backend smoke** — AST + import-time check on changed `.py` files (same check as §3.5 Step 1; included here because the routine container lacks a venv — F97)
 
-Skip this step only when: (a) no frontend files changed in this run, or (b) `npm run build` itself already failed (don't mask the build failure with a preview-server hang). Note "preview smoke skipped — <reason>" in the JOURNAL entry.
+Exit 0 = all gates pass; exit 1 = fail the build, investigate before proceeding to review. Artifacts (screenshots + `verify.md`) live under `.run/<task-id>/` which is gitignored; reference them in PR/journal text by path only — do not commit them.
+
+**Render probe** (`bin/render-probe.mjs`): navigates Chart, Live Trading, and Discovery tabs via Playwright/Chrome, captures screenshots to `.run/render-probe/` (`chart.png`, `trading.png`, `discovery.png`), asserts DOM anchors, and checks for console errors. Also runs an idle rAF canary + canvas MutationObserver on the Chart view to gate against the 60 Hz repaint loop regression (F218). Accepts `--url <base>` (defaults to `:5173`; verify-batch.sh passes `:4173`).
+
+**Dev-mode warning policy:** the probe gates against the PREVIEW build (`:4173`) as the hard gate — that is the source of truth. A dev-mode probe run (`:5173`) is optional diagnostic only. Zero console errors are expected in both modes — there is no allowlist. F289 fixed the only known dev-mode warning (autoSaveId/onLayout unknown-prop). If a new dev-only warning surfaces, file it as a TODO item rather than adding it to an allowlist.
+
+**Fallback (if `bin/verify-batch.sh` is missing):** run the individual steps from §3 (build) + §3.5 (AST/import smoke) + the preview-smoke sequence below manually. The original `bin/preview-smoke.sh` script starts the Vite preview server (port 4173), fetches the root page, and asserts `<div id="root">`, a bundled `<script src="*.js">`, and no error-body markers. Run `bash bin/preview-smoke.sh` then `node bin/render-probe.mjs --url http://localhost:4173` as separate steps.
+
+Skip this section only when: (a) no frontend files changed in this run, or (b) `npm run build` itself already failed (don't mask the build failure with a preview-server hang). Note "verification skipped — <reason>" in the JOURNAL entry.
 
 ### 4. Multi-Agent Review (severity-graded — match review depth to actual risk)
 
@@ -148,7 +156,7 @@ Single-pass self-review consistently misses P1s on architectural changes — tha
 
 | Tier | When | Personas |
 |---|---|---|
-| **A** | Bundle of `[easy]` items, total diff <100 lines, no contract surface | None. Orchestrator verifies via §3.5 smoke test + AST + full test suite + per-agent spot-check. Skip directly to §5 commit. |
+| **A** | Bundle of `[easy]` items, total diff <100 lines, no contract surface | None. Orchestrator verifies via §3.5b verification gate (`verify-batch.sh`) + full test suite + per-agent spot-check. Skip directly to §5 commit. |
 | **B** | `[medium]` items OR aggregate 100-300 lines OR >5 files touched | 2 max: `correctness` always + conditional file-type reviewer (`kieran-python` for `.py`, `kieran-typescript` for `.ts/.tsx`). |
 | **C** | `[hard]` / architectural / contract changes / aggregate >300 lines | 4-6 panel: the 4 always-on personas (correctness, testing, adversarial, security) + conditionals per file mix (kieran-*, reliability, project-standards, maintainability). |
 
@@ -232,7 +240,7 @@ Each agent gets:
 
 **Fix loop:**
 1. Apply all `safe_auto` findings. Per CLAUDE.md's subagent rule: dispatch a single fixer agent only when fixes need holistic decisions (extract shared helper, multi-file refactor, harmonize API contracts). When fixes are mechanical (rename, regex tighten, single-line guard) AND match the reviewer's `suggested_fix` text verbatim, apply directly — fixer-agent round-trip is overhead without benefit.
-2. Re-run `npm run build` if frontend changed; re-run AST + import-time check (§3.5 step 1) if backend changed.
+2. Re-run `bin/verify-batch.sh <task-id>` (§3.5b) after applying fixes — covers build, probe, and backend smoke in one call.
 3. **Round 2 skip license.** Skip the re-review round IF all three hold: (a) every applied finding was `autofix_class: safe_auto`, (b) every fix matched the reviewer's `suggested_fix` text verbatim, and (c) no P0/P1 was raised. Otherwise re-dispatch correctness + the originally-flagging persona on the changed lines.
 4. If new findings, fix again. Max 2 rounds total.
 5. If P0 or P1 remain after 2 rounds: do NOT push to main. Branch and flag in NEXT_RUN.md for human review.
@@ -317,7 +325,7 @@ You cannot visually verify UI changes — that is the human's job during morning
    - [ ] Setup step 2 ran: `bash bin/install-hooks.sh` activated hooks at start of session
    - [ ] All three pre-flight checks ran (no open builder PR, up-to-date main, TODO freshness)
    - [ ] §3 build verify (`npm run build`) ran before commit
-   - [ ] §3.5 backend smoke test ran (or substituted with documented reason)
+   - [ ] §3.5b verification gate ran: `bin/verify-batch.sh <task-id>` (or individual fallback steps with documented reason)
    - [ ] §4 multi-agent review ran with the F80 roster (4 always-on + conditionals, target 4-6 total)
    - [ ] §4.5 explicit `python3 bin/sync-todo-index.py` ran before staging
    - [ ] §5 step 2.2: every new F-item has a bucket tag (`[arch]` / `[hardening]` / `[polish]` / `[testing]` / `[infra]`) — pre-commit hook gates this
