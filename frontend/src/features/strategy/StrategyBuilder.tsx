@@ -127,6 +127,10 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
   const [showSaveAs, setShowSaveAs] = useState(false)
   const [saveAsName, setSaveAsName] = useState('')
   const [renamingStrategy, setRenamingStrategy] = useState<string | null>(null)
+  // F210: restore keyboard focus to the Rename button when a rename is cancelled —
+  // otherwise document.activeElement falls back to <body> (browser-verified regression).
+  const renameBtnRef = useRef<HTMLButtonElement>(null)
+  const cancelRename = () => { setRenamingStrategy(null); setRenameError(null); renameBtnRef.current?.focus() }
   const [renameValue, setRenameValue] = useState('')
   const [pendingDelete, setPendingDelete] = useState<{ name: string; snapshot: SavedStrategy[] } | null>(null)
   const pendingDeleteTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -1032,6 +1036,7 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
           {activeStrategyName && (
             <>
               <button
+                ref={renameBtnRef}
                 onClick={() => { setRenamingStrategy(activeStrategyName); setRenameValue(activeStrategyName) }}
                 style={styles.strategyBtn}
               >Rename</button>
@@ -1063,12 +1068,12 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
                 autoFocus
                 value={renameValue}
                 onChange={e => { setRenameValue(e.target.value); setRenameError(null) }}
-                onKeyDown={e => { if (e.key === 'Enter') renameStrategy(renamingStrategy, renameValue); if (e.key === 'Escape') { setRenamingStrategy(null); setRenameError(null) } }}
+                onKeyDown={e => { if (e.key === 'Enter') renameStrategy(renamingStrategy, renameValue); if (e.key === 'Escape') cancelRename() }}
                 placeholder="New name"
                 style={{ ...styles.saveAsInput, ...(renameError ? { borderColor: 'var(--accent-red)' } : {}) }}
               />
               <button onClick={() => renameStrategy(renamingStrategy, renameValue)} style={styles.strategyBtn}>OK</button>
-              <button onClick={() => { setRenamingStrategy(null); setRenameError(null) }} style={styles.strategyBtn}>Cancel</button>
+              <button onClick={cancelRename} style={styles.strategyBtn}>Cancel</button>
               {renameError && <span style={{ color: 'var(--accent-red)', fontSize: 11 }}>{renameError}</span>}
             </div>
           )}
