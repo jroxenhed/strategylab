@@ -11,7 +11,7 @@ import {
 import type { IChartApi, ISeriesApi } from 'lightweight-charts'
 import type { OHLCVBar, IndicatorInstance, EMAOverlay, Trade, RuleSignal } from '../../shared/types'
 import { INDICATOR_DEFS } from '../../shared/types/indicators'
-import { Group, Panel, Separator } from 'react-resizable-panels'
+import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels'
 import SubPane from './SubPane'
 import type { PaneRegistry } from './SubPane'
 import { toLineData, aggregateMarkers, snapTimestamp } from './chartUtils'
@@ -751,7 +751,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   }, [maximizedPane, subPaneCount, panelMinSizes])
 
   // After any panel resize, trigger syncWidths for price scale alignment.
-  // Debounced: syncWidths adjusts minimumWidth which can re-trigger onLayout,
+  // Debounced: syncWidths adjusts minimumWidth which can re-trigger onLayoutChange,
   // causing an infinite oscillation loop (two widths alternating each frame).
   const layoutRafRef = useRef<number | null>(null)
   const handleLayout = useCallback(() => {
@@ -761,6 +761,14 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       syncWidthsRef.current()
     })
   }, [])
+
+  // Persist pane sizes across page reloads via the v4 useDefaultLayout hook.
+  // groupId is keyed by subPaneCount because the Group remounts (key prop) when
+  // panel count changes — a new key means a new mount, so a new storage slot is correct.
+  const { defaultLayout: savedLayout, onLayoutChanged: saveLayout } = useDefaultLayout({
+    id: `chart-pane-sizes-${subPaneCount}`,
+    storage: localStorage,
+  })
 
   // The Group needs a key tied to subPaneCount so react-resizable-panels
   // resets its internal layout when panel count changes (defaultSize only
@@ -773,8 +781,9 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         key={`chart-panes-${subPaneCount}`}
         {...{ ref: groupRef } as any}
         orientation="vertical"
-        autoSaveId={subPaneCount > 0 ? `chart-pane-sizes-${subPaneCount}` : undefined}
-        onLayout={handleLayout}
+        defaultLayout={savedLayout}
+        onLayoutChange={handleLayout}
+        onLayoutChanged={saveLayout}
         style={{ height: '100%' }}
       >
         {/* Main chart panel — always present */}
