@@ -1,6 +1,6 @@
 # StrategyLab TODO
 
-\*\*299 / 305 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
+\*\*299 / 306 shipped.\*\* Themed roadmap. Items indexed **Section Letter + Number** (e.g. B3) for reference. Checked = done; journal has shipping details.
 
 ---
 
@@ -12,7 +12,7 @@ _(none open)_
 
 _(none tagged)_
 
-## Open Work — 29 items
+## Open Work — 30 items
 
 | Section | Topic | Open | IDs |
 |---|---|---|---|
@@ -24,7 +24,7 @@ _(none tagged)_
 | [F · Architecture](#f-architecture) | Refactors, abstractions, module shape | 12 | [F2](#f2)–[F3](#f3), [F7](#f7)–[F8](#f8), [F10](#f10), [F25](#f25), [F63](#f63), [F170](#f170), [F188](#f188), [F199](#f199), [F205](#f205), [F272](#f272) |
 | [F · Hardening](#f-hardening) | Security, reliability, validation | 1 | [F211](#f211) |
 | [F · Polish](#f-polish) | UI, naming, dead code | 1 | [F299](#f299) |
-| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 5 | [F97](#f97), [F161](#f161), [F280](#f280), [F300](#f300)–[F301](#f301) |
+| [F · Testing and Infra](#f-testing-and-infra) | Test gaps, smoke tests, build pipeline | 6 | [F97](#f97), [F161](#f161), [F280](#f280), [F300](#f300)–[F302](#f302) |
 
 ## A — Charts & Indicators
 
@@ -275,3 +275,4 @@ Own multi-session research project. Needs its own design work before implementat
 - [x] <a id="f298"></a> **F298** Recipe→script promotion for browser QA — once a browser verification recipe has been invented and passed (selectors, seeds, assertions known), promote it to a replayable script instead of ever re-driving it with an agent: extend `bin/render-probe.mjs` (or new `bin/behavior-probe.mjs`) with (a) a `--seed` mode that populates app state via backend API + localStorage injection before assertions, (b) a per-view assertion manifest (JSON: selector/eval-expression/expected) so F249c-class resize checks and F289-class console checks replay at script cost (~zero agent context). Browser agents then only ever do *first-of-its-kind* verification. Rationale: F-BATCH-0604B's 4-flow browser dispatch burned 223 tool calls/29 min, ~90% on re-drivable setup; cross-validated by user against Gemini/Antigravity hitting the same wall. [medium] [infra] (resolved 2026-06-04 — render-probe --seed + --manifest, additive, legacy byte-identical; hard exit 2 on bad seed/manifest, per-view console scoping (COR-01); first manifest = chart render + panel collapse/expand round-trip, 10/10 PASS at script cost)
 - [ ] <a id="f300"></a> **F300** Manifest-mode per-view budget in render-probe.mjs — a many-view manifest or long settleMs/canvas-mutation durations can blow the 120s node deadline, which fires 15s before verify-batch's 135s bash watchdog (zombie window); add per-view timeout + make the two deadlines explicitly coupled. (from F-BATCH-0604C review REL-06) [medium] [infra]
 - [ ] <a id="f301"></a> **F301** executeTrigger drag support in render-probe.mjs — manifest triggers are click/input/navigate only, so drag-based panel-resize checks (the original F249c resize-delta) aren't replayable; F-BATCH-0604C had to substitute a collapse/expand round-trip. Add a `drag` trigger (mouse down/move/up between two selectors/offsets). (from F-BATCH-0604C manifest authoring) [medium] [infra]
+- [ ] <a id="f302"></a> **F302** Per-reviewer effort cap in dispatch prompts — F-BATCH-0604C's correctness reviewer ran 5m47s / 60k tokens / 55 tool-uses vs siblings' ~2m / ~13-29, and with no agent-messaging tool the orchestrator could only poll (~15 min of wall-clock went to waits). Add a standard cap clause to review dispatch prompts (e.g. "≤25 tool calls / ~3 min; if hit, return partial findings + status token") and record cap-hits in run-state so chronic offenders surface in the report. [easy] [infra]
