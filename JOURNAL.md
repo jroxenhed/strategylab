@@ -6,6 +6,16 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-06-04
 
+### Interactive batch (F-BATCH-0604D) — 5 items, 3 lanes, full orchestrator cycle
+
+- **[F304](TODO-archive.md#f304)** close-batch `## New` gated routing — `GATED_TAG_RE` routes `[gated: …]` manifest items to `## Deferred (gated)` instead of their bucket section; fixer added pre-flight section-existence validation in `validate_manifest` (DI P1) so a missing target section fails before the apply loop, not mid-apply.
+- **[F303](TODO-archive.md#f303)** Tracking-toolchain self-test — `backend/tests/test_tooling.py`, 22 fixture-based tests (tmp-path only, zero real-file risk — confirmed by data-integrity reviewer) running sync-todo-index + close-batch (Close/New/gated/dissolved-section P0 path) + archive-todo end-to-end with structure invariants + idempotency.
+- **[F299](TODO-archive.md#f299)** rAF handles in F297 cancel handlers — `rafHandleRef` (BotCard) / `stopCloseRafRef` (BotControlCenter) + `cancelAnimationFrame` unmount effects.
+- **[F300](TODO-archive.md#f300)** render-probe per-view budget — `PER_VIEW_TIMEOUT_MS` (default 20s, `--per-view-timeout`) Promise.race per manifest view; fixer hardened the timeout path to close+recreate the page so stale CDP ops can't interleave with the next view (COR P1, the batch's best catch); deadline-coupling comments at both the node 120s and bash 135s watchdog sites.
+- **[F301](TODO-archive.md#f301)** render-probe `drag` trigger — from/to selectors, per-axis offset defaults (NaN guard from review), boundingBox null guard, 5-step mouse move; unblocks replaying the original F249c resize-delta check (filed as F306).
+- **Scope extension (from plan):** COR-06 — `sync-todo-index.py` excludes `Deferred (gated)` from the Open Work count/table (gated items aren't actionable); regex tightened to exact `Deferred \(gated\)$` after 3/3 reviewers flagged the loose prefix.
+- **Review (Tier B pooled, 3 personas + F302 effort caps):** 16 findings — 3 P1 all fixed, 0 P0; one holistic fixer pass, 22/22 tests, all gates PASS twice (pre-fix + final). Deferred → F305 (sync atomic write), F306 (drag-based F249c manifest check), F307 (count-test heuristic).
+
 ### TODO.md redesign (TODO-REDESIGN) — research → plan → migration, one orchestrated cycle
 
 - **Research (3 agents):** 87.2% of TODO.md's 140KB was checked-item residue; F### confirmed as a *section* problem, not an ID problem (category-in-ID is a documented anti-pattern — GitHub/Beads both rejected it); prior art unanimous that active/done must physically split at this scale. Tooling map: 32 coupling points, JOURNAL anchors + git-log archaeology pin the ID scheme immutable.
