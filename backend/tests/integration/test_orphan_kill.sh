@@ -24,7 +24,14 @@ set -euo pipefail
 BACKEND_PORT=8765
 READY_TIMEOUT=20      # seconds to wait for uvicorn to answer
 WORKER_WAIT=30        # seconds to wait for spawn workers to appear
-GRACE_AFTER_KILL=3    # seconds to let the OS reap children
+BOOTSTRAP_SETTLE=5    # seconds to wait AFTER workers appear for Python import bootstrap to complete
+                      # Workers appear in pgrep as soon as the OS creates the process, before
+                      # _init_worker runs. The F288 watchdog starts in _init_worker, which runs
+                      # after ~2-3s of Python module imports (pandas, numpy, fastapi, etc.).
+                      # Killing before bootstrap completes is a narrow edge case not covered by
+                      # the watchdog (the pipe-read blocks until EOF anyway). Waiting here
+                      # tests the real production scenario: server killed mid-computation.
+GRACE_AFTER_KILL=3    # seconds to let the OS reap children after SIGKILL
 
 # ---------------------------------------------------------------------------
 # Arg parsing
@@ -234,6 +241,15 @@ while true; do
   fi
   sleep 0.5
 done
+
+# F288: Wait for workers to finish Python bootstrap (module imports) and reach
+# _init_worker where the parent-death watchdog thread is started. Workers appear
+# in pgrep immediately after OS process creation, but the watchdog only starts
+# after ~2-3s of Python imports. Killing earlier tests the pipe-EOF path, not
+# the watchdog path. The real production scenario (server killed mid-computation)
+# always has workers past bootstrap, so this wait gives a true signal.
+log "Phase 3 — Waiting ${BOOTSTRAP_SETTLE}s for workers to finish bootstrap (watchdog start)"
+sleep "$BOOTSTRAP_SETTLE"
 
 # ---------------------------------------------------------------------------
 # Phase 4: SIGKILL backend mid-flight

@@ -28,6 +28,8 @@ import logging
 import multiprocessing as mp
 import os
 import pickle
+import threading
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeout
 from concurrent.futures.process import BrokenProcessPool
@@ -147,9 +149,38 @@ class _WorkerArgs(NamedTuple):
 def _init_worker(df_pickled: bytes) -> None:
     """Pool initializer — runs once per worker process. Deserializes the
     full df into a module global so each window's worker call slices it
-    in-process instead of paying pickling cost per call."""
+    in-process instead of paying pickling cost per call.
+
+    F288: After unpickling, starts a parent-death watchdog daemon thread.
+    The graceful-shutdown path is covered by _force_kill_executor (F279);
+    this covers the SIGKILL/crash case where the parent dies without running
+    any Python cleanup. On SIGKILL the kernel re-parents workers to PID 1
+    (init/launchd), leaving them orphaned until completion. The watchdog
+    detects the re-parenting (os.getppid() != initial_ppid) and calls
+    os._exit(1) — unblockable, no cleanup hangs. Using != initial_ppid
+    rather than == 1 is more robust: handles subreaper re-parenting on
+    Linux (e.g. systemd user sessions where PID 1 is not init)."""
     global _WORKER_DF
     _WORKER_DF = pickle.loads(df_pickled)
+
+    # F288: parent-death watchdog — daemon so it never blocks process exit.
+    initial_ppid = os.getppid()
+
+    def _watchdog() -> None:
+        while True:
+            time.sleep(0.5)
+            if os.getppid() != initial_ppid:
+                # Parent is gone; we are orphaned. Exit immediately.
+                # os._exit bypasses Python cleanup (no atexit, no __del__),
+                # which is correct here — we must not block on pickle or
+                # file-handle cleanup in a mid-work subprocess.
+                # DIG-08: worker imports MUST NOT register atexit handlers —
+                # os._exit will skip them.  If a new transitive import adds
+                # atexit, migrate to signal.signal(SIGTERM)+sys.exit instead.
+                os._exit(1)
+
+    t = threading.Thread(target=_watchdog, name="wfa-parent-watchdog", daemon=True)
+    t.start()
 
 
 def _run_window_core(
