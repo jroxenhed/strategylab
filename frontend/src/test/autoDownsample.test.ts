@@ -2,7 +2,7 @@
  * Auto-downsampling ladder tests — A8-downsample.
  * Covers coarserIntervalFor() ladder, tier escalation, null at top, daily/unknown passthrough,
  * the AUTOS_ON/AUTOS_OFF constants, calcVisibleBaseBars (D3 normalization),
- * and evaluateAutoInterval (pure helper for FIX-G / FIX-A / FIX-C).
+ * and evaluateAutoInterval (pure synchronous helper; Chart.tsx always passes pendingSince=null).
  */
 import { describe, it, expect } from 'vitest'
 import {
@@ -13,6 +13,7 @@ import {
   AUTOS_OFF_BARS,
   INTERVAL_SECS,
 } from '../shared/utils/intervals'
+import { aggregateBars, snapTimestamp } from '../features/chart/chartUtils'
 
 describe('AUTOS constants', () => {
   it('AUTOS_OFF_BARS is less than AUTOS_ON_BARS (hysteresis invariant)', () => {
@@ -175,7 +176,9 @@ describe('calcVisibleBaseBars — D3 normalization formula', () => {
   })
 })
 
-// ─── evaluateAutoInterval (FIX-G pure helper) ─────────────────────────────────
+// ─── evaluateAutoInterval (pure synchronous helper) ────────────────────────────
+// Note: pendingSince tests below exercise the pure helper's logic in isolation.
+// Chart.tsx always passes pendingSince=null (R3: synchronous render, no async race).
 
 describe('evaluateAutoInterval — coarsen path', () => {
   const now = Date.now()
@@ -368,5 +371,73 @@ describe('evaluateAutoInterval — hysteresis no-thrash', () => {
       now,
     })
     expect(result.action).toBe('coarsen')
+  })
+})
+
+// ─── FIX-1: 1d render-tier snap invariant ──────────────────────────────────────
+// Locks the invariant that snapTimestamp('1d') and aggregateBars('1d') produce
+// numerically matching bucket keys so markers/regime/signals are not silently
+// dropped when a 15m/30m/1h base is zoomed to the 1d auto render tier.
+
+describe('1d snap invariant — aggregateBars bucket keys match snapTimestamp', () => {
+  // Identity toET: passes numeric timestamps through unchanged (unit-test isolation).
+  const identityToET = (t: any) => t
+
+  it('aggregateBars to 1d buckets produces UTC-midnight numeric keys', () => {
+    // Mon 2024-01-15 09:30 ET → Unix 1705325400 (numeric)
+    const barTs = 1705325400 // intraday timestamp (ET-shifted or UTC; bucket math is the same)
+    const bucketSecs = INTERVAL_SECS['1d'] // 86400
+    const bars = [{ time: barTs, open: 100, high: 105, low: 99, close: 102, volume: 1000 }]
+    const result = aggregateBars(bars, bucketSecs)
+    expect(result).toHaveLength(1)
+    // Bucket floor: ts - (ts % 86400)
+    const expectedKey = barTs - (barTs % 86400)
+    expect(result[0].time).toBe(expectedKey)
+    expect(typeof result[0].time).toBe('number')
+  })
+
+  it('snapTimestamp("1d") floors to the same numeric bucket key as aggregateBars', () => {
+    const barTs = 1705325400
+    const bucketSecs = INTERVAL_SECS['1d']
+    const expectedBucketKey = barTs - (barTs % bucketSecs)
+
+    // snapTimestamp with identityToET should produce the same floor
+    const snapped = snapTimestamp(barTs, '1d', identityToET)
+    expect(snapped).toBe(expectedBucketKey)
+    expect(typeof snapped).toBe('number')
+  })
+
+  it('aggregateBars and snapTimestamp agree on the same bucket for multiple intraday bars', () => {
+    // Three intraday bars on the same calendar day → one aggregated bar
+    const ts1 = 1705325400 // 09:30
+    const ts2 = 1705329000 // 10:30
+    const ts3 = 1705332600 // 11:30
+    const bucketSecs = INTERVAL_SECS['1d']
+    const bars = [
+      { time: ts1, open: 100, high: 105, low: 99, close: 102 },
+      { time: ts2, open: 102, high: 106, low: 101, close: 104 },
+      { time: ts3, open: 104, high: 108, low: 103, close: 107 },
+    ]
+    const aggregated = aggregateBars(bars, bucketSecs)
+    expect(aggregated).toHaveLength(1)
+    const aggKey = aggregated[0].time
+
+    // All three source bars must snap to the same bucket key
+    const snap1 = snapTimestamp(ts1, '1d', identityToET)
+    const snap2 = snapTimestamp(ts2, '1d', identityToET)
+    const snap3 = snapTimestamp(ts3, '1d', identityToET)
+    expect(snap1).toBe(aggKey)
+    expect(snap2).toBe(aggKey)
+    expect(snap3).toBe(aggKey)
+  })
+
+  it('before FIX-1: snapTimestamp("1d") would have returned a date string (regression guard)', () => {
+    // If '1d' were missing from INTERVAL_SECONDS, snapTimestamp would fall through to the
+    // date-string branch and return 'YYYY-MM-DD', mismatching the numeric aggregateBars key.
+    // This test confirms the numeric path is taken.
+    const snapped = snapTimestamp(1705325400, '1d', identityToET)
+    expect(typeof snapped).toBe('number')
+    // Must NOT be a date string
+    expect(typeof snapped).not.toBe('string')
   })
 })

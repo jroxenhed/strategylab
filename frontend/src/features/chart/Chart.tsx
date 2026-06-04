@@ -14,10 +14,10 @@ import { INDICATOR_DEFS } from '../../shared/types/indicators'
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels'
 import SubPane from './SubPane'
 import type { PaneRegistry } from './SubPane'
-import { toLineData, aggregateMarkers, snapTimestamp } from './chartUtils'
+import { toLineData, aggregateMarkers, snapTimestamp, aggregateBars, aggregateLineSeries } from './chartUtils'
 import TradeTooltip from './TradeTooltip'
 import { getTimezone, useTimezone } from '../../shared/utils/time'
-import { calcVisibleBaseBars, evaluateAutoInterval } from '../../shared/utils/intervals'
+import { calcVisibleBaseBars, evaluateAutoInterval, INTERVAL_SECS } from '../../shared/utils/intervals'
 
 interface ChartProps {
   data: OHLCVBar[]
@@ -39,16 +39,13 @@ interface ChartProps {
   viewInterval: string
   backtestInterval: string
   onChartReady?: (chart: IChartApi | null) => void
-  /** Called when auto-downsampling wants to switch to a coarser interval (or back to base).
-   *  App.tsx receives this and sets viewInterval, triggering a backend-resampled refetch. */
-  onAutoInterval?: (interval: string) => void
-  /** True when viewInterval was set by auto-downsampling (not by the user). Used to gate
-   *  the de-aggregate branch so zoom-in doesn't clobber a manually selected coarse view. */
-  autoIntervalActive?: boolean
   /** Master enable for auto-downsampling (user checkbox). Default true; when false
-   *  the zoom-span evaluation never fires. Restoring an active auto view on
-   *  uncheck is the parent's job (it owns viewInterval). */
+   *  the zoom-span evaluation never fires. Setting null on the render interval is
+   *  handled internally; the parent just gates the feature. */
   autoIntervalEnabled?: boolean
+  /** Called when the render-layer auto interval changes (null = full resolution).
+   *  App.tsx stores this purely for the header badge. */
+  onAutoRenderChange?: (iv: string | null) => void
   /** Used to detect ticker/interval/date changes so fitContent fires on symbol switches but not on auto-refresh polls. */
   ticker?: string
   interval?: string
@@ -144,8 +141,15 @@ function buildMarkers(trades: Trade[], subPane = false) {
   })
 }
 
-export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, instanceLoading, loadingByInstance, instanceError, instanceErrorMessage, onRetryIndicators, trades, emaOverlays, ruleSignals, regimeSeries, viewInterval, backtestInterval, onChartReady, onAutoInterval, autoIntervalActive, autoIntervalEnabled, ticker, interval, from, to }: ChartProps) {
+export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, instanceLoading, loadingByInstance, instanceError, instanceErrorMessage, onRetryIndicators, trades, emaOverlays, ruleSignals, regimeSeries, viewInterval, backtestInterval, onChartReady, autoIntervalEnabled, onAutoRenderChange, ticker, interval, from, to }: ChartProps) {
   const [tzMode] = useTimezone()
+  /** Render-layer auto interval: null = render at data resolution (viewInterval).
+   *  Set internally by zoom-span evaluation; cleared on checkbox disable. */
+  const [autoRenderInterval, setAutoRenderInterval] = useState<string | null>(null)
+  /** Effective interval for all aggregation-aware paths: marker snapping, regime snapping,
+   *  SNAP tolerance, signal dedup. Auto-render overlays on top of the manual viewInterval. */
+  const effectiveInterval = autoRenderInterval ?? viewInterval
+  const isAggregated = effectiveInterval !== backtestInterval
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const candleSeriesRef = useRef<ISeriesApi<any> | null>(null)
@@ -160,32 +164,46 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   // Stable refs for auto-downsampling — kept in sync each render so the
   // syncHandler closure (created once at chart-mount) always reads current values
   // without needing to be re-subscribed (which would tear down and recreate the chart).
-  const onAutoIntervalRef = useRef(onAutoInterval)
-  useEffect(() => { onAutoIntervalRef.current = onAutoInterval })
+  /** Stable ref to current viewInterval (manual aggregate or base). */
   const viewIntervalRef = useRef(viewInterval)
   useEffect(() => { viewIntervalRef.current = viewInterval })
   const baseIntervalRef = useRef(backtestInterval)
   useEffect(() => { baseIntervalRef.current = backtestInterval })
-  const autoIntervalActiveRef = useRef(autoIntervalActive)
-  useEffect(() => { autoIntervalActiveRef.current = autoIntervalActive })
   const autoIntervalEnabledRef = useRef(autoIntervalEnabled)
   useEffect(() => { autoIntervalEnabledRef.current = autoIntervalEnabled })
+  /** Stable ref to setAutoRenderInterval so syncHandler closure (created once) can call it. */
+  const setAutoRenderIntervalRef = useRef(setAutoRenderInterval)
+  useEffect(() => { setAutoRenderIntervalRef.current = setAutoRenderInterval })
+  /** Stable ref to current autoRenderInterval value for the syncHandler closure. */
+  const autoRenderIntervalRef = useRef(autoRenderInterval)
+  useEffect(() => { autoRenderIntervalRef.current = autoRenderInterval })
   /** Set by the chart-creation effect: runs the auto-downsample evaluation against
    *  the current visible range. Needed because lw-charts skips no-change range
    *  assignments, so re-enabling the checkbox can't be nudged via a fake event. */
   const autoEvalRef = useRef<(() => void) | null>(null)
   // When the user re-enables auto-downsampling while already zoomed out, run the
   // evaluation immediately instead of waiting for the next pan/zoom.
+  // When disabled, clear the render-layer aggregate immediately — capturing the
+  // visible time window first so the full-resolution swap keeps the user's view
+  // (without this, the coarse logical range reinterprets over ~12x more bars and
+  // the view collapses to a small sub-window). Capture ONLY when auto is active:
+  // if no data swap follows, nothing consumes autoRangeRef and a stale non-null
+  // value would pause the evaluation loop permanently (the in-flight guard).
   useEffect(() => {
-    if (autoIntervalEnabled === false) return
+    if (autoIntervalEnabled === false) {
+      if (autoRenderIntervalRef.current !== null) {
+        try {
+          const vr = chartRef.current?.timeScale().getVisibleRange()
+          if (vr) autoRangeRef.current = vr as IRange<Time>
+        } catch { /* chart torn down */ }
+      }
+      setAutoRenderInterval(null)
+      return
+    }
     autoEvalRef.current?.()
   }, [autoIntervalEnabled])
-  /** Stores the timestamp (Date.now()) when an auto-interval switch was initiated,
-   *  or null when idle. A pending switch older than 5s is treated as expired (FIX-A).
-   *  Replaces the bare boolean: expiry safety valve covers COR-01, RACE-03, and RACE-01. */
-  const autoSwitchingRef = useRef<number | null>(null)
-  /** Captured getVisibleRange() just before an auto-interval switch; restored after
-   *  new data lands (takes priority over sessionStorage range restore). */
+  /** Captured getVisibleRange() just before a render-layer interval switch; restored after
+   *  new render data lands (takes priority over sessionStorage range restore). */
   const autoRangeRef = useRef<IRange<Time> | null>(null)
   const mainOverlaySeriesRef = useRef<Map<string, ISeriesApi<any>> | null>(null)
   const regimeBgSeriesRef = useRef<ISeriesApi<any> | null>(null)
@@ -201,6 +219,21 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     if (!qqqData || qqqData.length === 0) return []
     return qqqData.map(d => ({ time: toET(d.time as any) as any, value: d.close }))
   }, [qqqData, tzMode])
+
+  /** Render-layer SPY/QQQ: aggregated to match renderCandleData bucket boundaries. */
+  const renderSpyLineData = useMemo(() => {
+    if (!autoRenderInterval || spyLineData.length === 0) return spyLineData
+    const bucketSecs = INTERVAL_SECS[autoRenderInterval]
+    if (!bucketSecs) return spyLineData
+    return aggregateLineSeries(spyLineData, bucketSecs)
+  }, [spyLineData, autoRenderInterval])
+
+  const renderQqqLineData = useMemo(() => {
+    if (!autoRenderInterval || qqqLineData.length === 0) return qqqLineData
+    const bucketSecs = INTERVAL_SECS[autoRenderInterval]
+    if (!bucketSecs) return qqqLineData
+    return aggregateLineSeries(qqqLineData, bucketSecs)
+  }, [qqqLineData, autoRenderInterval])
 
   // Memoize toET-shifted series so re-runs triggered by trades/emaOverlays/toggles
   // don't re-transform thousands of bars each time.
@@ -246,32 +279,39 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     return groups
   }, [indicators])
 
-  const isAggregated = viewInterval !== backtestInterval
+  /** Render-layer candleData: client-side aggregated when autoRenderInterval is set.
+   *  All setData calls, candleTimeIndex, SPY/QQQ, and volume paths consume this. */
+  const renderCandleData = useMemo(() => {
+    if (!autoRenderInterval) return candleData
+    const bucketSecs = INTERVAL_SECS[autoRenderInterval]
+    if (!bucketSecs) return candleData
+    return aggregateBars(candleData, bucketSecs)
+  }, [candleData, autoRenderInterval])
 
   const candleTimeIndex = useMemo(() => {
     const map = new Map<string | number, number>()
-    for (let i = 0; i < candleData.length; i++) {
-      map.set(candleData[i].time, i)
+    for (let i = 0; i < renderCandleData.length; i++) {
+      map.set(renderCandleData[i].time, i)
     }
     return map
-  }, [candleData])
+  }, [renderCandleData])
 
   const mainMarkers = useMemo(
     () => {
       if (!trades || trades.length === 0) return null
-      if (isAggregated) return aggregateMarkers(trades, candleTimeIndex, viewInterval, backtestInterval, toET)
+      if (isAggregated) return aggregateMarkers(trades, candleTimeIndex, effectiveInterval, backtestInterval, toET)
       return buildMarkers(trades)
     },
-    [trades, isAggregated, candleTimeIndex, viewInterval, backtestInterval, tzMode],
+    [trades, isAggregated, candleTimeIndex, effectiveInterval, backtestInterval, tzMode],
   )
 
   const subPaneMarkers = useMemo(
     () => {
       if (!trades || trades.length === 0) return null
-      if (isAggregated) return aggregateMarkers(trades, candleTimeIndex, viewInterval, backtestInterval, toET, true)
+      if (isAggregated) return aggregateMarkers(trades, candleTimeIndex, effectiveInterval, backtestInterval, toET, true)
       return buildMarkers(trades, true)
     },
-    [trades, isAggregated, candleTimeIndex, viewInterval, backtestInterval, tzMode],
+    [trades, isAggregated, candleTimeIndex, effectiveInterval, backtestInterval, tzMode],
   )
 
   // Rule signal markers — one circle per signal, colored by rule index
@@ -282,7 +322,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       const color = RULE_SIGNAL_COLORS[rs.rule_index % RULE_SIGNAL_COLORS.length]
       const position = rs.side === 'buy' ? 'belowBar' : 'aboveBar'
       for (const sig of rs.signals) {
-        const time = isAggregated ? snapTimestamp(sig.time, viewInterval, toET) : toET(sig.time as any)
+        const time = isAggregated ? snapTimestamp(sig.time, effectiveInterval, toET) : toET(sig.time as any)
         out.push({ time: time as any, position, color, shape: 'circle' as const, size: 0.6 })
       }
     }
@@ -301,14 +341,14 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     // lightweight-charts requires markers sorted by time ascending
     out.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0))
     return out
-  }, [ruleSignals, isAggregated, viewInterval, tzMode])
+  }, [ruleSignals, isAggregated, effectiveInterval, tzMode])
 
   const tradeLookup = useMemo(() => {
-    if (!trades || trades.length === 0 || candleData.length === 0) return null
+    if (!trades || trades.length === 0 || renderCandleData.length === 0) return null
     const SNAP = isAggregated ? 5 : 2
     const byIdx = new Map<number, Trade[]>()
     for (const t of trades) {
-      const snapped = snapTimestamp(t.date, viewInterval, toET)
+      const snapped = snapTimestamp(t.date, effectiveInterval, toET)
       const idx = candleTimeIndex.get(snapped)
       if (idx === undefined) continue
       const arr = byIdx.get(idx)
@@ -316,20 +356,20 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       else byIdx.set(idx, [t])
     }
     const result = new Map<string | number, Trade[]>()
-    for (let i = 0; i < candleData.length; i++) {
+    for (let i = 0; i < renderCandleData.length; i++) {
       for (let d = 0; d <= SNAP; d++) {
         if (d === 0) {
           const t = byIdx.get(i)
-          if (t) { result.set(candleData[i].time, t); break }
+          if (t) { result.set(renderCandleData[i].time, t); break }
         } else {
           const left = byIdx.get(i - d)
           const right = byIdx.get(i + d)
-          if (left || right) { result.set(candleData[i].time, (left ?? right)!); break }
+          if (left || right) { result.set(renderCandleData[i].time, (left ?? right)!); break }
         }
       }
     }
     return result
-  }, [trades, candleTimeIndex, candleData, isAggregated, viewInterval, tzMode])
+  }, [trades, candleTimeIndex, renderCandleData, isAggregated, effectiveInterval, tzMode])
 
   const [tooltip, setTooltip] = useState<{ x: number; y: number; trades: Trade[] } | null>(null)
   const tradeLookupRef = useRef(tradeLookup)
@@ -407,20 +447,18 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       }
       if (sessionWriteTimer !== null) window.clearTimeout(sessionWriteTimer)
       sessionWriteTimer = window.setTimeout(() => {
-        // FIX-E (RACE-05): suppress sessionStorage write while a switch is pending —
-        // the current logical range belongs to the coarse series and would be misapplied
-        // to the base-interval series on page reload.
-        if (autoSwitchingRef.current !== null) { sessionWriteTimer = null; return }
+        // R3: no async switch pending anymore — render-layer resample is synchronous.
+        // Always safe to persist the logical range.
         sessionStorage.setItem('strategylab-chart-range', JSON.stringify(range))
         sessionWriteTimer = null
       }, 200)
 
-      // Auto-downsampling: measure visible base-equivalent bars and fire onAutoInterval
-      // when the span crosses AUTOS_ON_BARS (aggregate) or AUTOS_OFF_BARS (de-aggregate).
-      // Uses stable refs (viewIntervalRef, baseIntervalRef, onAutoIntervalRef,
-      // autoIntervalActiveRef) so this closure never needs to be re-subscribed.
+      // Auto-downsampling (render-layer): measure visible base-equivalent bars and
+      // call setAutoRenderInterval when the span crosses AUTOS_ON/OFF thresholds.
+      // Uses stable refs (viewIntervalRef, baseIntervalRef, autoRenderIntervalRef,
+      // setAutoRenderIntervalRef) so this closure never needs to be re-subscribed.
       // D3 fix: compare BASE-equivalent bars via calcVisibleBaseBars() to prevent the
-      // re-aggregate loop after a 5m→15m switch (raw bars drop to ~1/3, below OFF threshold).
+      // re-aggregate loop after a switch (raw bars drop, below OFF threshold).
       if (autoIntervalTimer !== null) window.clearTimeout(autoIntervalTimer)
       autoIntervalTimer = window.setTimeout(() => evaluateZoomSpan(range), 150)
     }
@@ -430,47 +468,63 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     // checkbox-re-enable effect — lw-charts skips no-change setVisibleLogicalRange
     // calls, so a synthetic "nudge" event can't reach this; it must be invoked.
     function evaluateZoomSpan(range: { from: number; to: number }) {
-      // Master enable (user checkbox). undefined = enabled (default). When the
-      // user unchecks mid-auto, App restores the base interval itself.
+      // Master enable (user checkbox). undefined = enabled (default).
       if (autoIntervalEnabledRef.current === false) return
+      // Structural guard (FIX-2/RACE-01): skip evaluation while a range-restore is in
+      // flight. setVisibleRange fires subscribeVisibleLogicalRangeChange, which would
+      // re-enter this evaluator 150ms later. Returning here closes the loop structurally;
+      // the hysteresis in evaluateAutoInterval is defence-in-depth only.
+      if (autoRangeRef.current !== null) return
+      // For auto evaluation: the base is always the DATA interval (viewInterval prop).
+      // autoRenderInterval overrides on top — the autoActive flag for the evaluator
+      // is whether we currently have a render-layer aggregate active.
       const currentView = viewIntervalRef.current
       const base = baseIntervalRef.current
+      const currentAutoRender = autoRenderIntervalRef.current
+      // The "effective" view for the evaluator: render interval if active, else viewInterval.
+      const evalView = currentAutoRender ?? currentView
+      const autoActive = currentAutoRender !== null
       // Compute base-equivalent visible bars (D3) using the shared pure helper.
       const rawSpan = Math.round(range.to - range.from)
-      const visibleBaseBars = calcVisibleBaseBars(rawSpan, currentView, base)
+      // When render-layer is active, bars on screen = render-aggregated bars;
+      // scale back to base-equivalent for the evaluator.
+      const visibleBaseBars = calcVisibleBaseBars(rawSpan, evalView, base)
 
-      // Delegate all branching logic to the pure evaluateAutoInterval helper (FIX-G).
-      // It handles: pending-switch expiry (FIX-A), reverse-zoom cancellation (RACE-01),
-      // re-escalation when autoActive (FIX-C), daily/unknown passthrough, hysteresis.
+      // Delegate all branching logic to the pure evaluateAutoInterval helper.
+      // pendingSince is always null (R3: synchronous, no async race).
       const decision = evaluateAutoInterval({
         visibleBaseBars,
-        viewInterval: currentView,
+        viewInterval: evalView,
         baseInterval: base,
-        autoActive: autoIntervalActiveRef.current ?? false,
-        pendingSince: autoSwitchingRef.current,
+        autoActive,
+        pendingSince: null,
         now: Date.now(),
       })
 
       if (decision.action === 'none') {
-        // RACE-01 + FIX-A: if a switch is pending but the helper returned 'none'
-        // (user zoomed back in, or evaluation found no needed switch), cancel the
-        // pending state and clear the saved range so data landing doesn't restore
-        // to the coarse position.
-        if (autoSwitchingRef.current !== null) {
-          autoSwitchingRef.current = null
-          autoRangeRef.current = null
-        }
         return
       }
 
-      // Capture visible time range before the state update so we can restore it
-      // after the new data lands (B1 / D2).
+      if (decision.action === 'restore') {
+        // User zoomed back in — clear render-layer aggregate.
+        autoRangeRef.current = null
+        setAutoRenderIntervalRef.current(null)
+        return
+      }
+
+      // FIX-6/RACE-05: guard against unknown interval targets before committing the
+      // coarsen — if the ladder ever outruns INTERVAL_SECS the sub-pane aggregation
+      // (which derives bucketSecs from INTERVAL_SECS[autoRenderInterval]) would silently
+      // produce mismatched bar counts and desynced crosshair alignment.
+      if (!INTERVAL_SECS[decision.target]) return
+
+      // 'coarsen': capture visible time range before the state update so we can
+      // restore it after renderCandleData memo recomputes and setData fires (B1/D2).
       try {
         const vr = chart.timeScale().getVisibleRange()
         if (vr) autoRangeRef.current = vr as IRange<Time>
       } catch {}
-      autoSwitchingRef.current = Date.now()
-      onAutoIntervalRef.current?.(decision.target)
+      setAutoRenderIntervalRef.current(decision.target)
     }
     autoEvalRef.current = () => {
       try {
@@ -522,7 +576,6 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       setTooltip(null)
       rangeRestoredRef.current = false
       autoRangeRef.current = null
-      autoSwitchingRef.current = null
       onChartReadyRef.current?.(null)
       chart.remove()
     }
@@ -533,25 +586,22 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
   }, [subPaneCount])
 
   // Candle data + range restore / fitContent on symbol/interval/date change.
+  // Consumes renderCandleData (client-side aggregated when autoRenderInterval is set)
+  // so the chart always displays the render-layer resolution.
   // fitContent fires only when (ticker, interval, from, to) changes — not on
-  // auto-refresh polls that return new data arrays for the same query key.
+  // auto-refresh polls or render-interval changes.
   useEffect(() => {
     const series = candleSeriesRef.current
     const chart = chartRef.current
-    // FIX-A (COR-01): clear the in-flight guard BEFORE the early-return check so
-    // an empty refetch (bad date range, network error returning empty OHLCV) can't
-    // wedge autoSwitchingRef in the pending state permanently.
-    autoSwitchingRef.current = null
-    if (!series || !chart || candleData.length === 0) return
-    series.setData(candleData)
+    if (!series || !chart || renderCandleData.length === 0) return
+    series.setData(renderCandleData)
 
     // Dev-only assertion surface for auto-downsampling zoom verification (D5).
-    // setVisibleLogicalRange lets scripted verification (render-probe / browser
-    // agents) drive zoom without trusted wheel events; reads chartRef dynamically
-    // so a teardown between capture and call can't hit a removed IChartApi.
+    // lastSetDataPoints reflects the RENDERED bar count (render-layer resolution).
+    // setVisibleLogicalRange lets scripted verification drive zoom without wheel events.
     if (import.meta.env.DEV) {
       window.__chartDebug = {
-        lastSetDataPoints: candleData.length,
+        lastSetDataPoints: renderCandleData.length,
         setVisibleLogicalRange: (from: number, to: number) => {
           try { chartRef.current?.timeScale().setVisibleLogicalRange({ from, to }) } catch { /* removed chart */ }
         },
@@ -564,13 +614,13 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       }
     }
 
-    // Auto-interval range restore: takes priority over sessionStorage (B1/D2).
-    // autoRangeRef is set just before onAutoInterval fires so the visible time
-    // window is preserved across the interval switch.
+    // Render-layer range restore: takes priority over sessionStorage (B1/D2/R3).
+    // autoRangeRef is set just before setAutoRenderInterval fires so the visible
+    // time window is preserved across the render-resolution switch.
     if (autoRangeRef.current) {
       const savedAutoRange = autoRangeRef.current
       autoRangeRef.current = null
-      // FIX-D (COR-03 + RACE-04): fall back to fitContent if setVisibleRange fails
+      // Fall back to fitContent if setVisibleRange fails
       // (e.g. saved time-domain range has endpoints not present in coarser series).
       // chartRef read dynamically per Key Bugs Fixed teardown guard pattern.
       try {
@@ -597,43 +647,64 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
         chart.timeScale().fitContent()
       }
     } else if (paramsChanged) {
-      // Symbol/interval/date switched → fit all panes.
+      // Symbol/interval/date switched → fit all panes; also clear auto render interval.
+      // FIX-4/RACE-02: write both the ref (live value for the syncHandler closure) and
+      // the state (for React rendering) synchronously so the debounced evaluator can't
+      // act on the stale previous ticker's auto-render state during the 150ms window.
+      autoRenderIntervalRef.current = null
+      autoRangeRef.current = null
+      setAutoRenderInterval(null)
+      // FIX-9/COR-03: fitContent must fire against base-resolution renderCandleData.
+      // App.tsx now resets autoRenderInterval eagerly (FIX-5), so Chart's autoRenderInterval
+      // prop is null before new data arrives — renderCandleData equals candleData here.
+      // The setAutoRenderInterval(null) above is a belt-and-suspenders fallback for any
+      // path that bypasses App's eager reset. In both cases the data on this pass is
+      // base-resolution, so fitContent fires correctly here.
       lastFitParamsRef.current = fitKey
       try { const c = chartRef.current; if (c) c.timeScale().fitContent() } catch {}
       for (const entry of paneRegistryRef.current.values()) {
         try { const c = entry.chart; if (c) c.timeScale().fitContent() } catch {}
       }
     }
-    // else: auto-refresh poll for same params — preserve user zoom.
-  }, [candleData, subPaneCount, ticker, interval, from, to])
+    // else: auto-refresh poll or render-interval change — preserve user zoom.
+  }, [renderCandleData, subPaneCount, ticker, interval, from, to])
+
+  // Report render-layer interval changes up to App.tsx for the header badge.
+  // Stable ref to onAutoRenderChange so this effect doesn't re-run when the callback
+  // identity changes (same pattern as onChartReadyRef).
+  const onAutoRenderChangeRef = useRef(onAutoRenderChange)
+  useEffect(() => { onAutoRenderChangeRef.current = onAutoRenderChange })
+  useEffect(() => {
+    onAutoRenderChangeRef.current?.(autoRenderInterval)
+  }, [autoRenderInterval])
 
   // SPY overlay
   useEffect(() => {
     const chart = chartRef.current
-    if (!chart || !showSpy || spyLineData.length === 0) return
+    if (!chart || !showSpy || renderSpyLineData.length === 0) return
     const spy = chart.addSeries(LineSeries, {
       color: '#f0883e', lineWidth: 1, title: 'SPY',
       priceScaleId: 'spy-scale',
       priceFormat: { type: 'price', precision: 2 },
     })
-    spy.setData(spyLineData)
+    spy.setData(renderSpyLineData as any)
     chart.priceScale('spy-scale').applyOptions({ visible: false })
     return () => { try { chart.removeSeries(spy) } catch {} }
-  }, [showSpy, spyLineData, subPaneCount])
+  }, [showSpy, renderSpyLineData, subPaneCount])
 
   // QQQ overlay
   useEffect(() => {
     const chart = chartRef.current
-    if (!chart || !showQqq || qqqLineData.length === 0) return
+    if (!chart || !showQqq || renderQqqLineData.length === 0) return
     const qqq = chart.addSeries(LineSeries, {
       color: '#a371f7', lineWidth: 1, title: 'QQQ',
       priceScaleId: 'qqq-scale',
       priceFormat: { type: 'price', precision: 2 },
     })
-    qqq.setData(qqqLineData)
+    qqq.setData(renderQqqLineData as any)
     chart.priceScale('qqq-scale').applyOptions({ visible: false })
     return () => { try { chart.removeSeries(qqq) } catch {} }
-  }, [showQqq, qqqLineData, subPaneCount])
+  }, [showQqq, renderQqqLineData, subPaneCount])
 
   // ─── Main-chart indicator overlays (generic) ─���───────────────────────
   useEffect(() => {
@@ -688,6 +759,9 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     const seriesMap = mainOverlaySeriesRef.current
     if (!seriesMap) return
 
+    // Render-layer bucket size for indicator line series aggregation.
+    const renderBucketSecs = autoRenderInterval ? (INTERVAL_SECS[autoRenderInterval] ?? 0) : 0
+
     for (const inst of mainInstances) {
       const data = instanceData[inst.id]
       if (!data) continue
@@ -698,33 +772,40 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
           const useCandleColor = inst.params.coloring === 'candle'
           const closeMap = new Map<any, { close: number; prevClose: number }>()
           if (useCandleColor) {
-            for (let i = 0; i < candleData.length; i++) {
-              const bar = candleData[i]
-              closeMap.set(bar.time, { close: bar.close, prevClose: i > 0 ? candleData[i - 1].close : bar.open })
+            // Use renderCandleData so color lookup aligns with rendered bars.
+            for (let i = 0; i < renderCandleData.length; i++) {
+              const bar = renderCandleData[i]
+              closeMap.set(bar.time, { close: bar.close, prevClose: i > 0 ? renderCandleData[i - 1].close : bar.open })
             }
           }
-          vol.setData((data.volume ?? []).map(d => {
-            const t = toET(d.time as any) as any
+          // Aggregate raw volume then color-map against renderCandleData.
+          const rawVolData = toLineData(data.volume ?? [], toET)
+          const aggVolData = renderBucketSecs > 0 ? aggregateLineSeries(rawVolData, renderBucketSecs) : rawVolData
+          vol.setData(aggVolData.map(d => {
             let color = '#26a64166'
             if (useCandleColor) {
-              const c = closeMap.get(t)
+              const c = closeMap.get(d.time)
               if (c) color = c.close >= c.prevClose ? '#26a64166' : '#ef535066'
             }
-            return { time: t, value: d.value, color }
+            return d.value !== undefined ? { time: d.time, value: d.value, color } : { time: d.time, color }
           }))
         }
       } else if (inst.type === 'bb') {
         for (const key of ['upper', 'middle', 'lower'] as const) {
           const s = seriesMap.get(`${inst.id}:${key}`)
-          if (s && data[key]) s.setData(toLineData(data[key], toET))
+          if (s && data[key]) {
+            const raw = toLineData(data[key], toET)
+            s.setData(renderBucketSecs > 0 ? aggregateLineSeries(raw, renderBucketSecs) : raw)
+          }
         }
       } else {
         const seriesKey = Object.keys(data)[0]
         if (!seriesKey || !data[seriesKey]) continue
-        seriesMap.get(inst.id)?.setData(toLineData(data[seriesKey], toET))
+        const raw = toLineData(data[seriesKey], toET)
+        seriesMap.get(inst.id)?.setData(renderBucketSecs > 0 ? aggregateLineSeries(raw, renderBucketSecs) : raw)
       }
     }
-  }, [instanceData, mainInstancesKey, candleData, tzMode, subPaneCount])
+  }, [instanceData, mainInstancesKey, renderCandleData, autoRenderInterval, tzMode, subPaneCount])
 
   // EMA rising/falling overlays (per-rule visualization during/after backtest)
   // Uses 2 series per overlay (active + inactive) instead of one per segment
@@ -753,7 +834,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       for (let i = 0; i < overlay.series.length; i++) {
         const pt = overlay.series[i]
         const t = isAggregated
-          ? snapTimestamp(pt.time, viewInterval, toET)
+          ? snapTimestamp(pt.time, effectiveInterval, toET)
           : toET(pt.time as any) as any
         if (pt.value === null) {
           activePts.push({ time: t })
@@ -811,7 +892,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       created.push(sInactive)
     }
     return () => { for (const s of created) { try { chart.removeSeries(s) } catch {} } }
-  }, [emaOverlays, isAggregated, viewInterval, tzMode, subPaneCount, indicators])
+  }, [emaOverlays, isAggregated, effectiveInterval, tzMode, subPaneCount, indicators])
 
   // Trade + rule-signal markers — merged into one sorted array and pushed to a
   // single plugin instance. candleData in deps ensures the effect re-runs after
@@ -830,7 +911,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     } else {
       mainMarkersPluginRef.current.setMarkers(merged as any)
     }
-  }, [mainMarkers, ruleSignalMarkers, candleData, subPaneCount])
+  }, [mainMarkers, ruleSignalMarkers, renderCandleData, subPaneCount])
 
   // Regime background shading — histogram series on hidden scale, green for active long, red for active short
   useEffect(() => {
@@ -857,7 +938,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     for (const pt of regimeSeries) {
       const color = pt.direction === 'long' ? '#26a64120' : pt.direction === 'short' ? '#f8514920' : undefined
       if (!color) continue
-      const t = snapTimestamp(pt.time, viewInterval, toET)
+      const t = snapTimestamp(pt.time, effectiveInterval, toET)
       deduped.set(t, { time: t, value: 1, color })
     }
     const bgData = Array.from(deduped.values()).sort((a, b) => {
@@ -865,7 +946,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       return (a.time as number) - (b.time as number)
     })
     try { regimeBgSeriesRef.current.setData(bgData as any) } catch {}
-  }, [regimeSeries, viewInterval, tzMode])
+  }, [regimeSeries, effectiveInterval, tzMode])
 
   // Compute default panel sizes based on sub-pane count (matches original ratios)
   const defaultSizes = useMemo(() => {
@@ -1025,6 +1106,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
             subPaneMarkers={subPaneMarkers}
             toET={toET}
             tzMode={tzMode}
+            bucketSecs={autoRenderInterval ? (INTERVAL_SECS[autoRenderInterval] ?? 0) : undefined}
             onDoubleClick={handlePaneDoubleClick}
           />
         ))}
@@ -1036,7 +1118,7 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
 // Extracted to avoid inline JSX fragments with Separator+Panel pairs
 function SubPanelEntry({
   group, paneIndex, isLastPane, defaultSize, minSize, instanceData, instanceLoading, loadingByInstance, instanceError, instanceErrorMessage, onRetryIndicators, chartRef, candleSeriesRef,
-  paneRegistryRef, syncWidthsRef, subPaneMarkers, toET, tzMode, onDoubleClick,
+  paneRegistryRef, syncWidthsRef, subPaneMarkers, toET, tzMode, bucketSecs, onDoubleClick,
 }: {
   group: { key: string; label: string; instances: IndicatorInstance[] }
   paneIndex: number
@@ -1056,6 +1138,7 @@ function SubPanelEntry({
   subPaneMarkers: any[] | null
   toET: (time: string | number) => any
   tzMode?: string
+  bucketSecs?: number
   onDoubleClick: (paneIndex: number) => void
 }) {
   return (
@@ -1086,6 +1169,7 @@ function SubPanelEntry({
             toET={toET}
             label={group.label}
             tzMode={tzMode}
+            bucketSecs={bucketSecs}
             showTimeAxis={isLastPane}
           />
         </div>

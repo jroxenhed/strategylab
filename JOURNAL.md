@@ -6,6 +6,14 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-06-04
 
+### A8 rework — auto-downsample moved to pure render-layer resampling (user-driven, full cycle)
+
+- **Why:** user observed the refetch-based switch pulls coarse bars from the provider — far slower than acceptable on big ranges (well beyond seconds). Reworked to client-side resampling: `aggregateBars`/`aggregateLineSeries` in chartUtils.ts, `autoRenderInterval` state + `effectiveInterval` derivation in Chart.tsx, SubPane `bucketSecs` prop with shared bucket floors (pane alignment invariant). Manual "Aggregate ▾" keeps the backend path (provider-official bars); only AUTO is client-side. **Measured: 521ms zoom-out switch / 308ms restore (mostly the 150ms debounce) vs multi-second refetches.**
+- **Design dividend:** the entire async race class from the first cycle (pending guards, reload trap, error resets) was deleted — App.tsx lost `handleAutoInterval`/`autoIntervalActive`/conditional persist; **[F308](TODO-archive.md#f308) closed as structurally dissolved** (no fetch window = no stranded-view race).
+- **Review (same 3-persona panel):** 15 findings, 3 P1 — `'1d'` missing from chartUtils `INTERVAL_SECONDS` (markers/regime/signals silently drop at the 1d render tier; locked with snap-invariant tests), restore-path re-entering the evaluator with only incidental convergence (in-flight guard on `autoRangeRef`), `any`-erasure in the new utils. One holistic fixer; 389/389 tests.
+- **Live catch (orchestrator):** the checkbox-disable path swapped data without capturing the time window — view collapsed to 8.9% of extent and made re-enable a silent no-op (window fell below threshold). Fixed with capture-before-clear, guarded to active-only so an unconsumed `autoRangeRef` can't wedge the evaluator. Full toggle cycle verified: 882-day span constant across coarsen → uncheck → recheck.
+- **Filed:** F310 (one-frame pane misalignment during swap, RACE-04, acceptable-as-is).
+
 ### A8 off-screen downsampling — auto view-interval at wide zoom (full cycle + live browser verification)
 
 - **[A8](TODO.md#a8) sub-item shipped:** auto-downsampling rides the existing A8b/A8d `viewInterval` pipeline (backend resamples OHLCV + indicators — no client-side aggregators, the explore brief's dual-path Steps 1/5/6 were cut at the fork). `evaluateAutoInterval` pure helper in `intervals.ts` (8000-on/6000-off thresholds in BASE-equivalent bars, 150ms debounce, `pendingSince` timestamp guard with 5s safety valve), `onAutoInterval` → App.tsx, `getVisibleRange` capture/restore across the swap, "Auto (1h)" header badge, `INTERVAL_SECS` consolidated to one export.

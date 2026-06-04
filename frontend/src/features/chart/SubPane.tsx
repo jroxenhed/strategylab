@@ -8,7 +8,7 @@ import {
 } from 'lightweight-charts'
 import type { IChartApi, ISeriesApi } from 'lightweight-charts'
 import type { IndicatorInstance } from '../../shared/types'
-import { toLineData } from './chartUtils'
+import { toLineData, aggregateLineSeries } from './chartUtils'
 
 export type PaneRegistryEntry = { chart: IChartApi; series: ISeriesApi<any> }
 export type PaneRegistry = Map<string, PaneRegistryEntry>
@@ -25,6 +25,9 @@ interface SubPaneProps {
   toET: (time: string | number) => any
   label: string
   tzMode?: string
+  /** Render-layer bucket size in seconds (0/undefined = no aggregation).
+   *  Must use the same bucket floor as the main pane to keep bar counts aligned. */
+  bucketSecs?: number
   loading?: boolean
   error?: boolean
   errorMessage?: string | null
@@ -44,7 +47,7 @@ const SUB_COLORS = ['#a371f7', '#58a6ff', '#f0883e', '#e8ab6a', '#56d4c4', '#f85
 export default function SubPane({
   paneKey, instances, instanceData, mainChartRef, mainSeriesRef,
   paneRegistryRef, syncWidthsRef,
-  markers, toET, label, tzMode, loading, error, errorMessage, onRetry,
+  markers, toET, label, tzMode, bucketSecs, loading, error, errorMessage, onRetry,
   showTimeAxis = true,
 }: SubPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -196,44 +199,56 @@ export default function SubPane({
     const sMap = seriesMapRef.current
     if (!sMap || !chartRef.current) return
 
+    // Render-layer aggregation helper: applies bucket-sampling if bucketSecs is set.
+    const agg = (raw: ReturnType<typeof toLineData>) =>
+      bucketSecs && bucketSecs > 0 ? aggregateLineSeries(raw, bucketSecs) : raw
+
     if (indicatorType === 'macd') {
       const inst = instances[0]
       const data = subData[inst.id]
       if (!data) return
       const histSeries = sMap.get(`${inst.id}:histogram`)
       if (histSeries) {
-        histSeries.setData((data.histogram ?? []).map(d => d.value !== null
-          ? { time: toET(d.time as any) as any, value: d.value as number, color: (d.value as number) >= 0 ? UP : DOWN }
-          : { time: toET(d.time as any) as any }
-        ))
+        // Aggregate the {time, value} projection of the histogram, then zip color back.
+        // This avoids passing extra fields through aggregateLineSeries (which only
+        // knows about {time, value}) without resorting to `as any` casts (TS-02).
+        const rawHistBase = toLineData(data.histogram ?? [], toET)
+        const aggHistBase = agg(rawHistBase)
+        const aggHist = aggHistBase.map(d => ({
+          time: d.time,
+          ...(d.value !== undefined ? { value: d.value, color: d.value >= 0 ? UP : DOWN } : {}),
+        }))
+        histSeries.setData(aggHist as any)
       }
-      sMap.get(`${inst.id}:macd`)?.setData(toLineData(data.macd ?? [], toET))
-      sMap.get(`${inst.id}:signal`)?.setData(toLineData(data.signal ?? [], toET))
+      sMap.get(`${inst.id}:macd`)?.setData(agg(toLineData(data.macd ?? [], toET)))
+      sMap.get(`${inst.id}:signal`)?.setData(agg(toLineData(data.signal ?? [], toET)))
     } else if (indicatorType === 'stochastic') {
       const inst = instances[0]
       const data = subData[inst.id]
       if (!data) return
-      sMap.get(`${inst.id}:k`)?.setData(toLineData(data.k ?? [], toET))
-      sMap.get(`${inst.id}:d`)?.setData(toLineData(data.d ?? [], toET))
-      // 80/20 reference lines
-      const kArr = data.k ?? []
-      if (kArr.length > 0) {
-        const first = kArr[0].time, last = kArr[kArr.length - 1].time
-        sMap.get('__ref80')?.setData([{ time: toET(first as any) as any, value: 80 }, { time: toET(last as any) as any, value: 80 }])
-        sMap.get('__ref20')?.setData([{ time: toET(first as any) as any, value: 20 }, { time: toET(last as any) as any, value: 20 }])
+      // Hoist aggregated k result to reuse for setData and reference-line endpoints (COR-02/TS-05).
+      const kAgg = agg(toLineData(data.k ?? [], toET))
+      sMap.get(`${inst.id}:k`)?.setData(kAgg)
+      sMap.get(`${inst.id}:d`)?.setData(agg(toLineData(data.d ?? [], toET)))
+      // 80/20 reference lines — endpoints from the already-aggregated k series
+      if (kAgg.length > 0) {
+        const first = kAgg[0].time, last = kAgg[kAgg.length - 1].time
+        sMap.get('__ref80')?.setData([{ time: first, value: 80 }, { time: last, value: 80 }])
+        sMap.get('__ref20')?.setData([{ time: first, value: 20 }, { time: last, value: 20 }])
       }
     } else if (indicatorType === 'adx') {
       const inst = instances[0]
       const data = subData[inst.id]
       if (!data) return
-      sMap.get(`${inst.id}:adx`)?.setData(toLineData(data.adx ?? [], toET))
-      sMap.get(`${inst.id}:plus_di`)?.setData(toLineData(data.plus_di ?? [], toET))
-      sMap.get(`${inst.id}:minus_di`)?.setData(toLineData(data.minus_di ?? [], toET))
-      // 25 reference line
-      const adxArr = data.adx ?? []
-      if (adxArr.length > 0) {
-        const first = adxArr[0].time, last = adxArr[adxArr.length - 1].time
-        sMap.get('__ref25')?.setData([{ time: toET(first as any) as any, value: 25 }, { time: toET(last as any) as any, value: 25 }])
+      // Hoist aggregated adx result to reuse for setData and reference-line endpoints (TS-05).
+      const adxAgg = agg(toLineData(data.adx ?? [], toET))
+      sMap.get(`${inst.id}:adx`)?.setData(adxAgg)
+      sMap.get(`${inst.id}:plus_di`)?.setData(agg(toLineData(data.plus_di ?? [], toET)))
+      sMap.get(`${inst.id}:minus_di`)?.setData(agg(toLineData(data.minus_di ?? [], toET)))
+      // 25 reference line — endpoints from the already-aggregated adx series
+      if (adxAgg.length > 0) {
+        const first = adxAgg[0].time, last = adxAgg[adxAgg.length - 1].time
+        sMap.get('__ref25')?.setData([{ time: first, value: 25 }, { time: last, value: 25 }])
       }
     } else {
       for (const inst of instances) {
@@ -241,17 +256,18 @@ export default function SubPane({
         if (!data) continue
         const seriesKey = Object.keys(data)[0]
         if (!seriesKey) continue
-        sMap.get(inst.id)?.setData(toLineData(data[seriesKey], toET))
+        sMap.get(inst.id)?.setData(agg(toLineData(data[seriesKey], toET)))
       }
 
       if (indicatorType === 'rsi' && instances.length > 0) {
         const firstData = subData[instances[0].id]
         const seriesKey = firstData ? Object.keys(firstData)[0] : null
-        const arr = seriesKey ? firstData[seriesKey] : []
-        if (arr.length > 0) {
-          const first = arr[0].time, last = arr[arr.length - 1].time
-          sMap.get('__ref70')?.setData([{ time: toET(first as any) as any, value: 70 }, { time: toET(last as any) as any, value: 70 }])
-          sMap.get('__ref30')?.setData([{ time: toET(first as any) as any, value: 30 }, { time: toET(last as any) as any, value: 30 }])
+        const rawArr = seriesKey ? firstData[seriesKey] : []
+        const aggArr = agg(toLineData(rawArr, toET))
+        if (aggArr.length > 0) {
+          const first = aggArr[0].time, last = aggArr[aggArr.length - 1].time
+          sMap.get('__ref70')?.setData([{ time: first, value: 70 }, { time: last, value: 70 }])
+          sMap.get('__ref30')?.setData([{ time: first, value: 30 }, { time: last, value: 30 }])
         }
       }
     }
@@ -265,7 +281,7 @@ export default function SubPane({
       }
     }
     syncWidthsRef.current()
-  }, [subData, instances, indicatorType, toET, tzMode])
+  }, [subData, instances, indicatorType, toET, tzMode, bucketSecs])
 
   useEffect(() => {
     const series = primarySeriesRef.current

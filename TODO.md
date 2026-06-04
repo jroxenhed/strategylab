@@ -19,7 +19,8 @@ _(none open)_
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
 | [Architecture](#architecture) | 6 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272) |
-| [Hardening](#hardening) | 2 | [F305](#f305), [F308](#f308) |
+| [Hardening](#hardening) | 1 | [F305](#f305) |
+| [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 4 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307) |
 | [Infra](#infra) | 4 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309) |
 
@@ -53,10 +54,10 @@ _(none open)_
 
 _(none open)_
 - [ ] <a id="f305"></a> **F305** [next] sync-todo-index.py writes TODO.md with bare write_text() — not atomic; adopt the tempfile+fsync+os.replace pattern close-batch.py already uses (DI-03, F-BATCH-0604D review). [easy] [hardening]
-- [ ] <a id="f308"></a> **F308** A8 auto-downsample: stranded view observed once on the first-ever interval switch of a session (logical range left past the coarse data's right edge — blank pane, recoverable by zoom-in). 1-of-4 occurrences, not reproducible incl. cold-fetch mount; hypothesis: slow coarse refetch interacting with the autoRangeRef restore. DEV `window.__chartDebug.getRanges()` hook is in place for diagnosis. Repro recipe in .run/A8-downsample/browser-assertions.json. [medium] [hardening]
 
 ## Polish
 
+- [ ] <a id="f310"></a> **F310** One-frame crosshair/pane misalignment possible during render-interval swap — main-pane and SubPane setData run in separate effects on the same commit; lw-charts may emit a range event between them and sync a logical range onto a sub-pane still holding the old bar count (try/catch prevents errors; visual blip only). Structural fix needs shared dep-chain plumbing. (RACE-04, A8-render-resample review, rated acceptable-as-is.) [medium] [polish]
 ## Testing
 
 - [ ] <a id="d24b"></a> **D24b** Regime bot visual verification — D24 not visually verified. Need to run a regime bot in paper trading to confirm flip sequence, pending_regime_flip retry, and BotCard regime status display. Manual QA item. [testing]
