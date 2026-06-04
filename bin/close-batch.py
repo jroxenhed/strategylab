@@ -134,16 +134,18 @@ CLOSE_LINE_RE = re.compile(
 NEW_BULLET_RE = re.compile(
     r'^- \[ \] \*\*([A-Z]+\d+[a-z0-9\-]*)\*\*'
 )
-BUCKET_TAG_RE = re.compile(r'\[(arch|hardening|polish|testing|infra)\]', re.IGNORECASE)
+BUCKET_TAG_RE = re.compile(r'\[(arch|hardening|polish|testing|infra|features)\]', re.IGNORECASE)
 H3_RE = re.compile(r'^### (.+)$')
 H2_RE = re.compile(r'^## (.+)$')
 
-F_BUCKET_H3 = {
-    'arch':      'F · Architecture',
-    'hardening': 'F · Hardening',
-    'polish':    'F · Polish',
-    'testing':   'F · Testing and Infra',
-    'infra':     'F · Testing and Infra',
+# COR-01: map bucket tag → H2 section name (new TODO.md structure)
+BUCKET_H2 = {
+    'arch':      'Architecture',
+    'hardening': 'Hardening',
+    'polish':    'Polish',
+    'testing':   'Testing',
+    'infra':     'Infra',
+    'features':  'Features',
 }
 
 
@@ -270,54 +272,57 @@ def apply_close(lines: list[str], item_id: str, note: str, dry_run: bool) -> lis
     return new_lines
 
 
-def find_f_section_bounds(lines: list[str]) -> tuple[int, int]:
-    """Return (start, end) indices of the F section body.
+def find_h2_section_bounds(lines: list[str], section_name: str) -> tuple[int, int]:
+    """Return (start, end) indices of the body of the H2 section named section_name.
 
-    start: line after the '## F — ...' header
+    COR-01: Locates sections by their plain H2 name (e.g. 'Architecture'),
+    not the old '## F — ...' pattern.
+
+    start: line after the matching '## <section_name>' header
     end: line index of the next ## header (or EOF)
+    Returns (-1, -1) if not found.
     """
-    in_f = False
-    f_start = -1  # KPY-03: initialise to avoid UnboundLocalError if loop body is ever restructured
+    in_section = False
+    sec_start = -1
+    target = section_name.strip().lower()
     for i, line in enumerate(lines):
         h2 = H2_RE.match(line.rstrip())
         if h2:
-            hdr = h2.group(1)
-            if re.match(r'^F\s*[—\-]', hdr):
-                in_f = True
-                f_start = i + 1
+            hdr = h2.group(1).strip().lower()
+            if hdr == target:
+                in_section = True
+                sec_start = i + 1
                 continue
-            elif in_f:
-                return f_start, i
-    if in_f:
-        return f_start, len(lines)
+            elif in_section:
+                return sec_start, i
+    if in_section:
+        return sec_start, len(lines)
     return -1, -1
 
 
-def find_h3_insert_position(lines: list[str], f_start: int, f_end: int, h3_label: str) -> int:
-    """Return the index to insert a new line (before the next H3 or at f_end).
+def find_insert_position_in_section(lines: list[str], sec_start: int, sec_end: int) -> int:
+    """Return the index to insert a new bullet at the end of a section body.
 
-    Finds the H3 matching h3_label within [f_start, f_end), then returns
-    the index just before the next H3 (or f_end if this is the last H3).
-    If the H3 is not found, returns f_end so the line lands at the bottom.
+    COR-01: Scans backward from sec_end to find the last non-blank line,
+    then inserts after it (leaving a trailing blank line before the next section).
+    Falls back to sec_end if section is empty.
     """
-    target_h3 = f'### {h3_label}'
-    found_h3 = False
-    for i in range(f_start, f_end):
+    insert_at = sec_end
+    for i in range(sec_end - 1, sec_start - 1, -1):
         stripped = lines[i].rstrip()
-        if stripped == target_h3:
-            found_h3 = True
-            continue
-        if found_h3 and stripped.startswith('### '):
-            # Next H3 found — insert before it
-            return i
-    if found_h3:
-        return f_end
-    # H3 not found — insert at end of F section
-    return f_end
+        if stripped:
+            insert_at = i + 1
+            break
+    return insert_at
 
 
 def apply_new(lines: list[str], bullet: str, dry_run: bool) -> list[str]:
-    """Insert a new TODO bullet into the appropriate F-bucket H3 sub-section."""
+    """Insert a new TODO bullet into the appropriate H2 section.
+
+    COR-01: Uses BUCKET_H2 mapping to locate the target H2 section by its
+    plain name (Architecture, Hardening, etc.) instead of the old '## F — ...'
+    pattern. Warns and defaults to Infra if no bucket tag is present.
+    """
     m = NEW_BULLET_RE.match(bullet)
     item_id = m.group(1)
 
@@ -328,28 +333,35 @@ def apply_new(lines: list[str], bullet: str, dry_run: bool) -> list[str]:
     # DIG-03: require exactly one bucket tag (silent first-match was wrong)
     all_tags = BUCKET_TAG_RE.findall(bullet)
     if len(all_tags) == 0:
-        raise ValueError(
-            f'New item {item_id} has no bucket tag '
-            f'([arch]/[hardening]/[polish]/[testing]/[infra])'
+        # COR-01: warn and default to Infra rather than hard-failing,
+        # so manifests without a tag still land somewhere sensible.
+        print(
+            f'WARNING: New item {item_id} has no bucket tag '
+            f'([arch]/[hardening]/[polish]/[testing]/[infra]/[features]); '
+            f'defaulting to Infra',
+            file=sys.stderr,
         )
-    if len(all_tags) > 1:
+        bucket = 'infra'
+    elif len(all_tags) > 1:
         raise ValueError(
             f'New item {item_id} has multiple bucket tags: {all_tags!r} — '
             f'exactly one is required'
         )
-    bucket = all_tags[0].lower()
-    h3_label = F_BUCKET_H3[bucket]
+    else:
+        bucket = all_tags[0].lower()
 
-    f_start, f_end = find_f_section_bounds(lines)
-    if f_start == -1:
-        raise ValueError('Could not find F section in TODO.md')
+    section_name = BUCKET_H2.get(bucket, 'Infra')
 
-    insert_at = find_h3_insert_position(lines, f_start, f_end, h3_label)
+    sec_start, sec_end = find_h2_section_bounds(lines, section_name)
+    if sec_start == -1:
+        raise ValueError(f'Could not find H2 section "{section_name}" in TODO.md')
+
+    insert_at = find_insert_position_in_section(lines, sec_start, sec_end)
 
     new_line = bullet if bullet.endswith('\n') else bullet + '\n'
 
     if dry_run:
-        print(f'  NEW {item_id} → ### {h3_label} (insert at line {insert_at + 1}):')
+        print(f'  NEW {item_id} → ## {section_name} (insert at line {insert_at + 1}):')
         print(f'    + {bullet!r}')
 
     new_lines = list(lines)

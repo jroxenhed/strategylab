@@ -36,22 +36,28 @@ if git diff --cached --name-only | grep -qx 'TODO.md'; then
     # --- Date-stamp newly-added top-level TODO items ---
     today=$(date +%Y-%m-%d)
 
+    # Canonical ID pattern: letter-prefix + digits + optional alphanum/dash suffix.
+    # Matches: A8, B9, F249c, F249-alt, C25b — same pattern used in
+    # sync-todo-index.py BULLET_RE and archive-todo.py ITEM_ID_RE_STR.
+    # (Previously [A-Z]+[0-9]+[a-z]? — single sub-letter only; silently missed F249c.)
+    ID_PAT='[A-Z]+[0-9]+[a-z0-9-]*'
+
     # IDs already present in the prior committed file (empty string on initial commit)
     prior_ids=$(git show HEAD:TODO.md 2>/dev/null \
-        | grep -oE '^\- \[[ x]\] \*\*[A-Z]+[0-9]+[a-z]?\*\*' \
-        | grep -oE '[A-Z]+[0-9]+[a-z]?' || true)
+        | grep -oE "^\- \[[ x]\] \*\*${ID_PAT}\*\*" \
+        | grep -oE "${ID_PAT}" || true)
 
     # Top-level bullet lines that appear as additions in the staged diff
     new_lines=$(git diff --cached --unified=0 -- TODO.md \
         | grep '^+' | grep -v '^+++' \
         | sed 's/^+//' \
-        | grep -E '^\- \[[ x]\] \*\*[A-Z]+[0-9]+[a-z]?\*\*' || true)
+        | grep -E "^\- \[[ x]\] \*\*${ID_PAT}\*\*" || true)
 
     if [ -n "$new_lines" ]; then
         # Build pipe-delimited list of IDs that are genuinely new (not in prior commit)
         new_ids=""
         while IFS= read -r line; do
-            id=$(printf '%s' "$line" | grep -oE '[A-Z]+[0-9]+[a-z]?' | head -1)
+            id=$(printf '%s' "$line" | grep -oE "${ID_PAT}" | head -1)
             if [ -n "$id" ] && ! printf '%s\n' $prior_ids | grep -qx "$id"; then
                 new_ids="${new_ids}|${id}"
             fi
@@ -70,9 +76,9 @@ DIFFEOF
                     if (arr[i] != "") id_set[arr[i]] = 1
                 }
             }
-            /^\- \[[ x]\] \*\*[A-Z]+[0-9]+[a-z]?\*\*/ {
+            /^\- \[[ x]\] \*\*[A-Z]+[0-9]+[a-z0-9-]*\*\*/ {
                 line = $0
-                if (match(line, /\*\*[A-Z]+[0-9]+[a-z]?\*\*/)) {
+                if (match(line, /\*\*[A-Z]+[0-9]+[a-z0-9-]*\*\*/)) {
                     id_raw = substr(line, RSTART, RLENGTH)
                     gsub(/\*/, "", id_raw)
                     already = (line ~ /\(added [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)$/)
@@ -108,7 +114,7 @@ DIFFEOF
             /^### F · Untagged/ { flag = 1; next }
             /^### / { flag = 0 }
             flag && /^- \[/ {
-                if (match($0, /\*\*[A-Z]+[0-9]+[a-z]?\*\*/)) {
+                if (match($0, /\*\*[A-Z]+[0-9]+[a-z0-9-]*\*\*/)) {
                     id = substr($0, RSTART, RLENGTH)
                     gsub(/\*/, "", id)
                     print "  - " id
@@ -131,7 +137,7 @@ DIFFEOF
     # fixes that don't check anything off are not gated.
     completed_ids=$(git diff --cached --unified=0 -- TODO.md \
         | grep '^+- \[x\]' \
-        | grep -oE '\*\*[A-Z]+[0-9]+[a-z]?\*\*' \
+        | grep -oE '\*\*[A-Z]+[0-9]+[a-z0-9-]*\*\*' \
         | tr -d '*' \
         | sort -u || true)
 

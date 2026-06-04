@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sync-todo-index.py v5 — Idempotent TODO.md maintenance.
+"""sync-todo-index.py v6 — Idempotent TODO.md maintenance.
 
 Jobs:
   1. Insert <a id="..."> anchors on every bullet line (idempotent).
@@ -8,12 +8,31 @@ Jobs:
      - Replaces both the old intro Section/Topic table AND the old Open Work table.
      - IDs column uses range notation (F2–F3 for consecutive bare numbers).
      - F section split into 4 rows: Architecture, Hardening, Polish, Testing & Infra.
+     - Table covers OPEN items only (checked items are excluded from the count).
   4. Re-home items to their correct section letter (A/B/C/D/E/F) and sort numerically.
      - Removes HTML comment markers (<!-- ... -->) that were chronological grouping aids.
      - F section body emits H3 sub-headers by bucket tag (arch/hardening/polish/testing/infra).
+     - Items in `## Deferred (gated)` are NEVER moved out (left in place).
+     - Items with `[gated: ...]` tags land in Deferred if already there; the sync never
+       forcibly routes them there — placement is the author's responsibility.
+     - Works with both the legacy A–F section structure AND the target structure
+       (bucket-named sections without letter prefixes).  Letter-prefixed section headers
+       (`## F — Architecture & housekeeping`) are still matched; non-lettered sections
+       (`## Features`) pass through untouched.
   5. (--archive-before DATE) Move old checked items + pre-numbering block to archive file.
      - Uses JOURNAL.md backref-first date heuristic, git log fallback, default-to-old last.
      - Pre-numbering items are always archived unconditionally.
+
+ID regex (canonical — matches pre-commit hook and archive-todo.py):
+  [A-Z]+\\d+[a-z0-9\\-]*   e.g. A8, B9, F249c, F249-alt, C25b
+
+Deferred-section mechanic (design note):
+  The sync never auto-inserts items into `## Deferred (gated)`.  Items are placed
+  there manually by the author with a `[gated: <condition>]` tag.  The sync simply
+  skips moving them during rehome_and_sort (they are detected by sitting under the
+  `## Deferred (gated)` header and are excluded from the re-homing pass entirely).
+  This is the simplest mechanic consistent with the current design: no new tag
+  parsing, no special routing rules — just a section that is left untouched.
 
 Usage:
   # In-place update (safe default — preserves tags):
@@ -110,6 +129,12 @@ F_H3_ANCHORS = {
 REPO_ROOT = Path(__file__).resolve().parent.parent
 JOURNAL_PATH = REPO_ROOT / 'JOURNAL.md'
 
+# Name of the archive file — the sync must never index or modify it.
+TODO_ARCHIVE_NAME = 'TODO-archive.md'
+
+# Header text of the Deferred section — items under this H2 are never re-homed.
+DEFERRED_SECTION_RE = re.compile(r'^Deferred\s*\(gated\)', re.IGNORECASE)
+
 
 def github_slug(header: str) -> str:
     """Convert an H2 header text to GitHub's anchor slug format."""
@@ -148,10 +173,13 @@ def parse_lines(lines: list[str]):
     bullets: list[dict] = []
     h2_headers: list[tuple[int, str]] = []
 
+    current_h2: str = ''
+
     for i, line in enumerate(lines):
         h2 = H2_RE.match(line.rstrip())
         if h2:
             h2_headers.append((i, h2.group(1)))
+            current_h2 = h2.group(1)
 
         m = BULLET_RE.match(line)
         if not m:
@@ -190,6 +218,7 @@ def parse_lines(lines: list[str]):
             'bucket_tag': bucket_tag,
             'short_title': short_title,
             'letter': letter,
+            'h2_section': current_h2,
         })
 
     return bullets, h2_headers
@@ -210,10 +239,40 @@ def _fallback_slug(text: str) -> str:
     return slug or 'item'
 
 
+_STANDALONE_ANCHOR_RE = re.compile(r'^<a id="([^"]+)"></a>\s*$')
+
+
 def insert_anchors(lines: list[str]) -> list[str]:
     result = []
     fallback_seen: set[str] = set()
-    for line in lines:
+    for idx, line in enumerate(lines):
+        # Drop a standalone anchor line when the very next non-blank line is a
+        # bullet that already carries the same anchor inline — one anchor per item.
+        sa = _STANDALONE_ANCHOR_RE.match(line.rstrip('\n'))
+        if sa:
+            standalone_slug = sa.group(1)
+            # Peek forward past blank lines to find the next content line
+            next_content = None
+            for j in range(idx + 1, len(lines)):
+                if lines[j].strip():
+                    next_content = lines[j]
+                    break
+            if next_content is not None:
+                nb = BULLET_RE.match(next_content)
+                if nb and nb.group(2):
+                    # Next bullet has an inline anchor — check if slugs match
+                    inline_slug = nb.group(2).strip()
+                    # nb.group(2) is like '<a id="f2"></a> '
+                    inline_slug_m = re.search(r'<a id="([^"]+)">', inline_slug)
+                    if inline_slug_m and inline_slug_m.group(1) == standalone_slug:
+                        # Duplicate: skip the standalone line
+                        continue
+            # Also check: next bullet has no inline anchor yet but will get one
+            # with the same slug after this pass — emit the standalone only if
+            # the bullet is missing the anchor entirely (it will be added below).
+            # Since insert_anchors runs sequentially and we may have already
+            # processed the bullet differently, rely on the above check for now.
+
         m = BULLET_RE.match(line)
         if m and not m.group(2):
             item_id = m.group(3)
@@ -365,72 +424,46 @@ def render_open_work(bullets: list[dict], h2_headers: list[tuple[int, str]]) -> 
     open_items = [b for b in bullets if not b['checked']]
     total = len(open_items)
 
+    # Sections to skip in the table (generated/navigation sections).
+    # All other H2 sections that hold items get one row in file order.
+    SKIP_SECTION_RE = re.compile(
+        r'^(Critical \(P1\)|Up Next|Open Work)',
+        re.IGNORECASE,
+    )
+
+    # Collect item sections in file order (deduplicated, preserving order)
+    section_order: list[str] = []
+    seen_sections: set[str] = set()
+    for _, hdr in h2_headers:
+        if SKIP_SECTION_RE.match(hdr):
+            continue
+        if hdr not in seen_sections:
+            section_order.append(hdr)
+            seen_sections.add(hdr)
+
+    # Group open items by their h2_section
     groups: dict[str, list[dict]] = {}
     for b in open_items:
-        groups.setdefault(b['letter'], []).append(b)
+        sec = b.get('h2_section', '')
+        groups.setdefault(sec, []).append(b)
 
-    for letter in groups:
-        groups[letter].sort(key=lambda b: sort_key(b['item_id']))
+    for sec in groups:
+        groups[sec].sort(key=lambda b: sort_key(b['item_id']))
 
-    # Map letter → (header_text, topic)
-    letter_to_header: dict[str, str] = {}
-    for _, hdr in h2_headers:
-        lm = re.match(r'^([A-Z])\s*[—\-]\s*(.+)$', hdr)
-        if lm:
-            letter_to_header[lm.group(1)] = hdr
+    lines_out = [f'## Open Work — {total} items', '']
+    lines_out.append('| Section | Open | IDs |')
+    lines_out.append('|---|---|---|')
 
-    lines = [f'## Open Work — {total} items', '']
-    lines.append('| Section | Topic | Open | IDs |')
-    lines.append('|---|---|---|---|')
-
-    for letter in sorted(groups.keys()):
-        items = groups[letter]
-        hdr = letter_to_header.get(letter, letter)
+    for hdr in section_order:
+        items = groups.get(hdr, [])
+        if not items:
+            continue
         slug = section_slug(hdr)
+        id_col = _build_id_ranges(items)
+        lines_out.append(f'| [{hdr}](#{slug}) | {len(items)} | {id_col} |')
 
-        # Extract topic (part after "X — ")
-        topic_m = re.match(r'^[A-Z]\s*[—\-]\s*(.+)$', hdr)
-        topic = topic_m.group(1) if topic_m else hdr
-
-        if letter == 'F':
-            # Emit 4 sub-rows for F section buckets
-            # Buckets: arch, hardening, polish, then testing+infra combined
-            bucket_groups: dict[str, list[dict]] = {}
-            untagged: list[dict] = []
-            for b in items:
-                bt = b.get('bucket_tag', '')
-                if bt in ('arch', 'hardening', 'polish', 'testing', 'infra'):
-                    bucket_groups.setdefault(bt, []).append(b)
-                else:
-                    untagged.append(b)
-
-            for key, h3_label, topic_desc in F_H3_ORDER:
-                anchor = F_H3_ANCHORS[key]
-                if key == 'combined':
-                    # testing + infra share a row
-                    bucket_items = sorted(
-                        bucket_groups.get('testing', []) + bucket_groups.get('infra', []),
-                        key=lambda b: sort_key(b['item_id'])
-                    )
-                else:
-                    bucket_items = sorted(
-                        bucket_groups.get(key, []),
-                        key=lambda b: sort_key(b['item_id'])
-                    )
-                if not bucket_items:
-                    continue
-                id_col = _build_id_ranges(bucket_items)
-                lines.append(f'| [{h3_label}](#{anchor}) | {topic_desc} | {len(bucket_items)} | {id_col} |')
-
-            if untagged:
-                id_col = _build_id_ranges(untagged)
-                lines.append(f'| [F · Untagged](#f-untagged) | (needs tagging) | {len(untagged)} | {id_col} |')
-        else:
-            id_col = _build_id_ranges(items)
-            lines.append(f'| [{letter}](#{slug}) | {topic} | {len(items)} | {id_col} |')
-
-    lines.append('')
-    return '\n'.join(lines)
+    lines_out.append('')
+    return '\n'.join(lines_out)
 
 
 # ---------------------------------------------------------------------------
@@ -751,49 +784,63 @@ def rehome_and_sort(lines: list[str]) -> list[str]:
     Algorithm:
     1. Parse the file into segments: header lines, section blocks.
     2. For each section block, extract its bullets.
-    3. Re-assign bullets to section blocks based on their ID letter.
+       - `## Deferred (gated)` section: contents are NEVER moved or sorted —
+         left byte-identical (author controls placement).
+    3. Re-assign bullets to section blocks based on their ID letter prefix.
     4. Within each section, sort bullets numerically (sort_key).
        - Multi-line bullets (indented continuation lines) travel with their parent.
     5. Rebuild the file.
 
-    Only modifies the letter-keyed sections (A–F). Other content preserved.
+    Only modifies the letter-keyed sections (A–F). Other sections (including
+    Deferred) are preserved verbatim.  Structure-agnostic: works with both
+    the legacy A–F lettered structure and the future named-bucket structure —
+    sections without a letter prefix are treated as non-routable (pass-through).
     """
 
     # --- Pass 1: Identify section boundaries ---
-    # Build list of segments:
-    # ('pre', lines_list) — content before first lettered H2
-    # ('section', letter, header_line, content_lines) — A, B, C, D, E, F sections
-    # ('post', lines_list) — content after last lettered section (E — Discovery block, etc.)
+    # We categorize each H2 section as:
+    #   'lettered'  — header matches `## X — ...` (letter-keyed, can host bullets)
+    #   'deferred'  — header matches DEFERRED_SECTION_RE (left verbatim)
+    #   'other'     — all other H2 sections (preserved as-is)
+    #
+    # Generated sections (Critical/Up Next/Open Work) are stripped elsewhere
+    # and are not present at this point in the pipeline.
 
-    # Find all lettered H2 headers
-    section_starts: list[tuple[int, str, str]] = []  # (line_idx, letter, full_line)
+    section_starts: list[tuple[int, str, str, str]] = []  # (line_idx, kind, key, full_line)
+    # kind: 'lettered' | 'deferred' | 'other'
+    # key:  letter (for lettered) | 'DEFERRED' | header text
+
     for i, line in enumerate(lines):
         h2 = H2_RE.match(line.rstrip())
         if h2:
-            lm = re.match(r'^([A-Z])\s*[—\-]', h2.group(1))
+            hdr = h2.group(1)
+            lm = re.match(r'^([A-Z])\s*[—\-]', hdr)
             if lm:
-                section_starts.append((i, lm.group(1), line))
+                section_starts.append((i, 'lettered', lm.group(1), line))
+            elif DEFERRED_SECTION_RE.match(hdr):
+                section_starts.append((i, 'deferred', 'DEFERRED', line))
+            else:
+                section_starts.append((i, 'other', hdr, line))
 
     if not section_starts:
         return lines
 
-    # Build per-section content lists
+    # Lines before the first H2 section
     pre_lines = list(lines[:section_starts[0][0]])
 
-    sections: dict[str, dict] = {}
-    letter_order: list[str] = []
-    for idx, (sidx, letter, hdr_line) in enumerate(section_starts):
+    # Build per-section data
+    sections: list[dict] = []
+    for idx, (sidx, kind, key, hdr_line) in enumerate(section_starts):
         end_idx = section_starts[idx + 1][0] if idx + 1 < len(section_starts) else len(lines)
-        # Content: everything between this header and the next section header
         content = list(lines[sidx + 1:end_idx])
-        sections[letter] = {
+        sections.append({
+            'kind': kind,
+            'key': key,
             'header_line': hdr_line,
             'content': content,
-        }
-        letter_order.append(letter)
+        })
 
     # --- Pass 2: Extract bullets with their continuation lines ---
-    # A "bullet group" = the bullet line + all immediately following indented non-bullet lines
     def extract_bullet_groups(content_lines: list[str]) -> tuple[list[tuple[str, list[str]]], list[str]]:
         """Returns (bullet_groups, non_bullet_lines).
         bullet_groups: list of (bullet_line, continuation_lines)
@@ -827,31 +874,35 @@ def rehome_and_sort(lines: list[str]) -> list[str]:
                 i += 1
         return groups, non_bullets
 
-    # Collect all bullet groups across all sections
-    all_bullet_groups: list[tuple[str, list[str], str]] = []  # (bullet_line, continuations, current_letter)
-    section_non_bullets: dict[str, list[str]] = {}
-
     # H3 sub-headers we auto-generate in the F section (strip on re-run to stay idempotent)
     F_GENERATED_H3 = {
         f'### {h3_label}' for _, h3_label, _ in F_H3_ORDER
-    } | {'### F · Untagged', '### F · Shipped'}  # keep '### F · Shipped' for idempotent strip of old previews
+    } | {'### F · Untagged', '### F · Shipped'}
 
-    for letter in letter_order:
-        groups, non_bullets = extract_bullet_groups(sections[letter]['content'])
-        if letter == 'F':
+    # Collect all moveable bullet groups from lettered sections
+    all_bullet_groups: list[tuple[str, list[str], str]] = []  # (bullet_line, continuations, current_key)
+    section_non_bullets: dict[str, list[str]] = {}
+
+    for sec in sections:
+        if sec['kind'] != 'lettered':
+            continue
+        key = sec['key']
+        groups, non_bullets = extract_bullet_groups(sec['content'])
+        if key == 'F':
             # Strip auto-generated H3 sub-headers so Pass 5 can re-emit them cleanly
             non_bullets = [
                 nl for nl in non_bullets
                 if nl.rstrip() not in F_GENERATED_H3
             ]
-        section_non_bullets[letter] = non_bullets
+        section_non_bullets[key] = non_bullets
         for bullet_line, continuations in groups:
-            all_bullet_groups.append((bullet_line, continuations, letter))
+            all_bullet_groups.append((bullet_line, continuations, key))
 
     # --- Pass 3: Re-assign each bullet to correct section letter ---
-    section_bullets: dict[str, list[tuple[str, list[str]]]] = {l: [] for l in letter_order}
+    lettered_keys = [sec['key'] for sec in sections if sec['kind'] == 'lettered']
+    section_bullets: dict[str, list[tuple[str, list[str]]]] = {k: [] for k in lettered_keys}
 
-    for bullet_line, continuations, _current_letter in all_bullet_groups:
+    for bullet_line, continuations, current_key in all_bullet_groups:
         m = BULLET_RE.match(bullet_line)
         if m:
             item_id = m.group(3)
@@ -861,30 +912,38 @@ def rehome_and_sort(lines: list[str]) -> list[str]:
                 if target_letter in section_bullets:
                     section_bullets[target_letter].append((bullet_line, continuations))
                     continue
-        # Fall through: keep in original section (shouldn't happen for numbered items)
-        section_bullets[_current_letter].append((bullet_line, continuations))
+        # Fall through: keep in original section
+        section_bullets[current_key].append((bullet_line, continuations))
 
-    # --- Pass 4: Sort bullets numerically within each section ---
-    for letter in letter_order:
-        section_bullets[letter].sort(key=lambda g: sort_key(
+    # --- Pass 4: Sort bullets numerically within each lettered section ---
+    for key in lettered_keys:
+        section_bullets[key].sort(key=lambda g: sort_key(
             BULLET_RE.match(g[0]).group(3) if BULLET_RE.match(g[0]) else ''
         ))
 
     # --- Pass 5: Rebuild ---
     result = list(pre_lines)
-    for letter in letter_order:
-        result.append(sections[letter]['header_line'])
+    for sec in sections:
+        kind = sec['kind']
+        key = sec['key']
+        result.append(sec['header_line'])
+
+        if kind != 'lettered':
+            # Deferred and other sections: emit content verbatim (no sort/re-home)
+            result.extend(sec['content'])
+            continue
+
         # Non-bullet lines for this section (section description, blank lines, etc.)
-        for nbl in section_non_bullets[letter]:
+        for nbl in section_non_bullets.get(key, []):
             result.append(nbl)
 
-        if letter == 'F':
+        if key == 'F':
             # F section: all bullets (open and shipped) grouped under H3 sub-headers
             # by bucket tag, sorted numerically within each bucket regardless of status.
             by_bucket: dict[str, list] = {}
             untagged: list = []
 
-            for bullet_line, continuations in section_bullets[letter]:
+            for bullet_line, continuations in section_bullets[key]:
                 bt_m = BUCKET_TAG_RE.search(bullet_line)
                 bt = bt_m.group(1).lower() if bt_m else ''
                 if bt in ('arch', 'hardening', 'polish', 'testing', 'infra'):
@@ -893,14 +952,14 @@ def rehome_and_sort(lines: list[str]) -> list[str]:
                     untagged.append((bullet_line, continuations))
 
             # Emit all bullets (open + shipped) under H3 sub-headers, sorted by ID
-            for key, h3_label, _topic in F_H3_ORDER:
-                if key == 'combined':
+            for h3_key, h3_label, _topic in F_H3_ORDER:
+                if h3_key == 'combined':
                     bucket_bullets = (
                         by_bucket.get('testing', []) +
                         by_bucket.get('infra', [])
                     )
                 else:
-                    bucket_bullets = by_bucket.get(key, [])
+                    bucket_bullets = by_bucket.get(h3_key, [])
                 # Sort numerically by item ID regardless of open/checked status
                 bucket_bullets.sort(key=lambda g: sort_key(
                     BULLET_RE.match(g[0]).group(3) if BULLET_RE.match(g[0]) else ''
@@ -919,8 +978,8 @@ def rehome_and_sort(lines: list[str]) -> list[str]:
                     result.append(bullet_line)
                     result.extend(continuations)
         else:
-            # Non-F sections: bullets as before
-            for bullet_line, continuations in section_bullets[letter]:
+            # Non-F lettered sections: bullets in sorted order
+            for bullet_line, continuations in section_bullets[key]:
                 result.append(bullet_line)
                 result.extend(continuations)
 
@@ -1160,6 +1219,16 @@ def main():
     if not input_path.exists():
         print(f'Error: {input_path} not found', file=sys.stderr)
         sys.exit(1)
+
+    # Safety: refuse to process TODO-archive.md — it is append-only and must
+    # never be indexed or sorted by this script.
+    for p in (input_path, output_path):
+        if p.name == TODO_ARCHIVE_NAME:
+            print(
+                f'Error: {p} is the archive file and must not be processed by this script.',
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     process(input_path, output_path, archive_before, args.dry_run, fix=args.fix)
 

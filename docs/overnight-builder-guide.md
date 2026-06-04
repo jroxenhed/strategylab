@@ -13,7 +13,7 @@ You are the StrategyLab overnight builder. Your job is to autonomously pick task
 1. Read CLAUDE.md for project context and patterns. Note the **Subagent delegation rule** there — applies to you too: dispatch subagents for parallel work (review personas), do sequential single-stream work (read → edit → verify) directly. No tier arbitrage when builder and would-be subagent are both Opus.
 2. Run `bash bin/install-hooks.sh` to activate versioned git hooks (idempotent — sets `core.hooksPath` to `.githooks/`). The pre-commit hook auto-runs `bin/sync-todo-index.py` and auto-stamps newly-added TODO items with `(added YYYY-MM-DD)`. Without this step the TODO.md index goes stale on every commit.
 3. Read NEXT_RUN.md for task overrides, skip list, constraints.
-4. Read TODO.md — pick items tagged [next]. If no [next] tags, pick unchecked items in section order.
+4. Read TODO.md (open items only — now small). Pick items tagged `[next]` first. If no `[next]` tags, pick unchecked items in file order: Up Next → bucket sections (Features / Arch / Hardening / Polish / Testing / Infra). **Skip items tagged `[gated: …]`** — those live in the Deferred section and must not be picked until their condition is met.
 5. Read JOURNAL.md (last entry only) for recent context.
 
 ## Pre-flight Checks
@@ -285,17 +285,17 @@ The script also auto-stamps newly-added top-level bullets with `(added YYYY-MM-D
 Run `npm run build` one last time. If clean:
 - The routine creates the working branch automatically (typically `claude/<adjective>-<surname>-<id>`). Verify with `git branch --show-current` that the current branch starts with `claude/` — abort and flag if not, since the sandbox git proxy blocks pushes to other branch prefixes.
 - **Before staging, work through this checklist line by line. Do not skip any item.**
-  1. Check off completed items in TODO.md.
+  1. Flip completed items to `[x]` in TODO.md, then run `python3 bin/archive-todo.py` to move them to `TODO-archive.md`. This is the close step — do it in the same session.
   2. **⛔ DO NOT SKIP: Add new TODO items.** This step is REQUIRED and has been skipped repeatedly. Do it now, before git add. Two required categories — both must be addressed:
      - *Findings:* one item for every P2/P3 finding, every thing you explicitly deferred ("no timeout", "not migrated", "left X out"), every "would be cleaner if..." you thought during implementation.
      - *Observations:* things you noticed while reading surrounding code — duplication, fragile patterns, missing guards, natural follow-ons. If you'd raise it in a code review, it belongs here. Tag [easy]/[medium]/[hard].
      - If this step produces zero new items, that is almost certainly wrong. You read code to implement; you saw things. Write them down.
-     - **F-items must include one bucket tag:** `[arch]` / `[hardening]` / `[polish]` / `[testing]` / `[infra]`. The sync script groups by tag; untagged items land in `### F · Untagged`.
+     - **F-items must include one bucket tag:** `[arch]` / `[hardening]` / `[polish]` / `[testing]` / `[infra]`; file the item under its bucket section in TODO.md (not at the bottom). F### is a monotonic counter — never introduce new prefix letters.
      - **DO NOT run git add until new items are written.**
   3. Tag suitable unchecked items `[next]` for tomorrow's run (prefer prereqs of in-progress work, then [easy] items). At least one item must be tagged [next] before you commit.
   4. Append to JOURNAL.md.
   5. Run `python3 bin/sync-todo-index.py` (per §4.5) so the index reflects all your TODO edits.
-- git add the changed files + TODO.md + JOURNAL.md
+- git add the changed files + TODO.md + TODO-archive.md + JOURNAL.md
 - Commit with a descriptive message including the review summary line. The pre-commit hook will re-run sync (idempotent) and stamp any unstamped new items.
 
 Note on Visual Verification:
@@ -328,9 +328,10 @@ You cannot visually verify UI changes — that is the human's job during morning
    - [ ] §3.5b verification gate ran: `bin/verify-batch.sh <task-id>` (or individual fallback steps with documented reason)
    - [ ] §4 multi-agent review ran with the F80 roster (4 always-on + conditionals, target 4-6 total)
    - [ ] §4.5 explicit `python3 bin/sync-todo-index.py` ran before staging
+   - [ ] §5 step 1: `python3 bin/archive-todo.py` ran — closed items moved to TODO-archive.md
    - [ ] §5 step 2.2: every new F-item has a bucket tag (`[arch]` / `[hardening]` / `[polish]` / `[testing]` / `[infra]`) — pre-commit hook gates this
    - [ ] §5 step 2.3: at least one unchecked item tagged `[next]` — pre-commit hook gates this when items are checked off
-   - [ ] Atomic commit: code + TODO + JOURNAL + NEXT_RUN in one commit on the `claude/`-prefixed branch
+   - [ ] Atomic commit: code + TODO + TODO-archive.md + JOURNAL + NEXT_RUN in one commit on the `claude/`-prefixed branch
    - [ ] Draft PR opened via GitHub MCP after push
 
    ## Run metrics
@@ -340,7 +341,7 @@ You cannot visually verify UI changes — that is the human's job during morning
    - **Shipped:** N items (F-IDs and one-line titles)
    - **Surfaced:** M new TODO items (F-IDs and bucket tags)
    - **Multiplier:** M / N (raw ratio; ≤1 means net burn-down, >1 means growth)
-   - **Cumulative open F-items:** XX (from `## Open Work — XX items` after sync)
+   - **Cumulative open F-items:** XX (from `grep -c '^\- \[ \]' TODO.md` after archive + sync)
    - **Reviewer roster:** which personas you actually dispatched (always-on count + conditional count)
 
    ## What I followed well
