@@ -42,12 +42,15 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Optional
 
-RUN_DIR = Path(".run")
+# Resolve .run/ relative to the repo root (script's parent directory) so the
+# tool works correctly regardless of the caller's cwd.
+RUN_DIR = Path(__file__).resolve().parent.parent / ".run"
 TIERS = {"A", "B", "C"}
 PHASES = {"explore", "implement", "verify", "review", "synthesize", "fix", "done"}
 STATUSES = {"ok", "blocked", "failed"}
-SEVERITIES = {"P0", "P1", "P2"}
+SEVERITIES = {"P0", "P1", "P2", "P3"}
 DECISIONS = {None, "fix", "defer"}
 BUILDS = {None, "pass", "fail"}
 
@@ -200,7 +203,7 @@ def cmd_verify(a):
     print(f"verified_files: {state['verified_files']}")
 
 
-def _fmt_duration(ms):
+def _fmt_duration(ms: Optional[int]) -> str:
     if ms is None:
         return "—"
     secs = ms / 1000
@@ -241,6 +244,27 @@ def cmd_report(a):
           + (f"  |  review: {review_tok} tokens across {review_n} agent(s)" if review_n else ""))
     if missing:
         print(f"missing usage: {', '.join(missing)}")
+    # Unattributed session usage footer — rows from the hook log not yet merged
+    # into any agent entry via add-agent.
+    usage_log = RUN_DIR / "current-session-usage.jsonl"
+    if usage_log.exists():
+        try:
+            rows = []
+            skipped = 0
+            for line in usage_log.read_text().splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    skipped += 1
+            total_session_tok = sum(r.get("tokens", 0) or 0 for r in rows)
+            footer = f"session-usage.jsonl: {len(rows)} rows, {total_session_tok} total tokens"
+            if skipped:
+                footer += f"  ({skipped} malformed line(s) skipped)"
+            print(footer)
+        except Exception:
+            pass
 
 
 def cmd_validate(a):
