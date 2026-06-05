@@ -183,7 +183,7 @@ async def _run_validate_background(req_dict: dict) -> None:
         result_dict = await asyncio.to_thread(_run_validate_sync, req_dict)
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
         _ensure_data_dir()
-        atomic_write_text(_VALIDATION_PATH, json.dumps(result_dict, cls=_DateEncoder))
+        atomic_write_text(_VALIDATION_PATH, json.dumps(result_dict, cls=_DateEncoder), backup_depth=3)
         _validate_state.update({
             "status": "done",
             "duration_secs": elapsed,
@@ -304,6 +304,11 @@ def get_validation_result() -> dict:
     """Read the last persisted validation result.
 
     Raises 404 if no validation has been run yet.
+
+    DI-01: applies a read-time normalization shim so pre-schema_version payloads
+    (run-1 artifacts lacking the events/distribution fields) return a complete schema.
+    schema_version=0 is the sentinel for "pre-events run" — consumers can gate on it.
+    The on-disk artifact is NOT modified.
     """
     if not _VALIDATION_PATH.exists():
         raise HTTPException(status_code=404, detail="No validation result yet — run a validation first")
@@ -311,4 +316,19 @@ def get_validation_result() -> dict:
         data: dict = json.loads(_VALIDATION_PATH.read_text())
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to read validation result: {exc}")
+    # DI-01: backfill missing fields introduced in schema_version=1 so old artifacts
+    # serve a complete schema.  Defaults mirror the ValidationResult field defaults.
+    _schema_v1_defaults: dict = {
+        "schema_version": 0,
+        "events": [],
+        "null_mean_return_pct": 0.0,
+        "null_median_return_pct": 0.0,
+        "null_p25_return_pct": 0.0,
+        "null_p75_return_pct": 0.0,
+        "signal_horizon_mean_return_pct": 0.0,
+        "signal_horizon_median_return_pct": 0.0,
+        "null_horizon_mean_return_pct": 0.0,
+        "null_horizon_median_return_pct": 0.0,
+    }
+    data = {**_schema_v1_defaults, **data}
     return data

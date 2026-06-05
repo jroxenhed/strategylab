@@ -98,6 +98,14 @@ class TradeOutcome:
     is_null: bool                      # True = washed-out only (null candidate)
     horizon_months: int
     composite_score: float = 0.0       # score from run_filter (for miss list ordering)
+    # Item 1: per-event fields added for event-level table
+    entry_date: Optional[date] = None
+    exit_date: Optional[date] = None   # touch date if hit early, horizon-end otherwise
+    days_to_hit: Optional[int] = None  # None if not a hit; calendar days entry→exit
+    # Item 2b (F327): horizon-end close for fixed-horizon return comparison
+    # hits exit early at the touch price; this captures what the price was at horizon-end
+    horizon_end_price: Optional[float] = None
+    horizon_end_return_pct: Optional[float] = None  # net return if held to horizon-end
 
 
 @dataclass
@@ -133,6 +141,25 @@ class ValidationResult:
     fetch_failures: int = 0
     # ADV-05: ticker-horizon overlaps suppressed (same ticker, prior event still open)
     overlap_suppressed: int = 0
+    # Item 2a (F327): null cohort return distribution — was missing from prior payload
+    null_mean_return_pct: float = 0.0
+    null_median_return_pct: float = 0.0
+    null_p25_return_pct: float = 0.0
+    null_p75_return_pct: float = 0.0
+    # Item 2b (F327): fixed-horizon return comparison (mean/median for both cohorts)
+    # NOTE: hits exit early at the touch price; horizon-end price is the additional measure.
+    signal_horizon_mean_return_pct: float = 0.0
+    signal_horizon_median_return_pct: float = 0.0
+    null_horizon_mean_return_pct: float = 0.0
+    null_horizon_median_return_pct: float = 0.0
+    # Item 1: complete per-event table for downstream analyses (F324/F325/F328)
+    # Each dict has keys: ticker, as_of, is_null, entry_date, entry_price,
+    # exit_date, exit_price, net_return_pct, hit, days_to_hit (or null),
+    # composite_score, horizon_end_return_pct (or null), forward_return_pct
+    events: list[dict] = field(default_factory=list)
+    # Schema version — increment when per-event dict shape changes so readers
+    # can handle old persisted files gracefully (F315 backward-compat concern).
+    schema_version: int = 1
 
 
 # ---------------------------------------------------------------------------
@@ -381,8 +408,11 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
     truncated_events = 0
     overlap_suppressed = 0
     seen_tickers: set[str] = set()
-    # ADV-05: track open horizon end per ticker {ticker: horizon_end_date}
-    open_horizons: dict[str, date] = {}
+    # COR-02: separate cooldown books per cohort so a signal-horizon for ticker X
+    # cannot suppress a null event for ticker X (and vice versa).  Each cohort is
+    # its own independent event stream; overlap suppression is only within-cohort.
+    signal_open_horizons: dict[str, date] = {}
+    null_open_horizons: dict[str, date] = {}
 
     for as_of in as_of_dates:
         try:
@@ -409,10 +439,12 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
         null_candidates = [c for c in candidates if c.is_null_candidate]
 
         for candidate_list, is_null in [(signal_candidates, False), (null_candidates, True)]:
+            # COR-02: each cohort uses its own horizon-tracking dict
+            open_horizons = null_open_horizons if is_null else signal_open_horizons
             for cand in candidate_list:
                 seen_tickers.add(cand.ticker)
 
-                # ADV-05: skip if a prior event's horizon is still open
+                # ADV-05: skip if a prior event's horizon is still open (within this cohort)
                 if cand.ticker in open_horizons and open_horizons[cand.ticker] >= as_of:
                     overlap_suppressed += 1
                     logger.debug(
@@ -433,6 +465,14 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
                     continue
                 entry_date, entry_close = entry_result
 
+                # DI-03: zero-guard on entry_close — a 0.0 yfinance bar must not abort the run
+                if entry_close <= 0:
+                    logger.warning(
+                        "run_validation: zero entry_close for %s at %s, skipping",
+                        cand.ticker, as_of,
+                    )
+                    continue
+
                 # Horizon end
                 horizon_end = _horizon_end_date(entry_date, req.horizon_months)
 
@@ -451,16 +491,16 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
                     )
                     continue
 
-                # Register horizon open (ADV-05)
+                # Register horizon open (ADV-05, within-cohort only)
                 open_horizons[cand.ticker] = horizon_end
 
                 # D11 exit: scan forward for take-profit within horizon
                 # ADV-02: is_hit judged on NET return >= hit_threshold (not gross close)
                 exit_close: Optional[float] = None
                 exit_date: Optional[date] = None
+                hit_early: bool = False  # True when take-profit touch triggers early exit
 
                 # First compute costs to determine net take-profit threshold
-                _, _, _, _ = _apply_costs(entry_close, entry_close, req)  # prime per_leg_commission
                 net_entry_adj = entry_close * (1 + req.slippage_bps / 1e4)
                 # Net return threshold: net_return_pct >= hit_threshold_pct
                 # net_return_pct = (net_exit - net_entry_adj) / net_entry_adj * 100 - comm_pct
@@ -486,6 +526,7 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
                     if close_val >= target_price:
                         exit_close = close_val
                         exit_date = row_date
+                        hit_early = True
                         break
 
                 if exit_close is None:
@@ -494,6 +535,21 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
                     if exit_close is None:
                         logger.debug("run_validation: no exit bar for %s", cand.ticker)
                         continue
+                    exit_date = horizon_end
+
+                # Item 2b (F327): capture horizon-end close for fixed-horizon comparison.
+                # When hit_early=True, the event exited before horizon-end; we record
+                # what the price would have been at horizon-end for the fixed-horizon measure.
+                # When hit_early=False, exit IS the horizon-end close, so they are identical.
+                horizon_end_close: Optional[float] = None
+                horizon_end_return_pct: Optional[float] = None
+                if hit_early:
+                    horizon_end_close = _close_at_or_before(df, horizon_end)
+                    if horizon_end_close is not None:
+                        _, _, _, horizon_end_return_pct = _apply_costs(entry_close, horizon_end_close, req)
+                else:
+                    # No early exit: horizon-end close == exit close
+                    horizon_end_close = exit_close
 
                 # Gross return
                 gross_return_pct = (exit_close - entry_close) / entry_close * 100
@@ -501,8 +557,16 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
                 # Apply costs (D6) — always compute net return
                 _, _, _, net_return_pct = _apply_costs(entry_close, exit_close, req)
 
+                if not hit_early:
+                    horizon_end_return_pct = net_return_pct
+
                 # ADV-02: is_hit judged on NET return (post slippage + commission)
                 is_hit = net_return_pct >= req.hit_threshold_pct
+
+                # Item 1: days_to_hit — calendar days from entry to exit, only for hits
+                days_to_hit: Optional[int] = None
+                if is_hit and exit_date is not None:
+                    days_to_hit = (exit_date - entry_date).days
 
                 outcome = TradeOutcome(
                     ticker=cand.ticker,
@@ -515,6 +579,11 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
                     is_null=is_null,
                     horizon_months=req.horizon_months,
                     composite_score=cand.composite_score,  # PY-05/ADV-07
+                    entry_date=entry_date,
+                    exit_date=exit_date,
+                    days_to_hit=days_to_hit,
+                    horizon_end_price=horizon_end_close,
+                    horizon_end_return_pct=horizon_end_return_pct,
                 )
 
                 if is_null:
@@ -531,23 +600,50 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
         ci_low, ci_high = wilson_ci(hits, n)
         return rate, ci_low, ci_high, n, hits
 
+    def _return_distribution_stats(returns: list[float]) -> tuple[float, float, float, float]:
+        """Return (mean, median, p25, p75) for a list of return values.
+
+        COR-05: percentiles via statistics.quantiles (n=4 gives [Q1, Q2, Q3]).
+        Falls back to min/max for n < 4.
+        """
+        if not returns:
+            return 0.0, 0.0, 0.0, 0.0
+        mean = statistics.mean(returns)
+        median = statistics.median(returns)
+        if len(returns) >= 4:
+            qs = statistics.quantiles(returns, n=4)
+            p25, p75 = qs[0], qs[2]
+        else:
+            p25 = min(returns)
+            p75 = max(returns)
+        return mean, median, p25, p75
+
     sig_rate, sig_ci_low, sig_ci_high, sig_n, sig_hits = _hit_rate_and_ci(signal_outcomes)
     null_rate, null_ci_low, null_ci_high, null_n, null_hits = _hit_rate_and_ci(null_outcomes)
 
-    # Return distribution (signal, net returns)
+    # Return distribution — signal net returns (existing)
     sig_returns = [o.net_return_pct for o in signal_outcomes]
-    if sig_returns:
-        sig_mean = statistics.mean(sig_returns)
-        sig_median = statistics.median(sig_returns)
-        # COR-05: percentiles via statistics.quantiles (n=4 returns [Q1, Q2, Q3])
-        if len(sig_returns) >= 4:
-            qs = statistics.quantiles(sig_returns, n=4)
-            p25, p75 = qs[0], qs[2]
-        else:
-            p25 = min(sig_returns)
-            p75 = max(sig_returns)
-    else:
-        sig_mean = sig_median = p25 = p75 = 0.0
+    sig_mean, sig_median, sig_p25, sig_p75 = _return_distribution_stats(sig_returns)
+
+    # Item 2a (F327): null cohort return distribution — was missing from prior payload
+    null_returns = [o.net_return_pct for o in null_outcomes]
+    null_mean, null_median, null_p25, null_p75 = _return_distribution_stats(null_returns)
+
+    # Item 2b (F327): fixed-horizon return comparison.
+    # horizon_end_return_pct is the net return if the position were held to horizon-end,
+    # regardless of whether a hit triggered an early exit. For non-hits, it equals
+    # net_return_pct (no early exit occurred). For hits it is the hypothetical hold-to-end.
+    # None values (no horizon-end bar available) are excluded from mean/median.
+    sig_horizon_returns = [
+        o.horizon_end_return_pct for o in signal_outcomes
+        if o.horizon_end_return_pct is not None
+    ]
+    null_horizon_returns = [
+        o.horizon_end_return_pct for o in null_outcomes
+        if o.horizon_end_return_pct is not None
+    ]
+    sig_hor_mean, sig_hor_median, _, _ = _return_distribution_stats(sig_horizon_returns)
+    null_hor_mean, null_hor_median, _, _ = _return_distribution_stats(null_horizon_returns)
 
     # Miss list: signal outcomes that did NOT hit, sorted by composite_score desc.
     # PY-05/COR-09/ADV-07: composite_score is now stored in TradeOutcome.
@@ -556,12 +652,38 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
         if not o.is_hit:
             miss_list_raw.append({
                 "ticker": o.ticker,
-                "as_of": o.as_of.isoformat(),
+                "as_of": o.as_of.isoformat() if isinstance(o.as_of, date) else str(o.as_of),
                 "composite_score": o.composite_score,
                 "net_return_pct": o.net_return_pct,
             })
     # Sort by composite_score desc; net_return_pct as tiebreak (worst misses last)
     miss_list_raw.sort(key=lambda x: (-(x["composite_score"] or 0), x["net_return_pct"]))
+
+    # Item 1: build per-event table for downstream analyses (F324/F325/F328).
+    # Includes both signal and null events. Dates serialized as ISO strings.
+    # Schema is additive-forward: new fields can be added without breaking readers
+    # that iterate over known keys. schema_version on the parent result tracks shape.
+    all_outcomes = signal_outcomes + null_outcomes
+    events_table: list[dict] = []
+    for o in all_outcomes:
+        events_table.append({
+            "ticker": o.ticker,
+            "as_of": o.as_of.isoformat() if isinstance(o.as_of, date) else o.as_of,
+            "is_null": o.is_null,
+            "entry_date": o.entry_date.isoformat() if isinstance(o.entry_date, date) else o.entry_date,
+            "entry_price": o.entry_price,
+            "exit_date": o.exit_date.isoformat() if isinstance(o.exit_date, date) else o.exit_date,
+            "exit_price": o.exit_price,
+            "net_return_pct": o.net_return_pct,
+            "forward_return_pct": o.forward_return_pct,
+            "hit": o.is_hit,
+            "days_to_hit": o.days_to_hit,
+            "composite_score": o.composite_score,
+            "horizon_months": o.horizon_months,
+            "horizon_end_return_pct": o.horizon_end_return_pct,
+        })
+    # Sort for deterministic output: as_of asc, ticker asc, null last
+    events_table.sort(key=lambda x: (x["as_of"] or "", x["is_null"], x["ticker"] or ""))
 
     elapsed = time.monotonic() - t0
     fetch_failures = getattr(bars_loader, "fetch_failures", 0)
@@ -579,8 +701,8 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
         null_hits=null_hits,
         signal_mean_return_pct=sig_mean,
         signal_median_return_pct=sig_median,
-        signal_p25_return_pct=p25,
-        signal_p75_return_pct=p75,
+        signal_p25_return_pct=sig_p25,
+        signal_p75_return_pct=sig_p75,
         miss_list=miss_list_raw,
         # ADV-09: expanded survivorship warning — biases are asymmetric, not symmetric
         survivorship_warning=(
@@ -599,4 +721,17 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
         truncated_events=truncated_events,
         fetch_failures=fetch_failures,
         overlap_suppressed=overlap_suppressed,
+        # Item 2a (F327): null cohort return distribution
+        null_mean_return_pct=null_mean,
+        null_median_return_pct=null_median,
+        null_p25_return_pct=null_p25,
+        null_p75_return_pct=null_p75,
+        # Item 2b (F327): fixed-horizon return comparison (hold-to-end, both cohorts)
+        signal_horizon_mean_return_pct=sig_hor_mean,
+        signal_horizon_median_return_pct=sig_hor_median,
+        null_horizon_mean_return_pct=null_hor_mean,
+        null_horizon_median_return_pct=null_hor_median,
+        # Item 1: per-event table
+        events=events_table,
+        schema_version=1,
     )

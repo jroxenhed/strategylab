@@ -597,3 +597,449 @@ def test_overlap_suppressed_counted():
     # 4 as-of dates in 2018; after first qualifies, remaining 3 are suppressed
     assert result.overlap_suppressed == 3
     assert result.signal_n == 1  # only the first event counted
+
+
+# ---------------------------------------------------------------------------
+# Item 1: events table tests
+# ---------------------------------------------------------------------------
+
+def test_events_table_present_with_signal_and_null_rows():
+    """Item 1: events list present; both signal and null rows appear with correct is_null flag."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    def _fake_run_filter(universe, as_of, params, bars_loader=None):
+        return [
+            _make_candidate("SIG1", is_null=False),
+            _make_candidate("NUL1", is_null=True),
+        ]
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018),
+        _fake_run_filter,
+        lambda ticker: flat_df,
+    )
+
+    assert hasattr(result, "events"), "ValidationResult must have 'events' attribute"
+    assert isinstance(result.events, list)
+    # Both signal and null rows should appear
+    tickers_in_events = {e["ticker"] for e in result.events}
+    is_null_values = {e["is_null"] for e in result.events}
+    assert "SIG1" in tickers_in_events
+    assert "NUL1" in tickers_in_events
+    assert False in is_null_values  # signal events
+    assert True in is_null_values   # null events
+
+
+def test_events_table_required_fields():
+    """Item 1: each event dict has all required keys."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018),
+        lambda universe, as_of, params, bars_loader=None: [_make_candidate("EVTX")],
+        lambda ticker: flat_df,
+    )
+
+    required_keys = {
+        "ticker", "as_of", "is_null", "entry_date", "entry_price",
+        "exit_date", "exit_price", "net_return_pct", "forward_return_pct",
+        "hit", "days_to_hit", "composite_score", "horizon_months",
+        "horizon_end_return_pct",
+    }
+    assert len(result.events) > 0, "Expected at least one event"
+    for event in result.events:
+        missing = required_keys - set(event.keys())
+        assert not missing, f"Event dict missing keys: {missing}"
+
+
+def test_events_table_dates_as_iso_strings():
+    """Item 1: date fields in events serialize as ISO strings (not date objects)."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018),
+        lambda universe, as_of, params, bars_loader=None: [_make_candidate("ISODT")],
+        lambda ticker: flat_df,
+    )
+
+    for event in result.events:
+        for key in ("as_of", "entry_date", "exit_date"):
+            val = event[key]
+            if val is not None:
+                assert isinstance(val, str), (
+                    f"events[0]['{key}'] should be ISO string, got {type(val)}: {val!r}"
+                )
+                # Should parse back to date without error
+                from datetime import date as _date
+                _date.fromisoformat(val)
+
+
+def test_events_table_days_to_hit_set_on_hits():
+    """Item 1: days_to_hit is an int >= 1 for hit events, None for misses."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    rising_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=3.0)
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018),
+        lambda universe, as_of, params, bars_loader=None: [_make_candidate("HITX")],
+        lambda ticker: rising_df,
+    )
+
+    hit_events = [e for e in result.events if e["hit"]]
+    miss_events = [e for e in result.events if not e["hit"]]
+
+    # All hit events should have days_to_hit set
+    for e in hit_events:
+        assert e["days_to_hit"] is not None, "Hit event must have days_to_hit"
+        assert isinstance(e["days_to_hit"], int)
+        assert e["days_to_hit"] >= 1
+
+    # All miss events should have days_to_hit = None
+    for e in miss_events:
+        assert e["days_to_hit"] is None, "Miss event must have days_to_hit=None"
+
+
+def test_events_table_serialization_roundtrip():
+    """Item 1: events table survives JSON round-trip (dates as ISO strings)."""
+    import dataclasses
+    import json
+    from datetime import date as _date
+
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018),
+        lambda universe, as_of, params, bars_loader=None: [
+            _make_candidate("RNDTRIP", is_null=False),
+            _make_candidate("RNDTRNL", is_null=True),
+        ],
+        lambda ticker: flat_df,
+    )
+
+    # Serialize via dataclasses.asdict + _DateEncoder (same path as the route)
+    class _DateEncoder(json.JSONEncoder):
+        def default(self, o):
+            if isinstance(o, _date):
+                return o.isoformat()
+            return super().default(o)
+
+    as_dict = dataclasses.asdict(result)
+    json_str = json.dumps(as_dict, cls=_DateEncoder)
+    parsed = json.loads(json_str)
+
+    assert "events" in parsed
+    assert "schema_version" in parsed
+    assert parsed["schema_version"] == 1
+
+    for event in parsed["events"]:
+        for key in ("as_of", "entry_date", "exit_date"):
+            val = event.get(key)
+            if val is not None:
+                assert isinstance(val, str), f"After roundtrip, {key} should be str"
+
+
+def test_schema_version_present():
+    """Item 1: schema_version field is present and equals 1."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018),
+        lambda universe, as_of, params, bars_loader=None: [],
+        lambda ticker: flat_df,
+    )
+
+    assert hasattr(result, "schema_version")
+    assert result.schema_version == 1
+
+
+# ---------------------------------------------------------------------------
+# Item 2a (F327): null cohort return distribution tests
+# ---------------------------------------------------------------------------
+
+def test_null_return_distribution_stats_present():
+    """F327 item 2a: null cohort return distribution fields are present and non-zero
+    when null outcomes exist."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+    # Use a declining path for null so return is clearly negative
+    declining_df = _make_declining_df(SPAN_START, SPAN_END)
+
+    def _fake_run_filter(universe, as_of, params, bars_loader=None):
+        return [
+            _make_candidate("SIGA", is_null=False),
+            _make_candidate("NULA", is_null=True),
+        ]
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018),
+        _fake_run_filter,
+        lambda ticker: declining_df,
+    )
+
+    # null_mean_return_pct should be non-zero (declining path → negative return)
+    assert hasattr(result, "null_mean_return_pct")
+    assert hasattr(result, "null_median_return_pct")
+    assert hasattr(result, "null_p25_return_pct")
+    assert hasattr(result, "null_p75_return_pct")
+
+    assert result.null_n > 0, "Expected null events"
+    # Declining path: mean/median should be negative
+    assert result.null_mean_return_pct < 0.0
+    assert result.null_median_return_pct < 0.0
+
+
+def test_return_distribution_stats_correct_on_synthetic_scenario():
+    """F327 item 2a: distribution stats match hand-computed values on a small scenario.
+
+    Scenario: 3 signal events all land at exactly the same flat price → net_return_pct
+    is determined by costs alone (negative). mean == median == all values.
+    """
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    # Use flat path so all 3 events get same net return
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+    # 3 tickers, single as-of date → 3 events (no overlap suppression since different tickers)
+    # Use start_year=end_year=2018, single date Feb 15 2018
+    tickers = ["T1", "T2", "T3"]
+    idx = [0]
+
+    def _fake_run_filter(universe, as_of, params, bars_loader=None):
+        return [_make_candidate(t) for t in tickers]
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018, slippage_bps=0.0),
+        _fake_run_filter,
+        lambda ticker: flat_df,
+    )
+
+    # With flat path + no slippage, net_return_pct ≈ 0 for all events
+    # p25 == p75 == median == mean (all returns equal)
+    if result.signal_n >= 3:
+        assert abs(result.signal_mean_return_pct - result.signal_median_return_pct) < 1.0
+        assert abs(result.signal_p25_return_pct - result.signal_p75_return_pct) < 1.0
+
+
+def test_null_distribution_zero_when_no_null_outcomes():
+    """F327 item 2a: null distribution fields are 0.0 when no null outcomes processed."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    # Only signal candidates, no null
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018),
+        lambda universe, as_of, params, bars_loader=None: [_make_candidate("ONLY_SIG")],
+        lambda ticker: flat_df,
+    )
+
+    assert result.null_n == 0
+    assert result.null_mean_return_pct == 0.0
+    assert result.null_median_return_pct == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Item 2b (F327): fixed-horizon return comparison
+# ---------------------------------------------------------------------------
+
+def test_horizon_return_fields_present():
+    """F327 item 2b: horizon-end return fields are present in result."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018),
+        lambda universe, as_of, params, bars_loader=None: [_make_candidate("HRZA")],
+        lambda ticker: flat_df,
+    )
+
+    assert hasattr(result, "signal_horizon_mean_return_pct")
+    assert hasattr(result, "signal_horizon_median_return_pct")
+    assert hasattr(result, "null_horizon_mean_return_pct")
+    assert hasattr(result, "null_horizon_median_return_pct")
+
+
+def test_horizon_return_equals_net_return_for_non_hits():
+    """F327 item 2b: for miss events, horizon_end_return_pct == net_return_pct
+    (no early exit, so fixed-horizon == actual exit)."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018, hit_threshold_pct=50.0),
+        lambda universe, as_of, params, bars_loader=None: [_make_candidate("MISS99")],
+        lambda ticker: flat_df,
+    )
+
+    # Flat path never hits +50% — all events are misses
+    # For misses: horizon_end_return_pct should equal net_return_pct
+    miss_events = [e for e in result.events if not e["hit"]]
+    for e in miss_events:
+        if e["horizon_end_return_pct"] is not None:
+            assert abs(e["horizon_end_return_pct"] - e["net_return_pct"]) < 0.01, (
+                f"Miss event: horizon_end_return_pct {e['horizon_end_return_pct']:.4f} "
+                f"!= net_return_pct {e['net_return_pct']:.4f}"
+            )
+
+
+def test_horizon_return_differs_from_net_return_for_early_hits():
+    """F327 item 2b: for early-hit events, horizon_end_return_pct != net_return_pct
+    when price trajectory diverges after the touch (rising path: continues up)."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    # Rising path: hits early (say at month 3), then continues rising past that point.
+    # horizon_end_return_pct should be HIGHER than net_return_pct at touch.
+    rising_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=3.0)
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018, hit_threshold_pct=50.0),
+        lambda universe, as_of, params, bars_loader=None: [_make_candidate("EARLYH")],
+        lambda ticker: rising_df,
+    )
+
+    hit_events = [e for e in result.events if e["hit"]]
+    # For a strongly rising path, the horizon-end return should exceed the touch return
+    for e in hit_events:
+        if e["horizon_end_return_pct"] is not None:
+            # At 3x/yr growth, horizon-end return >>> early touch return
+            assert e["horizon_end_return_pct"] > e["net_return_pct"], (
+                f"Expected horizon_end_return_pct > net_return_pct for strong rising path; "
+                f"got horizon={e['horizon_end_return_pct']:.2f}, net={e['net_return_pct']:.2f}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# TST-05: events-table vs aggregate counts consistency
+# ---------------------------------------------------------------------------
+
+def test_cohort_cooldowns_are_independent():
+    """COR-02: a signal event for ticker X must NOT suppress a null event for ticker X
+    at the same or later as_of date (and vice versa).  The two cohorts have separate
+    cooldown books after the fix.
+    """
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    # Both cohorts contain the SAME ticker so cross-cohort suppression is observable.
+    def _fake_run_filter(universe, as_of, params, bars_loader=None):
+        return [
+            _make_candidate("SAME", is_null=False),  # signal cohort
+            _make_candidate("SAME", is_null=True),   # null cohort — same ticker
+        ]
+
+    # Use a single as-of date so the first signal event's horizon (12 months) would
+    # suppress the null event in the old (shared) dict.
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018, horizon_months=12),
+        _fake_run_filter,
+        lambda ticker: flat_df,
+    )
+
+    # With separate cohort dicts: both the signal and null events should be recorded.
+    # signal_n >= 1 (4 as-of dates, first one fires; rest suppressed within signal cohort)
+    # null_n >= 1 (same: first fires; rest suppressed within null cohort)
+    assert result.signal_n >= 1, "Expected at least 1 signal event"
+    assert result.null_n >= 1, (
+        "Expected at least 1 null event — cross-cohort suppression is present (COR-02 regression)"
+    )
+
+
+def test_events_table_vs_aggregate_counts_consistent():
+    """TST-05: sum of hits in events matches aggregate counters.
+
+    Verifies that events_table is built from the same set of outcomes used to
+    compute signal_n/signal_hits/null_n/null_hits.  A merge bug or off-by-one
+    in overlap suppression would show up as a mismatch here.
+    """
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    def _fake_run_filter(universe, as_of, params, bars_loader=None):
+        return [
+            _make_candidate("SIGC1", is_null=False),
+            _make_candidate("SIGC2", is_null=False),
+            _make_candidate("NULC1", is_null=True),
+        ]
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018),
+        _fake_run_filter,
+        lambda ticker: flat_df,
+    )
+
+    # events_table includes both signal and null rows (not truncated)
+    signal_events = [e for e in result.events if not e["is_null"]]
+    null_events = [e for e in result.events if e["is_null"]]
+    signal_hits_in_table = sum(1 for e in signal_events if e["hit"])
+    null_hits_in_table = sum(1 for e in null_events if e["hit"])
+
+    assert len(signal_events) == result.signal_n, (
+        f"events signal rows ({len(signal_events)}) != signal_n ({result.signal_n})"
+    )
+    assert len(null_events) == result.null_n, (
+        f"events null rows ({len(null_events)}) != null_n ({result.null_n})"
+    )
+    assert signal_hits_in_table == result.signal_hits, (
+        f"events signal hits ({signal_hits_in_table}) != signal_hits ({result.signal_hits})"
+    )
+    assert null_hits_in_table == result.null_hits, (
+        f"events null hits ({null_hits_in_table}) != null_hits ({result.null_hits})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# TST-06: null and signal distributions are tracked independently
+# ---------------------------------------------------------------------------
+
+def test_null_and_signal_distributions_tracked_independently():
+    """TST-06: null and signal cohorts must use different price paths so a swapped
+    assignment cannot accidentally pass.
+
+    Uses a ticker-routing loader: signal ticker gets rising_df, null ticker gets
+    declining_df.  Asserts that null_mean_return_pct != signal_mean_return_pct,
+    confirming the two distributions are computed separately.
+    """
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    rising_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=3.0)
+    declining_df = _make_declining_df(SPAN_START, SPAN_END)
+
+    def _fake_run_filter(universe, as_of, params, bars_loader=None):
+        return [
+            _make_candidate("SIGT", is_null=False),
+            _make_candidate("NULT", is_null=True),
+        ]
+
+    def _routing_loader(ticker: str):
+        return rising_df if ticker == "SIGT" else declining_df
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018, horizon_months=12),
+        _fake_run_filter,
+        _routing_loader,
+    )
+
+    # Both cohorts must have events
+    assert result.signal_n > 0, "Expected signal events"
+    assert result.null_n > 0, "Expected null events"
+
+    # With such different price paths, the means must differ
+    assert result.signal_mean_return_pct != result.null_mean_return_pct, (
+        "signal_mean_return_pct == null_mean_return_pct — distributions may be swapped "
+        f"(signal={result.signal_mean_return_pct:.2f}, null={result.null_mean_return_pct:.2f})"
+    )
