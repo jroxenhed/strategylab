@@ -6,6 +6,7 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-06-05
 
+- New rule in CLAUDE.md Research Axioms (+ local working style): **promote durable findings immediately, never batch for session end** — direct lesson from the 529-killed session that nearly lost the first axiom by saving it last.
 - Adopted orphan test file `frontend/src/test/aggregateBars.test.ts` (found untracked, author session unknown): 20 passing tests covering aggregateBars OHLCV semantics (remainder buckets, volume-optional, monotonicity, daily passthrough) + aggregateLineSeries whitespace/parity — coverage that autoDownsample.test.ts doesn't duplicate.
 - **"Price leads, filings trail" promoted to Research Axiom** (new CLAUDE.md section): information diffusion order insiders → price → filings → analysts → screeners; filings fail as triggers but work as vetoes/filters; Form 4 is the only filing upstream of price (→ Insider Stack's #1 rank). Recovered from a 529-killed session that was mid-save; the filing-vs-price ablation in the ideation doc is the experiment that prices the axiom.
 - Edge-premise ideation (post-kill): 6-frame, 48-idea pass with 2020s anomaly-evidence web review → 5 survivors, saved to docs/ideation/2026-06-05-edge-premise-families-ideation.md and indexed in IDEAS.md. Headline: insider cluster buying is the strongest documented surviving retail edge (2-6% 30d CAR) and F321 just readied its data; next session = Insider Stack brainstorm with pre-registered guardrail.

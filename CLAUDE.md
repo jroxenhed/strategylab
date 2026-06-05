@@ -10,6 +10,8 @@ This file documents non-obvious architecture and runtime behavior — the stuff 
 
 Hard-won findings that steer premise design. Treat these like Key Bugs Fixed — authoritative until experimentally overturned.
 
+**Promote findings here the moment they're recognized as durable — never batch for session end.** The first axiom below was nearly lost when a 529 outage killed the session mid-save; a finding worth keeping is worth committing immediately.
+
 - **Price leads, filings trail.** Information diffusion order: insiders → price → filings → analysts → screeners. A quarterly filing is the *slowest public record* of things informed money acted on months earlier, so any screen using filings as the **trigger** structurally trades against people who already moved. GPRO-2015 and ENPH-2023 weren't anomalies; they were the rule (run-1/run-2 miss-list autopsy, confirmed by John's lived trading experience). Corollaries:
   - Filings are miscast as triggers but still useful as **vetoes and filters** — going-concern exclusions, weak-side disqualifiers, "filing confirms what price already said" gates.
   - **Form 4 is the one public filing upstream of price** — insiders act *before* the move. This is why the Insider Stack ranked #1 in the 2026-06-05 ideation and why its signal survived the 2020s while numeric PEAD died.
