@@ -169,11 +169,14 @@ def compute_f3(
     above = 0
     total = 0
     for ticker, closes in constituent_frames.items():
-        # Slice to data <= bar_date
-        try:
-            avail = closes.loc[closes.index <= bar_ts]
-        except Exception:
-            continue
+        # yfinance delivers tz-aware (America/New_York) indices; bar_ts is naive.
+        # Comparing the two RAISES — the 2026-06-05 all-WARMUP bug, where a
+        # blanket `except: continue` here silently skipped every constituent.
+        # Normalize instead of catching: real errors must propagate loudly.
+        idx = closes.index
+        if getattr(idx, "tz", None) is not None:
+            closes = pd.Series(closes.values, index=idx.tz_localize(None))
+        avail = closes.loc[closes.index <= bar_ts]
         n = len(avail)
         if n < _F3_SMA_PERIOD:
             continue  # excluded from both numerator and denominator
@@ -602,6 +605,10 @@ def _extract_closes(df: pd.DataFrame) -> Optional[pd.Series]:
     if series.empty:
         return None
 
+    # Strip timezone FIRST (yfinance indices are tz-aware America/New_York;
+    # naive-vs-aware comparisons raise — 2026-06-05 all-WARMUP regression)
+    if getattr(series.index, "tz", None) is not None:
+        series.index = series.index.tz_localize(None)
     # Normalize index to date-only
     if hasattr(series.index, "normalize"):
         series.index = series.index.normalize()

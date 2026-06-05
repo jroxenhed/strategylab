@@ -389,6 +389,33 @@ class TestComputeF3:
         result = rs.compute_f3(frames, bar_date)
         assert result == "NEUTRAL"
 
+    def test_tz_aware_constituent_index(self):
+        """REGRESSION (2026-06-05 all-WARMUP bug): yfinance frames carry a
+        tz-aware index (America/New_York); breadth must compute, not silently
+        skip every constituent on the naive-vs-aware comparison."""
+        n = 50
+        above = 40  # 80% → STRONG
+        frames = self._build_const_closes(n_tickers=n, n_bars=250, above=above)
+        # Localize every fixture index the way yfinance delivers real frames
+        frames = {
+            t: pd.Series(s.values, index=s.index.tz_localize("America/New_York"))
+            for t, s in frames.items()
+        }
+        bar_date = date(2015, 11, 1)
+        result = rs.compute_f3(frames, bar_date)
+        assert result == "STRONG"
+
+    def test_mixed_tz_and_naive_constituents(self):
+        """Mixed tz-aware and naive series must agree with the all-naive result."""
+        n = 50
+        above = 10  # 20% → WEAK
+        frames = self._build_const_closes(n_tickers=n, n_bars=250, above=above)
+        for i, (t, s) in enumerate(list(frames.items())):
+            if i % 2 == 0:
+                frames[t] = pd.Series(s.values, index=s.index.tz_localize("America/New_York"))
+        bar_date = date(2015, 11, 1)
+        assert rs.compute_f3(frames, bar_date) == "WEAK"
+
     def test_exclusion_of_short_history_names(self):
         """Names with < 200 bars are excluded from both numerator and denominator."""
         # 30 tickers with 250 bars (qualify, all above), 20 with only 100 bars (excluded)
