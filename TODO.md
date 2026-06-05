@@ -13,7 +13,7 @@ _(none open)_
 - [F305](#f305) — [next] sync-todo-index.py writes TODO.md with bare write_text() [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 27 items
+## Open Work — 28 items
 
 | Section | Open | IDs |
 |---|---|---|
@@ -21,7 +21,7 @@ _(none open)_
 | [Architecture](#architecture) | 8 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F331](#f331) |
 | [Hardening](#hardening) | 8 | [F305](#f305), [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F336](#f336)–[F337](#f337) |
 | [Polish](#polish) | 1 | [F310](#f310) |
-| [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329) |
+| [Testing](#testing) | 6 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329), [F338](#f338) |
 | [Infra](#infra) | 4 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309) |
 
 ## Features
@@ -76,6 +76,7 @@ _(none open)_
 ## Testing
 
 - [ ] <a id="f329"></a> **F329** Record a real Form 4 P-code (purchase) fixture for edgar positive controls — the real AAPL Form 4 fixture only contains S/G transaction codes, so the P-code accumulation path in get_form4_net_buys is exercised only by synthetic XML (TST-03c, F-RERUN-0605 review). Record a live insider-buy Form 4 (any ticker) and pin net-buys > 0. [easy] [testing]
+- [ ] <a id="f338"></a> **F338** Real-data smoke probe gate for new research instruments — implementing agents keep shipping bugs their own tests pass: three instrument bugs on 2026-06-05 sailed through green synthetic suites because fixtures share the implementer's blind spots (naive datetime indices vs tz-aware yfinance frames → all-WARMUP; long-only assumptions → inverted short take-profit; pond-shaped nulls → source-mode null_n=0). Every catch came from production-shaped contact: face-validity probes (2020-03-20 must read STRESS), reading real artifacts before interpreting, reviewers with different priors. INSTITUTIONALIZE: no new instrument's output is believed or committed until it has run against real cached data with pre-stated face-validity anchors; wire as a standing step in the orchestrator cycle + overnight-builder-guide (and consider a bin/smoke-probe helper that takes artifact path + anchor assertions). (John, 2026-06-05) [medium] [testing] (added 2026-06-05)
 
 - [ ] <a id="d24b"></a> **D24b** Regime bot visual verification — D24 not visually verified. Need to run a regime bot in paper trading to confirm flip sequence, pending_regime_flip retry, and BotCard regime status display. Manual QA item. [testing]
 
