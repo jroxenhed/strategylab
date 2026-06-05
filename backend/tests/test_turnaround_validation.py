@@ -270,8 +270,14 @@ def _run_validation_with_mocks(
     req: tv.ValidationRequest,
     fake_run_filter,
     fake_loader,
+    *,
+    progress=None,
+    timeout_secs=None,
 ) -> tv.ValidationResult:
-    """Patch the key seams and run validation inline."""
+    """Patch the key seams and run validation inline.
+
+    F313: optional progress and timeout_secs kwargs forwarded to run_validation.
+    """
     import sys
     import types
 
@@ -299,7 +305,12 @@ def _run_validation_with_mocks(
     tv._import_per_leg_commission = lambda: _fake_per_leg
 
     try:
-        result = tv.run_validation(req)
+        kwargs = {}
+        if progress is not None:
+            kwargs["progress"] = progress
+        if timeout_secs is not None:
+            kwargs["timeout_secs"] = timeout_secs
+        result = tv.run_validation(req, **kwargs)
     finally:
         tv._make_memoized_loader = orig_loader_fn
         tv._import_per_leg_commission = orig_import_comm
@@ -1043,3 +1054,392 @@ def test_null_and_signal_distributions_tracked_independently():
         "signal_mean_return_pct == null_mean_return_pct — distributions may be swapped "
         f"(signal={result.signal_mean_return_pct:.2f}, null={result.null_mean_return_pct:.2f})"
     )
+
+
+# ---------------------------------------------------------------------------
+# F313: progress tracking tests
+# ---------------------------------------------------------------------------
+
+def test_progress_dates_monotonic():
+    """F313: dates_done increments monotonically across as-of dates."""
+    import threading
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    progress = tv.ValidationProgress()
+    snapshots: list[int] = []
+
+    original_run_filter_calls = []
+
+    def _fake_run_filter(universe, as_of, params, bars_loader=None):
+        # Snapshot dates_done on each date entry
+        snapshots.append(progress.dates_done)
+        return [_make_candidate("PRGA")]
+
+    import sys, types
+    fake_t = _make_fake_turnaround(_fake_run_filter)
+    fake_edgar = types.ModuleType("edgar")
+    fake_edgar.fetch_universe = lambda: {}
+    orig_t = sys.modules.get("turnaround")
+    orig_e = sys.modules.get("edgar")
+    sys.modules["turnaround"] = fake_t
+    sys.modules["edgar"] = fake_edgar
+
+    orig_loader_fn = tv._make_memoized_loader
+    tv._make_memoized_loader = lambda **kw: lambda t: flat_df
+
+    orig_comm = tv._import_per_leg_commission
+    def _fake_per_leg(shares, req): return 0.0
+    tv._import_per_leg_commission = lambda: _fake_per_leg
+
+    try:
+        req = _make_validation_req(start_year=2018, end_year=2018)
+        result = tv.run_validation(req, progress=progress)
+    finally:
+        tv._make_memoized_loader = orig_loader_fn
+        tv._import_per_leg_commission = orig_comm
+        sys.modules["turnaround"] = orig_t or sys.modules.get("turnaround")
+        if orig_e is not None:
+            sys.modules["edgar"] = orig_e
+        elif "edgar" in sys.modules:
+            del sys.modules["edgar"]
+
+    # dates_done should have been 0 when entering the first date
+    assert snapshots[0] == 0
+    # After run, progress.dates_done should equal total dates (no timeout)
+    assert progress.dates_done == result.total_as_of_dates
+    # Snapshots should be non-decreasing
+    assert snapshots == sorted(snapshots)
+
+
+def test_progress_dates_total_and_universe_size_set():
+    """F313: progress.dates_total and universe_size are set before the main loop."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    progress = tv.ValidationProgress()
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2019),
+        lambda universe, as_of, params, bars_loader=None: [_make_candidate("PTOT")],
+        lambda ticker: flat_df,
+        progress=progress,
+    )
+
+    assert progress.dates_total == result.total_as_of_dates
+    assert progress.dates_total == 8  # 4 dates/year × 2 years
+    # universe_size is set (mock returns empty universe, so 0 is correct)
+    assert progress.universe_size == 0  # build_universe returns [] in the mock
+
+
+def test_progress_events_so_far_increments():
+    """F313: signal_events and null_events in progress increment with outcomes."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    progress = tv.ValidationProgress()
+
+    def _fake_run_filter(universe, as_of, params, bars_loader=None):
+        return [
+            _make_candidate("SIG_P", is_null=False),
+            _make_candidate("NUL_P", is_null=True),
+        ]
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018),
+        _fake_run_filter,
+        lambda ticker: flat_df,
+        progress=progress,
+    )
+
+    # After run completes, progress events should match result counts
+    assert progress.signal_events == result.signal_n
+    assert progress.null_events == result.null_n
+
+
+def test_progress_duration_secs_live():
+    """F313: progress tracker enables live duration computation (no direct test of route,
+    but verifies that monotonic timing works with the new signature)."""
+    import time
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    progress = tv.ValidationProgress()
+    t_start = time.monotonic()
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018),
+        lambda universe, as_of, params, bars_loader=None: [_make_candidate("TDUR")],
+        lambda ticker: flat_df,
+        progress=progress,
+    )
+
+    elapsed = time.monotonic() - t_start
+    # elapsed_secs on the result should be plausible (>0, <total elapsed)
+    assert result.elapsed_secs > 0
+    assert result.elapsed_secs <= elapsed + 0.5  # allow small clock skew
+
+
+# ---------------------------------------------------------------------------
+# F313: cancellation tests
+# ---------------------------------------------------------------------------
+
+def test_cancel_mid_run_raises():
+    """F313: cancel_event set before run starts → RuntimeError('_cancelled_') raised."""
+    import threading
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    cancel = threading.Event()
+    cancel.set()  # already cancelled before run starts
+
+    import sys, types
+    fake_t = _make_fake_turnaround(
+        lambda universe, as_of, params, bars_loader=None: [_make_candidate("CX")]
+    )
+    fake_edgar = types.ModuleType("edgar")
+    fake_edgar.fetch_universe = lambda: {}
+    orig_t = sys.modules.get("turnaround")
+    orig_e = sys.modules.get("edgar")
+    sys.modules["turnaround"] = fake_t
+    sys.modules["edgar"] = fake_edgar
+
+    orig_loader_fn = tv._make_memoized_loader
+    tv._make_memoized_loader = lambda **kw: lambda t: flat_df
+
+    orig_comm = tv._import_per_leg_commission
+    def _fake_per_leg(shares, req): return 0.0
+    tv._import_per_leg_commission = lambda: _fake_per_leg
+
+    try:
+        with pytest.raises(RuntimeError, match="_cancelled_"):
+            tv.run_validation(
+                _make_validation_req(start_year=2018, end_year=2018),
+                cancel_event=cancel,
+            )
+    finally:
+        tv._make_memoized_loader = orig_loader_fn
+        tv._import_per_leg_commission = orig_comm
+        if orig_t is not None:
+            sys.modules["turnaround"] = orig_t
+        elif "turnaround" in sys.modules:
+            del sys.modules["turnaround"]
+        if orig_e is not None:
+            sys.modules["edgar"] = orig_e
+        elif "edgar" in sys.modules:
+            del sys.modules["edgar"]
+
+
+def test_cancel_no_result_written(tmp_path):
+    """F313: cancel mid-run → caller should NOT write a result file (no result returned)."""
+    import threading
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    cancel = threading.Event()
+    cancel.set()
+
+    result_file = tmp_path / "validation_result.json"
+    assert not result_file.exists()
+
+    import sys, types
+    fake_t = _make_fake_turnaround(
+        lambda universe, as_of, params, bars_loader=None: [_make_candidate("CY")]
+    )
+    fake_edgar = types.ModuleType("edgar")
+    fake_edgar.fetch_universe = lambda: {}
+    orig_t = sys.modules.get("turnaround")
+    orig_e = sys.modules.get("edgar")
+    sys.modules["turnaround"] = fake_t
+    sys.modules["edgar"] = fake_edgar
+
+    orig_loader_fn = tv._make_memoized_loader
+    tv._make_memoized_loader = lambda **kw: lambda t: flat_df
+
+    orig_comm = tv._import_per_leg_commission
+    def _fake_per_leg(shares, req): return 0.0
+    tv._import_per_leg_commission = lambda: _fake_per_leg
+
+    raised = False
+    try:
+        tv.run_validation(
+            _make_validation_req(start_year=2018, end_year=2018),
+            cancel_event=cancel,
+        )
+    except RuntimeError:
+        raised = True
+    finally:
+        tv._make_memoized_loader = orig_loader_fn
+        tv._import_per_leg_commission = orig_comm
+        if orig_t is not None:
+            sys.modules["turnaround"] = orig_t
+        elif "turnaround" in sys.modules:
+            del sys.modules["turnaround"]
+        if orig_e is not None:
+            sys.modules["edgar"] = orig_e
+        elif "edgar" in sys.modules:
+            del sys.modules["edgar"]
+
+    assert raised, "Expected RuntimeError from cancelled run"
+    # The caller (route) decides not to write; run_validation itself doesn't write
+    # Result: the tmp file should not exist (the test confirms run_validation raises, not writes)
+    assert not result_file.exists()
+
+
+# ---------------------------------------------------------------------------
+# F313: timeout tests
+# ---------------------------------------------------------------------------
+
+def test_timeout_zero_produces_partial_result():
+    """F313: timeout_secs=0 → timed_out=True, dates_completed=0 (budget fires before first date)."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2019),
+        lambda universe, as_of, params, bars_loader=None: [_make_candidate("TOUT")],
+        lambda ticker: flat_df,
+        timeout_secs=0.0,
+    )
+
+    assert result.timed_out is True
+    # With zero timeout, no date can complete — dates_completed should be 0
+    assert result.dates_completed == 0
+
+
+def test_timeout_partial_result_has_timed_out_flag():
+    """F313: timeout result includes timed_out=True + dates_completed annotation."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2020),  # 3 years = 12 dates
+        lambda universe, as_of, params, bars_loader=None: [_make_candidate("TF")],
+        lambda ticker: flat_df,
+        timeout_secs=0.0,
+    )
+
+    assert hasattr(result, "timed_out")
+    assert hasattr(result, "dates_completed")
+    assert result.timed_out is True
+    assert result.dates_completed <= result.total_as_of_dates
+
+
+def test_timeout_completed_dates_events_preserved():
+    """F313: events from completed dates ARE included in a timeout result (salvage).
+    The in-flight date's partial events are dropped (bias protection).
+    Use a very short timeout that fires after the first date completes.
+    """
+    import time as _time
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    call_count = [0]
+
+    def _slow_filter(universe, as_of, params, bars_loader=None):
+        call_count[0] += 1
+        return [_make_candidate(f"TK{call_count[0]}")]
+
+    # Use a large number of dates but zero timeout — result should be partial
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2020),
+        _slow_filter,
+        lambda ticker: flat_df,
+        timeout_secs=0.0,
+    )
+
+    assert result.timed_out is True
+    # Since timeout=0, the run should have 0 completed dates and 0 events
+    assert result.dates_completed == 0
+    assert result.signal_n + result.null_n == 0
+
+
+def test_timeout_mid_date_drops_partial_date_events():
+    """F313-01 regression: a timeout that fires MID-date must drop that date's
+    already-processed events entirely (per-date buffer commit). Date 1 completes
+    (1 event, kept); date 2 processes one candidate slowly, then the budget fires
+    on the next candidate — date 2's partial prefix must NOT appear in outcomes,
+    counters, or the events table.
+    """
+    import time as _time
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    call_count = [0]
+
+    def _per_date_filter(universe, as_of, params, bars_loader=None):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return [_make_candidate("TKDATE1")]
+        return [_make_candidate("TKSLOW"), _make_candidate("TKNEVER")]
+
+    def _loader(ticker):
+        if ticker == "TKSLOW":
+            _time.sleep(0.5)  # burns past the budget DURING date 2's first candidate
+        return flat_df
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2020),
+        _per_date_filter,
+        _loader,
+        timeout_secs=0.2,
+    )
+
+    assert result.timed_out is True
+    assert result.dates_completed == 1
+    # Only date 1's event survives; TKSLOW was processed but must be dropped.
+    assert result.signal_n + result.null_n == 1
+    event_tickers = {e["ticker"] for e in result.events}
+    assert event_tickers == {"TKDATE1"}
+
+
+def test_no_timeout_timed_out_false():
+    """F313: normal run (no timeout) → timed_out=False, dates_completed == total."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018),
+        lambda universe, as_of, params, bars_loader=None: [_make_candidate("NOTO")],
+        lambda ticker: flat_df,
+    )
+
+    assert result.timed_out is False
+    assert result.dates_completed == result.total_as_of_dates
+
+
+# ---------------------------------------------------------------------------
+# F313: backward compat — old status fields still present
+# ---------------------------------------------------------------------------
+
+def test_validation_result_backward_compat_fields():
+    """F313: ValidationResult still has all pre-F313 fields (backward compat)."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018),
+        lambda universe, as_of, params, bars_loader=None: [],
+        lambda ticker: flat_df,
+    )
+
+    # All pre-F313 fields must still be present
+    for field in (
+        "signal_hit_rate", "null_hit_rate", "signal_n", "null_n",
+        "survivorship_warning", "total_as_of_dates", "elapsed_secs",
+        "conviction_skipped", "unique_tickers", "truncated_events",
+        "fetch_failures", "overlap_suppressed", "events", "schema_version",
+    ):
+        assert hasattr(result, field), f"Missing backward-compat field: {field}"

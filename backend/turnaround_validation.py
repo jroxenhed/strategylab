@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 import math
 import statistics
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -33,6 +34,36 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Wall-clock budget (mirrors _WFA_TIMEOUT_SECS in routes/walk_forward.py).
+# On timeout the completed-dates result IS written (salvage); on cancel
+# nothing is written (user intent). Checked at every as-of date boundary and
+# at every symbol iteration inside the current date.
+# ---------------------------------------------------------------------------
+_VALIDATION_TIMEOUT_SECS: float = 3 * 3600  # 3 hours — generous; real runs take ~60 min
+
+
+# ---------------------------------------------------------------------------
+# Progress tracker — plain mutable dict owned by the route, mutated here via
+# GIL-atomic single-key writes (no asyncio.Lock needed from a sync thread).
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ValidationProgress:
+    """Mutable progress state, passed by reference into run_validation.
+
+    Fields are mutated by the worker thread; the async status route reads them
+    (GIL ensures single-key updates are atomic — no asyncio.Lock needed).
+    """
+    dates_done: int = 0
+    dates_total: int = 0
+    current_date: str = ""       # ISO date string of the as-of date being processed
+    symbols_loaded: int = 0      # symbols processed in the current as-of date pass
+    universe_size: int = 0       # total universe size (set once at startup)
+    signal_events: int = 0       # running count of signal events recorded
+    null_events: int = 0         # running count of null events recorded
+
 
 # ---------------------------------------------------------------------------
 # Lazy / conditional imports so this module doesn't hard-fail while lane B
@@ -160,6 +191,13 @@ class ValidationResult:
     # Schema version — increment when per-event dict shape changes so readers
     # can handle old persisted files gracefully (F315 backward-compat concern).
     schema_version: int = 1
+    # F313: timeout salvage annotation.
+    # timed_out=True means the budget fired mid-run; completed dates' events
+    # ARE included (honest partial result). Partial in-flight date is dropped
+    # (its events would be biased toward the prefix of the universe).
+    # Cancel writes nothing; timeout writes this partial-but-honest result.
+    timed_out: bool = False
+    dates_completed: int = 0    # number of as-of dates fully processed before timeout
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +387,13 @@ def _apply_costs(
 # Main validation function
 # ---------------------------------------------------------------------------
 
-def run_validation(req: ValidationRequest) -> ValidationResult:
+def run_validation(
+    req: ValidationRequest,
+    *,
+    cancel_event: Optional[threading.Event] = None,
+    progress: Optional[ValidationProgress] = None,
+    timeout_secs: float = _VALIDATION_TIMEOUT_SECS,
+) -> ValidationResult:
     """Run historical as-of validation.
 
     Calls run_filter() at each quarterly date in [start_year, end_year].
@@ -369,6 +413,13 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
 
     ADV-05: per-ticker cooldown — if a prior event's horizon is still open for a
     given ticker at the current as_of date, the new event is skipped (overlap_suppressed).
+
+    F313: cancel_event — threading.Event; if set, raises CancelledError (no result written).
+    F313: progress — mutable ValidationProgress dict mutated with GIL-atomic single-key
+    writes (safe from a sync worker thread; the async status route just reads).
+    F313: timeout_secs — wall-clock budget; on expiry the completed-dates result IS returned
+    with timed_out=True (salvage). The in-flight date is dropped (partial events bias).
+    Cancel differs from timeout: cancel = user intent (no write); timeout = salvage (partial write).
 
     CPU-bound; designed to run in asyncio.to_thread().
     """
@@ -403,6 +454,11 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
     as_of_dates = _quarterly_as_of_dates(req.start_year, req.end_year)
     hit_threshold = req.hit_threshold_pct / 100.0
 
+    # F313: seed progress metadata now that universe + date list are known
+    if progress is not None:
+        progress.dates_total = len(as_of_dates)
+        progress.universe_size = len(universe)
+
     signal_outcomes: list[TradeOutcome] = []
     null_outcomes: list[TradeOutcome] = []
     truncated_events = 0
@@ -414,7 +470,27 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
     signal_open_horizons: dict[str, date] = {}
     null_open_horizons: dict[str, date] = {}
 
+    timed_out = False
+    dates_completed = 0
+
     for as_of in as_of_dates:
+        # F313: check cancellation at every as-of date boundary
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("_cancelled_")
+
+        # F313: check wall-clock budget at every as-of date boundary
+        if (time.monotonic() - t0) >= timeout_secs:
+            logger.warning(
+                "run_validation: wall-clock budget %.0fs exceeded after %d/%d dates",
+                timeout_secs, dates_completed, len(as_of_dates),
+            )
+            timed_out = True
+            break
+
+        # F313: update progress — entering new date
+        if progress is not None:
+            progress.current_date = as_of.isoformat()
+            progress.symbols_loaded = 0
         try:
             # Pass bars_loader into run_filter (D2) — avoids re-fetching per as_of
             candidates = turnaround.run_filter(
@@ -438,15 +514,41 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
         signal_candidates = [c for c in candidates if not c.is_null_candidate]
         null_candidates = [c for c in candidates if c.is_null_candidate]
 
+        # F313-01: per-date buffers — outcomes/counters commit to the global lists
+        # only when the date COMPLETES, so a timeout mid-date drops the partial
+        # date entirely (WFA partial-window drop rule; prevents prefix bias and
+        # the signal-committed/null-partial cohort asymmetry).
+        date_signal_outcomes: list[TradeOutcome] = []
+        date_null_outcomes: list[TradeOutcome] = []
+        date_overlap_suppressed = 0
+        date_truncated_events = 0
+
         for candidate_list, is_null in [(signal_candidates, False), (null_candidates, True)]:
+            if timed_out:
+                break
             # COR-02: each cohort uses its own horizon-tracking dict
             open_horizons = null_open_horizons if is_null else signal_open_horizons
             for cand in candidate_list:
                 seen_tickers.add(cand.ticker)
 
+                # F313: check cancellation and wall-clock budget at every symbol iteration
+                if cancel_event is not None and cancel_event.is_set():
+                    raise RuntimeError("_cancelled_")
+                if (time.monotonic() - t0) >= timeout_secs:
+                    logger.warning(
+                        "run_validation: wall-clock budget %.0fs exceeded inside date %s",
+                        timeout_secs, as_of,
+                    )
+                    timed_out = True
+                    break
+
+                # F313: update within-date symbol progress (signal cohort only to avoid double-counting)
+                if not is_null and progress is not None:
+                    progress.symbols_loaded += 1
+
                 # ADV-05: skip if a prior event's horizon is still open (within this cohort)
                 if cand.ticker in open_horizons and open_horizons[cand.ticker] >= as_of:
-                    overlap_suppressed += 1
+                    date_overlap_suppressed += 1
                     logger.debug(
                         "run_validation: overlap suppressed %s at %s (horizon open until %s)",
                         cand.ticker, as_of, open_horizons[cand.ticker],
@@ -484,7 +586,7 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
                     last_available = max(df.index)
 
                 if last_available < horizon_end:
-                    truncated_events += 1
+                    date_truncated_events += 1
                     logger.debug(
                         "run_validation: truncated event %s at %s (data ends %s, horizon %s)",
                         cand.ticker, as_of, last_available, horizon_end,
@@ -587,9 +689,33 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
                 )
 
                 if is_null:
-                    null_outcomes.append(outcome)
+                    date_null_outcomes.append(outcome)
+                    # F313: running event counts = committed + current-date buffer
+                    if progress is not None:
+                        progress.null_events = len(null_outcomes) + len(date_null_outcomes)
                 else:
-                    signal_outcomes.append(outcome)
+                    date_signal_outcomes.append(outcome)
+                    # F313: running event counts = committed + current-date buffer
+                    if progress is not None:
+                        progress.signal_events = len(signal_outcomes) + len(date_signal_outcomes)
+
+        # F313-01: timeout mid-date → discard the date's buffers entirely (drop rule);
+        # the partial date never reaches the global lists or counters.
+        if timed_out:
+            break
+
+        # F313: date fully completed — commit buffers, then increment counters
+        signal_outcomes.extend(date_signal_outcomes)
+        null_outcomes.extend(date_null_outcomes)
+        overlap_suppressed += date_overlap_suppressed
+        truncated_events += date_truncated_events
+        dates_completed += 1
+        if progress is not None:
+            progress.dates_done = dates_completed
+            # snap running counts back to committed totals (drops nothing here;
+            # buffers were just committed)
+            progress.signal_events = len(signal_outcomes)
+            progress.null_events = len(null_outcomes)
 
     # ---------- Aggregate statistics ----------
 
@@ -734,4 +860,7 @@ def run_validation(req: ValidationRequest) -> ValidationResult:
         # Item 1: per-event table
         events=events_table,
         schema_version=1,
+        # F313: timeout salvage annotation
+        timed_out=timed_out,
+        dates_completed=dates_completed,
     )

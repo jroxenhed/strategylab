@@ -18,6 +18,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import threading
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -71,6 +72,16 @@ _validate_state: dict = {
     "duration_secs": None,
     "error": None,
 }
+
+# F313: per-run cancel event + started_at_monotonic for live duration_secs
+# These are replaced at the start of each new run.
+_validate_cancel_event: Optional[threading.Event] = None
+_validate_started_at_monotonic: Optional[float] = None
+
+# F313: mutable progress object — mutated by the worker thread via GIL-atomic
+# single-key writes; read by the async status route (no asyncio.Lock needed).
+# Type is ValidationProgress (from turnaround_validation), imported lazily.
+_validate_progress: Optional[object] = None  # ValidationProgress instance or None
 
 _scan_lock: asyncio.Lock = asyncio.Lock()
 _validate_lock: asyncio.Lock = asyncio.Lock()
@@ -161,14 +172,22 @@ async def _run_scan_background(params: FilterParams, max_universe: int) -> None:
 # Validation background worker
 # ---------------------------------------------------------------------------
 
-def _run_validate_sync(req_dict: dict) -> dict:
-    """Synchronous validation worker — runs in asyncio.to_thread()."""
+def _run_validate_sync(
+    req_dict: dict,
+    cancel_event: threading.Event,
+    progress: object,  # ValidationProgress instance
+) -> dict:
+    """Synchronous validation worker — runs in asyncio.to_thread().
+
+    F313: cancel_event and progress are injected by the route.
+    Raises RuntimeError('_cancelled_') when cancel_event fires mid-run.
+    """
     import dataclasses as dc
     # Late import — lane C may not exist during parallel build
     from turnaround_validation import ValidationRequest, run_validation
 
     req = ValidationRequest(**req_dict)
-    result = run_validation(req)
+    result = run_validation(req, cancel_event=cancel_event, progress=progress)
     return dc.asdict(result)
 
 
@@ -177,23 +196,53 @@ async def _run_validate_background(req_dict: dict) -> None:
 
     REL-02: try/finally guarantees ANY exit path (including CancelledError) sets
     a terminal status — status never stays 'running' after the worker exits.
+
+    F313: pass cancel_event + progress to the sync worker.
+    Cancel (user intent) → status='cancelled', no result file written.
+    Timeout (budget) → status='timeout', partial-but-honest result IS written
+    (timed_out=True + dates_completed annotation in the result payload).
     """
+    global _validate_cancel_event, _validate_started_at_monotonic, _validate_progress
+
+    cancel_event = _validate_cancel_event
+    progress = _validate_progress
     started = datetime.now(timezone.utc)
     try:
-        result_dict = await asyncio.to_thread(_run_validate_sync, req_dict)
+        result_dict = await asyncio.to_thread(
+            _run_validate_sync, req_dict, cancel_event, progress
+        )
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
         _ensure_data_dir()
         atomic_write_text(_VALIDATION_PATH, json.dumps(result_dict, cls=_DateEncoder), backup_depth=3)
+        final_status = "timeout" if result_dict.get("timed_out") else "done"
         _validate_state.update({
-            "status": "done",
+            "status": final_status,
             "duration_secs": elapsed,
             "error": None,
         })
-        logger.info("Validation done in %.1fs", elapsed)
+        logger.info("Validation %s in %.1fs", final_status, elapsed)
     except asyncio.CancelledError:
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
         _validate_state.update({"status": "cancelled", "duration_secs": elapsed, "error": "cancelled"})
         raise
+    except RuntimeError as exc:
+        if "_cancelled_" in str(exc):
+            # F313: user-initiated cancel via POST /cancel — no result file written
+            elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+            _validate_state.update({
+                "status": "cancelled",
+                "duration_secs": elapsed,
+                "error": "cancelled by user",
+            })
+            logger.info("Validation cancelled after %.1fs", elapsed)
+        else:
+            elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+            logger.error("Validation failed: %s", exc, exc_info=True)
+            _validate_state.update({
+                "status": "error",
+                "duration_secs": elapsed,
+                "error": str(exc),
+            })
     except Exception as exc:
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
         logger.error("Validation failed: %s", exc, exc_info=True)
@@ -273,11 +322,20 @@ async def start_validation(
 
     PY-06/ORCH-01: ValidationRequest is fully typed — invalid body returns 422.
     REL-01/DI-09: asyncio.Lock makes the check+update atomic.
+    F313: creates a fresh cancel_event + ValidationProgress for this run.
     """
+    import time as _time
+    from turnaround_validation import ValidationProgress
+    global _validate_cancel_event, _validate_started_at_monotonic, _validate_progress
+
     # REL-01/DI-09: asyncio.Lock makes the check+update atomic
     async with _validate_lock:
         if _validate_state["status"] == "running":
             raise HTTPException(status_code=409, detail="Validation already running")
+        # F313: fresh cancel event + progress tracker for this run
+        _validate_cancel_event = threading.Event()
+        _validate_progress = ValidationProgress()
+        _validate_started_at_monotonic = _time.monotonic()
         _validate_state.update({
             "status": "running",
             "started_at": _utcnow_str(),
@@ -290,13 +348,66 @@ async def start_validation(
 
 @router.get("/api/turnaround/validate/status")
 def validate_status() -> dict:
-    """Poll the current validation state."""
+    """Poll the current validation state.
+
+    F313: adds live duration_secs while running + progress object.
+    duration_secs is computed from the monotonic clock while status='running'
+    so callers see a live wall-clock counter; at terminal states it reflects
+    the total elapsed time recorded by the background task.
+    """
+    import time as _time
+
+    status = _validate_state["status"]
+
+    # F313: live duration while running
+    if status == "running" and _validate_started_at_monotonic is not None:
+        live_duration = _time.monotonic() - _validate_started_at_monotonic
+    else:
+        live_duration = _validate_state.get("duration_secs")
+
+    # F313: snapshot progress (GIL-safe read of individual fields)
+    progress_snapshot: Optional[dict] = None
+    if _validate_progress is not None:
+        p = _validate_progress
+        progress_snapshot = {
+            "dates_done": p.dates_done,
+            "dates_total": p.dates_total,
+            "current_date": p.current_date,
+            "symbols_loaded": p.symbols_loaded,
+            "universe_size": p.universe_size,
+            "events_so_far": {
+                "signal": p.signal_events,
+                "null": p.null_events,
+            },
+        }
+
     return {
-        "status": _validate_state["status"],
+        "status": status,
         "started_at": _validate_state.get("started_at"),
-        "duration_secs": _validate_state.get("duration_secs"),
+        "duration_secs": live_duration,
         "error": _validate_state.get("error"),
+        "progress": progress_snapshot,
     }
+
+
+@router.post("/api/turnaround/validate/cancel")
+async def cancel_validation() -> dict:
+    """Cancel an in-flight validation run.
+
+    F313: sets the cancel_event so the worker thread exits cleanly at the next
+    symbol or date boundary. Status transitions to 'cancelled', no result file
+    written (cancellation = user intent, not a salvage scenario).
+    Returns 409 if no run is in flight.
+    """
+    async with _validate_lock:
+        if _validate_state["status"] != "running":
+            raise HTTPException(
+                status_code=409,
+                detail=f"No validation in flight (status={_validate_state['status']!r})",
+            )
+        if _validate_cancel_event is not None:
+            _validate_cancel_event.set()
+    return {"status": "cancelling"}
 
 
 @router.get("/api/turnaround/validate/result")
