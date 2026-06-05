@@ -293,6 +293,9 @@ def _resolve_candidate_source(config_name: Optional[str]):
     # package needing to be importable at server startup (consistent with D12 pattern).
     from research.config_momentum import CONFIG_M1, CONFIG_M2, CONFIG_M3  # noqa: local import
 
+    # Unit 7: deterioration-short configs (D1 primary + D2 price-only fallback)
+    from research.config_deterioration import CONFIG_D1, CONFIG_D2  # noqa: local import
+
     _REGISTERED: dict[str, object] = {
         # "legacy" resolves to None (the default run_filter path)
         "legacy": None,
@@ -300,8 +303,9 @@ def _resolve_candidate_source(config_name: Optional[str]):
         "momentum_M1": CONFIG_M1,   # PRIMARY — H1/H2 judged on this only
         "momentum_M2": CONFIG_M2,   # robustness (looser nearness band)
         "momentum_M3": CONFIG_M3,   # robustness (trend-filter ablation)
-        # Future configs registered here by their units:
-        # "deterioration_short": config_deterioration.CONFIG,
+        # Unit 7: deterioration-short configs per charter §1 variant grid
+        "deterioration_D1": CONFIG_D1,  # PRIMARY — H1/H2 judged on this only
+        "deterioration_D2": CONFIG_D2,  # price-only fallback (veto leg OFF)
     }
 
     if config_name is None or config_name == "legacy":
