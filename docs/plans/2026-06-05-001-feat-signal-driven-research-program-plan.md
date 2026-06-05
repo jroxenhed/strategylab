@@ -334,7 +334,7 @@ The beaten-down-names universe is abandoned as a *selection premise*; its events
 
 **Verification:** One verdict doc, two pre-registered verdicts, ledger covering both.
 
-- [ ] **Unit 8: Epistemics ablation (prices the axiom)**
+- [x] **Unit 8: Epistemics ablation (prices the axiom)**
 
 **Goal:** Head-to-head, same universe, same horizons: price-only selection vs filing-only selection. Converts "price leads, filings trail" from FRAME-DEPENDENT (audit classification) into a measured number, settling the CLAUDE.md axiom's evidence status.
 
