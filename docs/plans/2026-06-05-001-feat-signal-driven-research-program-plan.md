@@ -147,7 +147,7 @@ The beaten-down-names universe is abandoned as a *selection premise*; its events
 
 ### Phase 1 — Platform (the harness stops being premise-shaped)
 
-- [ ] **Unit 1: Pluggable candidate-source interface**
+- [x] **Unit 1: Pluggable candidate-source interface**
 
 **Goal:** Decouple `run_validation` from `run_filter`; any config callable can emit candidates.
 
@@ -176,7 +176,7 @@ The beaten-down-names universe is abandoned as a *selection premise*; its events
 
 **Verification:** Legacy regression test green; a toy config runs end-to-end producing a verdict artifact.
 
-- [ ] **Unit 2: Outcome engine v2 (cohort-relative forward returns)**
+- [x] **Unit 2: Outcome engine v2 (cohort-relative forward returns)**
 
 **Goal:** Replace +50%-touch/12m as primary metric with 21/63/126-trading-day cohort-relative forward returns vs a matched null; long+short sign handling.
 
@@ -207,7 +207,7 @@ The beaten-down-names universe is abandoned as a *selection premise*; its events
 
 **Verification:** Run-2 events table reprocessed through v2 produces the audit's apples-to-apples numbers (the EDA's corrected null hold-median, computed against the **legacy 12-month horizon fields kept as diagnostics** — so this reproduction check does not contradict the new 21/63/126-trading-day horizon set) — the engine reproduces the EDA's corrected math. This same reprocessing **also serves as the pond-abandonment counterfactual check**: if corrected cohort-relative metrics still show no excess vs the local null, abandonment is evidence-confirmed (closing the loop the EDA opened); if it shows signal, that is material information.
 
-- [ ] **Unit 3: Universe v2 + price infrastructure**
+- [x] **Unit 3: Universe v2 + price infrastructure**
 
 **Goal:** Liquid tradeable universe (min_price $5, min_avg_volume 500k, F319 hygiene, no washed-out gate) + F332 price-frame persistence so iteration is minutes, not 35-minute walls.
 
