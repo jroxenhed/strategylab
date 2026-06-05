@@ -176,22 +176,37 @@ def _run_validate_sync(
     req_dict: dict,
     cancel_event: threading.Event,
     progress: object,  # ValidationProgress instance
+    config_name: Optional[str] = None,
 ) -> dict:
     """Synchronous validation worker — runs in asyncio.to_thread().
 
     F313: cancel_event and progress are injected by the route.
     Raises RuntimeError('_cancelled_') when cancel_event fires mid-run.
+
+    Unit 1 (D12): config_name resolves to a CandidateSourceConfig (or None for legacy).
+    Resolution errors surface as RuntimeError → status="error" at GET /validate/status.
     """
     import dataclasses as dc
     # Late import — lane C may not exist during parallel build
     from turnaround_validation import ValidationRequest, run_validation
 
+    # Resolve config before constructing req so refusal errors surface cleanly
+    try:
+        candidate_source = _resolve_candidate_source(config_name)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+
     req = ValidationRequest(**req_dict)
-    result = run_validation(req, cancel_event=cancel_event, progress=progress)
+    result = run_validation(
+        req,
+        cancel_event=cancel_event,
+        progress=progress,
+        candidate_source=candidate_source,
+    )
     return dc.asdict(result)
 
 
-async def _run_validate_background(req_dict: dict) -> None:
+async def _run_validate_background(req_dict: dict, config_name: Optional[str] = None) -> None:
     """Async background function: calls _run_validate_sync in a thread.
 
     REL-02: try/finally guarantees ANY exit path (including CancelledError) sets
@@ -201,6 +216,8 @@ async def _run_validate_background(req_dict: dict) -> None:
     Cancel (user intent) → status='cancelled', no result file written.
     Timeout (budget) → status='timeout', partial-but-honest result IS written
     (timed_out=True + dates_completed annotation in the result payload).
+
+    Unit 1 (D12): config_name forwarded to _run_validate_sync for source resolution.
     """
     global _validate_cancel_event, _validate_started_at_monotonic, _validate_progress
 
@@ -209,7 +226,7 @@ async def _run_validate_background(req_dict: dict) -> None:
     started = datetime.now(timezone.utc)
     try:
         result_dict = await asyncio.to_thread(
-            _run_validate_sync, req_dict, cancel_event, progress
+            _run_validate_sync, req_dict, cancel_event, progress, config_name
         )
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
         _ensure_data_dir()
@@ -255,6 +272,40 @@ async def _run_validate_background(req_dict: dict) -> None:
 
 # ValidationRequest imported here (parallel-build concern no longer applies)
 from turnaround_validation import ValidationRequest  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# Config registry (Unit 1 / D12): maps config_name string to CandidateSourceConfig
+# or None (legacy path).  Populated here so the route can resolve config_name
+# to an object without the API surface carrying Python objects.
+# New configs are registered here as they land (Units 6–8); default is legacy (None).
+# ---------------------------------------------------------------------------
+
+def _resolve_candidate_source(config_name: Optional[str]):
+    """Return a CandidateSourceConfig for the given name, or None for legacy.
+
+    Raises ValueError with a clear message if the name is not registered —
+    surfaces through the F313 error channel at GET /validate/status.
+    """
+    from turnaround_validation import CandidateSourceConfig  # noqa: local import
+
+    _REGISTERED: dict[str, object] = {
+        # "legacy" resolves to None (the default run_filter path)
+        "legacy": None,
+        # Future configs registered here by their units:
+        # "momentum": config_momentum.CONFIG,
+        # "deterioration_short": config_deterioration.CONFIG,
+    }
+
+    if config_name is None or config_name == "legacy":
+        return None
+
+    if config_name not in _REGISTERED:
+        registered_names = ", ".join(sorted(_REGISTERED.keys()))
+        raise ValueError(
+            f"Unknown config_name {config_name!r}. "
+            f"Registered configs: {registered_names}."
+        )
+    return _REGISTERED[config_name]
 
 
 # ---------------------------------------------------------------------------
@@ -317,12 +368,25 @@ def get_watchlist(include_null: bool = Query(default=False, alias="include_null"
 async def start_validation(
     request: ValidationRequest,  # PY-07: typed body → FastAPI emits 422 on bad input
     background_tasks: BackgroundTasks,
+    config_name: Optional[str] = Query(
+        default=None,
+        description=(
+            "Unit 1 (D12): optional config name. "
+            "Default (None or 'legacy') → legacy run_filter path (config #0). "
+            "Future: 'momentum', 'deterioration_short', etc. "
+            "Unknown names are refused with status='error' at GET /validate/status."
+        ),
+    ),
 ) -> dict:
     """Start a historical validation run in the background.
 
     PY-06/ORCH-01: ValidationRequest is fully typed — invalid body returns 422.
     REL-01/DI-09: asyncio.Lock makes the check+update atomic.
     F313: creates a fresh cancel_event + ValidationProgress for this run.
+
+    Unit 1 (D12): optional config_name selects the candidate source.
+    Default (None) → legacy run_filter path unchanged (regression anchor).
+    Response shapes are unchanged regardless of config_name.
     """
     import time as _time
     from turnaround_validation import ValidationProgress
@@ -342,7 +406,7 @@ async def start_validation(
             "duration_secs": None,
             "error": None,
         })
-    background_tasks.add_task(_run_validate_background, request.model_dump())
+    background_tasks.add_task(_run_validate_background, request.model_dump(), config_name)
     return {"status": "running"}
 
 

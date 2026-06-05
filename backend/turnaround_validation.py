@@ -18,6 +18,13 @@ Key design decisions:
 - D11: entry = first trading close >= as_of; exit = first close >= entry*(1+threshold)
   within horizon_months (take-profit), else close at horizon-end. Truncated events
   (horizon extends past available price data) are counted and skipped.
+- D12 (Unit 1): Pluggable candidate source — run_validation accepts an optional
+  candidate_source callable (CandidateSourceConfig) so non-legacy configs can emit
+  candidates without going through run_filter. Default None → legacy run_filter path
+  (config #0, regression anchor). A non-default config MUST declare expected_events_per_year
+  (R1 enforcement); the harness refuses to run a non-default config missing this
+  declaration. Errors surface via the same RuntimeError channel F313 built (caught
+  by _run_validate_background → sets status="error", visible at GET /validate/status).
 """
 from __future__ import annotations
 
@@ -34,6 +41,49 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Pluggable candidate source (Unit 1 / D12)
+#
+# A CandidateSourceConfig declares: name, direction (long/short), the
+# pre-registered expected event rate (R1 enforcement), and the callable that
+# produces candidates for a given (as_of, universe) pair.
+#
+# The callable signature is:
+#   source_fn(as_of: date, universe: list, bars_loader: Callable) -> list[CandidateResult-like]
+#
+# The returned objects must be duck-compatible with CandidateResult (ticker,
+# composite_score, is_null_candidate, has_insider_buying, has_buyback).
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CandidateSourceConfig:
+    """Declares a pluggable candidate source for run_validation (Unit 1 / D12).
+
+    Fields
+    ------
+    name : str
+        Human-readable config identifier (used in events table and error messages).
+    direction : str
+        'long' or 'short'.  Flows through to TradeOutcome and ValidationResult
+        for sign-correct cost handling in Unit 2.  Currently stored as metadata
+        only; Unit 2 wires it into _apply_costs().
+    expected_events_per_year : float
+        Pre-registered expected event rate (R1 enforcement).  The harness refuses
+        to run a non-default (non-None candidate_source) config that has this set
+        to None or <= 0.  Forces explicit registration before any run.
+    source_fn : Callable
+        Called once per as-of date: source_fn(as_of, universe, bars_loader)
+        -> list of CandidateResult-like objects.
+    horizons : list[int], optional
+        Horizon set in months.  Defaults to [req.horizon_months] if None.
+        Unit 2 will extend this to [1, 3, 6] trading-day horizons.
+    """
+    name: str
+    direction: str  # 'long' | 'short'
+    expected_events_per_year: Optional[float]  # None only for legacy config #0
+    source_fn: Callable  # (as_of, universe, bars_loader) -> list[CandidateResult-like]
+    horizons: Optional[list] = None  # reserved for Unit 2
 
 # ---------------------------------------------------------------------------
 # Wall-clock budget (mirrors _WFA_TIMEOUT_SECS in routes/walk_forward.py).
@@ -393,16 +443,26 @@ def run_validation(
     cancel_event: Optional[threading.Event] = None,
     progress: Optional[ValidationProgress] = None,
     timeout_secs: float = _VALIDATION_TIMEOUT_SECS,
+    candidate_source: Optional[CandidateSourceConfig] = None,
 ) -> ValidationResult:
     """Run historical as-of validation.
 
-    Calls run_filter() at each quarterly date in [start_year, end_year].
+    Default (candidate_source=None): calls run_filter() at each quarterly date
+    in [start_year, end_year] — the legacy config #0 regression anchor.
+
+    Pluggable source (Unit 1 / D12): when candidate_source is provided, the harness
+    calls source.source_fn(as_of, universe, bars_loader) instead of run_filter().
+    The non-default config MUST declare expected_events_per_year > 0 (R1 enforcement);
+    the harness refuses to run a config missing this declaration and raises RuntimeError
+    so the caller's error-channel (F313 / GET /validate/status) surfaces the refusal.
+    No partial artifacts are written on refusal.
+
     Uses a memoized bars_loader (D2) so each symbol's price history is fetched
     at most once across all as-of dates.
 
     Conviction is skipped for all validation runs (D3): both flags are set False
-    after run_filter returns, composite score is NOT recomputed (conviction flags
-    are additive-only, never gatekeepers — omitting the bonus is conservative).
+    after the candidate source returns, composite score is NOT recomputed (conviction
+    flags are additive-only, never gatekeepers — omitting the bonus is conservative).
 
     Set definitions (ADV-08):
       signal  = washed-out AND fundamentals AND valuation
@@ -423,6 +483,20 @@ def run_validation(
 
     CPU-bound; designed to run in asyncio.to_thread().
     """
+    # D12 (Unit 1): R1 enforcement — non-default configs must declare event rate pre-run.
+    # Surfaces through the existing F313 error channel (RuntimeError → status="error" at
+    # GET /validate/status), no partial artifacts written.
+    if candidate_source is not None:
+        if (
+            candidate_source.expected_events_per_year is None
+            or candidate_source.expected_events_per_year <= 0
+        ):
+            raise RuntimeError(
+                f"Config '{candidate_source.name}' missing required event-rate declaration "
+                f"(expected_events_per_year must be > 0). "
+                f"R1: every non-default config must pre-register an expected event rate "
+                f"before running. Set CandidateSourceConfig.expected_events_per_year."
+            )
     t0 = time.monotonic()
 
     turnaround = _import_turnaround()
@@ -507,15 +581,20 @@ def run_validation(
             progress.current_date = as_of.isoformat()
             progress.symbols_loaded = 0
         try:
-            # Pass bars_loader into run_filter (D2) — avoids re-fetching per as_of
-            candidates = turnaround.run_filter(
-                universe=universe,
-                as_of=as_of,
-                params=params,
-                bars_loader=bars_loader,
-            )
+            if candidate_source is not None:
+                # D12 (Unit 1): pluggable path — delegate to the injected source callable.
+                # source_fn(as_of, universe, bars_loader) -> list[CandidateResult-like]
+                candidates = candidate_source.source_fn(as_of, universe, bars_loader)
+            else:
+                # Legacy config #0: pass bars_loader into run_filter (D2) — avoids re-fetching per as_of
+                candidates = turnaround.run_filter(
+                    universe=universe,
+                    as_of=as_of,
+                    params=params,
+                    bars_loader=bars_loader,
+                )
         except Exception as exc:
-            logger.warning("run_validation: run_filter failed at %s: %s", as_of, exc)
+            logger.warning("run_validation: candidate source failed at %s: %s", as_of, exc)
             continue
 
         # D3: zero out conviction flags (both signal and null candidates)
@@ -804,6 +883,10 @@ def run_validation(
     # Includes both signal and null events. Dates serialized as ISO strings.
     # Schema is additive-forward: new fields can be added without breaking readers
     # that iterate over known keys. schema_version on the parent result tracks shape.
+    # Unit 1 (D12): additive fields config_name and direction tag every event with
+    # its source config for downstream join.  Legacy path uses "legacy" / "long".
+    _config_name = candidate_source.name if candidate_source is not None else "legacy"
+    _direction = candidate_source.direction if candidate_source is not None else "long"
     all_outcomes = signal_outcomes + null_outcomes
     events_table: list[dict] = []
     for o in all_outcomes:
@@ -822,6 +905,9 @@ def run_validation(
             "composite_score": o.composite_score,
             "horizon_months": o.horizon_months,
             "horizon_end_return_pct": o.horizon_end_return_pct,
+            # D12 (Unit 1): config provenance tags — additive, consumers check key presence
+            "config_name": _config_name,
+            "direction": _direction,
         })
     # Sort for deterministic output: as_of asc, ticker asc, null last
     events_table.sort(key=lambda x: (x["as_of"] or "", x["is_null"], x["ticker"] or ""))
