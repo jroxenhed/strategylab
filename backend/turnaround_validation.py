@@ -889,12 +889,24 @@ def _compute_cohort_null_aggregates(
     name_records: list[tuple[float, dict[int, Optional[float]]]] = []
     n_usable = 0
 
+    # UNIVERSE_V2 floor conformance (charter pre-registered universe-v2): exclude
+    # sub-$5 / thin-volume / split-corrupt names from the exhaustive null cohort,
+    # using the SAME point-in-time helper the configs use at candidate emission.
+    # Signal and null MUST see the same universe or the per-cohort excess
+    # (signal − null median) is biased. Lazy import: the helper is a leaf module
+    # (no project imports), so importing it here cannot create a cycle.
+    from research.universe_floors import floor_status as _floor_status, OK as _FLOOR_OK
+
     for entry in universe:
         ticker = entry[0] if isinstance(entry, (tuple, list)) else entry
         if ticker in selected_tickers:
             continue
         df = bars_loader(ticker)
         if df is None or df.empty:
+            continue
+        # Point-in-time floor enforcement (counted reason: below_floor / corrupt_frame
+        # — names failing the floors are excluded from the null cohort entirely).
+        if _floor_status(df, as_of) != _FLOOR_OK:
             continue
         entry_res = _first_trading_close_on_or_after(df, as_of)
         if entry_res is None:

@@ -708,3 +708,90 @@ def test_d7_d2_emits_where_d1_vetoes():
     assert len(d2_results) == 1, (
         f"D2 must emit candidate regardless of YoY; got {len(d2_results)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# UNIVERSE_V2 floor conformance (charter pre-registered universe-v2)
+# ---------------------------------------------------------------------------
+
+def _make_sub5_crashed_df(as_of: date, bars_before: int = 500) -> pd.DataFrame:
+    """Crashed (would pass price gates) but ends BELOW the $5 min_price floor.
+
+    Reproduces the live $0.0112-entry / sub-$5 deterioration leak: a name that
+    crashed ≥50% from its 252-day high and sits near its low, but the absolute
+    price is below the tradeable floor.
+    """
+    phase1_end = as_of - timedelta(days=int(260 * 1.5))
+    phase1 = _make_df(
+        as_of - timedelta(days=int(bars_before * 1.5)),
+        phase1_end,
+        start_price=8.0,
+        trend=0.003,
+    )
+    last_p1 = float(phase1["Close"].iloc[-1]) if not phase1.empty else 20.0
+    phase2 = _make_df(phase1_end + timedelta(days=1), as_of,
+                      start_price=last_p1, trend=-0.012)  # crash deep, ends sub-$5
+    return pd.concat([phase1, phase2])
+
+
+def _make_thin_crashed_df(as_of: date, bars_before: int = 500) -> pd.DataFrame:
+    """Crashed (would pass price gates) but below the 500k min_avg_volume floor."""
+    df = _make_crashed_df(as_of, bars_before=bars_before)
+    df["Volume"] = 100_000
+    return df
+
+
+def _make_corrupt_crashed_df(as_of: date, bars_before: int = 500) -> pd.DataFrame:
+    """Crashed but with a >10x split-corruption jump inside trailing 252td.
+
+    Mirrors GXXM's $51M split-corrupted entry signature.
+    """
+    df = _make_crashed_df(as_of, bars_before=bars_before)
+    closes = df["Close"].tolist()
+    spike = len(closes) - 20
+    closes[spike] = closes[spike - 1] * 50.0
+    df["Close"] = closes
+    return df
+
+
+def test_d7_sub5_price_excluded_from_candidates():
+    """Sub-$5 crashed name excluded from D2 candidate emission (below_floor)."""
+    from research.config_deterioration import _make_source_fn, _compute_price_gates
+
+    as_of = date(2018, 6, 15)
+    df = _make_sub5_crashed_df(as_of)
+    passes, metrics = _compute_price_gates(df, as_of)
+    assert passes, "Sub-$5 fixture must still pass the relative price gates"
+    assert metrics["price"] < 5.0, "Fixture must end below the $5 floor"
+
+    universe = [("PENNY", "0001112223")]
+    results = _make_source_fn("D2")(as_of, universe, {"PENNY": df}.get)
+    assert "PENNY" not in [r.ticker for r in results], (
+        "Sub-$5 crashed name must be excluded by the min_price floor"
+    )
+
+
+def test_d7_thin_volume_excluded_from_candidates():
+    """Thin-volume crashed name excluded from D2 emission (below_floor)."""
+    from research.config_deterioration import _make_source_fn
+
+    as_of = date(2018, 6, 15)
+    df = _make_thin_crashed_df(as_of)
+    universe = [("THIN", "0001112224")]
+    results = _make_source_fn("D2")(as_of, universe, {"THIN": df}.get)
+    assert "THIN" not in [r.ticker for r in results], (
+        "Thin-volume crashed name must be excluded by the min_avg_volume floor"
+    )
+
+
+def test_d7_corrupt_frame_excluded_from_candidates():
+    """Split-corrupt crashed frame excluded from D2 emission (corrupt_frame)."""
+    from research.config_deterioration import _make_source_fn
+
+    as_of = date(2018, 6, 15)
+    df = _make_corrupt_crashed_df(as_of)
+    universe = [("GXXM", "0001112225")]
+    results = _make_source_fn("D2")(as_of, universe, {"GXXM": df}.get)
+    assert "GXXM" not in [r.ticker for r in results], (
+        "Split-corrupt frame (GXXM signature) must be excluded (corrupt_frame)"
+    )

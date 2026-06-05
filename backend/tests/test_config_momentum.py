@@ -581,3 +581,77 @@ def test_u6_signal_candidates_not_null():
             f"Momentum candidates must have is_null_candidate=False; "
             f"ticker={c.ticker} has is_null_candidate={c.is_null_candidate}"
         )
+
+
+# ---------------------------------------------------------------------------
+# UNIVERSE_V2 floor conformance (charter pre-registered universe-v2)
+# ---------------------------------------------------------------------------
+
+def _make_sub5_near_high_df(as_of: date, bars_before: int = 600) -> pd.DataFrame:
+    """Near-high (would pass gates) but trades below the $5 min_price floor."""
+    start = as_of - timedelta(days=int(bars_before * 1.5))
+    return _make_df(start, as_of, start_price=2.50, trend=0.0005)
+
+
+def _make_thin_volume_near_high_df(as_of: date, bars_before: int = 600) -> pd.DataFrame:
+    """Near-high (would pass gates) but below the 500k min_avg_volume floor."""
+    start = as_of - timedelta(days=int(bars_before * 1.5))
+    df = _make_df(start, as_of, start_price=50.0, trend=0.0005)
+    df["Volume"] = 100_000
+    return df
+
+
+def _make_corrupt_near_high_df(as_of: date, bars_before: int = 600) -> pd.DataFrame:
+    """Near-high but with a >10x split-corruption jump within trailing 252td."""
+    start = as_of - timedelta(days=int(bars_before * 1.5))
+    df = _make_df(start, as_of, start_price=50.0, trend=0.0005)
+    closes = df["Close"].tolist()
+    spike = len(closes) - 30
+    closes[spike] = closes[spike - 1] * 50.0
+    df["Close"] = closes
+    return df
+
+
+def test_u6_sub5_price_excluded_from_candidates():
+    """Sub-$5 near-high name is excluded from candidate emission (below_floor)."""
+    from research.config_momentum import _make_source_fn
+
+    as_of = date(2019, 6, 15)
+    universe = [("CHEAP", "Penny Co"), ("NEAR", "Near High Corp")]
+    bars_map = {
+        "CHEAP": _make_sub5_near_high_df(as_of),
+        "NEAR": _make_near_high_df(as_of, bars_before=600),
+    }
+    source_fn = _make_source_fn("M1")
+    candidates = source_fn(as_of, universe, bars_map.get)
+    assert "CHEAP" not in [c.ticker for c in candidates], (
+        "Sub-$5 name must be excluded by the min_price floor (below_floor)"
+    )
+
+
+def test_u6_thin_volume_excluded_from_candidates():
+    """Below-floor average volume near-high name is excluded (below_floor)."""
+    from research.config_momentum import _make_source_fn
+
+    as_of = date(2019, 6, 15)
+    universe = [("THIN", "Thin Co")]
+    bars_map = {"THIN": _make_thin_volume_near_high_df(as_of)}
+    source_fn = _make_source_fn("M1")
+    candidates = source_fn(as_of, universe, bars_map.get)
+    assert "THIN" not in [c.ticker for c in candidates], (
+        "Thin-volume name must be excluded by the min_avg_volume floor"
+    )
+
+
+def test_u6_corrupt_frame_excluded_from_candidates():
+    """A >10x split-corrupt frame is excluded (corrupt_frame)."""
+    from research.config_momentum import _make_source_fn
+
+    as_of = date(2019, 6, 15)
+    universe = [("GXXM", "Corrupt Co")]
+    bars_map = {"GXXM": _make_corrupt_near_high_df(as_of)}
+    source_fn = _make_source_fn("M1")
+    candidates = source_fn(as_of, universe, bars_map.get)
+    assert "GXXM" not in [c.ticker for c in candidates], (
+        "Split-corrupt frame must be excluded (corrupt_frame)"
+    )

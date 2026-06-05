@@ -2790,3 +2790,95 @@ def test_u6_cohort_all_insufficient_flagged_excess_none():
     for h in (21, 63, 126):
         assert se[f"excess_{h}d"] is None
         assert se[f"hit_v2_{h}d"] is None
+
+
+def _make_ramp_df_pv(start, end, base=100.0, step=1.0, price_scale=1.0, volume=1_000_000):
+    """Ramp df with an explicit absolute price scale and volume, for floor tests.
+
+    Close[i] = (base + step*i) * price_scale, so price_scale < ~0.05 puts the name
+    below the $5 floor while keeping forward returns well-defined.
+    """
+    dates = pd.date_range(start, end, freq="B")
+    n = len(dates)
+    closes = [(base + step * i) * price_scale for i in range(n)]
+    return pd.DataFrame(
+        {
+            "Open": closes,
+            "High": [c + 0.001 for c in closes],
+            "Low": [c - 0.001 for c in closes],
+            "Close": closes,
+            "Volume": [volume] * n,
+        },
+        index=dates,
+    )
+
+
+def test_u6_cohort_null_aggregates_exclude_floor_failures():
+    """Source-mode null aggregates must enforce the UNIVERSE_V2 floors point-in-time.
+
+    Signal and null must see the SAME universe or excess is biased. Three of the
+    six unselected names fail floors: sub-$5 price, thin volume, and a >10x
+    split-corrupt frame. Only the three floor-passing null names may contribute to
+    the cohort aggregates (n == 3); the three failures are excluded.
+    """
+    SPAN_START = date(2014, 1, 1)
+    SPAN_END = date(2020, 12, 31)
+    AS_OF = date(2018, 2, 15)
+
+    # Three clean (floor-passing) null names.
+    loaders = {
+        "OK1": _make_ramp_df(SPAN_START, SPAN_END, base=100.0, step=0.5),
+        "OK2": _make_ramp_df(SPAN_START, SPAN_END, base=100.0, step=1.0),
+        "OK3": _make_ramp_df(SPAN_START, SPAN_END, base=100.0, step=1.5),
+    }
+    # Sub-$5: tiny price_scale keeps the close below $5 across the trailing
+    # window through AS_OF (below_floor). At AS_OF the ramp index is ~1080, so
+    # scale 0.003 → close ≈ $3.5, still under the floor.
+    loaders["CHEAP"] = _make_ramp_df_pv(
+        SPAN_START, SPAN_END, base=100.0, step=1.0, price_scale=0.003)
+    # Thin volume (below_floor).
+    loaders["THIN"] = _make_ramp_df_pv(
+        SPAN_START, SPAN_END, base=100.0, step=1.0, volume=100_000)
+    # Split-corrupt: >10x bar-over-bar jump within trailing 252td of AS_OF.
+    corrupt = _make_ramp_df(SPAN_START, SPAN_END, base=100.0, step=1.0)
+    cdates = [d.date() if hasattr(d, "date") else d for d in corrupt.index]
+    entry_idx = next(i for i, d in enumerate(cdates) if d >= AS_OF)
+    spike_idx = entry_idx - 30  # within trailing 252td, strictly before AS_OF
+    cl = corrupt["Close"].tolist()
+    cl[spike_idx] = cl[spike_idx - 1] * 50.0
+    corrupt["Close"] = cl
+    loaders["GXXM"] = corrupt
+
+    SIG = "SIGZ"
+    loaders[SIG] = _make_ramp_df(SPAN_START, SPAN_END, base=100.0, step=5.0)
+
+    universe = [(SIG, "Signal Co")] + [
+        (t, f"{t} Co") for t in ("OK1", "OK2", "OK3", "CHEAP", "THIN", "GXXM")
+    ]
+
+    def _source(as_of, universe, bars_loader):
+        if as_of == AS_OF:
+            return [_make_candidate(SIG, is_null=False)]
+        return []
+
+    source = tv.CandidateSourceConfig(
+        name="u6_floor_nulls", direction="long",
+        expected_events_per_year=100.0, source_fn=_source,
+    )
+    req = _make_validation_req(
+        start_year=2018, end_year=2018, horizon_months=12, max_universe=50,
+    )
+    result = _run_validation_with_source_and_universe(req, source, loaders, universe)
+
+    cohort = result.cohort_null_aggregates.get(AS_OF.isoformat())
+    assert cohort is not None
+    assert cohort["n"] == 3, (
+        f"Only the 3 floor-passing null names may contribute; got n={cohort['n']} "
+        f"(CHEAP/THIN/GXXM must be excluded by the floor enforcement)"
+    )
+
+    # Whole-cohort null medians computed over ONLY the 3 clean names.
+    import statistics as _st
+    for h in (21, 63, 126):
+        exp = _st.median(_fwd_ret(loaders[t], AS_OF, h) for t in ("OK1", "OK2", "OK3"))
+        assert cohort["medians"][str(h)] == pytest.approx(exp, rel=1e-9)

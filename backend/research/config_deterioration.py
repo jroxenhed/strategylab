@@ -49,6 +49,12 @@ from typing import Callable, Optional
 
 import pandas as pd
 
+from research.universe_floors import (
+    floor_status,
+    BELOW_FLOOR as _FLOOR_BELOW,
+    CORRUPT_FRAME as _FLOOR_CORRUPT,
+)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -84,6 +90,8 @@ _REVENUE_TRAILING_QUARTERS = 8
 @dataclass
 class _ExclusionCounts:
     no_bars: int = 0            # bars_loader returned None or empty
+    below_floor: int = 0        # UNIVERSE_V2: sub-$5 price or thin avg volume
+    corrupt_frame: int = 0      # UNIVERSE_V2: >10x split-corruption in trailing 252td
     short_history: int = 0      # Gate D: < 252 td (recent IPOs)
     gate_a_fail: int = 0        # pct_off_high < 50 (not crashed enough)
     gate_b_fail: int = 0        # pct_above_low > 25 (recovered too much from low)
@@ -404,6 +412,24 @@ def _make_source_fn(
                 excl.no_bars += 1
                 continue
 
+            # UNIVERSE_V2 floor conformance (charter pre-registered universe-v2):
+            # point-in-time min_price / min_avg_volume floors + split-corruption
+            # guard, evaluated strictly from bars <= as_of (no look-ahead). The
+            # SAME enforcement runs in the harness's null-aggregates path so signal
+            # and null see the same universe. Rejects the live $0.0112 / sub-$5
+            # leaks and the GXXM $51M split-corrupted entry.
+            fstatus = floor_status(df, as_of)
+            if fstatus == _FLOOR_BELOW:
+                excl.below_floor += 1
+                continue
+            if fstatus == _FLOOR_CORRUPT:
+                excl.corrupt_frame += 1
+                logger.debug(
+                    "deterioration/%s: %s excluded — corrupt_frame at %s",
+                    variant, ticker, as_of,
+                )
+                continue
+
             passes_price, metrics = _compute_price_gates(df, as_of)
 
             # Gate D — short history
@@ -489,19 +515,23 @@ def _make_source_fn(
             )
             logger.info(
                 "deterioration/%s at %s: %d candidates from %d universe names "
-                "(no_bars=%d, short_history=%d, gate_a_fail=%d, gate_b_fail=%d, "
+                "(no_bars=%d, below_floor=%d, corrupt_frame=%d, short_history=%d, "
+                "gate_a_fail=%d, gate_b_fail=%d, "
                 "no_fundamentals=%d [%.1f%%], veto_negative=%d, veto_admit=%d)",
                 variant, as_of, len(candidates), len(universe),
-                excl.no_bars, excl.short_history, excl.gate_a_fail, excl.gate_b_fail,
+                excl.no_bars, excl.below_floor, excl.corrupt_frame, excl.short_history,
+                excl.gate_a_fail, excl.gate_b_fail,
                 excl.no_fundamentals, frac_no_fundamentals * 100,
                 excl.veto_exclude_negative, excl.veto_admit,
             )
         else:
             logger.info(
                 "deterioration/%s at %s: %d candidates from %d universe names "
-                "(no_bars=%d, short_history=%d, gate_a_fail=%d, gate_b_fail=%d)",
+                "(no_bars=%d, below_floor=%d, corrupt_frame=%d, short_history=%d, "
+                "gate_a_fail=%d, gate_b_fail=%d)",
                 variant, as_of, len(candidates), len(universe),
-                excl.no_bars, excl.short_history, excl.gate_a_fail, excl.gate_b_fail,
+                excl.no_bars, excl.below_floor, excl.corrupt_frame, excl.short_history,
+                excl.gate_a_fail, excl.gate_b_fail,
             )
 
         return candidates

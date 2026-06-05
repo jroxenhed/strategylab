@@ -44,6 +44,12 @@ from typing import Callable, Optional
 
 import pandas as pd
 
+from research.universe_floors import (
+    floor_status,
+    BELOW_FLOOR as _FLOOR_BELOW,
+    CORRUPT_FRAME as _FLOOR_CORRUPT,
+)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -83,6 +89,8 @@ class _ExclusionCounts:
     no_bars: int = 0          # bars_loader returned None or empty
     gate_a_fail: int = 0      # pct_off_high > threshold (not near high)
     gate_b_fail: int = 0      # price <= ma_200 OR ma_200 not rising
+    below_floor: int = 0      # UNIVERSE_V2: sub-$5 price or thin avg volume
+    corrupt_frame: int = 0    # UNIVERSE_V2: >10x split-corruption in trailing 252td
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +325,22 @@ def _make_source_fn(
                 excl.no_bars += 1
                 continue
 
+            # UNIVERSE_V2 floor conformance (charter pre-registered universe-v2):
+            # point-in-time min_price / min_avg_volume floors + split-corruption
+            # guard, evaluated strictly from bars <= as_of (no look-ahead). The
+            # SAME enforcement runs in the harness's null-aggregates path so signal
+            # and null see the same universe.
+            fstatus = floor_status(df, as_of)
+            if fstatus == _FLOOR_BELOW:
+                excl.below_floor += 1
+                continue
+            if fstatus == _FLOOR_CORRUPT:
+                excl.corrupt_frame += 1
+                logger.debug(
+                    "momentum/%s: %s excluded — corrupt_frame at %s", variant, ticker, as_of,
+                )
+                continue
+
             passes, metrics = _compute_gates(
                 df, as_of, threshold_pct, require_ma_slope
             )
@@ -343,9 +367,11 @@ def _make_source_fn(
 
         logger.debug(
             "momentum/%s at %s: %d candidates from %d universe names "
-            "(no_bars=%d, short_history=%d, gate_a_fail=%d, gate_b_fail=%d)",
+            "(no_bars=%d, below_floor=%d, corrupt_frame=%d, short_history=%d, "
+            "gate_a_fail=%d, gate_b_fail=%d)",
             variant, as_of, len(candidates), len(universe),
-            excl.no_bars, excl.short_history, excl.gate_a_fail, excl.gate_b_fail,
+            excl.no_bars, excl.below_floor, excl.corrupt_frame, excl.short_history,
+            excl.gate_a_fail, excl.gate_b_fail,
         )
 
         return candidates
