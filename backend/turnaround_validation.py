@@ -543,6 +543,26 @@ class ValidationResult:
     # Schema stays schema_version=2 (this is an ADDITIVE top-level field; consumers
     # that don't know it simply ignore it).
     cohort_null_aggregates: dict = field(default_factory=dict)
+    # PART 2 durable fix: per-cohort floor-exclusion counts, populated ONLY for
+    # injected candidate_source runs that trigger the exhaustive null aggregate path
+    # (same condition as cohort_null_aggregates).  Empty {} on the legacy path.
+    # Schema is ADDITIVE — consumers that don't know this field simply ignore it.
+    #
+    # Structure:
+    #   {
+    #     "<as_of ISO>": {
+    #       "ok": int,           # names that passed all UNIVERSE_V2 floors
+    #       "below_floor": int,  # sub-$5 price or thin avg volume
+    #       "corrupt_frame": int,# split-corruption signature (>10x bar ratio)
+    #       "no_bars": int,      # bars_loader returned None / empty
+    #     },
+    #     ...
+    #     "totals": {            # sum across all cohorts
+    #       "ok": int, "below_floor": int, "corrupt_frame": int, "no_bars": int,
+    #       "cohorts": int,      # number of cohorts that contributed counts
+    #     },
+    #   }
+    floor_accounting: dict = field(default_factory=dict)
     # Schema version — increment when per-event dict shape changes so readers
     # can handle old persisted files gracefully (F315 backward-compat concern).
     schema_version: int = 1
@@ -895,19 +915,37 @@ def _compute_cohort_null_aggregates(
     # Signal and null MUST see the same universe or the per-cohort excess
     # (signal − null median) is biased. Lazy import: the helper is a leaf module
     # (no project imports), so importing it here cannot create a cycle.
-    from research.universe_floors import floor_status as _floor_status, OK as _FLOOR_OK
+    from research.universe_floors import (
+        floor_status as _floor_status, OK as _FLOOR_OK,
+        BELOW_FLOOR as _FLOOR_BELOW, CORRUPT_FRAME as _FLOOR_CORRUPT,
+    )
+
+    # PART 2 durable fix: track floor-exclusion counts (selection-layer facts,
+    # zero outcome contact). These are persisted in ValidationResult.floor_accounting
+    # and logged at INFO so the sealed judge can verify universe conformance.
+    _floor_count_ok = 0
+    _floor_count_below = 0
+    _floor_count_corrupt = 0
+    _floor_count_no_bars = 0
 
     for entry in universe:
         ticker = entry[0] if isinstance(entry, (tuple, list)) else entry
         if ticker in selected_tickers:
             continue
         df = bars_loader(ticker)
-        if df is None or df.empty:
+        if df is None or (hasattr(df, "empty") and df.empty):
+            _floor_count_no_bars += 1
             continue
         # Point-in-time floor enforcement (counted reason: below_floor / corrupt_frame
         # — names failing the floors are excluded from the null cohort entirely).
-        if _floor_status(df, as_of) != _FLOOR_OK:
+        fstatus = _floor_status(df, as_of)
+        if fstatus == _FLOOR_BELOW:
+            _floor_count_below += 1
             continue
+        if fstatus == _FLOOR_CORRUPT:
+            _floor_count_corrupt += 1
+            continue
+        _floor_count_ok += 1
         entry_res = _first_trading_close_on_or_after(df, as_of)
         if entry_res is None:
             continue
@@ -938,6 +976,13 @@ def _compute_cohort_null_aggregates(
             "medians": {},
             "tercile_breaks": [],
             "tercile_medians": [],
+            # PART 2: floor-exclusion counts (selection-layer, zero outcome contact)
+            "floor_counts": {
+                "ok": _floor_count_ok,
+                "below_floor": _floor_count_below,
+                "corrupt_frame": _floor_count_corrupt,
+                "no_bars": _floor_count_no_bars,
+            },
         }
 
     medians = {
@@ -983,6 +1028,13 @@ def _compute_cohort_null_aggregates(
         "medians": medians,
         "tercile_breaks": tercile_breaks,
         "tercile_medians": tercile_medians,
+        # PART 2: floor-exclusion counts (selection-layer, zero outcome contact)
+        "floor_counts": {
+            "ok": _floor_count_ok,
+            "below_floor": _floor_count_below,
+            "corrupt_frame": _floor_count_corrupt,
+            "no_bars": _floor_count_no_bars,
+        },
     }
 
 
@@ -1201,6 +1253,11 @@ def run_validation(
     # injected-source cohorts that emit ZERO null candidates (see second pass).
     # Keyed by as_of ISO string. Committed on date completion (buffer semantics).
     cohort_null_aggregates: dict = {}
+    # PART 2 durable fix: per-cohort floor-exclusion counts, accumulated from
+    # _compute_cohort_null_aggregates (selection-layer only, zero outcome contact).
+    # Persisted in ValidationResult.floor_accounting and logged at INFO.
+    floor_accounting: dict = {}
+    _floor_totals = {"ok": 0, "below_floor": 0, "corrupt_frame": 0, "no_bars": 0}
     # COR-02: separate cooldown books per cohort so a signal-horizon for ticker X
     # cannot suppress a null event for ticker X (and vice versa).  Each cohort is
     # its own independent event stream; overlap suppression is only within-cohort.
@@ -1509,6 +1566,26 @@ def run_validation(
         # fix-nulls (U6): commit the cohort exhaustive null aggregate (if computed).
         if date_cohort_null_aggregate is not None:
             cohort_null_aggregates[as_of.isoformat()] = date_cohort_null_aggregate
+            # PART 2 durable fix: extract and persist floor-exclusion counts.
+            # These are selection-layer facts (from _compute_cohort_null_aggregates,
+            # which evaluates pre-as_of bars only — zero outcome contact).
+            fc = date_cohort_null_aggregate.get("floor_counts")
+            if fc:
+                floor_accounting[as_of.isoformat()] = {
+                    "ok": fc.get("ok", 0),
+                    "below_floor": fc.get("below_floor", 0),
+                    "corrupt_frame": fc.get("corrupt_frame", 0),
+                    "no_bars": fc.get("no_bars", 0),
+                }
+                for k in ("ok", "below_floor", "corrupt_frame", "no_bars"):
+                    _floor_totals[k] += fc.get(k, 0)
+                logger.info(
+                    "floor_accounting at %s: ok=%d below_floor=%d corrupt_frame=%d "
+                    "no_bars=%d (selection-layer, zero outcome contact)",
+                    as_of.isoformat(),
+                    fc.get("ok", 0), fc.get("below_floor", 0),
+                    fc.get("corrupt_frame", 0), fc.get("no_bars", 0),
+                )
         dates_completed += 1
         if progress is not None:
             progress.dates_done = dates_completed
@@ -1718,6 +1795,24 @@ def run_validation(
     # instruments progress/cancel)
     fetch_failures = getattr(_inner_loader, "fetch_failures", 0)
 
+    # PART 2 durable fix: finalize floor_accounting with cross-cohort totals.
+    # Populated only for source-mode runs that triggered the exhaustive null path.
+    if floor_accounting:
+        floor_accounting["totals"] = {
+            "ok": _floor_totals["ok"],
+            "below_floor": _floor_totals["below_floor"],
+            "corrupt_frame": _floor_totals["corrupt_frame"],
+            "no_bars": _floor_totals["no_bars"],
+            "cohorts": len(floor_accounting),  # number of cohort entries before adding totals
+        }
+        logger.info(
+            "floor_accounting totals: ok=%d below_floor=%d corrupt_frame=%d no_bars=%d "
+            "across %d cohort(s) (selection-layer, zero outcome contact)",
+            _floor_totals["ok"], _floor_totals["below_floor"],
+            _floor_totals["corrupt_frame"], _floor_totals["no_bars"],
+            len([k for k in floor_accounting if k != "totals"]),
+        )
+
     return ValidationResult(
         signal_hit_rate=sig_rate,
         signal_hit_rate_ci_low=sig_ci_low,
@@ -1766,6 +1861,10 @@ def run_validation(
         # fix-nulls (U6): cohort-exhaustive null aggregates (injected-source cohorts
         # with zero null candidates). Empty {} on the legacy path. Additive top-level.
         cohort_null_aggregates=cohort_null_aggregates,
+        # PART 2 durable fix: per-cohort floor-exclusion counts + totals.
+        # Populated only for source-mode runs that triggered the exhaustive null path.
+        # Empty {} on the legacy path (no injected source → exhaustive null never runs).
+        floor_accounting=floor_accounting,
         # Unit 2 (D14): schema_version=2 — events carry additive bar-counted forward
         # returns + cohort-relative excess + hit_v2. v1 fields all still populated.
         schema_version=2,

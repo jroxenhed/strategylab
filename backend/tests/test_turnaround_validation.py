@@ -2882,3 +2882,176 @@ def test_u6_cohort_null_aggregates_exclude_floor_failures():
     for h in (21, 63, 126):
         exp = _st.median(_fwd_ret(loaders[t], AS_OF, h) for t in ("OK1", "OK2", "OK3"))
         assert cohort["medians"][str(h)] == pytest.approx(exp, rel=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# PART 2 / Durable fix: floor_accounting persisted in source-mode artifact.
+#
+# The sealed judge blocked the conformant momentum verdict because below_floor /
+# corrupt_frame counters were logged at DEBUG only and never persisted.  The fix:
+#   - _compute_cohort_null_aggregates returns floor counts in its aggregate dict.
+#   - run_validation stores per-cohort floor counts in a top-level
+#     ValidationResult.floor_accounting dict (additive — schema_version unchanged).
+#   - The counts are logged at INFO per cohort.
+#
+# Two tests:
+#   test_floor_accounting_persisted_source_mode — 2-cohort source-mode run;
+#     assert floor_accounting present with correct below_floor / corrupt_frame /
+#     no_bars / ok counts per cohort and in totals.
+#   test_floor_accounting_absent_legacy_path — legacy path (no candidate_source)
+#     must NOT populate floor_accounting (the exhaustive null aggregate path never
+#     triggers, so floor counts are meaningless — {} is the correct sentinel).
+# ---------------------------------------------------------------------------
+
+def _make_ramp_df(start, end, base=100.0, step=1.0):
+    """Shared ramp helper (re-declared here to be self-contained; mirrors the one
+    used in U6 tests above)."""
+    dates = pd.date_range(start, end, freq="B")
+    n = len(dates)
+    closes = [base + step * i for i in range(n)]
+    return pd.DataFrame(
+        {
+            "Open": closes,
+            "High": [c + 0.001 for c in closes],
+            "Low": [c - 0.001 for c in closes],
+            "Close": closes,
+            "Volume": [1_000_000] * n,
+        },
+        index=dates,
+    )
+
+
+def test_floor_accounting_persisted_source_mode():
+    """(PART 2 RED→GREEN) Source-mode 2-cohort run: result.floor_accounting must be
+    present with per-cohort ok/below_floor/corrupt_frame/no_bars counts and a
+    'totals' entry summing across all cohorts.
+
+    Universe: 1 signal + 4 unselected names:
+      OK1    — passes all floors (price OK, volume OK)
+      CHEAP  — below_floor (price < $5)
+      THIN   — below_floor (thin volume)
+      GXXM   — corrupt_frame (>10x bar spike in trailing 252td)
+
+    Two cohorts (2018-02-15 and 2018-05-15):
+      - Only the first cohort (2018-02-15) emits a signal candidate → exhaustive
+        null aggregates computed for that cohort only.
+      - Second cohort emits no signal → no aggregates, no floor_accounting entry
+        for that cohort.
+
+    Assertions:
+      result.floor_accounting is a non-empty dict.
+      result.floor_accounting['2018-02-15']['ok'] == 1
+      result.floor_accounting['2018-02-15']['below_floor'] == 2  (CHEAP + THIN)
+      result.floor_accounting['2018-02-15']['corrupt_frame'] == 1  (GXXM)
+      result.floor_accounting['2018-02-15']['no_bars'] == 0
+      result.floor_accounting['totals']['below_floor'] == 2
+      result.floor_accounting['totals']['corrupt_frame'] == 1
+    """
+    SPAN_START = date(2014, 1, 1)
+    SPAN_END = date(2020, 12, 31)
+    AS_OF1 = date(2018, 2, 15)
+
+    # One clean null name
+    loaders = {
+        "OK1": _make_ramp_df_pv(SPAN_START, SPAN_END, base=100.0, step=0.5),
+    }
+    # Sub-$5 price (below_floor)
+    loaders["CHEAP"] = _make_ramp_df_pv(
+        SPAN_START, SPAN_END, base=100.0, step=1.0, price_scale=0.003
+    )
+    # Thin volume (below_floor)
+    loaders["THIN"] = _make_ramp_df_pv(
+        SPAN_START, SPAN_END, base=100.0, step=1.0, volume=100_000
+    )
+    # Split-corrupt: >10x bar-over-bar jump within trailing 252td of AS_OF1
+    corrupt = _make_ramp_df_pv(SPAN_START, SPAN_END, base=100.0, step=1.0)
+    cdates = [d.date() if hasattr(d, "date") else d for d in corrupt.index]
+    entry_idx = next(i for i, d in enumerate(cdates) if d >= AS_OF1)
+    spike_idx = entry_idx - 30  # within trailing 252td, strictly before AS_OF1
+    cl = corrupt["Close"].tolist()
+    cl[spike_idx] = cl[spike_idx - 1] * 50.0
+    corrupt["Close"] = cl
+    loaders["GXXM"] = corrupt
+
+    SIG = "SIGW"
+    loaders[SIG] = _make_ramp_df_pv(SPAN_START, SPAN_END, base=100.0, step=5.0)
+
+    universe = [(SIG, "Signal Co")] + [
+        (t, f"{t} Co") for t in ("OK1", "CHEAP", "THIN", "GXXM")
+    ]
+
+    def _source(as_of, universe, bars_loader):
+        # Only emit a signal candidate on the first cohort
+        if as_of == AS_OF1:
+            return [_make_candidate(SIG, is_null=False)]
+        return []
+
+    source = tv.CandidateSourceConfig(
+        name="floor_acct_test", direction="long",
+        expected_events_per_year=100.0, source_fn=_source,
+    )
+    req = _make_validation_req(
+        start_year=2018, end_year=2018, horizon_months=12, max_universe=50,
+    )
+    result = _run_validation_with_source_and_universe(req, source, loaders, universe)
+
+    # The new field must be present on the result
+    assert hasattr(result, "floor_accounting"), (
+        "ValidationResult must have a 'floor_accounting' field (PART 2 fix missing)"
+    )
+    fa = result.floor_accounting
+    assert isinstance(fa, dict), "floor_accounting must be a dict"
+    assert fa, "floor_accounting must be non-empty for a source-mode run with signal candidates"
+
+    # Per-cohort counts for AS_OF1
+    key = AS_OF1.isoformat()
+    assert key in fa, f"floor_accounting must contain entry for {key}"
+    cohort_fa = fa[key]
+    assert cohort_fa["ok"] == 1, f"ok count: expected 1, got {cohort_fa['ok']}"
+    assert cohort_fa["below_floor"] == 2, (
+        f"below_floor count: expected 2 (CHEAP+THIN), got {cohort_fa['below_floor']}"
+    )
+    assert cohort_fa["corrupt_frame"] == 1, (
+        f"corrupt_frame count: expected 1 (GXXM), got {cohort_fa['corrupt_frame']}"
+    )
+    assert cohort_fa["no_bars"] == 0, (
+        f"no_bars count: expected 0, got {cohort_fa['no_bars']}"
+    )
+
+    # Totals across all cohorts
+    assert "totals" in fa, "floor_accounting must have a 'totals' key"
+    totals = fa["totals"]
+    assert totals["below_floor"] == 2, (
+        f"totals below_floor: expected 2, got {totals['below_floor']}"
+    )
+    assert totals["corrupt_frame"] == 1, (
+        f"totals corrupt_frame: expected 1, got {totals['corrupt_frame']}"
+    )
+
+
+def test_floor_accounting_absent_legacy_path():
+    """(PART 2) Legacy path (candidate_source=None) must NOT populate floor_accounting.
+
+    The exhaustive null aggregate path never triggers on the legacy path, so
+    floor counts are meaningless — floor_accounting should be {} (empty dict).
+    """
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    def _fake_run_filter(universe, as_of, params, bars_loader=None):
+        return [_make_candidate("SIGL", is_null=False),
+                _make_candidate("NULL", is_null=True)]
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018, horizon_months=3),
+        _fake_run_filter,
+        lambda ticker: flat_df,
+    )
+    # Must have the field but it must be empty on the legacy path
+    assert hasattr(result, "floor_accounting"), (
+        "ValidationResult must have floor_accounting field even on legacy path"
+    )
+    assert result.floor_accounting == {}, (
+        "Legacy path must not populate floor_accounting (exhaustive null path never runs)"
+    )
