@@ -296,6 +296,9 @@ def _resolve_candidate_source(config_name: Optional[str]):
     # Unit 7: deterioration-short configs (D1 primary + D2 price-only fallback)
     from research.config_deterioration import CONFIG_D1, CONFIG_D2  # noqa: local import
 
+    # Unit 8: epistemics-ablation configs (EP_PRICE + EP_FILING, both long)
+    from research.config_epistemics import CONFIG_PRICE, CONFIG_FILING  # noqa: local import
+
     _REGISTERED: dict[str, object] = {
         # "legacy" resolves to None (the default run_filter path)
         "legacy": None,
@@ -306,6 +309,9 @@ def _resolve_candidate_source(config_name: Optional[str]):
         # Unit 7: deterioration-short configs per charter §1 variant grid
         "deterioration_D1": CONFIG_D1,  # PRIMARY — H1/H2 judged on this only
         "deterioration_D2": CONFIG_D2,  # price-only fallback (veto leg OFF)
+        # Unit 8: epistemics-ablation configs per charter §2 (EP_PRICE + EP_FILING)
+        "epistemics_price": CONFIG_PRICE,    # EP_PRICE — 126td return rank, top-50
+        "epistemics_filing": CONFIG_FILING,  # EP_FILING — PIT revenue YoY rank, top-50
     }
 
     if config_name is None or config_name == "legacy":
