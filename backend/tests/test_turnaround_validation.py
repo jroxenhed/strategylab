@@ -2519,3 +2519,274 @@ def test_u2_legacy_diagnostic_fields_coexist_with_v2():
         # v2 additive
         for k in ("fwd_return_21d", "excess_63d", "hit_v2_126d"):
             assert k in e, f"v2 field {k} must be present"
+
+
+# ---------------------------------------------------------------------------
+# U6 / fix-nulls: cohort-exhaustive null aggregates for injected sources that
+# emit ZERO null candidates (the harness-design gap fix).
+#
+# Charter §"Outcome spec" + §H2 "Exact stratification computation" (FROZEN):
+#   When a candidate_source is active and a cohort emits zero null candidates,
+#   the harness computes cohort-exhaustive null aggregates directly over every
+#   universe ticker NOT selected that as_of (with sufficient data): per-horizon
+#   median fwd return, plus trailing-252d daily-return-stdev terciles with
+#   per-tercile median fwd return. Persisted as result.cohort_null_aggregates.
+#   Signal excess is then computed vs the cohort's exhaustive null median.
+# ---------------------------------------------------------------------------
+
+def _run_validation_with_source_and_universe(
+    req: tv.ValidationRequest,
+    candidate_source,
+    loader_by_ticker,
+    universe,
+    *,
+    progress=None,
+):
+    """Like _run_validation_with_source but injects a non-empty universe and a
+    per-ticker bars loader (dict dispatch). Needed for cohort-exhaustive null
+    aggregates, which iterate over universe tickers NOT selected by the source.
+    """
+    import sys
+    import types
+
+    fake_t = _make_fake_turnaround(
+        lambda universe, as_of, params, bars_loader=None: []
+    )
+    # Inject the universe via build_universe (run_validation slices [:max_universe]).
+    fake_t.build_universe = lambda ticker_cik_map, params=None: list(universe)
+    orig_t = sys.modules.get("turnaround")
+    sys.modules["turnaround"] = fake_t
+
+    fake_edgar = types.ModuleType("edgar")
+    fake_edgar.fetch_universe = lambda: {t: "0000000001" for t, _ in universe}
+    orig_e = sys.modules.get("edgar")
+    sys.modules["edgar"] = fake_edgar
+
+    def _loader(ticker):
+        return loader_by_ticker.get(ticker)
+
+    orig_loader_fn = tv._make_memoized_loader
+    tv._make_memoized_loader = lambda **kw: _loader
+
+    orig_import_comm = tv._import_per_leg_commission
+    tv._import_per_leg_commission = lambda: (
+        lambda shares, req: max(shares * req.per_share_rate, req.min_per_order)
+    )
+
+    try:
+        kwargs = {"candidate_source": candidate_source}
+        if progress is not None:
+            kwargs["progress"] = progress
+        result = tv.run_validation(req, **kwargs)
+    finally:
+        tv._make_memoized_loader = orig_loader_fn
+        tv._import_per_leg_commission = orig_import_comm
+        if orig_t is not None:
+            sys.modules["turnaround"] = orig_t
+        elif "turnaround" in sys.modules:
+            del sys.modules["turnaround"]
+        if orig_e is not None:
+            sys.modules["edgar"] = orig_e
+        elif "edgar" in sys.modules:
+            del sys.modules["edgar"]
+    return result
+
+
+def _trailing_vol_252(df: pd.DataFrame, as_of: date) -> float:
+    """Independent re-derivation of the trailing-252d daily-return stdev at the
+    entry row (first row >= as_of). Uses pandas std (sample, ddof=1) over the
+    251 daily simple returns spanning the trailing 252 closes. Mirrors the math
+    the implementation must use, derived independently here so the test asserts
+    real behavior rather than calling production code.
+    """
+    dates = [d.date() if hasattr(d, "date") else d for d in df.index]
+    entry_idx = next(i for i, d in enumerate(dates) if d >= as_of)
+    window = df["Close"].iloc[entry_idx - 251 : entry_idx + 1]
+    rets = window.pct_change().dropna()
+    return float(rets.std(ddof=1))
+
+
+def _fwd_ret(df: pd.DataFrame, as_of: date, n: int) -> float:
+    """Independent exact forward return at offset n from entry row (first >= as_of)."""
+    dates = [d.date() if hasattr(d, "date") else d for d in df.index]
+    entry_idx = next(i for i, d in enumerate(dates) if d >= as_of)
+    entry_close = float(df["Close"].iloc[entry_idx])
+    exit_close = float(df["Close"].iloc[entry_idx + n])
+    return (exit_close - entry_close) / entry_close * 100.0
+
+
+def test_u6_cohort_null_aggregates_populated_for_zero_null_source():
+    """(a) Injected source emits a signal candidate but ZERO null candidates on a
+    single cohort. Against a synthetic universe of 6 unselected names, the harness
+    must populate result.cohort_null_aggregates for that as_of with:
+      - n == 6 (all six universe names have sufficient data),
+      - per-horizon whole-cohort null median == independently computed median,
+      - tercile_breaks (2 values) and tercile_medians (3 buckets),
+    and the signal event's excess_*d must equal signal_fwd − whole-cohort null
+    median (exhaustive), no longer None.
+    """
+    SPAN_START = date(2014, 1, 1)
+    SPAN_END = date(2020, 12, 31)
+    AS_OF = date(2018, 2, 15)
+
+    # 6 unselected null universe names: arithmetic ramps with distinct steps so
+    # their trailing-252d return stdev differs monotonically (separable terciles)
+    # and their forward returns are exact. base differs to keep fwd returns
+    # well-separated for tercile-median checks.
+    null_specs = {
+        "NUL1": dict(base=100.0, step=0.5),
+        "NUL2": dict(base=100.0, step=1.0),
+        "NUL3": dict(base=100.0, step=1.5),
+        "NUL4": dict(base=100.0, step=2.0),
+        "NUL5": dict(base=100.0, step=2.5),
+        "NUL6": dict(base=100.0, step=3.0),
+    }
+    loaders = {
+        t: _make_ramp_df(SPAN_START, SPAN_END, base=s["base"], step=s["step"])
+        for t, s in null_specs.items()
+    }
+    # The selected signal name (steep ramp → large fwd return).
+    SIG = "SIGX"
+    loaders[SIG] = _make_ramp_df(SPAN_START, SPAN_END, base=100.0, step=5.0)
+
+    universe = [(SIG, "Signal Co")] + [(t, f"{t} Co") for t in null_specs]
+
+    def _source(as_of, universe, bars_loader):
+        if as_of == AS_OF:
+            return [_make_candidate(SIG, is_null=False)]
+        return []  # only one populated cohort
+
+    source = tv.CandidateSourceConfig(
+        name="u6_zero_null", direction="long",
+        expected_events_per_year=100.0, source_fn=_source,
+    )
+    req = _make_validation_req(
+        start_year=2018, end_year=2018, horizon_months=12, max_universe=50,
+    )
+    result = _run_validation_with_source_and_universe(req, source, loaders, universe)
+
+    # Legacy events-based null path is empty for this source.
+    assert result.null_n == 0
+
+    # New cohort_null_aggregates dict is present and populated for AS_OF.
+    agg = result.cohort_null_aggregates
+    assert isinstance(agg, dict)
+    key = AS_OF.isoformat()
+    assert key in agg, "cohort_null_aggregates must contain the populated cohort"
+    cohort = agg[key]
+    assert cohort["n"] == 6
+    assert cohort.get("insufficient") in (False, None)
+
+    # Whole-cohort null median per horizon == independent median of null fwd returns.
+    for h in (21, 63, 126):
+        expected_vals = sorted(_fwd_ret(loaders[t], AS_OF, h) for t in null_specs)
+        import statistics as _st
+        expected_median = _st.median(expected_vals)
+        got = cohort["medians"][str(h)]
+        assert got == pytest.approx(expected_median, rel=1e-9), (
+            f"horizon {h}: median {got} != {expected_median}"
+        )
+
+    # Tercile structure: 2 break values, 3 tercile buckets each with per-horizon medians.
+    assert len(cohort["tercile_breaks"]) == 2
+    assert len(cohort["tercile_medians"]) == 3
+    for bucket in cohort["tercile_medians"]:
+        for h in (21, 63, 126):
+            assert str(h) in bucket["medians"]
+
+    # Tercile membership: names sorted by trailing-252d vol, split into 3 of 2.
+    vols = {t: _trailing_vol_252(loaders[t], AS_OF) for t in null_specs}
+    ordered = sorted(null_specs, key=lambda t: vols[t])
+    expected_buckets = [ordered[0:2], ordered[2:4], ordered[4:6]]
+    import statistics as _st
+    for bi, members in enumerate(expected_buckets):
+        for h in (21, 63, 126):
+            exp = _st.median(_fwd_ret(loaders[m], AS_OF, h) for m in members)
+            got = cohort["tercile_medians"][bi]["medians"][str(h)]
+            assert got == pytest.approx(exp, rel=1e-9), (
+                f"tercile {bi} horizon {h}: {got} != {exp}"
+            )
+
+    # Signal excess computed vs whole-cohort exhaustive null median (no longer None).
+    sig_events = [e for e in result.events if e["ticker"] == SIG and not e["is_null"]]
+    assert len(sig_events) == 1
+    se = sig_events[0]
+    for h in (21, 63, 126):
+        sig_fwd = se[f"fwd_return_{h}d"]
+        null_med = cohort["medians"][str(h)]
+        assert se[f"excess_{h}d"] is not None
+        assert se[f"excess_{h}d"] == pytest.approx(sig_fwd - null_med, rel=1e-9)
+        assert se[f"hit_v2_{h}d"] == ((sig_fwd - null_med) > 0)
+
+
+def test_u6_legacy_path_unchanged_no_cohort_aggregates():
+    """(b) Regression: legacy path (candidate_source=None, null candidates emitted
+    via run_filter) is byte-identically unchanged — events-based nulls keep working
+    and cohort_null_aggregates stays empty (the new path never triggers)."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    def _fake_run_filter(universe, as_of, params, bars_loader=None):
+        return [_make_candidate("SIGL", is_null=False),
+                _make_candidate("NULL", is_null=True)]
+
+    result = _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018, horizon_months=3),
+        _fake_run_filter,
+        lambda ticker: flat_df,
+    )
+    # Legacy events-based nulls still computed.
+    assert result.null_n > 0
+    # New dict present but empty (no injected source → never triggers).
+    assert result.cohort_null_aggregates == {}
+
+
+def test_u6_cohort_all_insufficient_flagged_excess_none():
+    """(c) Cohort where ALL unselected universe names lack sufficient data
+    (< 252 bars) → aggregates flagged insufficient, signal excess stays None."""
+    AS_OF = date(2018, 2, 15)
+    SPAN_START = date(2014, 1, 1)
+    SPAN_END = date(2020, 12, 31)
+
+    # Null universe names: SHORT frames (only ~30 business days near AS_OF) so
+    # they cannot supply a trailing-252d window or 126d forward return.
+    short_start = date(2018, 2, 1)
+    short_end = date(2018, 3, 15)
+    short_df = _make_ramp_df(short_start, short_end, base=100.0, step=1.0)
+
+    SIG = "SIGY"
+    loaders = {
+        "NSH1": short_df,
+        "NSH2": short_df,
+        SIG: _make_ramp_df(SPAN_START, SPAN_END, base=100.0, step=5.0),
+    }
+    universe = [(SIG, "Signal Co"), ("NSH1", "n1"), ("NSH2", "n2")]
+
+    def _source(as_of, universe, bars_loader):
+        if as_of == AS_OF:
+            return [_make_candidate(SIG, is_null=False)]
+        return []
+
+    source = tv.CandidateSourceConfig(
+        name="u6_insufficient", direction="long",
+        expected_events_per_year=100.0, source_fn=_source,
+    )
+    req = _make_validation_req(
+        start_year=2018, end_year=2018, horizon_months=12, max_universe=50,
+    )
+    result = _run_validation_with_source_and_universe(req, source, loaders, universe)
+
+    key = AS_OF.isoformat()
+    cohort = result.cohort_null_aggregates.get(key)
+    assert cohort is not None, "cohort entry must exist even when insufficient"
+    assert cohort["insufficient"] is True
+    assert cohort["n"] == 0
+
+    # Signal excess stays None (no usable cohort null median).
+    sig_events = [e for e in result.events if e["ticker"] == SIG and not e["is_null"]]
+    assert len(sig_events) == 1
+    se = sig_events[0]
+    for h in (21, 63, 126):
+        assert se[f"excess_{h}d"] is None
+        assert se[f"hit_v2_{h}d"] is None

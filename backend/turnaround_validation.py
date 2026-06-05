@@ -469,6 +469,10 @@ class TradeOutcome:
     fwd_return_pct: dict[int, Optional[float]] = field(default_factory=dict)   # {21: x, 63: y, 126: z}
     fwd_excess_pct: dict[int, Optional[float]] = field(default_factory=dict)   # {21: ex, 63: ey, 126: ez}
     hit_v2: dict[int, Optional[bool]] = field(default_factory=dict)            # {21: bool, ...} excess>0
+    # fix-nulls (U6): trailing-252d daily-return stdev at entry (charter §H2 vol
+    # proxy). Lets downstream place this event into its cohort's null vol-tercile
+    # for the H2 stratified recompute. None = < 252 trailing bars.
+    trailing_vol_252d: Optional[float] = None
 
 
 @dataclass
@@ -520,6 +524,25 @@ class ValidationResult:
     # exit_date, exit_price, net_return_pct, hit, days_to_hit (or null),
     # composite_score, horizon_end_return_pct (or null), forward_return_pct
     events: list[dict] = field(default_factory=list)
+    # fix-nulls (U6): cohort-exhaustive null aggregates. Populated ONLY for
+    # injected candidate_source cohorts that emit ZERO null candidates (the
+    # legacy run_filter path emits null candidates, so this stays {} there).
+    # Maps as_of ISO string -> {
+    #   "n": int,                       # # of unselected universe names with sufficient data
+    #   "insufficient": bool,           # True when n==0 (no usable null peer that cohort)
+    #   "medians": {"21":..,"63":..,"126":..},   # whole-cohort null median fwd return per horizon
+    #   "tercile_breaks": [b1, b2],     # trailing-252d daily-return-stdev tercile breakpoints
+    #   "tercile_medians": [            # 3 buckets, low→high vol, each median fwd return per horizon
+    #       {"n": int, "medians": {"21":..,"63":..,"126":..}}, ... (3 entries)
+    #   ],
+    # }
+    # Charter §"Outcome spec" + §H2 "Exact stratification computation" (FROZEN sha
+    # ffef4c05…189f): the v2 forward-return math (21/63/126td bar-counting) and the
+    # volatility-tercile stratification are computed here identically to signal
+    # events, so the H2 tercile-stratified recompute is reproducible downstream.
+    # Schema stays schema_version=2 (this is an ADDITIVE top-level field; consumers
+    # that don't know it simply ignore it).
+    cohort_null_aggregates: dict = field(default_factory=dict)
     # Schema version — increment when per-event dict shape changes so readers
     # can handle old persisted files gracefully (F315 backward-compat concern).
     schema_version: int = 1
@@ -784,6 +807,174 @@ def _bar_counted_forward_returns(
 
 
 # ---------------------------------------------------------------------------
+# fix-nulls (U6): cohort-exhaustive null aggregates for injected sources.
+#
+# Charter §H2 "Exact stratification computation" (FROZEN, sha ffef4c05…189f):
+#   volatility proxy = trailing-252-day realized volatility = stdev of the
+#   trailing-252-day daily SIMPLE returns at the entry row.  The same already-
+#   fetched bars feed both the v2 forward returns and this volatility, so the
+#   stratified recompute is reproducible.  Sample stdev (ddof=1) over the 251
+#   daily returns spanning the trailing 252 closes; < 252 trailing bars → None
+#   (insufficient history, never imputed — matches Gate C / D14 edge handling).
+# ---------------------------------------------------------------------------
+
+def _trailing_vol_252(
+    df: pd.DataFrame,
+    entry_date: date,
+    lookback: int = 252,
+) -> Optional[float]:
+    """Trailing-252d daily-return stdev at the entry row (first row == entry_date).
+
+    Returns None when fewer than `lookback` trailing bars are available (the entry
+    row inclusive), so the name lacks a full window and is excluded with a counted
+    reason rather than imputed.
+    """
+    if df is None or df.empty or "Close" not in df.columns:
+        return None
+    dates = _frame_dates(df)
+    entry_idx: Optional[int] = None
+    for i, d in enumerate(dates):
+        if d == entry_date:
+            entry_idx = i
+            break
+    if entry_idx is None:
+        for i, d in enumerate(dates):
+            if d >= entry_date:
+                entry_idx = i
+                break
+    if entry_idx is None:
+        return None
+    # Need `lookback` closes ending at entry_idx (inclusive) → entry_idx >= lookback-1.
+    if entry_idx < lookback - 1:
+        return None
+    window = df["Close"].iloc[entry_idx - (lookback - 1): entry_idx + 1]
+    rets = window.pct_change().dropna()
+    if len(rets) < 2:
+        return None
+    try:
+        return float(rets.std(ddof=1))
+    except Exception:
+        return None
+
+
+def _compute_cohort_null_aggregates(
+    as_of: date,
+    selected_tickers: set[str],
+    universe: list,
+    bars_loader: Callable[[str], Optional[pd.DataFrame]],
+    req: ValidationRequest,
+    *,
+    horizons: tuple[int, ...] = V2_HORIZONS_TRADING_DAYS,
+    n_terciles: int = 3,
+) -> dict:
+    """Cohort-exhaustive null aggregate for a single as_of (fix-nulls / U6).
+
+    For every universe ticker NOT in `selected_tickers`, stream the frame via the
+    (warm) cached loader, find the entry bar (first close >= as_of), compute v2
+    bar-counted forward returns at `horizons` AND the trailing-252d daily-return
+    stdev, then DISCARD the frame.  Names with no entry bar / insufficient history
+    / no completed horizon are skipped (counted via the returned n).
+
+    Returns the per-cohort aggregate dict (see ValidationResult.cohort_null_aggregates
+    docstring).  When no usable null peer exists, returns an `insufficient=True`
+    record with n=0 and empty medians, so signal excess for that cohort stays None
+    (counted reason: no exhaustive null median available).
+
+    Memory: per-ticker stream-and-discard — at most one frame is held at a time
+    beyond what the loader caches.
+    """
+    # Per-name records: (vol_or_None, {horizon: fwd_or_None}).
+    fwd_by_h: dict[int, list[float]] = {h: [] for h in horizons}
+    # For terciles we need names that have BOTH a vol and a fwd value per horizon.
+    name_records: list[tuple[float, dict[int, Optional[float]]]] = []
+    n_usable = 0
+
+    for entry in universe:
+        ticker = entry[0] if isinstance(entry, (tuple, list)) else entry
+        if ticker in selected_tickers:
+            continue
+        df = bars_loader(ticker)
+        if df is None or df.empty:
+            continue
+        entry_res = _first_trading_close_on_or_after(df, as_of)
+        if entry_res is None:
+            continue
+        entry_date, entry_close = entry_res
+        if entry_close <= 0:
+            continue
+        fwd = _bar_counted_forward_returns(
+            df, entry_date, entry_close, horizons=horizons, direction=req.direction,
+        )
+        vol = _trailing_vol_252(df, entry_date)
+        # A name is "usable" if it has at least one completed horizon. The trailing
+        # vol may be None (short history) — such a name still contributes to the
+        # whole-cohort medians but cannot be placed in a tercile.
+        if all(fwd.get(h) is None for h in horizons):
+            continue
+        n_usable += 1
+        for h in horizons:
+            v = fwd.get(h)
+            if v is not None:
+                fwd_by_h[h].append(v)
+        if vol is not None:
+            name_records.append((vol, fwd))
+
+    if n_usable == 0:
+        return {
+            "n": 0,
+            "insufficient": True,
+            "medians": {},
+            "tercile_breaks": [],
+            "tercile_medians": [],
+        }
+
+    medians = {
+        str(h): (statistics.median(fwd_by_h[h]) if fwd_by_h[h] else None)
+        for h in horizons
+    }
+
+    # Tercile stratification by trailing-252d vol (charter §H2). Only names with a
+    # defined vol participate. Breakpoints via statistics.quantiles (n=3 → the two
+    # interior tercile cut points), then bucket each name by its vol.
+    tercile_breaks: list[float] = []
+    tercile_medians: list[dict] = []
+    vols_only = sorted(r[0] for r in name_records)
+    if len(name_records) >= n_terciles:
+        qs = statistics.quantiles(vols_only, n=n_terciles)  # n_terciles-1 cut points
+        tercile_breaks = [float(q) for q in qs]
+
+        def _bucket(vol: float) -> int:
+            b = 0
+            for cut in tercile_breaks:
+                if vol > cut:
+                    b += 1
+                else:
+                    break
+            return min(b, n_terciles - 1)
+
+        buckets: list[list[tuple[float, dict[int, Optional[float]]]]] = [
+            [] for _ in range(n_terciles)
+        ]
+        for vol, fwd in name_records:
+            buckets[_bucket(vol)].append((vol, fwd))
+
+        for bucket in buckets:
+            b_medians: dict[str, Optional[float]] = {}
+            for h in horizons:
+                vals = [fwd.get(h) for _, fwd in bucket if fwd.get(h) is not None]
+                b_medians[str(h)] = statistics.median(vals) if vals else None
+            tercile_medians.append({"n": len(bucket), "medians": b_medians})
+
+    return {
+        "n": n_usable,
+        "insufficient": False,
+        "medians": medians,
+        "tercile_breaks": tercile_breaks,
+        "tercile_medians": tercile_medians,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Cost application helpers
 # ---------------------------------------------------------------------------
 
@@ -994,6 +1185,10 @@ def run_validation(
     truncated_events = 0
     overlap_suppressed = 0
     seen_tickers: set[str] = set()
+    # fix-nulls (U6): per-cohort exhaustive null aggregates, populated only for
+    # injected-source cohorts that emit ZERO null candidates (see second pass).
+    # Keyed by as_of ISO string. Committed on date completion (buffer semantics).
+    cohort_null_aggregates: dict = {}
     # COR-02: separate cooldown books per cohort so a signal-horizon for ticker X
     # cannot suppress a null event for ticker X (and vice versa).  Each cohort is
     # its own independent event stream; overlap suppression is only within-cohort.
@@ -1057,6 +1252,30 @@ def run_validation(
         date_null_outcomes: list[TradeOutcome] = []
         date_overlap_suppressed = 0
         date_truncated_events = 0
+        date_cohort_null_aggregate: Optional[dict] = None
+
+        # fix-nulls (U6): when an injected candidate_source is active and this
+        # cohort emits ZERO null candidates but ≥1 signal candidate, the legacy
+        # events-based null path produces no matched null. Compute cohort-EXHAUSTIVE
+        # null aggregates directly over the universe names NOT selected this as_of
+        # (per-ticker stream-and-discard via the warm cached loader). Charter
+        # §"Outcome spec" / §H2 (FROZEN). Buffered; committed on date completion.
+        if (
+            candidate_source is not None
+            and signal_candidates
+            and not null_candidates
+        ):
+            selected_tickers = {c.ticker for c in signal_candidates}
+            try:
+                date_cohort_null_aggregate = _compute_cohort_null_aggregates(
+                    as_of, selected_tickers, universe, bars_loader, req,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "run_validation: cohort null aggregate failed at %s: %s",
+                    as_of, exc,
+                )
+                date_cohort_null_aggregate = None
 
         for candidate_list, is_null in [(signal_candidates, False), (null_candidates, True)]:
             if timed_out:
@@ -1249,6 +1468,9 @@ def run_validation(
                     horizon_end_price=horizon_end_close,
                     horizon_end_return_pct=horizon_end_return_pct,
                     fwd_return_pct=fwd_returns,
+                    # fix-nulls (U6): trailing-252d vol (charter §H2 proxy) on the
+                    # same frame/entry the forward returns use.
+                    trailing_vol_252d=_trailing_vol_252(df, entry_date),
                 )
 
                 if is_null:
@@ -1272,6 +1494,9 @@ def run_validation(
         null_outcomes.extend(date_null_outcomes)
         overlap_suppressed += date_overlap_suppressed
         truncated_events += date_truncated_events
+        # fix-nulls (U6): commit the cohort exhaustive null aggregate (if computed).
+        if date_cohort_null_aggregate is not None:
+            cohort_null_aggregates[as_of.isoformat()] = date_cohort_null_aggregate
         dates_completed += 1
         if progress is not None:
             progress.dates_done = dates_completed
@@ -1310,9 +1535,16 @@ def run_validation(
             for o in _null_by_cohort.get(as_of_key, [])
             if o.fwd_return_pct.get(horizon) is not None
         ]
-        if not vals:
-            return None
-        return statistics.median(vals)
+        if vals:
+            return statistics.median(vals)
+        # fix-nulls (U6): no events-based null cohort (injected source emitted zero
+        # null candidates) — fall back to the cohort-EXHAUSTIVE null median computed
+        # over the universe names NOT selected this as_of. None when that cohort was
+        # flagged insufficient (no usable null peer) so excess stays None.
+        agg = cohort_null_aggregates.get(as_of_key.isoformat())
+        if agg and not agg.get("insufficient"):
+            return agg.get("medians", {}).get(str(horizon))
+        return None
 
     # Precompute per-cohort null medians once per (cohort, horizon).
     #
@@ -1463,6 +1695,8 @@ def run_validation(
             "hit_v2_21d": o.hit_v2.get(21),
             "hit_v2_63d": o.hit_v2.get(63),
             "hit_v2_126d": o.hit_v2.get(126),
+            # fix-nulls (U6): trailing-252d vol for H2 tercile placement downstream.
+            "trailing_vol_252d": o.trailing_vol_252d,
         })
     # Sort for deterministic output: as_of asc, ticker asc, null last
     events_table.sort(key=lambda x: (x["as_of"] or "", x["is_null"], x["ticker"] or ""))
@@ -1517,6 +1751,9 @@ def run_validation(
         null_horizon_median_return_pct=null_hor_median,
         # Item 1: per-event table
         events=events_table,
+        # fix-nulls (U6): cohort-exhaustive null aggregates (injected-source cohorts
+        # with zero null candidates). Empty {} on the legacy path. Additive top-level.
+        cohort_null_aggregates=cohort_null_aggregates,
         # Unit 2 (D14): schema_version=2 — events carry additive bar-counted forward
         # returns + cohort-relative excess + hit_v2. v1 fields all still populated.
         schema_version=2,
