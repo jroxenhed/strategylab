@@ -25,22 +25,164 @@ Key design decisions:
   (R1 enforcement); the harness refuses to run a non-default config missing this
   declaration. Errors surface via the same RuntimeError channel F313 built (caught
   by _run_validate_background → sets status="error", visible at GET /validate/status).
+- D13 (Unit 3 / F332): Price-frame persistence — on-disk cache under
+  backend/data/turnaround/price_cache/ keyed by ticker+span so reruns start at
+  the date loop without re-fetching.  Format: pickle (protocol 4) — no parquet
+  engine (pyarrow/fastparquet) available in the venv; see DEVIATION NOTE in
+  PriceFrameCache.  Atomic writes: tmp file + os.replace (fileutil.py pattern).
+  The existing in-process TTL-cache (_fetch in shared.py) is NOT bypassed —
+  warm in-process hits still short-circuit the loader; D13 adds a durable layer
+  beneath it that survives server restarts.
 """
 from __future__ import annotations
 
 import logging
 import math
+import os
+import pickle
+import re
 import statistics
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Callable, Optional, TYPE_CHECKING
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# F332 / D13: Price-frame on-disk cache (Unit 3)
+#
+# DEVIATION NOTE — format choice:
+#   pyarrow and fastparquet are NOT installed in backend/venv.  pandas.DataFrame
+#   pickle (protocol 4, Python 3.8+ portable) is used instead.  Protocol 4 is
+#   the highest version that predates Python 3.8's default bump to 5; it gives
+#   reliable cross-version portability within the 3.8–3.12 range we target.
+#
+#   If a parquet engine is later added, replace the _read/_write helpers in
+#   PriceFrameCache — the public API (load/store) is format-agnostic.
+#
+# Cache directory:
+#   backend/data/turnaround/price_cache/  (gitignored via the parent rule)
+#
+# Key encoding:
+#   ticker must be a safe filesystem name (A-Z0-9 only after upper-casing; any
+#   other character is replaced with "_" for safety on all platforms).
+#   span is "YYYY-MM-DD_YYYY-MM-DD".  Combined key: "{safe_ticker}_{span}.pkl"
+#
+# Atomic write: write to a .tmp sibling, then os.replace — same pattern as
+#   fileutil.atomic_write_text but for binary data.
+# ---------------------------------------------------------------------------
+
+# Locate the cache directory relative to this file so it works from any cwd.
+_THIS_DIR = Path(__file__).resolve().parent
+_PRICE_CACHE_DIR: Path = _THIS_DIR / "data" / "turnaround" / "price_cache"
+_PICKLE_PROTOCOL = 4  # Python 3.8+ portable; higher protocols not strictly needed
+
+
+def _safe_ticker(ticker: str) -> str:
+    """Replace non-alphanumeric chars so the ticker is safe as a filename component."""
+    return re.sub(r"[^A-Za-z0-9]", "_", ticker).upper()
+
+
+class PriceFrameCache:
+    """On-disk pickle cache for validation price frames (F332 / D13).
+
+    Each entry is keyed by (ticker, fetch_start, fetch_end) and stored as a
+    single pickle file in *cache_dir*.  Reads are best-effort (corrupt/missing
+    files return None).  Writes are atomic (tmp + os.replace).
+
+    Thread-safety: multiple threads may call load/store concurrently.
+    - load() is read-only → safe.
+    - store() uses os.replace which is atomic on POSIX; on Windows it is NOT
+      atomic but is still correct (last writer wins; no partial reads possible
+      because the tmp file is fsync'd before rename).
+
+    TTL eviction is NOT implemented here — the parent F314/F320 policy handles
+    that at the edgar_cache level.  Price frames don't expire on human timescales
+    (2015-2024 bars don't change).
+    """
+
+    def __init__(self, cache_dir: Path = _PRICE_CACHE_DIR) -> None:
+        self._dir = cache_dir
+
+    def _ensure_dir(self) -> bool:
+        """Create cache dir if needed. Returns True on success, False on OSError."""
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            return True
+        except OSError as exc:
+            logger.warning("PriceFrameCache: cannot create cache dir %s: %s", self._dir, exc)
+            return False
+
+    def _path(self, ticker: str, fetch_start: str, fetch_end: str) -> Path:
+        safe = _safe_ticker(ticker)
+        span = f"{fetch_start}_{fetch_end}".replace("-", "")
+        return self._dir / f"{safe}_{span}.pkl"
+
+    def load(
+        self, ticker: str, fetch_start: str, fetch_end: str
+    ) -> Optional[pd.DataFrame]:
+        """Return cached DataFrame for ticker+span, or None if not cached / corrupt."""
+        p = self._path(ticker, fetch_start, fetch_end)
+        if not p.exists():
+            return None
+        try:
+            with open(p, "rb") as fh:
+                obj = pickle.load(fh)
+            if not isinstance(obj, pd.DataFrame):
+                logger.warning("PriceFrameCache: unexpected type in %s — ignoring", p)
+                return None
+            return obj
+        except Exception as exc:
+            logger.warning("PriceFrameCache: failed to load %s: %s", p, exc)
+            return None
+
+    def store(
+        self, ticker: str, fetch_start: str, fetch_end: str, df: pd.DataFrame
+    ) -> None:
+        """Persist *df* for ticker+span.  Best-effort — logs on failure, never raises."""
+        if not self._ensure_dir():
+            return
+        p = self._path(ticker, fetch_start, fetch_end)
+        # Atomic write: pickle to tmp sibling, then os.replace.
+        try:
+            dir_ = str(p.parent)
+            fd = tempfile.NamedTemporaryFile(
+                mode="wb", delete=False, dir=dir_, suffix=".tmp"
+            )
+            try:
+                pickle.dump(df, fd, protocol=_PICKLE_PROTOCOL)
+                fd.flush()
+                os.fsync(fd.fileno())
+                try:
+                    fd.close()
+                except Exception:
+                    pass
+                os.replace(fd.name, str(p))
+            except Exception:
+                try:
+                    fd.close()
+                except Exception:
+                    pass
+                try:
+                    os.unlink(fd.name)
+                except OSError:
+                    pass
+                raise
+        except Exception as exc:
+            logger.warning("PriceFrameCache: failed to store %s: %s", p, exc)
+
+
+# Module-level default cache instance (can be replaced in tests via monkeypatch).
+_price_frame_cache: PriceFrameCache = PriceFrameCache()
+
 
 # ---------------------------------------------------------------------------
 # Pluggable candidate source (Unit 1 / D12)
@@ -300,6 +442,7 @@ def _make_memoized_loader(
     low_lookback_years: int,
     horizon_months: int,
     data_source: str,
+    price_cache: Optional[PriceFrameCache] = None,
 ) -> Callable[[str], Optional[pd.DataFrame]]:
     """Return a memoized loader that fetches each symbol's full price span ONCE.
 
@@ -313,6 +456,26 @@ def _make_memoized_loader(
 
     REL-07: fetch_failures attribute is incremented on exception (as opposed to
     empty/delisted — those are still cached as None but not counted as failures).
+
+    D13 (F332): Price-frame persistence — the inner fetch first checks the
+    on-disk PriceFrameCache (ticker+span key).  On a cache hit, the network is
+    NOT touched and the in-process _cache is populated from disk.  On a miss,
+    the normal _fetch call runs and, on success, the frame is persisted to disk
+    before being returned.
+
+    Layer order (cheapest first):
+      1. In-process _cache dict (free; lives only for this run)
+      2. On-disk PriceFrameCache (fast; survives server restarts / reruns)
+      3. _fetch() network call (slow; only on cold miss)
+
+    The existing TTL-cache inside shared._fetch() is NOT bypassed — a network
+    call populates both the TTL-cache and the on-disk frame cache.  However,
+    the on-disk cache is checked BEFORE _fetch, so a warm disk hit never even
+    calls _fetch (and therefore never hits its TTL-cache lookup overhead).
+
+    price_cache=None falls back to the module-level _price_frame_cache default
+    (which is a PriceFrameCache pointing at the standard cache directory).
+    Pass a custom PriceFrameCache to redirect writes in tests.
     """
     from shared import _fetch  # noqa: runtime import, safe inside thread
 
@@ -321,21 +484,39 @@ def _make_memoized_loader(
     fetch_start = f"{fetch_start_year}-01-01"
     fetch_end = f"{fetch_end_year}-12-31"
 
+    _disk_cache = price_cache if price_cache is not None else _price_frame_cache
+
     _cache: dict[str, Optional[pd.DataFrame]] = {}
 
     def _loader(ticker: str) -> Optional[pd.DataFrame]:
+        # Layer 1: in-process memo
         if ticker in _cache:
             return _cache[ticker]
+
+        # Layer 2: on-disk cache (F332 / D13)
+        disk_hit = _disk_cache.load(ticker, fetch_start, fetch_end)
+        if disk_hit is not None:
+            _cache[ticker] = disk_hit
+            return _cache[ticker]
+
+        # Layer 3: network fetch
         try:
             df = _fetch(ticker, fetch_start, fetch_end, "1d", data_source)
-            _cache[ticker] = df if df is not None and not df.empty else None
+            result = df if df is not None and not df.empty else None
+            _cache[ticker] = result
+            # Persist to disk on successful fetch (non-None only)
+            if result is not None:
+                _disk_cache.store(ticker, fetch_start, fetch_end, result)
         except Exception as exc:
             logger.warning("bars_loader: failed to fetch %s: %s", ticker, exc)
             _loader.fetch_failures += 1  # type: ignore[attr-defined]
             # Retry once before caching None
             try:
                 df2 = _fetch(ticker, fetch_start, fetch_end, "1d", data_source)
-                _cache[ticker] = df2 if df2 is not None and not df2.empty else None
+                result2 = df2 if df2 is not None and not df2.empty else None
+                _cache[ticker] = result2
+                if result2 is not None:
+                    _disk_cache.store(ticker, fetch_start, fetch_end, result2)
             except Exception:
                 _cache[ticker] = None
         return _cache[ticker]

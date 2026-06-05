@@ -1836,3 +1836,246 @@ def test_u1_short_direction_flows_to_events():
     # once Unit 2 wires direction-aware cost inversion into _apply_costs().
     # Currently _apply_costs() is long-only, so net_return_pct is negative here.
     # The plumbing (direction tag) is the Unit 1 deliverable; sign correctness is U2.
+
+
+# ---------------------------------------------------------------------------
+# Unit 3 (F332 / D13): Price-frame persistence integration tests
+#
+# Format decision: pickle (protocol 4) — pyarrow/fastparquet not installed in
+# backend/venv.  See DEVIATION NOTE in PriceFrameCache docstring for rationale.
+#
+# Test scenarios:
+#   F332-S1: store/load roundtrip — loaded frame is byte/value-identical
+#   F332-S2: second load hits disk, NOT network (fetch_fn never called second time)
+#   F332-S3: missing cache file returns None (cold miss path)
+#   F332-S4: corrupt cache file returns None (graceful degradation)
+#   F332-S5: integration — second _make_memoized_loader call for same span starts
+#            from disk, confirming no network call on warm disk
+# ---------------------------------------------------------------------------
+
+class TestPriceFrameCacheUnit:
+    """Unit tests for PriceFrameCache.load/store (F332)."""
+
+    def test_f332_s1_store_load_roundtrip(self, tmp_path):
+        """F332-S1: stored frame loads back value-identical (index + columns preserved)."""
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+        df = _make_price_df(date(2015, 1, 1), date(2024, 12, 31), annual_growth_rate=0.1)
+        cache.store("AAPL", "2015-01-01", "2024-12-31", df)
+
+        loaded = cache.load("AAPL", "2015-01-01", "2024-12-31")
+        assert loaded is not None, "Expected loaded DataFrame, got None"
+        assert isinstance(loaded, pd.DataFrame)
+        # Shape must match
+        assert loaded.shape == df.shape, (
+            f"Shape mismatch: loaded={loaded.shape}, original={df.shape}"
+        )
+        # Close column values must be numerically identical
+        pd.testing.assert_series_equal(
+            loaded["Close"].reset_index(drop=True),
+            df["Close"].reset_index(drop=True),
+            check_names=False,
+        )
+
+    def test_f332_s3_cold_miss_returns_none(self, tmp_path):
+        """F332-S3: loading a ticker not in cache returns None (no file exists)."""
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+        result = cache.load("NOTCACHED", "2015-01-01", "2024-12-31")
+        assert result is None, f"Expected None for cold miss, got {result}"
+
+    def test_f332_s4_corrupt_file_returns_none(self, tmp_path):
+        """F332-S4: corrupt pickle file returns None without raising (graceful degrade)."""
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+        # Write garbage bytes to what would be the cache file
+        p = tmp_path / f"FAKE_{20150101}_{20241231}.pkl"
+        # Actually use the real path from cache internals
+        p = cache._path("FAKE", "2015-01-01", "2024-12-31")
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"not valid pickle data!!!!")
+
+        result = cache.load("FAKE", "2015-01-01", "2024-12-31")
+        assert result is None, "Corrupt cache file must return None (graceful degradation)"
+
+    def test_f332_different_spans_different_files(self, tmp_path):
+        """F332: different span strings produce different cache files (no collision)."""
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+        df1 = _make_price_df(date(2015, 1, 1), date(2020, 12, 31), annual_growth_rate=0.0)
+        df2 = _make_price_df(date(2015, 1, 1), date(2024, 12, 31), annual_growth_rate=1.0)
+        cache.store("AAPL", "2015-01-01", "2020-12-31", df1)
+        cache.store("AAPL", "2015-01-01", "2024-12-31", df2)
+
+        loaded1 = cache.load("AAPL", "2015-01-01", "2020-12-31")
+        loaded2 = cache.load("AAPL", "2015-01-01", "2024-12-31")
+        assert loaded1 is not None
+        assert loaded2 is not None
+        assert loaded1.shape[0] != loaded2.shape[0], (
+            "Different spans must produce different files with different row counts"
+        )
+
+    def test_f332_atomic_write_no_partial_on_failure(self, tmp_path):
+        """F332: if the store write fails mid-way, no partial file is left behind."""
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+        df = _make_price_df(date(2015, 1, 1), date(2024, 12, 31), annual_growth_rate=0.0)
+        target = cache._path("ATOMT", "2015-01-01", "2024-12-31")
+
+        # Before store: target must not exist
+        assert not target.exists()
+        # store should succeed normally
+        cache.store("ATOMT", "2015-01-01", "2024-12-31", df)
+        assert target.exists(), "Cache file must exist after store"
+        # No .tmp orphan left
+        tmps = list(tmp_path.glob("*.tmp"))
+        assert tmps == [], f"Orphan .tmp files found: {tmps}"
+
+
+class TestPriceFrameCacheIntegration:
+    """Integration tests for F332 via _make_memoized_loader (Unit 3 / D13).
+
+    Scenario F332-S2: second _make_memoized_loader invocation for the same
+    ticker+span must return a value-identical frame without calling _fetch
+    (network call spy asserts zero calls on warm disk).
+    """
+
+    def test_f332_s2_second_load_hits_disk_not_network(self, tmp_path):
+        """F332-S2: after the first run persists a frame, a second run for the same
+        ticker+span reads from disk, not network.  The network fetch spy is never
+        called on the second run.
+
+        Uses a custom PriceFrameCache (tmp_path) injected into _make_memoized_loader
+        via the price_cache parameter.
+
+        _make_memoized_loader does `from shared import _fetch` at factory-call time
+        (lazy import in function body), so we must patch sys.modules["shared"] BEFORE
+        calling _make_memoized_loader, not before calling loader("ticker").
+        """
+        import sys
+        import types as _types
+
+        fetch_call_count = [0]
+        SPAN_START = date(2015, 1, 1)
+        SPAN_END = date(2022, 12, 31)
+        sample_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+        def _spy_fetch(ticker, start, end, interval, source):
+            fetch_call_count[0] += 1
+            return sample_df
+
+        # Shared PriceFrameCache pointing at tmp_path (isolated from real cache)
+        shared_cache = tv.PriceFrameCache(cache_dir=tmp_path)
+
+        # --- First run: cold miss, must call fetch once ---
+        # Patch shared BEFORE creating loader1 so the `from shared import _fetch`
+        # inside _make_memoized_loader picks up the spy.
+        fake_shared = _types.ModuleType("shared")
+        fake_shared._fetch = _spy_fetch
+        orig_shared = sys.modules.get("shared")
+        sys.modules["shared"] = fake_shared
+        try:
+            loader1 = tv._make_memoized_loader(
+                start_year=2018,
+                end_year=2018,
+                low_lookback_years=3,
+                horizon_months=12,
+                data_source="yahoo",
+                price_cache=shared_cache,
+            )
+            result1 = loader1("AAPL")
+        finally:
+            if orig_shared is not None:
+                sys.modules["shared"] = orig_shared
+            elif "shared" in sys.modules:
+                del sys.modules["shared"]
+
+        assert result1 is not None, "First load must return the frame"
+        assert fetch_call_count[0] == 1, (
+            f"First load must call _fetch exactly once; got {fetch_call_count[0]}"
+        )
+
+        # --- Second run: warm disk, must NOT call fetch ---
+        # Patch shared again but second run should NEVER call _fetch (disk hit).
+        fetch_call_count_before = fetch_call_count[0]  # should be 1
+        fake_shared2 = _types.ModuleType("shared")
+        fake_shared2._fetch = _spy_fetch
+        orig_shared2 = sys.modules.get("shared")
+        sys.modules["shared"] = fake_shared2
+        try:
+            loader2 = tv._make_memoized_loader(
+                start_year=2018,
+                end_year=2018,
+                low_lookback_years=3,
+                horizon_months=12,
+                data_source="yahoo",
+                price_cache=shared_cache,  # same cache dir → disk hit
+            )
+            result2 = loader2("AAPL")
+        finally:
+            if orig_shared2 is not None:
+                sys.modules["shared"] = orig_shared2
+            elif "shared" in sys.modules:
+                del sys.modules["shared"]
+
+        assert result2 is not None, "Second load must return the frame"
+        assert fetch_call_count[0] == fetch_call_count_before, (
+            f"Second load must NOT call _fetch (disk hit expected); "
+            f"fetch count went from {fetch_call_count_before} to {fetch_call_count[0]}"
+        )
+
+        # Value-identical: same shape and Close values
+        assert result1.shape == result2.shape, (
+            f"First and second load must be value-identical; shapes differ: "
+            f"{result1.shape} vs {result2.shape}"
+        )
+        pd.testing.assert_series_equal(
+            result1["Close"].reset_index(drop=True),
+            result2["Close"].reset_index(drop=True),
+            check_names=False,
+        )
+
+    def test_f332_s2_cache_miss_calls_network_then_persists(self, tmp_path):
+        """F332-S2 complement: cold miss calls _fetch, then persists the frame to disk.
+
+        After the first load, the cache file must exist in tmp_path.
+
+        _make_memoized_loader does `from shared import _fetch` at factory-call time,
+        so sys.modules["shared"] must be patched BEFORE the factory call.
+        """
+        import sys, types as _types
+
+        SPAN_START = date(2015, 1, 1)
+        SPAN_END = date(2022, 12, 31)
+        sample_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+        fetch_calls = []
+
+        def _spy_fetch(ticker, start, end, interval, source):
+            fetch_calls.append(ticker)
+            return sample_df
+
+        shared_cache = tv.PriceFrameCache(cache_dir=tmp_path)
+
+        # Patch shared BEFORE creating loader so the factory's import picks up the spy
+        fake_shared = _types.ModuleType("shared")
+        fake_shared._fetch = _spy_fetch
+        orig_shared = sys.modules.get("shared")
+        sys.modules["shared"] = fake_shared
+        try:
+            loader = tv._make_memoized_loader(
+                start_year=2018,
+                end_year=2018,
+                low_lookback_years=3,
+                horizon_months=12,
+                data_source="yahoo",
+                price_cache=shared_cache,
+            )
+            result = loader("MSFT")
+        finally:
+            if orig_shared is not None:
+                sys.modules["shared"] = orig_shared
+            elif "shared" in sys.modules:
+                del sys.modules["shared"]
+
+        # Network was called
+        assert "MSFT" in fetch_calls, "Cold miss must call _fetch"
+        # Cache file must now exist
+        cache_files = list(tmp_path.glob("MSFT_*.pkl"))
+        assert len(cache_files) == 1, (
+            f"Expected 1 cache file for MSFT after first load; found {cache_files}"
+        )

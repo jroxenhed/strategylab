@@ -46,6 +46,43 @@ class FilterParams(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Universe v2 preset (Unit 3 / R5)
+#
+# Liquid, tradeable universe floor params per the Signal-Driven Research Program
+# plan (R5: min price $5, meaningful liquidity floor).
+#
+# F319 junk-suffix hygiene (applied in build_universe) is premise-independent
+# and is retained regardless of which preset is in use.
+#
+# "No washed-out gate" design note:
+#   The washed-out gate lives in _process_symbol() and is enforced only when
+#   run_filter() is called.  Signal configs that use the pluggable source path
+#   (Unit 1 / CandidateSourceConfig) bypass run_filter entirely, so they
+#   bypass the washed-out gate naturally.  No FilterParams knob is needed for
+#   "gate OFF" — that property is conferred by the pluggable-source path.
+#
+# USAGE:
+#   from turnaround import UNIVERSE_V2
+#   params = FilterParams(**UNIVERSE_V2)
+#
+#   For run_validation with a pluggable source, pass UNIVERSE_V2 as the
+#   params dict in the ValidationRequest so Stage 1a (price/volume gate in
+#   _process_symbol) uses the v2 floors when bars_loader pre-screens.
+#
+# EXISTING CONSUMER INVARIANT:
+#   The FilterParams() default constructor still gives min_price=1.0 /
+#   min_avg_volume=100_000 so existing ScanRequest callers (routes/turnaround.py)
+#   are NOT affected. This preset is opt-in — callers must construct FilterParams
+#   from UNIVERSE_V2 explicitly.
+# ---------------------------------------------------------------------------
+
+UNIVERSE_V2: dict = {
+    "min_price": 5.0,
+    "min_avg_volume": 500_000,
+}
+
+
+# ---------------------------------------------------------------------------
 # Result dataclass (stays dataclass — serialized via dataclasses.asdict)
 # ---------------------------------------------------------------------------
 
