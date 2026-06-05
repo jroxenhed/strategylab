@@ -16,11 +16,11 @@ _(none open)_
 - [F319](#f319) — [next] Turnaround universe hygiene v2 [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 26 items
+## Open Work — 28 items
 
 | Section | Open | IDs |
 |---|---|---|
-| [Features](#features) | 2 | [B9](#b9), [F316](#f316) |
+| [Features](#features) | 4 | [B9](#b9), [F316](#f316), [F324](#f324)–[F325](#f325) |
 | [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320) |
 | [Hardening](#hardening) | 8 | [F305](#f305), [F313](#f313)–[F315](#f315), [F319](#f319), [F321](#f321)–[F323](#f323) |
 | [Polish](#polish) | 1 | [F310](#f310) |
@@ -36,6 +36,10 @@ _(none open)_
   - FX conversion cost
 
 - [ ] <a id="f316"></a> **F316** Turnaround valuation: implement P/S vs own 5-year historical median fallback (spec §4 "below its own historical median") — needs historical shares×price×TTM-revenue series; current gate is absolute P/S threshold only (ADV-10, F311 review). [medium] [features]
+
+- [ ] <a id="f324"></a> **F324** Turnaround gate transparency — per-gate margins + near-miss tier + inflection stages (gate design review 2026-06-05, with John). (a) Every sub-check emits signed distance-to-threshold alongside its bool (e.g. NKE failed pillar 2 by GM −0.53pp — invisible in binary payload); (b) near-miss tier: names failing EXACTLY one sub-check get a labeled "forming" watchlist tier, never in the signal set (one parameter total; NKE + EL land here today); (c) label existing pillar-2 sub-check combos as inflection stage early/mid/confirmed (revenue→margins→NI sequence; zero parameters, pure relabeling). Keeps binary membership (validation sets + auditability); adds no threshold knobs. [medium] [features]
+
+- [ ] <a id="f325"></a> **F325** Dose-response validation cohorts — report hit rate by gates-passed cohort (all-gates vs miss-exactly-one vs washed-out-only null) in run_validation. Monotonically rising hit rate with gates passed is a much harsher falsification than single signal-vs-null; partially fixes small-n (miss-one cohort is larger); zero new tuning (gates already locked). Analysis-layer only — does not alter membership or thresholds. (gate design review 2026-06-05) [medium] [features]
 
 ## Architecture
 
@@ -98,7 +102,7 @@ _(none open)_
 
 ## Deferred (gated)
 
-- [ ] <a id="f317"></a> **F317** Turnaround Phases 3+4 — Stage-2 catalyst monitor (upgrades/earnings/technical-confirmation alerts on watchlist names only) + the screen UI (candidate table, catalyst feed, validation panel, miss list one click away). Spec §5/§7/§8. [hard] [features] [gated: F312 validation shows the filter beating the null out-of-sample — spec §8 "Phase 2 is the gate"]
+- [ ] <a id="f317"></a> **F317** Turnaround Phases 3+4 — Stage-2 catalyst monitor (upgrades/earnings/technical-confirmation alerts on watchlist names only) + the screen UI (candidate table, catalyst feed, validation panel, miss list one click away). Spec §5/§7/§8. DESIGN NOTE (2026-06-05): watchlist membership must be STICKY — Gate 1 requires price below the 200dMA while the Stage-2 trigger is reclaiming the MA ribbon, so a name doing the thing we wait for instantly disqualifies itself from the list being watched; qualify at scan time, evaluate triggers later regardless of subsequent price recovery. [hard] [features] [gated: F312 validation shows the filter beating the null out-of-sample — spec §8 "Phase 2 is the gate"]
 
 - [ ] <a id="f318"></a> **F318** Survivorship-corrected validation universe — include delisted/failed names in the historical test universe (spec §9; ADV-02/ADV-09: biases are asymmetric, null inflated more than signal, so the measured edge is understated-to-unknown). [hard] [features] [gated: a delisted-names data source (CRSP/Tiingo/Sharadar) is selected and available]
 
