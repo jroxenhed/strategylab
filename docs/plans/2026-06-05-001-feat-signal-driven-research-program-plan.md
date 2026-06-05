@@ -310,7 +310,7 @@ The beaten-down-names universe is abandoned as a *selection premise*; its events
 
 **Verification:** Explore/confirm verdict doc with ledger; event rate vs pre-registered estimate reported (R1 honesty check).
 
-- [ ] **Unit 7: Deterioration-short config (short + long-veto, one run, two questions)**
+- [x] **Unit 7: Deterioration-short config (short + long-veto, one run, two questions)**
 
 **Goal:** Run-1's miss-list signature (price crashed, trailing fundamentals still printing fine) inverted into a short-candidate emitter — the only premise with in-house evidence. Simultaneously read as a long-side exclusion filter.
 
