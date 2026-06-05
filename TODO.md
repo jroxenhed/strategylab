@@ -13,12 +13,12 @@ _(none open)_
 - [F305](#f305) — [next] sync-todo-index.py writes TODO.md with bare write_text() [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 28 items
+## Open Work — 26 items
 
 | Section | Open | IDs |
 |---|---|---|
-| [Features](#features) | 5 | [B9](#b9), [F316](#f316), [F324](#f324)–[F325](#f325), [F328](#f328) |
-| [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320) |
+| [Features](#features) | 1 | [B9](#b9) |
+| [Architecture](#architecture) | 9 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F331](#f331)–[F332](#f332) |
 | [Hardening](#hardening) | 6 | [F305](#f305), [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329) |
@@ -32,16 +32,10 @@ _(none open)_
   - Hard-to-borrow dynamic rate feed
   - FX conversion cost
 
-- [ ] <a id="f316"></a> **F316** Turnaround valuation: implement P/S vs own 5-year historical median fallback (spec §4 "below its own historical median") — needs historical shares×price×TTM-revenue series; current gate is absolute P/S threshold only (ADV-10, F311 review). [medium] [features]
-
-- [ ] <a id="f324"></a> **F324** Turnaround gate transparency — per-gate margins + near-miss tier + inflection stages (gate design review 2026-06-05, with John). (a) Every sub-check emits signed distance-to-threshold alongside its bool (e.g. NKE failed pillar 2 by GM −0.53pp — invisible in binary payload); (b) near-miss tier: names failing EXACTLY one sub-check get a labeled "forming" watchlist tier, never in the signal set (one parameter total; NKE + EL land here today); (c) label existing pillar-2 sub-check combos as inflection stage early/mid/confirmed (revenue→margins→NI sequence; zero parameters, pure relabeling). Keeps binary membership (validation sets + auditability); adds no threshold knobs. [medium] [features]
-
-- [ ] <a id="f325"></a> **F325** Dose-response validation cohorts — report hit rate by gates-passed cohort (all-gates vs miss-exactly-one vs washed-out-only null) in run_validation. Monotonically rising hit rate with gates passed is a much harsher falsification than single signal-vs-null; partially fixes small-n (miss-one cohort is larger); zero new tuning (gates already locked). Analysis-layer only — does not alter membership or thresholds. (gate design review 2026-06-05) [medium] [features]
-
-- [ ] <a id="f328"></a> **F328** Miss-list horizon diagnostic — for each miss, compute time-to-+50% at extended horizons (24/36m): distinguishes "wrong name" (selection failure, thesis-threatening) from "right name, fired early" (timing failure, Stage-2's job). Motivated by ENPH: screen's #10-conviction pick at 2023-11 (−36% in window) became John's best long of 2026 after the real turn. Zero knobs; uses already-cached price spans where available. ENPH 2023→2026 point-in-time timeline is the agreed case-study vignette once F326 lands. [easy] [features]
-
 ## Architecture
 
+- [ ] <a id="f331"></a> **F331** Parallel price prefetch for validation runs — the date-1 wall is ~7k sequential yahoo fetches (~35min at ~3.5/sec, I/O-bound). Add a ThreadPoolExecutor prefetch phase (4-8 workers) that warms the memoized loader before the date loop; run_filter then sweeps a warm memo. NOT the WFA ProcessPool pattern (that's CPU-bound windows) — this is network I/O. Prereqs: verify _fetch() TTL-cache dict + memo dict thread-safety (add locks), keep the yf.Ticker-only rule (yf.download global-state bug), cap workers + backoff to dodge yahoo 429s, keep progress counter + cancel responsiveness (loader wrapper already per-call). Suggested by John watching the run-2 bar, 2026-06-05. [medium] [arch]
+- [ ] <a id="f332"></a> **F332** Persist validation price frames to disk (parquet per ticker+span) — the same wall has now been paid 3x for identical 2015-2024 daily bars (run-1, aborted run-2a, run-2b); in-process memo dies with every run/reload. On-disk cache makes reruns start at the date loop (~minutes total) and compounds with F331 (parallel cold fill, instant warm). Eviction: span-keyed files, prune with F314/F320 policy. [medium] [arch]
 - [ ] <a id="a8"></a> **A8** Chart performance — large dataset optimizations (100K+ 5-min bars): [arch]
   - [x] Equity curve detail mode downsample: root cause was missing `toDisplayTime()` shift on equity timestamps — raw UTC timestamps didn't match the main chart's ET-shifted timestamps, breaking crosshair sync and bucket alignment. Fixed by adding `toDisplayTime` to `shared/utils/time.ts` (mirrors Chart.tsx `toET`) and applying it to equity/baseline/trade-tick timestamps in Results.tsx before downsampling. `downsampleEquity()` itself was always correct.
   - [x] Equity curve detail mode sync: pixel-perfect alignment with main chart via bar-count matching. Passed OHLCV timestamps (`mainTimestamps` prop) from App.tsx, built equity/baseline/tick data with same bar positions (whitespace entries for missing values), logical-range sync. Five sub-fixes: `timeVisible`, baseline bar-matching, tick snapping, deferred width sync, invisible left axis.
@@ -98,8 +92,6 @@ _(none open)_
 - [ ] <a id="f309"></a> **F309** Promote the A8 zoom→auto-switch verification recipe to a scripted render-probe check (F298 rule): seed Alpaca 5m multi-year settings, drive `window.__chartDebug.setVisibleLogicalRange(0, N)`, assert lastSetDataPoints drops ≥10x + 'Auto (…)' badge, then narrow range and assert full-resolution restore. Needs DEV-build probe target or exposing the hook in preview builds behind a flag. [easy] [infra]
 
 ## Deferred (gated)
-
-- [ ] <a id="f317"></a> **F317** Turnaround Phases 3+4 — Stage-2 catalyst monitor (upgrades/earnings/technical-confirmation alerts on watchlist names only) + the screen UI (candidate table, catalyst feed, validation panel, miss list one click away). Spec §5/§7/§8. DESIGN NOTE (2026-06-05): watchlist membership must be STICKY — Gate 1 requires price below the 200dMA while the Stage-2 trigger is reclaiming the MA ribbon, so a name doing the thing we wait for instantly disqualifies itself from the list being watched; qualify at scan time, evaluate triggers later regardless of subsequent price recovery. [hard] [features] [gated: F312 validation shows the filter beating the null out-of-sample — spec §8 "Phase 2 is the gate"]
 
 - [ ] <a id="f318"></a> **F318** Survivorship-corrected validation universe — include delisted/failed names in the historical test universe (spec §9; ADV-02/ADV-09: biases are asymmetric, null inflated more than signal, so the measured edge is understated-to-unknown). [hard] [features] [gated: a delisted-names data source (CRSP/Tiingo/Sharadar) is selected and available]
 
