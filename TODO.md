@@ -13,12 +13,12 @@ _(none open)_
 - [F305](#f305) — [next] sync-todo-index.py writes TODO.md with bare write_text() [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 28 items
+## Open Work — 27 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
-| [Architecture](#architecture) | 9 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F331](#f331)–[F332](#f332) |
+| [Architecture](#architecture) | 8 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F331](#f331) |
 | [Hardening](#hardening) | 8 | [F305](#f305), [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F336](#f336)–[F337](#f337) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329) |
@@ -35,7 +35,6 @@ _(none open)_
 ## Architecture
 
 - [ ] <a id="f331"></a> **F331** Parallel price prefetch for validation runs — the date-1 wall is ~7k sequential yahoo fetches (~35min at ~3.5/sec, I/O-bound). Add a ThreadPoolExecutor prefetch phase (4-8 workers) that warms the memoized loader before the date loop; run_filter then sweeps a warm memo. NOT the WFA ProcessPool pattern (that's CPU-bound windows) — this is network I/O. Prereqs: verify _fetch() TTL-cache dict + memo dict thread-safety (add locks), keep the yf.Ticker-only rule (yf.download global-state bug), cap workers + backoff to dodge yahoo 429s, keep progress counter + cancel responsiveness (loader wrapper already per-call). Suggested by John watching the run-2 bar, 2026-06-05. [medium] [arch]
-- [ ] <a id="f332"></a> **F332** Persist validation price frames to disk (parquet per ticker+span) — the same wall has now been paid 3x for identical 2015-2024 daily bars (run-1, aborted run-2a, run-2b); in-process memo dies with every run/reload. On-disk cache makes reruns start at the date loop (~minutes total) and compounds with F331 (parallel cold fill, instant warm). Eviction: span-keyed files, prune with F314/F320 policy. [medium] [arch]
 - [ ] <a id="a8"></a> **A8** Chart performance — large dataset optimizations (100K+ 5-min bars): [arch]
   - [x] Equity curve detail mode downsample: root cause was missing `toDisplayTime()` shift on equity timestamps — raw UTC timestamps didn't match the main chart's ET-shifted timestamps, breaking crosshair sync and bucket alignment. Fixed by adding `toDisplayTime` to `shared/utils/time.ts` (mirrors Chart.tsx `toET`) and applying it to equity/baseline/trade-tick timestamps in Results.tsx before downsampling. `downsampleEquity()` itself was always correct.
   - [x] Equity curve detail mode sync: pixel-perfect alignment with main chart via bar-count matching. Passed OHLCV timestamps (`mainTimestamps` prop) from App.tsx, built equity/baseline/tick data with same bar positions (whitespace entries for missing values), logical-range sync. Five sub-fixes: `timeVisible`, baseline bar-matching, tick snapping, deferred width sync, invisible left axis.
