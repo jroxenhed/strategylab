@@ -8,6 +8,8 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ### Phase-2 full-universe verdict — the filter does NOT beat the null (the gate worked)
 
+- **Full write-up / fresh-session pickup doc:** [docs/plans/poor-mans-bloomberg-phase2-run1.md](plans/poor-mans-bloomberg-phase2-run1.md) — verdict, autopsy, bug ledger, rerun protocol (§8 is the next-step sequence), idea bank, data locations.
+
 - **The run:** 8,909 names × 36 quarterly as-of dates (2015–2023), locked config, 105 min, 1,039 fetch failures (12%), 3,156 overlapping events suppressed, 2,064 unique tickers, 3.9GB EDGAR cache built (one-time; reruns are minutes).
 - **The verdict:** signal 44/125 = **35.2%** [27.4–43.9] vs null 1,384/3,034 = **45.6%** [43.9–47.4] at +50%/12m touch. The full-screen picks did WORSE than merely-washed-out names; signal CI entirely at/below null. Mean net +8.8% is 2015–23 beta, not edge. **Phases 3–5 stay gated; $0 spent on UI for a non-edge — the spec §8 gate did exactly its job.**
 - **The autopsy (miss-list top 10 told the story):** GPRO-2015/-54%, ENPH/CRSR/BOOM-2023, oilfield trio 2018-19 — all decelerating former highfliers whose price crashed before their filings, not recovering troughs. **Price leads, filings trail**: conditioning on good trailing fundamentals after a crash selects names where the bad news hasn't finished arriving. Root cause is a spec-conformance bug, not a thesis kill: spec §4 says revenue "has TURNED positive" (sign change); the implementation accepted any ≥0 YoY run → F326. Killed a proxy, not the thesis — the real test is the F319+F326+F321 rerun.
