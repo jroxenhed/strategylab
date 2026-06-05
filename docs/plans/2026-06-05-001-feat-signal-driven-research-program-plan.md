@@ -286,7 +286,7 @@ The beaten-down-names universe is abandoned as a *selection premise*; its events
 
 ### Phase 3 — First signal configs (pre-registered, regime-conditioned)
 
-- [ ] **Unit 6: Momentum config (long)**
+- [x] **Unit 6: Momentum config (long)**
 
 **Goal:** The best-documented anomaly family, implemented as config #1 through the generalized harness: near-high + uptrend persistence on universe-v2, weeks-to-months horizons.
 
