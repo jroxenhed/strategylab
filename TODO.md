@@ -11,16 +11,15 @@ _(none open)_
 ## Up Next
 
 - [F305](#f305) — [next] sync-todo-index.py writes TODO.md with bare write_text() [easy]
-- [F313](#f313) — [next] Turnaround validation wall-clock budget + cancellation + progress [medium]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 29 items
+## Open Work — 28 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 5 | [B9](#b9), [F316](#f316), [F324](#f324)–[F325](#f325), [F328](#f328) |
 | [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320) |
-| [Hardening](#hardening) | 7 | [F305](#f305), [F313](#f313)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330) |
+| [Hardening](#hardening) | 6 | [F305](#f305), [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329) |
 | [Infra](#infra) | 4 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309) |
@@ -67,8 +66,6 @@ _(none open)_
 
 _(none open)_
 - [ ] <a id="f305"></a> **F305** [next] sync-todo-index.py writes TODO.md with bare write_text() — not atomic; adopt the tempfile+fsync+os.replace pattern close-batch.py already uses (DI-03, F-BATCH-0604D review). [easy] [hardening]
-
-- [ ] <a id="f313"></a> **F313** [next] Turnaround validation wall-clock budget + cancellation + progress — run_validation has no timeout/cancel path; a wide run can hold the to_thread slot for hours (REL-06, F311 review). Mirror the `_WFA_TIMEOUT_SECS` pattern incl. the partial-window drop rule. Promoted from review-finding to felt pain by the first full-universe run (2026-06-05): also add a progress counter to the status payload (as-of dates completed/total + symbols loaded — orchestrator was reduced to counting cache files) and set `duration_secs` while running, not only at terminal. [medium] [hardening]
 
 - [ ] <a id="f314"></a> **F314** EDGAR cache eviction/size cap — backend/data/turnaround/edgar_cache/ grows unboundedly (companyfacts are MB-scale; full-universe worst case GB-scale; expired files refreshed in place, never pruned) (DI-05/DI-10, F311 review). Measured 2026-06-05: 134MB at just 77 facts files (~1.8MB avg); full-run projection 2–5GB. Age-based prune on scan start + total-size cap. Largely superseded by F320 if that ships first (derived cache makes raw facts prunable). [easy] [hardening]
 

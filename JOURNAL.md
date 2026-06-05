@@ -6,6 +6,7 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-06-05
 
+- **[F313](TODO-archive.md#f313)** validation progress + cancel + wall-clock budget, plus ValidationRunPanel (Discovery tab) — dual progress bars, live event counts, cancel button. Two live-caught lessons folded in: timeout salvage had partial-date contamination (P1, per-date buffer fix + discriminating test) and progress/cancel hooks were blind during the date-1 price wall (moved to the bars_loader layer after watching symbols_loaded sit at 0 on a live run; cancel now drains in seconds, proven by the run-2 restart). Stuck-reload drain deadlock documented: pre-F313 workers can't die while a validation thread runs.
 - **Rerun-protocol batch (F-RERUN-0605):** shipped all four pre-rerun items in one orchestrated cycle (3 parallel impl lanes, 5-persona Tier-C review, 37 findings → 16 fixed / 6 deferred-with-rulings, holistic fixer). 924 backend tests green (+46 net).
   - **[F326](TODO-archive.md#f326)** sign-change inflection gate — the spec-conformance fix from the run-1 autopsy; GPRO-2015-class always-positive-decelerating names now fail.
   - **[F319](TODO-archive.md#f319)** universe hygiene v2 — junk-suffix exclusion purifies the null set.
