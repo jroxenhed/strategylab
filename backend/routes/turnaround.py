@@ -288,11 +288,19 @@ def _resolve_candidate_source(config_name: Optional[str]):
     """
     from turnaround_validation import CandidateSourceConfig  # noqa: local import
 
+    # Unit 6: momentum configs (M1 primary + M2/M3 robustness variants)
+    # Lazy import inside the function so the route loads without the research
+    # package needing to be importable at server startup (consistent with D12 pattern).
+    from research.config_momentum import CONFIG_M1, CONFIG_M2, CONFIG_M3  # noqa: local import
+
     _REGISTERED: dict[str, object] = {
         # "legacy" resolves to None (the default run_filter path)
         "legacy": None,
+        # Unit 6: momentum configs per charter §1 variant grid
+        "momentum_M1": CONFIG_M1,   # PRIMARY — H1/H2 judged on this only
+        "momentum_M2": CONFIG_M2,   # robustness (looser nearness band)
+        "momentum_M3": CONFIG_M3,   # robustness (trend-filter ablation)
         # Future configs registered here by their units:
-        # "momentum": config_momentum.CONFIG,
         # "deterioration_short": config_deterioration.CONFIG,
     }
 
