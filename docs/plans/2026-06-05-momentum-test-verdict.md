@@ -1,5 +1,7 @@
 # MOMENTUM-TEST Verdict — Unit 6, Signal-Driven Research Program (Experiment 2 of 4)
 
+> **CONFORMANCE AMENDMENT (2026-06-05, same evening):** the deterioration run exposed that universe-v2 price/volume floors were not enforced point-in-time in the config/null paths — 9.7% (explore) / 6.7% (confirm) of this experiment's events were sub-$5, and the exhaustive null medians included unfloored names, despite the charter specifying universe-v2. A quick floored recheck on the existing artifacts holds the H1 direction (confirm median excess +3.50pp floored vs +3.42pp unfloored; means deflate as vol-junk exits). Floors are being enforced (with counted exclusions) and **the experiment is being regenerated under conformance; the verdicts below are superseded pending the conformant rerun.** The charter is unchanged — this is conformance repair, not redesign.
+
 **Date:** 2026-06-05 · **Charter:** `.run/MOMENTUM-TEST/charter.md`, sha256 `ffef4c05…c6189f`, frozen blind · **Alpha:** 25% program share → per-comparison α=0.00625 · **Protocol:** blind charter → implementation (161 tests) → explore (2015–2020, open) → sealed confirm (2021–2024, explore-blind judge) · **Config:** M1 — `pct_off_high ≤ 5%` + price > rising 200d SMA, long, universe-v2, cohort-exhaustive nulls
 
 ## Verdict: H1 CONFIRMED · H2 (gating) WEAKENED → momentum-as-such NOT confirmed
