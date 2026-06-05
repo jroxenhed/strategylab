@@ -234,7 +234,7 @@ The beaten-down-names universe is abandoned as a *selection premise*; its events
 
 ### Phase 2 — The regime instrument (the strongest fact, weaponized)
 
-- [ ] **Unit 4: Point-in-time regime classifier (price-only)**
+- [x] **Unit 4: Point-in-time regime classifier (price-only)**
 
 **Goal:** Daily regime state 2015–2024 from index/breadth/vol features computable point-in-time from cached daily bars; no look-ahead, no survivorship leak.
 
@@ -259,7 +259,7 @@ The beaten-down-names universe is abandoned as a *selection premise*; its events
 
 **Verification:** Artifact regenerates deterministically; no feature uses data after its date (spot-audit by shifting input window and confirming states before the shift are unchanged).
 
-- [ ] **Unit 5: Pre-registered test — does regime state predict forward base rates?**
+- [x] **Unit 5: Pre-registered test — does regime state predict forward base rates?**
 
 **Goal:** The first experiment of the program: regime state at cohort date vs that cohort's forward base rate, out-of-time. If yes, regime is candidate signal #1 *and* a validated conditioning instrument; if no, it remains a descriptive caution.
 
