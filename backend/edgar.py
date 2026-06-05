@@ -82,7 +82,7 @@ def _get(url: str, params: dict | None = None) -> httpx.Response:
 
     _retry_delays = (1, 4)
     last_exc: Exception | None = None
-    for attempt, _ in enumerate(range(len(_retry_delays) + 1)):
+    for attempt in range(len(_retry_delays) + 1):
         try:
             response = _http_client.get(url, params=params)
             if response.status_code in (429, 500, 502, 503, 504) and attempt < len(_retry_delays):
@@ -273,7 +273,8 @@ def search_buyback_8k(cik: str, months_back: int = 12, as_of: date | None = None
     params = {
         "q": '"repurchase" OR "buyback"',
         "forms": "8-K",
-        "ciks": str(_cik_int(padded)),
+        "dateRange": "custom",           # Fix 2: required alongside startdt/enddt+forms (else HTTP 500)
+        "ciks": padded,                  # Fix 1: must be zero-padded 10-digit string (e.g. 0000320193)
         "startdt": start_dt.isoformat(),
         "enddt": end_dt.isoformat(),
     }
@@ -289,10 +290,12 @@ def search_buyback_8k(cik: str, months_back: int = 12, as_of: date | None = None
     results = []
     for hit in hits:
         src = hit.get("_source", {})
+        # Fix 3: real EFTS fields are adsh/root_forms/file_date (not accession_no/form_type)
+        root_forms = src.get("root_forms", [])
         results.append({
-            "accessionNo": src.get("accession_no", ""),
+            "accessionNo": src.get("adsh", ""),
             "filedAt": src.get("file_date", ""),
-            "formType": src.get("form_type", ""),
+            "formType": root_forms[0] if root_forms else "",
         })
 
     _write_cache(cache_path, results)
@@ -322,21 +325,24 @@ def fetch_form4_xml(cik: str, accession: str) -> str:
     (CACHE_DIR / "form4").mkdir(parents=True, exist_ok=True)
 
     # Locate the XML document via the filing index.
+    # Fix 4: real listing URL is index.json (not {accession}-index.json which 404s);
+    # response has directory.item[] with 'name' fields (not documents[].document).
     cik_int = _cik_int(padded)
     idx_url = (
         f"https://www.sec.gov/Archives/edgar/data/{cik_int}"
-        f"/{accession_nodash}/{accession_nodash}-index.json"
+        f"/{accession_nodash}/index.json"
     )
     xml_filename = None
     try:
         resp = _get(idx_url)
         idx_data = resp.json()
-        # Two-pass: prefer doc whose type is '4' or '4/A'; fall back to first .xml (COR-07/PY-02).
+        # Two-pass: prefer form4.xml directly; fall back to any .xml in directory.item[].
+        items = idx_data.get("directory", {}).get("item", [])
         typed_match: str | None = None
         fallback_match: str | None = None
-        for doc in idx_data.get("documents", []):
-            fname = doc.get("document", "")
-            if doc.get("type") in ("4", "4/A") and typed_match is None:
+        for item in items:
+            fname = item.get("name", "")
+            if fname == "form4.xml" and typed_match is None:
                 typed_match = fname
             if fname.endswith(".xml") and fallback_match is None:
                 fallback_match = fname

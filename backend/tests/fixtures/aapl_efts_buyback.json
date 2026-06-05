@@ -1,0 +1,56 @@
+{
+  "hits": {
+    "total": {
+      "value": 1,
+      "relation": "eq"
+    },
+    "hits": [
+      {
+        "_index": "edgar_file",
+        "_id": "0000320193-26-000011:a8-kex991q2202603282026.htm",
+        "_score": 3.4785116,
+        "_source": {
+          "ciks": [
+            "0000320193"
+          ],
+          "period_ending": "2026-04-30",
+          "file_num": [
+            "001-36743"
+          ],
+          "display_names": [
+            "Apple Inc.  (AAPL)  (CIK 0000320193)"
+          ],
+          "xsl": null,
+          "sequence": "2",
+          "root_forms": [
+            "8-K"
+          ],
+          "file_date": "2026-04-30",
+          "biz_states": [
+            "CA"
+          ],
+          "sics": [
+            "3571"
+          ],
+          "form": "8-K",
+          "adsh": "0000320193-26-000011",
+          "film_num": [
+            "26926130"
+          ],
+          "biz_locations": [
+            "Cupertino, CA"
+          ],
+          "file_type": "EX-99.1",
+          "file_description": "EX-99.1",
+          "inc_states": [
+            "CA"
+          ],
+          "items": [
+            "2.02",
+            "9.01"
+          ]
+        }
+      }
+    ]
+  }
+}

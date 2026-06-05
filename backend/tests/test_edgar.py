@@ -447,7 +447,12 @@ def test_get_form4_net_buys_net_sell(monkeypatch, tmp_path):
 
 
 def test_has_buyback_authorization_true(monkeypatch, tmp_path):
-    """True when EFTS returns matching 8-K filings."""
+    """True when EFTS returns matching 8-K filings.
+
+    COR-04 / F321 Fix 3: fixture uses real EFTS field names (adsh, root_forms)
+    so the test validates F321's field-name fix, not just the hit count.
+    Old field names (accession_no, form_type) would silently produce empty strings.
+    """
     import edgar
 
     monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
@@ -458,9 +463,9 @@ def test_has_buyback_authorization_true(monkeypatch, tmp_path):
             "hits": [
                 {
                     "_source": {
-                        "accession_no": "0001234567-23-000099",
+                        "adsh": "0001234567-23-000099",
                         "file_date": "2023-06-15",
-                        "form_type": "8-K",
+                        "root_forms": ["8-K"],
                     }
                 }
             ]
@@ -472,8 +477,12 @@ def test_has_buyback_authorization_true(monkeypatch, tmp_path):
 
     monkeypatch.setattr(edgar, "_get", fake_get)
 
+    filings = edgar.search_buyback_8k("0000123456", months_back=12)
     result = edgar.has_buyback_authorization("0000123456", months_back=12)
     assert result is True
+    # COR-04: verify the field-name fix actually worked — accessionNo must be non-empty
+    assert len(filings) == 1
+    assert filings[0]["accessionNo"] != "", "accessionNo is empty — adsh field not parsed (F321 regression)"
 
 
 # ---------------------------------------------------------------------------
@@ -1154,3 +1163,206 @@ def test_rate_limiter_sleep_outside_lock(monkeypatch):
         assert all(not held for held in lock_held_during_sleep), (
             "Rate-limit sleep was called while holding the lock"
         )
+
+
+# ---------------------------------------------------------------------------
+# F321 — Positive-control fixture tests (recorded 2026-06-05 from live EFTS)
+# ---------------------------------------------------------------------------
+
+# Path to recorded fixtures
+_FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+def test_f321_efts_request_params(monkeypatch, tmp_path):
+    """F321 Fix 1+2: EFTS request sends zero-padded ciks string + dateRange=custom.
+
+    Before fix: ciks was sent as bare int (silent 0 hits); dateRange was missing (HTTP 500).
+    After fix: ciks=0000320193 (string), dateRange=custom present.
+    """
+    import edgar
+
+    monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
+    (tmp_path / "efts").mkdir(parents=True, exist_ok=True)
+
+    captured_params: list[dict] = []
+    captured_urls: list[str] = []
+
+    def fake_get(url, params=None):
+        captured_urls.append(url)
+        if params:
+            captured_params.append(dict(params))
+        return _make_fake_response({"hits": {"hits": []}})
+
+    monkeypatch.setattr(edgar, "_get", fake_get)
+
+    edgar.search_buyback_8k("320193", months_back=12)
+
+    assert len(captured_params) == 1
+    p = captured_params[0]
+    # Fix 1: ciks must be the zero-padded 10-digit string, NOT a bare int
+    assert p["ciks"] == "0000320193", f"ciks was {p['ciks']!r}, expected '0000320193'"
+    assert isinstance(p["ciks"], str), "ciks must be a string"
+    # Fix 2: dateRange=custom is required
+    assert p.get("dateRange") == "custom", f"dateRange was {p.get('dateRange')!r}, expected 'custom'"
+    # Other required params still present
+    assert "startdt" in p
+    assert "enddt" in p
+    assert p["forms"] == "8-K"
+    # TST-04: assert the URL endpoint itself (a wrong base URL would pass all param checks)
+    assert len(captured_urls) == 1
+    assert captured_urls[0].startswith("https://efts.sec.gov/LATEST/search-index"), (
+        f"EFTS URL regression: got {captured_urls[0]!r}"
+    )
+
+
+def test_f321_efts_field_names_from_fixture(monkeypatch, tmp_path):
+    """F321 Fix 3: parser reads adsh/root_forms instead of old accession_no/form_type.
+
+    Fixture is a real EFTS response recorded 2026-06-05 for AAPL (CIK 0000320193).
+    Before fix: src.get('accession_no') and src.get('form_type') both return '' (silent empty).
+    After fix: adsh and root_forms[0] yield non-empty values.
+    """
+    import edgar
+
+    monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
+    (tmp_path / "efts").mkdir(parents=True, exist_ok=True)
+
+    fixture_path = _FIXTURES_DIR / "aapl_efts_buyback.json"
+    with open(fixture_path) as f:
+        fixture_data = json.load(f)
+
+    # ADV-07: pin the fixture schema itself — if the fixture goes stale (reverts to old
+    # field names), this assertion catches it before the parser assertion can hide it.
+    first_src = fixture_data["hits"]["hits"][0]["_source"]
+    assert "_source" in fixture_data["hits"]["hits"][0], "fixture structure unexpected"
+    assert "adsh" in first_src, (
+        "Fixture missing 'adsh' key — fixture may be stale or reverted to old field names"
+    )
+    assert "root_forms" in first_src, (
+        "Fixture missing 'root_forms' key — fixture may be stale or reverted to old field names"
+    )
+
+    def fake_get(url, params=None):
+        return _make_fake_response(fixture_data)
+
+    monkeypatch.setattr(edgar, "_get", fake_get)
+
+    results = edgar.search_buyback_8k("0000320193", months_back=12)
+
+    assert len(results) == 1
+    r = results[0]
+    # Fix 3: accessionNo and formType must be non-empty (old field names returned '')
+    assert r["accessionNo"] != "", f"accessionNo is empty — adsh field not parsed"
+    assert r["accessionNo"] == "0000320193-26-000011"
+    assert r["formType"] == "8-K"
+    assert r["filedAt"] == "2026-04-30"
+
+
+def test_f321_has_buyback_authorization_aapl_fixture(monkeypatch, tmp_path):
+    """F321 positive control: AAPL has_buyback_authorization → True from real EFTS fixture.
+
+    Fixture: 1 hit (8-K filed 2026-04-30 with buyback authorization, EX-99.1).
+    Recorded from live EFTS 2026-06-05 for window 2025-06-05..2026-06-05.
+    """
+    import edgar
+
+    monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
+    (tmp_path / "efts").mkdir(parents=True, exist_ok=True)
+
+    fixture_path = _FIXTURES_DIR / "aapl_efts_buyback.json"
+    with open(fixture_path) as f:
+        fixture_data = json.load(f)
+
+    def fake_get(url, params=None):
+        return _make_fake_response(fixture_data)
+
+    monkeypatch.setattr(edgar, "_get", fake_get)
+
+    result = edgar.has_buyback_authorization("0000320193", months_back=12)
+    assert result is True, "AAPL should have buyback authorization in 12-month window"
+
+
+def test_f321_form4_index_parses_directory_item(monkeypatch, tmp_path):
+    """F321 Fix 4: fetch_form4_xml uses index.json (not {accession}-index.json) + directory.item[].
+
+    Fixture is a real index.json response for AAPL Form 4 accession 0001140361-26-023363,
+    recorded 2026-06-05. Old code requested {accession}-index.json (404) and parsed documents[].
+    New code uses index.json and parses directory.item[].name.
+    """
+    import edgar
+
+    monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
+    (tmp_path / "form4").mkdir(parents=True, exist_ok=True)
+
+    fixture_path = _FIXTURES_DIR / "aapl_form4_index.json"
+    with open(fixture_path) as f:
+        index_fixture = json.load(f)
+
+    xml_fixture_path = _FIXTURES_DIR / "aapl_form4_real.xml"
+    xml_content = xml_fixture_path.read_text(encoding="utf-8")
+
+    captured_urls: list[str] = []
+
+    def fake_get(url, params=None):
+        captured_urls.append(url)
+        if url.endswith("index.json"):
+            return _make_fake_response(index_fixture)
+        if url.endswith("form4.xml"):
+            mock = MagicMock()
+            mock.text = xml_content
+            mock.raise_for_status.return_value = None
+            return mock
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(edgar, "_get", fake_get)
+
+    result = edgar.fetch_form4_xml("0000320193", "0001140361-26-023363")
+
+    # Fix 4a: index URL must NOT contain the accession in the filename (old pattern 404d)
+    index_url = next((u for u in captured_urls if "index" in u), None)
+    assert index_url is not None, "No index URL was requested"
+    assert index_url.endswith("/index.json"), (
+        f"Expected URL ending in /index.json, got: {index_url}"
+    )
+    assert "023363-index.json" not in index_url, (
+        f"Old broken pattern found in URL: {index_url}"
+    )
+
+    # Fix 4b: XML content should be returned (non-empty, valid XML)
+    assert result != "", "fetch_form4_xml returned empty string — index parsing failed"
+    assert "ownershipDocument" in result, "Returned content is not Form 4 XML"
+
+
+def test_f321_get_form4_net_buys_aapl_fixture(monkeypatch, tmp_path):
+    """F321 positive control: AAPL get_form4_net_buys → non-zero from real submissions + XML fixture.
+
+    Uses recorded submissions fixture (3 Form 4s, all 2026, within 6-month window)
+    and real Form 4 XML (has S transaction). Result must be non-zero.
+    """
+    import edgar
+
+    monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
+
+    subs_fixture_path = _FIXTURES_DIR / "aapl_submissions_form4.json"
+    with open(subs_fixture_path) as f:
+        subs_fixture = json.load(f)
+
+    xml_fixture_path = _FIXTURES_DIR / "aapl_form4_real.xml"
+    xml_content = xml_fixture_path.read_text(encoding="utf-8")
+
+    def fake_get(url, params=None):
+        if "submissions" in url:
+            return _make_fake_response(subs_fixture)
+        raise AssertionError(f"Unexpected _get call: {url}")
+
+    monkeypatch.setattr(edgar, "_get", fake_get)
+    # Serve the real XML for every accession
+    monkeypatch.setattr(edgar, "fetch_form4_xml", lambda cik_arg, acc: xml_content)
+
+    result = edgar.get_form4_net_buys("0000320193", months_back=6,
+                                       as_of=date(2026, 6, 5))
+
+    assert result != 0.0, (
+        f"get_form4_net_buys returned 0 for AAPL — parser is silently empty. "
+        f"Check that transactionCode/shares/price are being extracted."
+    )
