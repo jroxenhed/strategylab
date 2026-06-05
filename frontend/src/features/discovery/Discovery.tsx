@@ -1,5 +1,6 @@
 import SignalScanner from './SignalScanner'
 import PerformanceComparison from './PerformanceComparison'
+import ValidationRunPanel from './ValidationRunPanel'
 
 const PREVIEW_CARDS = [
   {
@@ -19,6 +20,7 @@ const PREVIEW_CARDS = [
 export default function Discovery({ onSpawnBot }: { onSpawnBot?: (symbol: string, strategyName: string) => void }) {
   return (
     <div style={styles.container}>
+      <ValidationRunPanel />
       <SignalScanner onSpawnBot={onSpawnBot} />
       <PerformanceComparison />
       <div style={styles.previewSection}>

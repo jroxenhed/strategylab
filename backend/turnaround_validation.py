@@ -443,13 +443,28 @@ def run_validation(
         universe = []
 
     # Memoized loader (D2): one fetch per symbol covering the full span
-    bars_loader = _make_memoized_loader(
+    _inner_loader = _make_memoized_loader(
         start_year=req.start_year,
         end_year=req.end_year,
         low_lookback_years=params.low_lookback_years,
         horizon_months=req.horizon_months,
         data_source=params.data_source,
     )
+
+    # F313: instrument the loader itself. The ~60-min date-1 price wall happens
+    # INSIDE run_filter (washed-out gate fetches bars per symbol), so both the
+    # within-date progress counter and cancellation responsiveness must live at
+    # the loader layer — the candidate loop only runs AFTER the wall. On cancel,
+    # return None (loader contract: no bars) so run_filter skips remaining
+    # symbols in seconds without exception spam; the date-boundary check then
+    # raises _cancelled_ cleanly.
+    def bars_loader(ticker: str):
+        if cancel_event is not None and cancel_event.is_set():
+            return None
+        if progress is not None:
+            progress.symbols_loaded += 1
+        return _inner_loader(ticker)
+
 
     as_of_dates = _quarterly_as_of_dates(req.start_year, req.end_year)
     hit_threshold = req.hit_threshold_pct / 100.0
@@ -812,7 +827,9 @@ def run_validation(
     events_table.sort(key=lambda x: (x["as_of"] or "", x["is_null"], x["ticker"] or ""))
 
     elapsed = time.monotonic() - t0
-    fetch_failures = getattr(bars_loader, "fetch_failures", 0)
+    # F313: failures accumulate on the inner memoized loader (the wrapper only
+    # instruments progress/cancel)
+    fetch_failures = getattr(_inner_loader, "fetch_failures", 0)
 
     return ValidationResult(
         signal_hit_rate=sig_rate,

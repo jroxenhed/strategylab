@@ -273,6 +273,7 @@ def _run_validation_with_mocks(
     *,
     progress=None,
     timeout_secs=None,
+    cancel_event=None,
 ) -> tv.ValidationResult:
     """Patch the key seams and run validation inline.
 
@@ -310,6 +311,8 @@ def _run_validation_with_mocks(
             kwargs["progress"] = progress
         if timeout_secs is not None:
             kwargs["timeout_secs"] = timeout_secs
+        if cancel_event is not None:
+            kwargs["cancel_event"] = cancel_event
         result = tv.run_validation(req, **kwargs)
     finally:
         tv._make_memoized_loader = orig_loader_fn
@@ -1361,6 +1364,63 @@ def test_timeout_completed_dates_events_preserved():
     # Since timeout=0, the run should have 0 completed dates and 0 events
     assert result.dates_completed == 0
     assert result.signal_n + result.null_n == 0
+
+
+def test_progress_symbols_counted_at_loader_layer():
+    """F313 follow-up: symbols_loaded must increment INSIDE run_filter (the date-1
+    price wall happens there), i.e. at the bars_loader layer — not in the
+    candidate loop. A filter that touches the loader for 3 universe symbols but
+    returns only 1 candidate must still count 3.
+    """
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    def _filter_touching_loader(universe, as_of, params, bars_loader=None):
+        # simulate the washed-out gate sweeping the universe through the loader
+        for t in ["SYM1", "SYM2", "SYM3"]:
+            bars_loader(t)
+        return [_make_candidate("SYM1")]
+
+    progress = tv.ValidationProgress()
+    _run_validation_with_mocks(
+        _make_validation_req(start_year=2018, end_year=2018),
+        _filter_touching_loader,
+        lambda ticker: flat_df,
+        progress=progress,
+    )
+    # 4 as-of dates in 2018; counter resets per date — last date's sweep (3 loader
+    # touches + candidate-loop lookups) must be >= 3, proving loader-layer counting.
+    assert progress.symbols_loaded >= 3
+
+
+def test_cancel_during_run_filter_via_loader():
+    """F313 follow-up: a cancel that lands while run_filter is mid-sweep must make
+    the loader return None (fast skip) and the run terminate with _cancelled_ at
+    the next date boundary — not after the full price wall.
+    """
+    import threading
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+    cancel = threading.Event()
+    none_seen = [0]
+
+    def _filter_cancelling_midsweep(universe, as_of, params, bars_loader=None):
+        bars_loader("PRE")          # before cancel: real frame
+        cancel.set()                # cancel lands mid-sweep
+        if bars_loader("POST") is None:  # after cancel: loader must yield None
+            none_seen[0] += 1
+        return []
+
+    with pytest.raises(RuntimeError, match="_cancelled_"):
+        _run_validation_with_mocks(
+            _make_validation_req(start_year=2018, end_year=2018),
+            _filter_cancelling_midsweep,
+            lambda ticker: flat_df,
+            cancel_event=cancel,
+        )
+    assert none_seen[0] == 1
 
 
 def test_timeout_mid_date_drops_partial_date_events():
