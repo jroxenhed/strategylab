@@ -10,17 +10,18 @@ _(none open)_
 
 ## Up Next
 
+- [F326](#f326) — [next] Inflection gate must require a SIGN CHANGE [medium]
 - [F305](#f305) — [next] sync-todo-index.py writes TODO.md with bare write_text() [easy]
 - [F313](#f313) — [next] Turnaround validation wall-clock budget + cancellation + progress [medium]
 - [F321](#f321) — [next] Conviction pillar is a silent dud [medium]
 - [F319](#f319) — [next] Turnaround universe hygiene v2 [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 28 items
+## Open Work — 31 items
 
 | Section | Open | IDs |
 |---|---|---|
-| [Features](#features) | 4 | [B9](#b9), [F316](#f316), [F324](#f324)–[F325](#f325) |
+| [Features](#features) | 7 | [B9](#b9), [F316](#f316), [F324](#f324)–[F328](#f328) |
 | [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320) |
 | [Hardening](#hardening) | 8 | [F305](#f305), [F313](#f313)–[F315](#f315), [F319](#f319), [F321](#f321)–[F323](#f323) |
 | [Polish](#polish) | 1 | [F310](#f310) |
@@ -40,6 +41,12 @@ _(none open)_
 - [ ] <a id="f324"></a> **F324** Turnaround gate transparency — per-gate margins + near-miss tier + inflection stages (gate design review 2026-06-05, with John). (a) Every sub-check emits signed distance-to-threshold alongside its bool (e.g. NKE failed pillar 2 by GM −0.53pp — invisible in binary payload); (b) near-miss tier: names failing EXACTLY one sub-check get a labeled "forming" watchlist tier, never in the signal set (one parameter total; NKE + EL land here today); (c) label existing pillar-2 sub-check combos as inflection stage early/mid/confirmed (revenue→margins→NI sequence; zero parameters, pure relabeling). Keeps binary membership (validation sets + auditability); adds no threshold knobs. [medium] [features]
 
 - [ ] <a id="f325"></a> **F325** Dose-response validation cohorts — report hit rate by gates-passed cohort (all-gates vs miss-exactly-one vs washed-out-only null) in run_validation. Monotonically rising hit rate with gates passed is a much harsher falsification than single signal-vs-null; partially fixes small-n (miss-one cohort is larger); zero new tuning (gates already locked). Analysis-layer only — does not alter membership or thresholds. (gate design review 2026-06-05) [medium] [features]
+
+- [ ] <a id="f326"></a> **F326** [next] Inflection gate must require a SIGN CHANGE — spec §4 says revenue growth "has TURNED positive", implying a prior negative stretch; the implementation checks only "YoY ≥ 0 for K consecutive quarters", admitting always-positive-but-decelerating former highfliers (GPRO 2015, ENPH/CRSR/BOOM 2023, oilfield trio 2018-19 — the full-run miss-list top 10). Spec-conformance fix, not tuning (the wording predates the data; be transparent that the run surfaced it). Require ≥1 negative YoY quarter in the lookback before the positive run. Rerun protocol: F319 + F326 + F321 land first, then re-run full validation on warm caches (~minutes) and report old vs new side by side. [medium] [hardening]
+
+- [ ] <a id="f327"></a> **F327** Validation payload gaps from the full-run read — add null return distribution (mean/median/quartiles; hit-rate-only comparison hides the vol asymmetry between junky null and steadier signal names), plus a fixed-horizon return comparison alongside the touch-+50% hit metric. Analysis-layer. [easy] [hardening]
+
+- [ ] <a id="f328"></a> **F328** Miss-list horizon diagnostic — for each miss, compute time-to-+50% at extended horizons (24/36m): distinguishes "wrong name" (selection failure, thesis-threatening) from "right name, fired early" (timing failure, Stage-2's job). Motivated by ENPH: screen's #10-conviction pick at 2023-11 (−36% in window) became John's best long of 2026 after the real turn. Zero knobs; uses already-cached price spans where available. ENPH 2023→2026 point-in-time timeline is the agreed case-study vignette once F326 lands. [easy] [features]
 
 ## Architecture
 
