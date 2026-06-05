@@ -25,6 +25,18 @@ Key design decisions:
   (R1 enforcement); the harness refuses to run a non-default config missing this
   declaration. Errors surface via the same RuntimeError channel F313 built (caught
   by _run_validate_background → sets status="error", visible at GET /validate/status).
+- D14 (Unit 2): Outcome engine v2 — bar-counted forward returns at 21/63/126
+  TRADING DAYS (rows on the already-fetched frame; survivorship-safe, no
+  calendar API), cohort-relative excess (event fwd return − same-cohort null
+  median at the matched horizon; hit_v2 = excess > 0), and short support
+  (direction + borrow_rate_annual on ValidationRequest; _apply_costs() inverts
+  slippage sign for shorts and accrues borrow cost over the holding period,
+  reusing the borrow_cost pattern from routes/backtest.py). Events table becomes
+  schema_version=2 with ADDITIVE fwd_return_/excess_/hit_v2_ fields; the legacy
+  calendar-month horizon_end_return_pct stays populated as a diagnostic so
+  schema_version=1 consumers keep working. Null sampling is cohort-exhaustive
+  (all same-as_of null events), beta control is market/cohort-excess only (NOT
+  beta-adjusted — see the second-pass comment).
 - D13 (Unit 3 / F332): Price-frame persistence — on-disk cache under
   backend/data/turnaround/price_cache/ keyed by ticker+span so reruns start at
   the date loop without re-fetching.  Format: pickle (protocol 4) — no parquet
@@ -45,6 +57,7 @@ import statistics
 import tempfile
 import threading
 import time
+import zlib
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
@@ -52,6 +65,12 @@ from typing import Callable, Optional, TYPE_CHECKING
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    # PY-01: CandidateResult lives in turnaround.py (lane B); imported only for type
+    # hints so the source_fn signature is statically checkable without a runtime
+    # import (preserving the lazy-import design that lets this module load first).
+    from turnaround import CandidateResult
 
 logger = logging.getLogger(__name__)
 
@@ -85,72 +104,151 @@ _THIS_DIR = Path(__file__).resolve().parent
 _PRICE_CACHE_DIR: Path = _THIS_DIR / "data" / "turnaround" / "price_cache"
 _PICKLE_PROTOCOL = 4  # Python 3.8+ portable; higher protocols not strictly needed
 
+# DI-04: cache-format version. Lives in the on-disk path (price_cache/v1/...).
+# Bump this constant to globally evict every cached frame in one move — e.g. when
+# the provider schema changes, when the sanitization scheme changes (DI-01), or
+# when a split-adjustment staleness sweep is needed.  See PriceFrameCache docstring
+# for the split-adjustment staleness risk this guards against.
+_PRICE_CACHE_VERSION = "v1"
+
 
 def _safe_ticker(ticker: str) -> str:
-    """Replace non-alphanumeric chars so the ticker is safe as a filename component."""
+    """Replace non-alphanumeric chars so the ticker is safe as a filename component.
+
+    DI-01: the sanitized name alone is NOT collision-free (BRK.A, BRK_A and BRK/A all
+    map to BRK_A).  Callers that need a collision-free key append a hash of the raw
+    ticker via _ticker_key().
+    """
     return re.sub(r"[^A-Za-z0-9]", "_", ticker).upper()
+
+
+def _ticker_key(ticker: str) -> str:
+    """Collision-free filename component for a ticker (DI-01).
+
+    Combines the human-readable sanitized name with a CRC32 of the *raw* ticker so
+    that distinct tickers differing only in punctuation (BRK.A vs BRK_A vs BRK/A) get
+    distinct cache files.  The raw bytes drive the hash, so the inverse-collision
+    risk is a CRC32 collision on differing inputs (negligible at universe scale).
+    """
+    crc = format(zlib.crc32(ticker.encode("utf-8")) & 0xFFFFFFFF, "08x")
+    return f"{_safe_ticker(ticker)}_{crc}"
+
+
+def _safe_source(data_source: str) -> str:
+    """Sanitize a data_source/provider id for use as a filename component (DI-02)."""
+    return re.sub(r"[^A-Za-z0-9]", "_", data_source or "unknown").lower()
 
 
 class PriceFrameCache:
     """On-disk pickle cache for validation price frames (F332 / D13).
 
-    Each entry is keyed by (ticker, fetch_start, fetch_end) and stored as a
-    single pickle file in *cache_dir*.  Reads are best-effort (corrupt/missing
-    files return None).  Writes are atomic (tmp + os.replace).
+    Each entry is keyed by (data_source, ticker, fetch_start, fetch_end) and stored
+    as a single pickle file under *cache_dir*/<version>/.  Reads are best-effort
+    (corrupt/missing files return None and the corrupt file is unlinked).  Writes are
+    atomic (tmp + os.replace).
+
+    Key design (DI-01/DI-02/DI-04):
+    - The filename embeds a CRC32 of the raw ticker (_ticker_key) so punctuation-only
+      variants (BRK.A / BRK_A / BRK/A) never alias to the same file.
+    - The data_source/provider is part of the key (sanitized) so a frame fetched from
+      provider A is never served on a run using provider B.  Providers differ in
+      split-adjustment, survivorship, and gaps.
+    - The cache-format version (_PRICE_CACHE_VERSION) is a path segment so a version
+      bump globally evicts every stale frame in one move.
+
+    STALENESS / SPLIT-ADJUSTMENT RISK (DI-04): there is NO automatic eviction.  Most
+    historical bars are immutable, but split-adjusted providers RETROACTIVELY revise
+    all historical prices after a post-hoc split.  A frame cached before such a split
+    therefore carries stale (pre-adjustment) closes indefinitely — material for the
+    high-split small/mid-cap names overrepresented in the turnaround universe.  The
+    mitigation today is the manual version-bump lever above; a real time/mtime-based
+    eviction policy is deferred to a follow-up F-item (F314/F320 family).
 
     Thread-safety: multiple threads may call load/store concurrently.
-    - load() is read-only → safe.
+    - load() is read-only (plus a best-effort unlink of a proven-corrupt file) → safe.
     - store() uses os.replace which is atomic on POSIX; on Windows it is NOT
       atomic but is still correct (last writer wins; no partial reads possible
       because the tmp file is fsync'd before rename).
-
-    TTL eviction is NOT implemented here — the parent F314/F320 policy handles
-    that at the edgar_cache level.  Price frames don't expire on human timescales
-    (2015-2024 bars don't change).
     """
 
     def __init__(self, cache_dir: Path = _PRICE_CACHE_DIR) -> None:
         self._dir = cache_dir
 
     def _ensure_dir(self) -> bool:
-        """Create cache dir if needed. Returns True on success, False on OSError."""
+        """Create the versioned cache dir if needed. True on success, False on OSError."""
         try:
-            self._dir.mkdir(parents=True, exist_ok=True)
+            self._version_dir().mkdir(parents=True, exist_ok=True)
             return True
         except OSError as exc:
-            logger.warning("PriceFrameCache: cannot create cache dir %s: %s", self._dir, exc)
+            logger.warning("PriceFrameCache: cannot create cache dir %s: %s", self._version_dir(), exc)
             return False
 
-    def _path(self, ticker: str, fetch_start: str, fetch_end: str) -> Path:
-        safe = _safe_ticker(ticker)
+    def _version_dir(self) -> Path:
+        return self._dir / _PRICE_CACHE_VERSION
+
+    def _path(
+        self,
+        ticker: str,
+        fetch_start: str,
+        fetch_end: str,
+        data_source: str = "yahoo",
+    ) -> Path:
+        # DI-01: collision-free ticker key.  DI-02: provider in the key.
+        # DI-04: version segment in the path so a bump evicts globally.
+        key = _ticker_key(ticker)
+        ds = _safe_source(data_source)
         span = f"{fetch_start}_{fetch_end}".replace("-", "")
-        return self._dir / f"{safe}_{span}.pkl"
+        return self._version_dir() / f"{key}_{ds}_{span}.pkl"
 
     def load(
-        self, ticker: str, fetch_start: str, fetch_end: str
+        self,
+        ticker: str,
+        fetch_start: str,
+        fetch_end: str,
+        data_source: str = "yahoo",
     ) -> Optional[pd.DataFrame]:
-        """Return cached DataFrame for ticker+span, or None if not cached / corrupt."""
-        p = self._path(ticker, fetch_start, fetch_end)
+        """Return cached DataFrame for (provider, ticker, span), or None.
+
+        DI-03: a proven-corrupt file (unpickle failure or wrong type) is unlinked
+        before returning None, so the next run triggers a clean network fetch instead
+        of re-encountering the same corrupt file on every restart.
+        """
+        p = self._path(ticker, fetch_start, fetch_end, data_source)
         if not p.exists():
             return None
         try:
             with open(p, "rb") as fh:
                 obj = pickle.load(fh)
             if not isinstance(obj, pd.DataFrame):
-                logger.warning("PriceFrameCache: unexpected type in %s — ignoring", p)
+                logger.warning("PriceFrameCache: unexpected type in %s — evicting", p)
+                self._unlink_quiet(p)
                 return None
             return obj
         except Exception as exc:
-            logger.warning("PriceFrameCache: failed to load %s: %s", p, exc)
+            logger.warning("PriceFrameCache: failed to load %s: %s — evicting", p, exc)
+            self._unlink_quiet(p)
             return None
 
+    @staticmethod
+    def _unlink_quiet(p: Path) -> None:
+        """Best-effort unlink of a corrupt cache file (DI-03)."""
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
     def store(
-        self, ticker: str, fetch_start: str, fetch_end: str, df: pd.DataFrame
+        self,
+        ticker: str,
+        fetch_start: str,
+        fetch_end: str,
+        df: pd.DataFrame,
+        data_source: str = "yahoo",
     ) -> None:
-        """Persist *df* for ticker+span.  Best-effort — logs on failure, never raises."""
+        """Persist *df* for (provider, ticker, span).  Best-effort — never raises."""
         if not self._ensure_dir():
             return
-        p = self._path(ticker, fetch_start, fetch_end)
+        p = self._path(ticker, fetch_start, fetch_end, data_source)
         # Atomic write: pickle to tmp sibling, then os.replace.
         try:
             dir_ = str(p.parent)
@@ -224,8 +322,13 @@ class CandidateSourceConfig:
     name: str
     direction: str  # 'long' | 'short'
     expected_events_per_year: Optional[float]  # None only for legacy config #0
-    source_fn: Callable  # (as_of, universe, bars_loader) -> list[CandidateResult-like]
-    horizons: Optional[list] = None  # reserved for Unit 2
+    # PY-01: full signature — (as_of, universe, bars_loader) -> list[CandidateResult].
+    # universe is a list of (ticker, name) tuples; bars_loader maps ticker -> frame.
+    source_fn: Callable[
+        [date, list[tuple[str, str]], Callable[[str], Optional[pd.DataFrame]]],
+        list[CandidateResult],
+    ]
+    horizons: Optional[list[int]] = None  # reserved for Unit 2
 
 # ---------------------------------------------------------------------------
 # Wall-clock budget (mirrors _WFA_TIMEOUT_SECS in routes/walk_forward.py).
@@ -234,6 +337,20 @@ class CandidateSourceConfig:
 # at every symbol iteration inside the current date.
 # ---------------------------------------------------------------------------
 _VALIDATION_TIMEOUT_SECS: float = 3 * 3600  # 3 hours — generous; real runs take ~60 min
+
+# ---------------------------------------------------------------------------
+# Unit 2 (D14): Outcome engine v2 — bar-counted forward-return horizons.
+#
+# Horizons are TRADING DAYS (rows on the already-fetched daily frame), NOT
+# calendar months.  We count N rows forward from the entry row on the same
+# frame the loader already produced — survivorship-safe and no external
+# calendar API.  21/63/126 trading days ≈ 1/3/6 calendar months.
+#
+# The legacy calendar-month horizon (req.horizon_months / _horizon_end_date)
+# is RETAINED as a diagnostic field (horizon_end_return_pct) so existing
+# schema_version=1 consumers and the run-2 reproduction check keep working.
+# ---------------------------------------------------------------------------
+V2_HORIZONS_TRADING_DAYS: tuple[int, ...] = (21, 63, 126)
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +404,14 @@ class ValidationRequest(BaseModel):
 
     start_year: int = Field(default=2015, ge=2005, le=2024)
     end_year: int = Field(default=2023, ge=2005, le=2024)
-    horizon_months: int = Field(default=12, ge=3, le=24)
+    # Unit 2 (D14): horizon_months is now a LEGACY diagnostic horizon only. The
+    # v2 outcome metrics use bar-counted trading-day horizons (V2_HORIZONS_TRADING_DAYS)
+    # measured on the already-fetched frame. The old ge=3/le=24 calendar-month
+    # constraint is RELAXED to ge=1 so a config can run a short diagnostic window;
+    # the upper bound is widened so the legacy 12m field still validates while the
+    # real horizons are the bar-counted ones. Existing consumers pinning 12 are
+    # unaffected (12 is still valid).
+    horizon_months: int = Field(default=12, ge=1, le=36)
     hit_threshold_pct: float = Field(default=50.0, ge=10.0, le=500.0)
     initial_capital: float = Field(default=10_000.0, ge=1_000.0)
 
@@ -295,6 +419,14 @@ class ValidationRequest(BaseModel):
     slippage_bps: float = Field(default=2.0, ge=0.0)
     per_share_rate: float = Field(default=0.0, ge=0.0)
     min_per_order: float = Field(default=0.0, ge=0.0)
+
+    # Unit 2 (D14): direction + borrow cost for short support (P0 review item).
+    # direction flows into _apply_costs() to invert slippage sign and accrue borrow
+    # cost over the holding period (mirrors backtester borrow_cost()). When a
+    # CandidateSourceConfig with direction='short' is injected, run_validation
+    # overrides req.direction from the config so the cost engine is sign-correct.
+    direction: str = Field(default="long")  # 'long' | 'short'
+    borrow_rate_annual: float = Field(default=0.5, ge=0.0)
 
     # Universe cap — same role as ScanRequest.max_universe. The full universe
     # is ~10k names == ~10k sequential daily-bar fetches in the memoized
@@ -329,6 +461,14 @@ class TradeOutcome:
     # hits exit early at the touch price; this captures what the price was at horizon-end
     horizon_end_price: Optional[float] = None
     horizon_end_return_pct: Optional[float] = None  # net return if held to horizon-end
+    # Unit 2 (D14): bar-counted forward returns at V2_HORIZONS_TRADING_DAYS.
+    # GROSS direction-aware return at each horizon; None = incomplete (data ended
+    # before N bars forward). Keyed by horizon (21/63/126). Cohort-relative excess
+    # is computed in a second pass (needs the cohort null medians) and stored in
+    # fwd_excess_pct.
+    fwd_return_pct: dict[int, Optional[float]] = field(default_factory=dict)   # {21: x, 63: y, 126: z}
+    fwd_excess_pct: dict[int, Optional[float]] = field(default_factory=dict)   # {21: ex, 63: ey, 126: ez}
+    hit_v2: dict[int, Optional[bool]] = field(default_factory=dict)            # {21: bool, ...} excess>0
 
 
 @dataclass
@@ -493,8 +633,8 @@ def _make_memoized_loader(
         if ticker in _cache:
             return _cache[ticker]
 
-        # Layer 2: on-disk cache (F332 / D13)
-        disk_hit = _disk_cache.load(ticker, fetch_start, fetch_end)
+        # Layer 2: on-disk cache (F332 / D13).  DI-02: data_source is part of the key.
+        disk_hit = _disk_cache.load(ticker, fetch_start, fetch_end, data_source)
         if disk_hit is not None:
             _cache[ticker] = disk_hit
             return _cache[ticker]
@@ -506,7 +646,7 @@ def _make_memoized_loader(
             _cache[ticker] = result
             # Persist to disk on successful fetch (non-None only)
             if result is not None:
-                _disk_cache.store(ticker, fetch_start, fetch_end, result)
+                _disk_cache.store(ticker, fetch_start, fetch_end, result, data_source)
         except Exception as exc:
             logger.warning("bars_loader: failed to fetch %s: %s", ticker, exc)
             _loader.fetch_failures += 1  # type: ignore[attr-defined]
@@ -516,7 +656,7 @@ def _make_memoized_loader(
                 result2 = df2 if df2 is not None and not df2.empty else None
                 _cache[ticker] = result2
                 if result2 is not None:
-                    _disk_cache.store(ticker, fetch_start, fetch_end, result2)
+                    _disk_cache.store(ticker, fetch_start, fetch_end, result2, data_source)
             except Exception:
                 _cache[ticker] = None
         return _cache[ticker]
@@ -579,26 +719,135 @@ def _horizon_end_date(entry_date: date, horizon_months: int) -> date:
     return date(year, month, day)
 
 
+def _frame_dates(df: pd.DataFrame) -> list[date]:
+    """Return the frame's index as a list of date objects (normalises Timestamps)."""
+    if hasattr(df.index, "date"):
+        return [d.date() if hasattr(d, "date") else d for d in df.index]
+    return list(df.index)
+
+
+def _bar_counted_forward_returns(
+    df: pd.DataFrame,
+    entry_date: date,
+    entry_close: float,
+    horizons: tuple[int, ...] = V2_HORIZONS_TRADING_DAYS,
+    direction: str = "long",
+) -> dict[int, Optional[float]]:
+    """Unit 2 (D14): bar-counted forward GROSS return at each trading-day horizon.
+
+    Counts N rows forward from the entry row on the *already-fetched* frame
+    (survivorship-safe; no calendar API).  For horizon N the exit bar is the
+    entry-row index + N.  If that row is past the end of the frame, the horizon
+    is INCOMPLETE → None (the long-horizon cell is marked incomplete, never
+    extrapolated — D14 / Unit 2 edge case).
+
+    Sign convention (matches CLAUDE.md Short Selling):
+      long  : (exit - entry) / entry
+      short : (entry - exit) / entry
+
+    Returns {horizon_n: fwd_return_pct or None}.  Gross (pre-cost) — costs are
+    applied separately so the diagnostic and v2 paths share one cost model.
+    """
+    out: dict[int, Optional[float]] = {h: None for h in horizons}
+    if df is None or df.empty or entry_close <= 0:
+        return out
+    dates = _frame_dates(df)
+    # Locate the entry row: first row whose date == entry_date (the entry bar the
+    # caller already resolved via _first_trading_close_on_or_after).
+    entry_idx: Optional[int] = None
+    for i, d in enumerate(dates):
+        if d == entry_date:
+            entry_idx = i
+            break
+    if entry_idx is None:
+        # Fall back to first row >= entry_date (defensive; should not happen).
+        for i, d in enumerate(dates):
+            if d >= entry_date:
+                entry_idx = i
+                break
+    if entry_idx is None:
+        return out
+    if "Close" not in df.columns:
+        raise KeyError("No 'Close' column in DataFrame during bar-counted forward return")
+    n_rows = len(dates)
+    for h in horizons:
+        exit_idx = entry_idx + h
+        if exit_idx >= n_rows:
+            out[h] = None  # incomplete horizon — data ends before N bars forward
+            continue
+        exit_close = float(df.iloc[exit_idx]["Close"])
+        if direction == "short":
+            out[h] = (entry_close - exit_close) / entry_close * 100.0
+        else:
+            out[h] = (exit_close - entry_close) / entry_close * 100.0
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Cost application helpers
 # ---------------------------------------------------------------------------
+
+def _borrow_cost_pct(
+    entry_close: float,
+    hold_days: float,
+    req: ValidationRequest,
+) -> float:
+    """Unit 2 (D14): short borrow cost as a percent of entry notional.
+
+    Mirrors backend/routes/backtest.py borrow_cost(): the dollar cost is
+    shares * entry_price * (rate/100/365) * hold_days.  As a fraction of the
+    position notional (shares * entry_price) it collapses to
+    (rate/100/365) * hold_days, so it is share-count-independent.  Returned as a
+    PERCENT (×100) so it subtracts directly from net_return_pct.  Zero for longs
+    or rate=0 (identical guard to the backtester).
+    """
+    if req.direction != "short" or req.borrow_rate_annual <= 0 or entry_close <= 0:
+        return 0.0
+    if hold_days <= 0:
+        return 0.0
+    # (rate/100/365) is the daily borrow fraction; ×hold_days ×100 → percent.
+    return (req.borrow_rate_annual / 100.0 / 365.0) * hold_days * 100.0
+
 
 def _apply_costs(
     gross_entry: float,
     gross_exit: float,
     req: ValidationRequest,
+    *,
+    hold_days: float = 0.0,
 ) -> tuple[float, float, float, float]:
     """Return (net_entry, net_exit, commission_total, net_return_pct).
 
-    Long direction only:
-    - entry fill: close * (1 + bps/1e4)  — worse (slippage hurts on buy)
-    - exit fill:  close * (1 - bps/1e4)  — worse (slippage hurts on sell)
+    Unit 2 (D14): direction-aware.  Slippage sign is inverted for shorts and a
+    borrow cost accrues over the holding period (reusing the backtester's
+    borrow_cost pattern).
+
+    Long (direction='long'):
+      - entry fill: close * (1 + bps/1e4)  — worse (slippage hurts on buy)
+      - exit fill:  close * (1 - bps/1e4)  — worse (slippage hurts on sell)
+      - net_return = (net_exit - net_entry)/net_entry  (price up = profit)
+
+    Short (direction='short'):
+      - entry fill: close * (1 - bps/1e4)  — sell to open, slippage hurts (lower)
+      - exit fill:  close * (1 + bps/1e4)  — buy to cover, slippage hurts (higher)
+      - net_return = (net_entry - net_exit)/net_entry  (price down = profit)
+      - borrow cost accrues over hold_days and reduces the short return.
+
+    commission and (for shorts) borrow cost are netted as percent-of-notional.
     """
     per_leg_commission = _import_per_leg_commission()
 
     bps = req.slippage_bps
-    net_entry = gross_entry * (1 + bps / 1e4)
-    net_exit = gross_exit * (1 - bps / 1e4)
+    is_short = req.direction == "short"
+
+    if is_short:
+        # Sell-to-open then buy-to-cover: slippage is unfavorable on both legs,
+        # which for a short means entry fills LOWER and exit (cover) fills HIGHER.
+        net_entry = gross_entry * (1 - bps / 1e4)
+        net_exit = gross_exit * (1 + bps / 1e4)
+    else:
+        net_entry = gross_entry * (1 + bps / 1e4)
+        net_exit = gross_exit * (1 - bps / 1e4)
 
     shares = req.initial_capital / net_entry if net_entry > 0 else 0.0
     comm_in = per_leg_commission(shares, req)
@@ -606,8 +855,14 @@ def _apply_costs(
 
     position_value = shares * net_entry
     if position_value > 0:
-        net_return_pct = ((net_exit - net_entry) / net_entry * 100
-                         - (comm_in + comm_out) / position_value * 100)
+        comm_pct = (comm_in + comm_out) / position_value * 100
+        if is_short:
+            gross_pct = (net_entry - net_exit) / net_entry * 100
+            borrow_pct = _borrow_cost_pct(net_entry, hold_days, req)
+            net_return_pct = gross_pct - comm_pct - borrow_pct
+        else:
+            gross_pct = (net_exit - net_entry) / net_entry * 100
+            net_return_pct = gross_pct - comm_pct
     else:
         net_return_pct = 0.0
 
@@ -678,6 +933,11 @@ def run_validation(
                 f"R1: every non-default config must pre-register an expected event rate "
                 f"before running. Set CandidateSourceConfig.expected_events_per_year."
             )
+        # Unit 2 (D14): the config's declared direction governs the cost engine.
+        # Override req.direction so _apply_costs() is sign-correct for shorts even
+        # when the caller left req at its 'long' default.
+        if candidate_source.direction in ("long", "short"):
+            req = req.model_copy(update={"direction": candidate_source.direction})
     t0 = time.monotonic()
 
     turnaround = _import_turnaround()
@@ -713,7 +973,7 @@ def run_validation(
     # return None (loader contract: no bars) so run_filter skips remaining
     # symbols in seconds without exception spam; the date-boundary check then
     # raises _cancelled_ cleanly.
-    def bars_loader(ticker: str):
+    def bars_loader(ticker: str) -> Optional[pd.DataFrame]:
         if cancel_event is not None and cancel_event.is_set():
             return None
         if progress is not None:
@@ -877,14 +1137,17 @@ def run_validation(
                 exit_date: Optional[date] = None
                 hit_early: bool = False  # True when take-profit touch triggers early exit
 
-                # First compute costs to determine net take-profit threshold
-                net_entry_adj = entry_close * (1 + req.slippage_bps / 1e4)
-                # Net return threshold: net_return_pct >= hit_threshold_pct
-                # net_return_pct = (net_exit - net_entry_adj) / net_entry_adj * 100 - comm_pct
-                # For is_hit we use a conservative approximation: gross close >= target_price
-                # (commission drag is symmetric and small; the direction is correct for exit scan)
-                # Full net return is always computed for the actual exit; is_hit uses net_return_pct.
-                target_price = entry_close * (1 + hit_threshold)  # scan trigger (gross)
+                # Take-profit scan trigger (gross close).  COR-01: the early-exit
+                # trigger is DIRECTION-AWARE.  A long profits when price RISES to
+                # entry*(1+threshold); a short profits when price FALLS to
+                # entry*(1-threshold).  Using the long-direction trigger for shorts
+                # inverts the scan (it would fire on a deeply LOSING short and never
+                # on a winner).  The final is_hit uses the net return (direction-aware
+                # via _apply_costs); this scan only governs the early-exit touch.
+                if req.direction == "short":
+                    target_price = entry_close * (1 - hit_threshold)  # profit if price falls
+                else:
+                    target_price = entry_close * (1 + hit_threshold)  # profit if price rises
 
                 # Slice df to [entry_date+1 .. horizon_end]
                 if hasattr(df.index, "date"):
@@ -900,7 +1163,11 @@ def run_validation(
                     if "Close" not in df.columns:
                         raise KeyError("No 'Close' column in DataFrame during exit scan")
                     close_val = float(df.iloc[i]["Close"])
-                    if close_val >= target_price:
+                    if req.direction == "short":
+                        hit_condition = close_val <= target_price
+                    else:
+                        hit_condition = close_val >= target_price
+                    if hit_condition:
                         exit_close = close_val
                         exit_date = row_date
                         hit_early = True
@@ -923,19 +1190,39 @@ def run_validation(
                 if hit_early:
                     horizon_end_close = _close_at_or_before(df, horizon_end)
                     if horizon_end_close is not None:
-                        _, _, _, horizon_end_return_pct = _apply_costs(entry_close, horizon_end_close, req)
+                        _hold_to_horizon = (horizon_end - entry_date).days
+                        _, _, _, horizon_end_return_pct = _apply_costs(
+                            entry_close, horizon_end_close, req, hold_days=_hold_to_horizon
+                        )
                 else:
                     # No early exit: horizon-end close == exit close
                     horizon_end_close = exit_close
 
-                # Gross return
-                gross_return_pct = (exit_close - entry_close) / entry_close * 100
+                # Gross return — direction-aware (Unit 2 / D14). For shorts the
+                # diagnostic gross return is (entry - exit)/entry.
+                if req.direction == "short":
+                    gross_return_pct = (entry_close - exit_close) / entry_close * 100
+                else:
+                    gross_return_pct = (exit_close - entry_close) / entry_close * 100
 
-                # Apply costs (D6) — always compute net return
-                _, _, _, net_return_pct = _apply_costs(entry_close, exit_close, req)
+                # Holding period in calendar days (for borrow accrual on shorts).
+                exit_hold_days = (exit_date - entry_date).days if exit_date is not None else 0
+
+                # Apply costs (D6 + Unit 2 D14: direction-aware + borrow) — net return
+                _, _, _, net_return_pct = _apply_costs(
+                    entry_close, exit_close, req, hold_days=exit_hold_days
+                )
 
                 if not hit_early:
                     horizon_end_return_pct = net_return_pct
+
+                # Unit 2 (D14): bar-counted forward GROSS returns at 21/63/126
+                # trading days on the already-fetched frame. None = incomplete
+                # horizon (data ended before N bars forward).
+                fwd_returns = _bar_counted_forward_returns(
+                    df, entry_date, entry_close,
+                    direction=req.direction,
+                )
 
                 # ADV-02: is_hit judged on NET return (post slippage + commission)
                 is_hit = net_return_pct >= req.hit_threshold_pct
@@ -961,6 +1248,7 @@ def run_validation(
                     days_to_hit=days_to_hit,
                     horizon_end_price=horizon_end_close,
                     horizon_end_return_pct=horizon_end_return_pct,
+                    fwd_return_pct=fwd_returns,
                 )
 
                 if is_null:
@@ -991,6 +1279,79 @@ def run_validation(
             # buffers were just committed)
             progress.signal_events = len(signal_outcomes)
             progress.null_events = len(null_outcomes)
+
+    # ---------- Unit 2 (D14): cohort-relative excess (second pass) ----------
+    #
+    # Sampling design decision (locked here per the plan's "matched-null sampling
+    # design" deferral): COHORT-EXHAUSTIVE, not sampled.  For each event the
+    # matched null is *every* null-cohort event sharing the same as_of date — the
+    # harness already emits a full null cohort per quarterly as_of (tens to low
+    # hundreds of names at universe scale).  Cohort sizes are small enough that
+    # using the entire null set is cheap and removes sampling variance, so a
+    # with-replacement draw buys nothing.  excess_Nd = event_fwd_Nd - null_median_Nd
+    # at the matched horizon; hit_v2 = excess > 0.
+    #
+    # BETA CONTROL (locked per Deferred-to-Implementation): the null is matched on
+    # cohort (as_of) + universe ONLY — it neutralises time/regime/tape but NOT the
+    # cross-sectional beta/size tilt of a directional selection.  This excess is
+    # therefore MARKET/COHORT-EXCESS, explicitly NOT beta-adjusted.  Per the plan's
+    # risk table, momentum CONFIRMED may not be claimed on this excess alone; a
+    # beta/size null-stratification key (added to the cohort key) is the documented
+    # upgrade and is left as an additive extension of this same second pass (the
+    # cohort key below is the single insertion point).  Recording the choice in code
+    # so the limitation travels with the metric.
+    _null_by_cohort: dict[date, list[TradeOutcome]] = {}
+    for o in null_outcomes:
+        _null_by_cohort.setdefault(o.as_of, []).append(o)
+
+    def _cohort_null_median(as_of_key: date, horizon: int) -> Optional[float]:
+        vals = [
+            o.fwd_return_pct.get(horizon)
+            for o in _null_by_cohort.get(as_of_key, [])
+            if o.fwd_return_pct.get(horizon) is not None
+        ]
+        if not vals:
+            return None
+        return statistics.median(vals)
+
+    # Precompute per-cohort null medians once per (cohort, horizon).
+    #
+    # COR-02: hit_v2 / fwd_excess_pct are computed on GROSS bar-counted forward
+    # returns (fwd_return_pct), and the cohort null median is likewise GROSS.  So
+    # hit_v2 is a GROSS cohort-relative excess flag — it is NOT the same economic
+    # quantity as is_hit (which is NET: post slippage + commission + borrow).  For
+    # long runs with tight slippage the gap is small; for short runs with borrow,
+    # hit_v2_rate can sit systematically above the net signal_hit_rate.  Downstream
+    # callers MUST NOT compare hit_v2_rate directly against the net is_hit / signal
+    # hit rate — hit_v2 is a relative (gross, cohort-excess) ranking metric only.
+    #
+    # COR-04: excess/hit_v2 is computed for BOTH signal and null outcomes below.
+    # For NULL events the excess is self-referential — each null event is compared
+    # against the median of its own cohort's null events — so a null cohort's
+    # hit_v2_rate converges to ~50% by construction (half above the median, half
+    # below) regardless of return level.  That is a pure self-comparison artifact:
+    # null-event hit_v2 must NOT be read as "null effectiveness".  Only the SIGNAL
+    # cohort's hit_v2 (signal vs null median) is a meaningful excess.  The fields are
+    # still populated for null events for additive schema consistency (downstream
+    # filters on is_null to exclude them).
+    _null_median_cache: dict[tuple[date, int], Optional[float]] = {}
+    for o in signal_outcomes + null_outcomes:
+        excess: dict[int, Optional[float]] = {}
+        hit_v2: dict[int, Optional[bool]] = {}
+        for h in V2_HORIZONS_TRADING_DAYS:
+            ev = o.fwd_return_pct.get(h)
+            key = (o.as_of, h)
+            if key not in _null_median_cache:
+                _null_median_cache[key] = _cohort_null_median(o.as_of, h)
+            nm = _null_median_cache[key]
+            if ev is None or nm is None:
+                excess[h] = None
+                hit_v2[h] = None
+            else:
+                excess[h] = ev - nm
+                hit_v2[h] = excess[h] > 0
+        o.fwd_excess_pct = excess
+        o.hit_v2 = hit_v2
 
     # ---------- Aggregate statistics ----------
 
@@ -1089,6 +1450,19 @@ def run_validation(
             # D12 (Unit 1): config provenance tags — additive, consumers check key presence
             "config_name": _config_name,
             "direction": _direction,
+            # Unit 2 (D14): schema_version=2 ADDITIVE fields — bar-counted forward
+            # returns + cohort-relative excess + hit_v2 at each trading-day horizon.
+            # None = incomplete horizon (data ended before N bars) or no cohort null.
+            # Existing schema_version=1 consumers ignore these unknown keys.
+            "fwd_return_21d": o.fwd_return_pct.get(21),
+            "fwd_return_63d": o.fwd_return_pct.get(63),
+            "fwd_return_126d": o.fwd_return_pct.get(126),
+            "excess_21d": o.fwd_excess_pct.get(21),
+            "excess_63d": o.fwd_excess_pct.get(63),
+            "excess_126d": o.fwd_excess_pct.get(126),
+            "hit_v2_21d": o.hit_v2.get(21),
+            "hit_v2_63d": o.hit_v2.get(63),
+            "hit_v2_126d": o.hit_v2.get(126),
         })
     # Sort for deterministic output: as_of asc, ticker asc, null last
     events_table.sort(key=lambda x: (x["as_of"] or "", x["is_null"], x["ticker"] or ""))
@@ -1143,7 +1517,9 @@ def run_validation(
         null_horizon_median_return_pct=null_hor_median,
         # Item 1: per-event table
         events=events_table,
-        schema_version=1,
+        # Unit 2 (D14): schema_version=2 — events carry additive bar-counted forward
+        # returns + cohort-relative excess + hit_v2. v1 fields all still populated.
+        schema_version=2,
         # F313: timeout salvage annotation
         timed_out=timed_out,
         dates_completed=dates_completed,

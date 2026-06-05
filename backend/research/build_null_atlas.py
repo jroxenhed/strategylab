@@ -19,6 +19,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -31,6 +32,13 @@ _OUTPUT_PATH = _REPO_ROOT / "backend" / "data" / "turnaround" / "null_atlas.json
 
 SCHEMA_VERSION = 1
 COVERAGE_GATE = 0.60  # minimum submission coverage to include sector dimension
+
+# Unit 2 (D14): atlas v2 — when the events table is schema_version=2, cells are
+# built from the bar-counted forward returns + cohort-relative excess at the
+# three trading-day horizons instead of the v1 touch/hit fields.  The v1 path is
+# preserved unchanged so the existing artifact still regenerates.
+V2_HORIZONS = (21, 63, 126)
+INSUFFICIENT_N = 30  # n<30 → cell flagged insufficient (same convention as v1)
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +152,60 @@ def _cohort_stats(events: list[dict]) -> dict:
     return result
 
 
+def _cohort_stats_v2(events: list[dict]) -> dict:
+    """Unit 2 (D14): horizon-end excess-based cell stats for schema_version=2 events.
+
+    For each of the 21/63/126 trading-day horizons, compute the cohort's median
+    forward return, median cohort-relative excess, and the hit_v2 rate (fraction
+    of events whose excess > 0).  None-valued horizon cells (incomplete horizon —
+    data ended before N bars) are excluded from each horizon's denominator and the
+    excluded count surfaced as n_complete[h].
+
+    n is the cohort size; n<30 → insufficient flag (same convention as v1).
+    """
+    n = len(events)
+    if n == 0:
+        return {"n": 0, "insufficient": True}
+
+    horizons: dict[str, dict] = {}
+    for h in V2_HORIZONS:
+        fwd_key = f"fwd_return_{h}d"
+        exc_key = f"excess_{h}d"
+        hit_key = f"hit_v2_{h}d"
+        fwd_vals = [e[fwd_key] for e in events if e.get(fwd_key) is not None]
+        exc_vals = [e[exc_key] for e in events if e.get(exc_key) is not None]
+        hit_flags = [e[hit_key] for e in events if e.get(hit_key) is not None]
+        n_complete = len(fwd_vals)
+        hit_v2_rate = (sum(1 for f in hit_flags if f) / len(hit_flags)) if hit_flags else None
+        ci_lo, ci_hi = (
+            _wilson_ci(sum(1 for f in hit_flags if f), len(hit_flags))
+            if hit_flags else (0.0, 0.0)
+        )
+        horizons[f"{h}d"] = {
+            "n_complete": n_complete,
+            "median_fwd_return_pct": _median(fwd_vals),
+            "median_excess_pct": _median(exc_vals),
+            "hit_v2_rate": round(hit_v2_rate, 6) if hit_v2_rate is not None else None,
+            "hit_v2_ci_low": ci_lo,
+            "hit_v2_ci_high": ci_hi,
+            # Per-horizon insufficiency: too few completed events at this horizon.
+            "insufficient": n_complete < INSUFFICIENT_N,
+        }
+
+    n_null = sum(1 for e in events if e.get("is_null"))
+    n_signal = sum(1 for e in events if not e.get("is_null"))
+
+    result: dict = {
+        "n": n,
+        "n_null": n_null,
+        "n_signal": n_signal,
+        "horizons": horizons,
+    }
+    if n < INSUFFICIENT_N:
+        result["insufficient"] = True
+    return result
+
+
 def _price_band(entry_price: float | None) -> str:
     """Classify entry_price into penny/low/mid/high band."""
     if entry_price is None:
@@ -209,8 +271,20 @@ def _check_sector_coverage(events: list[dict]) -> tuple[bool, float, str]:
     return passed, round(coverage, 4), reason
 
 
-def _build_sector_dimension(events: list[dict]) -> dict:
-    """Build per-sector stats using SIC descriptions from submission files."""
+def _build_sector_dimension(
+    events: list[dict], stats_fn: Callable[[list[dict]], dict] = _cohort_stats
+) -> dict:
+    """Build per-sector stats using SIC descriptions from submission files.
+
+    Unit 2 (D14): stats_fn selects v1 (_cohort_stats) or v2 (_cohort_stats_v2)
+    cells so the sector dimension matches the rest of the atlas.
+
+    PY-04: guard the universe.json open() — in normal flow _check_sector_coverage
+    has already validated the file exists, but a direct call (e.g. a test) would
+    otherwise raise an undiagnosed FileNotFoundError.
+    """
+    if not _UNIVERSE_PATH.exists():
+        return {}
     # Load universe.json for ticker -> CIK
     with open(_UNIVERSE_PATH, encoding="utf-8") as f:
         universe = json.load(f)
@@ -248,7 +322,7 @@ def _build_sector_dimension(events: list[dict]) -> dict:
         sector = ticker_to_sic.get(t, "Unknown")
         sector_events.setdefault(sector, []).append(e)
 
-    return {sector: _cohort_stats(evts) for sector, evts in sorted(sector_events.items())}
+    return {sector: stats_fn(evts) for sector, evts in sorted(sector_events.items())}
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +335,15 @@ def build_atlas() -> dict:
 
     events: list[dict] = raw["events"]
     print(f"  {len(events)} events loaded.")
+
+    # Unit 2 (D14): branch on the events table schema_version. v2 events carry
+    # bar-counted forward returns + cohort-relative excess; cells are built with
+    # _cohort_stats_v2 (horizon-end excess cells). v1 events keep the original
+    # touch/hit cells via _cohort_stats. Default 1 for legacy artifacts.
+    events_schema = int(raw.get("schema_version", 1))
+    atlas_version = 2 if events_schema >= 2 else 1
+    _stats = _cohort_stats_v2 if atlas_version == 2 else _cohort_stats
+    print(f"  events schema_version={events_schema} → building atlas v{atlas_version}")
 
     # --- Coverage gate ---
     sector_gate_passed, sector_coverage, sector_reason = _check_sector_coverage(events)
@@ -275,7 +358,7 @@ def build_atlas() -> dict:
 
     per_cohort: dict[str, dict] = {}
     for as_of in sorted(cohort_map.keys()):
-        per_cohort[as_of] = _cohort_stats(cohort_map[as_of])
+        per_cohort[as_of] = _stats(cohort_map[as_of])
 
     print(f"  {len(per_cohort)} cohorts built.")
 
@@ -287,7 +370,7 @@ def build_atlas() -> dict:
 
     per_year: dict[str, dict] = {}
     for year in sorted(year_map.keys()):
-        per_year[year] = _cohort_stats(year_map[year])
+        per_year[year] = _stats(year_map[year])
 
     print(f"  {len(per_year)} year rollups built.")
 
@@ -303,14 +386,14 @@ def build_atlas() -> dict:
     for band in sorted(band_year_map.keys()):
         price_band_x_year[band] = {}
         for year in sorted(band_year_map[band].keys()):
-            price_band_x_year[band][year] = _cohort_stats(band_year_map[band][year])
+            price_band_x_year[band][year] = _stats(band_year_map[band][year])
 
     print(f"  Price-band × year cells built.")
 
     # --- Sector dimension (conditional) ---
     sector: dict | None = None
     if sector_gate_passed:
-        sector = _build_sector_dimension(events)
+        sector = _build_sector_dimension(events, stats_fn=_stats)
         print(f"  Sector dimension built ({len(sector)} sectors).")
 
     # --- Meta block ---
@@ -324,15 +407,24 @@ def build_atlas() -> dict:
             "passed": sector_gate_passed,
             "reason": sector_reason,
         },
+        "events_schema_version": events_schema,
+        "atlas_version": atlas_version,
         "usage": (
             "Denominator lookup for validation: compare a candidate's cohort-matched events "
             "against these local rates; cohort_dir_pct >=0.6 across populated cohorts is the "
             "standard robustness bar"
+            + (
+                ". Atlas v2: cells carry per-horizon (21/63/126 trading-day) median "
+                "forward return, median cohort-relative excess, and hit_v2_rate; excess "
+                "is market/cohort-excess (NOT beta-adjusted)."
+                if atlas_version == 2 else ""
+            )
         ),
     }
 
     atlas: dict = {
-        "schema_version": SCHEMA_VERSION,
+        # atlas schema_version: 2 when built from schema_version=2 events (v2 cells).
+        "schema_version": atlas_version,
         "meta": meta,
         "per_cohort": per_cohort,
         "per_year": per_year,
@@ -353,13 +445,24 @@ def _sanity_check(atlas: dict, null_events: list[dict]) -> list[str]:
     """
     results = []
 
-    # 1. Overall null hit rate ~45.3% (global across all cohorts)
-    # Weighted average of per-cohort rates by n
+    # 1. Overall null hit rate ~45.3% (global across all cohorts), weighted by cohort.
+    # COR-03: the atlas per-cohort `hit_rate`/`n` are computed over ALL events
+    # (signal + null) — signal events have a higher hit rate by construction, so the
+    # blended rate is tilted upward and the 0.453 null anchor is meaningless against
+    # it (it could PASS while the null composition has shifted).  Compute the
+    # weighted null hit rate from is_null events only — grouped by cohort and weighted
+    # by per-cohort null n — so anchor-1 truly anchors the NULL baseline (same null
+    # slice anchor-3 uses, just cohort-weighted instead of pooled).
+    null_by_cohort: dict[str, list[dict]] = {}
+    for e in null_events:
+        null_by_cohort.setdefault(e["as_of"], []).append(e)
     total_n = 0
     weighted_hits = 0.0
-    for cohort in atlas["per_cohort"].values():
-        n = cohort.get("n", 0)
-        hr = cohort.get("hit_rate", 0.0)
+    for cohort_events in null_by_cohort.values():
+        n = len(cohort_events)
+        if n == 0:
+            continue
+        hr = sum(1 for e in cohort_events if e.get("hit")) / n
         total_n += n
         weighted_hits += hr * n
     overall_hr = weighted_hits / total_n if total_n else 0.0
@@ -393,6 +496,29 @@ def _sanity_check(atlas: dict, null_events: list[dict]) -> list[str]:
     return results
 
 
+def _sanity_check_v2(atlas: dict) -> list[str]:
+    """Unit 2 (D14): v2 atlas sanity — every populated cohort cell exposes the
+    three horizon sub-cells with median excess + hit_v2_rate keys.  The v1
+    touch-metric anchors (45.3% null hit rate, 84.3% 2020) do NOT apply to v2
+    cells, so they are intentionally skipped here."""
+    results = []
+    n_cells = 0
+    n_with_horizons = 0
+    for cell in atlas["per_cohort"].values():
+        if cell.get("n", 0) == 0:
+            continue
+        n_cells += 1
+        h = cell.get("horizons", {})
+        if all(f"{d}d" in h for d in V2_HORIZONS):
+            n_with_horizons += 1
+    ok = n_cells > 0 and n_with_horizons == n_cells
+    results.append(
+        f"[{'PASS' if ok else 'FAIL'}] v2 horizon cells: {n_with_horizons}/{n_cells} "
+        f"populated cohorts expose all {len(V2_HORIZONS)} horizons"
+    )
+    return results
+
+
 def main() -> None:
     atlas = build_atlas()
 
@@ -401,7 +527,11 @@ def main() -> None:
         _raw = json.load(f)
     null_events = [e for e in _raw["events"] if e.get("is_null")]
 
-    sanity = _sanity_check(atlas, null_events)
+    # Unit 2 (D14): v1 touch-metric anchors only apply to the v1 atlas.
+    if atlas.get("schema_version", 1) >= 2:
+        sanity = _sanity_check_v2(atlas)
+    else:
+        sanity = _sanity_check(atlas, null_events)
     print("\nSanity checks:")
     for s in sanity:
         print(" ", s)

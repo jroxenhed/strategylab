@@ -198,6 +198,13 @@ def load_pond() -> dict:
     # PY-11/DI-07: use context manager + explicit utf-8 encoding
     with open(VALIDATION_PATH, encoding="utf-8") as f:
         d = json.load(f)
+    # DI-09: guard against pre-events artifacts (schema_version=0 → events=[]). Reading
+    # validation_result.json directly bypasses the route backfill shim, so a pre-events
+    # run would otherwise yield silent all-zero bounds.
+    if int(d.get("schema_version", 0)) == 0:
+        raise SystemExit(
+            "survivorship_bound: pre-events artifact (schema_version=0) — re-run validation first."
+        )
     ev = d["events"]
     for e in ev:
         e["year"] = int(e["as_of"][:4])

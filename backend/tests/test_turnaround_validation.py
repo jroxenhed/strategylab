@@ -752,7 +752,8 @@ def test_events_table_serialization_roundtrip():
 
     assert "events" in parsed
     assert "schema_version" in parsed
-    assert parsed["schema_version"] == 1
+    # Unit 2 (D14): events table is now schema_version=2 (additive v2 fields).
+    assert parsed["schema_version"] == 2
 
     for event in parsed["events"]:
         for key in ("as_of", "entry_date", "exit_date"):
@@ -762,7 +763,7 @@ def test_events_table_serialization_roundtrip():
 
 
 def test_schema_version_present():
-    """Item 1: schema_version field is present and equals 1."""
+    """Item 1 / Unit 2: schema_version field is present and equals 2."""
     SPAN_START = date(2015, 1, 1)
     SPAN_END = date(2022, 12, 31)
     flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
@@ -774,7 +775,7 @@ def test_schema_version_present():
     )
 
     assert hasattr(result, "schema_version")
-    assert result.schema_version == 1
+    assert result.schema_version == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1799,13 +1800,8 @@ def test_u1_short_direction_flows_to_events():
     """U1-S5: short-direction config flows direction through to outcome events.
 
     A CandidateSourceConfig with direction='short' must produce events table rows
-    tagged direction='short'.  The actual sign-correct cost inversion for short
-    returns is Unit 2's work; this test validates the plumbing that carries the
-    direction declaration from config to events.
-
-    TODO(U2): once Unit 2 lands direction-aware _apply_costs(), add assertion here
-    that net_return_pct for a falling price with direction='short' is POSITIVE
-    (currently it will be negative because _apply_costs() is long-only).
+    tagged direction='short'.  Unit 2 completes the TODO(U2): direction-aware
+    _apply_costs() now makes a falling-price short produce a POSITIVE net return.
     """
     SPAN_START = date(2015, 1, 1)
     SPAN_END = date(2022, 12, 31)
@@ -1832,10 +1828,15 @@ def test_u1_short_direction_flows_to_events():
         )
         assert ev.get("config_name") == "short_config"
 
-    # TODO(U2): assert that net_return_pct > 0 for falling-price short candidate
-    # once Unit 2 wires direction-aware cost inversion into _apply_costs().
-    # Currently _apply_costs() is long-only, so net_return_pct is negative here.
-    # The plumbing (direction tag) is the Unit 1 deliverable; sign correctness is U2.
+    # TODO(U2) RESOLVED: falling-price short produces POSITIVE net_return_pct now
+    # that _apply_costs() is direction-aware (short return = (entry - exit)/entry,
+    # slippage inverted, borrow accrued). A 30%/yr decline over a 3-month hold is a
+    # clear positive short return even after borrow + slippage.
+    assert len(result.events) >= 1
+    for ev in result.events:
+        assert ev["net_return_pct"] > 0, (
+            f"Falling-price short must net positive; got {ev['net_return_pct']}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1885,15 +1886,44 @@ class TestPriceFrameCacheUnit:
     def test_f332_s4_corrupt_file_returns_none(self, tmp_path):
         """F332-S4: corrupt pickle file returns None without raising (graceful degrade)."""
         cache = tv.PriceFrameCache(cache_dir=tmp_path)
-        # Write garbage bytes to what would be the cache file
-        p = tmp_path / f"FAKE_{20150101}_{20241231}.pkl"
-        # Actually use the real path from cache internals
+        # Use the real path from cache internals (lives under the versioned subdir).
         p = cache._path("FAKE", "2015-01-01", "2024-12-31")
-        tmp_path.mkdir(parents=True, exist_ok=True)
+        p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(b"not valid pickle data!!!!")
 
         result = cache.load("FAKE", "2015-01-01", "2024-12-31")
         assert result is None, "Corrupt cache file must return None (graceful degradation)"
+
+    def test_di03_corrupt_file_evicted_on_load(self, tmp_path):
+        """DI-03: a corrupt pickle is UNLINKED on load so the next run re-fetches
+        cleanly instead of re-encountering the same corrupt file forever."""
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+        p = cache._path("DEAD", "2015-01-01", "2024-12-31")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"\x00\x01garbage not a pickle\xff")
+        assert p.exists()
+
+        result = cache.load("DEAD", "2015-01-01", "2024-12-31")
+        assert result is None, "Corrupt file must load as None"
+        assert not p.exists(), "DI-03: corrupt file must be evicted (unlinked) after a failed load"
+
+    def test_di02_data_source_in_cache_key(self, tmp_path):
+        """DI-02: distinct providers do NOT alias — a yahoo frame is never served
+        for an alpaca request of the same ticker+span."""
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+        df_y = _make_price_df(date(2015, 1, 1), date(2020, 12, 31), annual_growth_rate=0.0)
+        cache.store("AAPL", "2015-01-01", "2020-12-31", df_y, data_source="yahoo")
+        # An alpaca request for the same ticker+span must MISS (different provider key).
+        assert cache.load("AAPL", "2015-01-01", "2020-12-31", data_source="alpaca") is None
+        assert cache.load("AAPL", "2015-01-01", "2020-12-31", data_source="yahoo") is not None
+
+    def test_di01_punctuation_tickers_collision_free(self, tmp_path):
+        """DI-01: BRK.A / BRK_A / BRK/A must map to DISTINCT cache files (no alias)."""
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+        p1 = cache._path("BRK.A", "2015-01-01", "2020-12-31")
+        p2 = cache._path("BRK_A", "2015-01-01", "2020-12-31")
+        p3 = cache._path("BRK/A", "2015-01-01", "2020-12-31")
+        assert len({p1, p2, p3}) == 3, f"Punctuation variants collided: {p1}, {p2}, {p3}"
 
     def test_f332_different_spans_different_files(self, tmp_path):
         """F332: different span strings produce different cache files (no collision)."""
@@ -1922,8 +1952,8 @@ class TestPriceFrameCacheUnit:
         # store should succeed normally
         cache.store("ATOMT", "2015-01-01", "2024-12-31", df)
         assert target.exists(), "Cache file must exist after store"
-        # No .tmp orphan left
-        tmps = list(tmp_path.glob("*.tmp"))
+        # No .tmp orphan left (files live under the versioned subdir → recursive glob)
+        tmps = list(tmp_path.glob("**/*.tmp"))
         assert tmps == [], f"Orphan .tmp files found: {tmps}"
 
 
@@ -2074,8 +2104,418 @@ class TestPriceFrameCacheIntegration:
 
         # Network was called
         assert "MSFT" in fetch_calls, "Cold miss must call _fetch"
-        # Cache file must now exist
-        cache_files = list(tmp_path.glob("MSFT_*.pkl"))
+        # Cache file must now exist (under the versioned subdir → recursive glob)
+        cache_files = list(tmp_path.glob("**/MSFT_*.pkl"))
         assert len(cache_files) == 1, (
             f"Expected 1 cache file for MSFT after first load; found {cache_files}"
         )
+
+
+# ===========================================================================
+# Unit 2 (D14): Outcome engine v2 — bar-counted cohort-relative forward returns
+# ===========================================================================
+#
+# Sampling-design note (mirrors the engine's locked decision): the matched null
+# is COHORT-EXHAUSTIVE — every null event sharing the same as_of date. Excess is
+# market/cohort-excess (NOT beta-adjusted). These tests pin: exact bar-counted
+# returns, incomplete-horizon flagging, n<30 insufficiency, missing-price
+# exclusion with a counted reason, short sign-correctness end-to-end, and borrow
+# accrual scaling with hold days.
+
+
+def _make_ramp_df(
+    start: date,
+    end: date,
+    base: float = 100.0,
+    step: float = 1.0,
+) -> pd.DataFrame:
+    """Arithmetic price ramp: Close[i] = base + step*i over business days.
+
+    Makes the bar-counted forward return at offset N from any entry row EXACT:
+      ((C[entry+N]) - C[entry]) / C[entry] = (N*step) / C[entry].
+    """
+    dates = pd.date_range(start, end, freq="B")
+    n = len(dates)
+    closes = [base + step * i for i in range(n)]
+    return pd.DataFrame(
+        {
+            "Open": closes,
+            "High": [c + 0.001 for c in closes],
+            "Low": [c - 0.001 for c in closes],
+            "Close": closes,
+            "Volume": [1_000_000] * n,
+        },
+        index=dates,
+    )
+
+
+def _entry_row_and_close(df: pd.DataFrame, as_of: date) -> tuple[int, float]:
+    """Return (entry_row_index, entry_close) for the first row >= as_of."""
+    dates = [d.date() if hasattr(d, "date") else d for d in df.index]
+    for i, d in enumerate(dates):
+        if d >= as_of:
+            return i, float(df.iloc[i]["Close"])
+    raise AssertionError("no entry row")
+
+
+# ---------------------------------------------------------------------------
+# U2-S1: Happy path — synthetic events with known prices → exact fwd returns
+# ---------------------------------------------------------------------------
+
+def test_u2_exact_bar_counted_forward_returns():
+    """U2-S1: bar-counted forward returns at 21/63/126 trading days are exact.
+
+    A ramp df with step=1.0 from base=100 → forward return at offset N from the
+    entry row is exactly (N * 1.0)/entry_close * 100. Assert all three horizons.
+    """
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    ramp = _make_ramp_df(SPAN_START, SPAN_END, base=100.0, step=1.0)
+
+    as_of = date(2018, 2, 15)
+    entry_idx, entry_close = _entry_row_and_close(ramp, as_of)
+
+    fwd = tv._bar_counted_forward_returns(ramp, _frame_date_at(ramp, entry_idx), entry_close)
+
+    for h in (21, 63, 126):
+        expected = (h * 1.0) / entry_close * 100.0
+        assert fwd[h] is not None, f"horizon {h} should be complete"
+        assert abs(fwd[h] - expected) < 1e-6, (
+            f"horizon {h}: got {fwd[h]}, expected {expected}"
+        )
+
+
+def _frame_date_at(df: pd.DataFrame, idx: int) -> date:
+    d = df.index[idx]
+    return d.date() if hasattr(d, "date") else d
+
+
+# ---------------------------------------------------------------------------
+# U2-S2: Edge case — event within 126 trading days of data end → incomplete
+# ---------------------------------------------------------------------------
+
+def test_u2_incomplete_long_horizon_marked_none_not_extrapolated():
+    """U2-S2: an entry with <126 bars to data end → 126d cell is None (incomplete),
+    while the 21d/63d cells that DO fit are computed. Never extrapolated."""
+    SPAN_START = date(2018, 1, 1)
+    # Only ~90 business days of data after entry → 21d and 63d fit, 126d does not.
+    SPAN_END = date(2018, 5, 31)
+    ramp = _make_ramp_df(SPAN_START, SPAN_END, base=100.0, step=1.0)
+
+    as_of = date(2018, 1, 2)
+    entry_idx, entry_close = _entry_row_and_close(ramp, as_of)
+    fwd = tv._bar_counted_forward_returns(ramp, _frame_date_at(ramp, entry_idx), entry_close)
+
+    assert fwd[21] is not None, "21d should fit within the frame"
+    assert fwd[63] is not None, "63d should fit within the frame"
+    assert fwd[126] is None, "126d must be marked incomplete (None), never extrapolated"
+
+
+# ---------------------------------------------------------------------------
+# U2 cohort-relative excess end-to-end (signal vs same-cohort null median)
+# ---------------------------------------------------------------------------
+
+def test_u2_cohort_relative_excess_end_to_end():
+    """Signal event's excess = its fwd return minus the same-cohort null median.
+
+    Per-ticker loader: the signal ticker rises faster than the nulls, so at every
+    horizon the signal excess must be positive and hit_v2 True. Null events
+    (identical flat ramp) have excess ~0 vs their own median.
+    """
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    # Signal ramps at step=2 (fast), nulls ramp at step=0.5 (slow).
+    fast = _make_ramp_df(SPAN_START, SPAN_END, base=100.0, step=2.0)
+    slow = _make_ramp_df(SPAN_START, SPAN_END, base=100.0, step=0.5)
+
+    def _loader(ticker: str):
+        return fast if ticker == "SIG" else slow
+
+    def _source(as_of, universe, bars_loader):
+        cands = [_make_candidate("SIG", is_null=False)]
+        # 5 null candidates so the cohort null median is well-defined
+        for k in range(5):
+            cands.append(_make_candidate(f"NUL{k}", is_null=True))
+        return cands
+
+    source = tv.CandidateSourceConfig(
+        name="excess_cfg", direction="long",
+        expected_events_per_year=200.0, source_fn=_source,
+    )
+
+    result = _run_validation_with_source(
+        _make_validation_req(start_year=2018, end_year=2018, horizon_months=12,
+                             hit_threshold_pct=500.0),  # high threshold → no early exit
+        source,
+        _loader,
+    )
+
+    sig_events = [e for e in result.events if not e["is_null"]]
+    assert sig_events, "expected at least one signal event"
+    for e in sig_events:
+        for col in ("excess_21d", "excess_63d", "excess_126d"):
+            assert e[col] is not None, f"{col} should be computed"
+            assert e[col] > 0, f"fast signal must beat slow-null median at {col}: {e[col]}"
+        for col in ("hit_v2_21d", "hit_v2_63d", "hit_v2_126d"):
+            assert e[col] is True, f"{col} should be True (excess>0)"
+
+
+# ---------------------------------------------------------------------------
+# U2-S3: n<30 cohort → insufficient flagging is honored by the atlas convention
+# (the engine still computes excess; insufficiency is an atlas-cell concept).
+# Here we assert the engine produces a small-cohort excess without crashing and
+# the atlas marks the cell insufficient (covered in the research test below).
+# ---------------------------------------------------------------------------
+
+def test_u2_small_cohort_excess_computes_without_crash():
+    """U2-S3 (engine side): a cohort with very few null events still computes a
+    median-based excess (no division by zero, no crash). Insufficiency flagging
+    lives in the atlas (n<30); see the research test for that assertion."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    flat = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+    def _source(as_of, universe, bars_loader):
+        return [
+            _make_candidate("SIGX", is_null=False),
+            _make_candidate("NULX", is_null=True),  # single null → median is itself
+        ]
+
+    source = tv.CandidateSourceConfig(
+        name="tiny_cfg", direction="long",
+        expected_events_per_year=50.0, source_fn=_source,
+    )
+    result = _run_validation_with_source(
+        _make_validation_req(start_year=2018, end_year=2018, horizon_months=12),
+        source,
+        lambda ticker: flat,
+    )
+    # No crash; excess fields present (may be 0.0 since signal==null path here)
+    for e in result.events:
+        assert "excess_63d" in e
+
+
+# ---------------------------------------------------------------------------
+# U2-S4: missing price data for an event → excluded with a counted reason
+# ---------------------------------------------------------------------------
+
+def test_u2_missing_price_excluded_with_counted_reason():
+    """U2-S4: a candidate whose loader returns None (missing price) is excluded
+    and never appears in the events table — it is NOT silently turned into a
+    zero-return event. The run still completes for the candidate that has data."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    ramp = _make_ramp_df(SPAN_START, SPAN_END, base=100.0, step=1.0)
+
+    def _loader(ticker: str):
+        return None if ticker == "MISSING" else ramp
+
+    def _source(as_of, universe, bars_loader):
+        return [
+            _make_candidate("MISSING", is_null=False),  # no price → excluded
+            _make_candidate("HASDATA", is_null=False),
+        ]
+
+    source = tv.CandidateSourceConfig(
+        name="missing_cfg", direction="long",
+        expected_events_per_year=100.0, source_fn=_source,
+    )
+    result = _run_validation_with_source(
+        _make_validation_req(start_year=2018, end_year=2018, horizon_months=12),
+        source,
+        _loader,
+    )
+    tickers = {e["ticker"] for e in result.events}
+    assert "MISSING" not in tickers, "missing-price ticker must be excluded, not zero-filled"
+    assert "HASDATA" in tickers, "ticker with data must still produce an event"
+
+
+# ---------------------------------------------------------------------------
+# U2-S5: short-direction event with falling price → positive excess end-to-end
+# ---------------------------------------------------------------------------
+
+def test_u2_short_falling_price_positive_fwd_return_and_excess():
+    """U2-S5: a short on a falling price produces POSITIVE bar-counted forward
+    returns (sign-correct end-to-end) and positive excess vs a flat null cohort."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    falling = _make_ramp_df(SPAN_START, SPAN_END, base=300.0, step=-0.2)  # declines
+    flat = _make_ramp_df(SPAN_START, SPAN_END, base=100.0, step=0.0)
+
+    def _loader(ticker: str):
+        return falling if ticker == "SHRT" else flat
+
+    def _source(as_of, universe, bars_loader):
+        cands = [_make_candidate("SHRT", is_null=False)]
+        for k in range(4):
+            cands.append(_make_candidate(f"NUL{k}", is_null=True))
+        return cands
+
+    source = tv.CandidateSourceConfig(
+        name="short_cfg", direction="short",
+        expected_events_per_year=150.0, source_fn=_source,
+    )
+    result = _run_validation_with_source(
+        _make_validation_req(start_year=2018, end_year=2018, horizon_months=12,
+                             hit_threshold_pct=500.0),
+        source,
+        _loader,
+    )
+    sig = [e for e in result.events if not e["is_null"] and e["ticker"] == "SHRT"]
+    assert sig, "short event should exist"
+    for e in sig:
+        # Falling price + short direction → positive forward return at every horizon
+        assert e["fwd_return_63d"] is not None and e["fwd_return_63d"] > 0, (
+            f"short fwd_return_63d must be positive on a falling price: {e['fwd_return_63d']}"
+        )
+        # Flat null cohort → null median ~0 → short excess positive
+        assert e["excess_63d"] is not None and e["excess_63d"] > 0
+        assert e["net_return_pct"] > 0, "short net return on falling price must be positive"
+
+
+# ---------------------------------------------------------------------------
+# COR-01: short take-profit early-exit must trigger on price FALLING to target
+# ---------------------------------------------------------------------------
+
+def test_cor01_winning_short_hits_early_with_correct_days_to_hit():
+    """COR-01 (P0): a winning short whose price FALLS through entry*(1-threshold)
+    mid-window must fire the early-exit (hit) at the crossing bar with the correct
+    days_to_hit.  Under the pre-fix long-direction trigger this never fires for a
+    falling short (it would only fire on a deeply LOSING short whose price rose),
+    so this test is discriminating.
+
+    Price design: Close = 200 through 2018-05 (above entry), then steps to 80 on
+    the first business day of 2018-06.  threshold=50% → target = entry*0.5 = 100,
+    so 80 <= 100 triggers the short take-profit on that exact bar."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    idx = pd.date_range(SPAN_START, SPAN_END, freq="B")
+    drop_on = pd.Timestamp(2018, 6, 1)
+    closes = [200.0 if ts < drop_on else 80.0 for ts in idx]
+    df = pd.DataFrame(
+        {
+            "Open": closes,
+            "High": [c + 0.001 for c in closes],
+            "Low": [c - 0.001 for c in closes],
+            "Close": closes,
+            "Volume": [1_000_000] * len(idx),
+        },
+        index=idx,
+    )
+
+    # Expected entry = first business day >= 2018-02-15 (as_of date).
+    as_of = pd.Timestamp(2018, 2, 15)
+    entry_ts = idx[idx >= as_of][0]
+    entry_date = entry_ts.date()
+    # Expected early-exit = first bar at/after the drop where Close (80) <= target (100).
+    exit_ts = idx[idx >= drop_on][0]
+    exit_date = exit_ts.date()
+    expected_days_to_hit = (exit_date - entry_date).days
+
+    def _source(as_of_, universe, bars_loader):
+        cands = [_make_candidate("SHRT", is_null=False)]
+        for k in range(4):
+            cands.append(_make_candidate(f"NUL{k}", is_null=True))
+        return cands
+
+    source = tv.CandidateSourceConfig(
+        name="cor01_short", direction="short",
+        expected_events_per_year=150.0, source_fn=_source,
+    )
+    result = _run_validation_with_source(
+        _make_validation_req(start_year=2018, end_year=2018, horizon_months=12,
+                             hit_threshold_pct=50.0, slippage_bps=0.0,
+                             borrow_rate_annual=0.0),
+        source,
+        lambda ticker: df if ticker == "SHRT" else _make_ramp_df(SPAN_START, SPAN_END, base=100.0, step=0.0),
+    )
+    sig = [e for e in result.events if e["ticker"] == "SHRT"]
+    assert sig, "short event should exist"
+    e = sig[0]
+    # The short is a winner (price halved) and must be marked a hit (early-exit fired).
+    assert e["hit"] is True, f"winning short must hit: net_return_pct={e['net_return_pct']}"
+    assert e["net_return_pct"] >= 50.0, f"net return must clear threshold: {e['net_return_pct']}"
+    # Early exit fired at the drop bar — NOT held to horizon end.
+    assert e["exit_date"] == exit_date.isoformat(), (
+        f"early-exit date must be the crossing bar {exit_date}, got {e['exit_date']}"
+    )
+    assert e["days_to_hit"] == expected_days_to_hit, (
+        f"days_to_hit must be {expected_days_to_hit}, got {e['days_to_hit']}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# U2-S6: short cost correctness — slippage inverted + borrow accrues with hold
+# ---------------------------------------------------------------------------
+
+def test_u2_short_slippage_inverted_vs_long():
+    """U2-S6a: for the SAME entry/exit, a short's slippage-adjusted fills are the
+    mirror of a long's (entry lower / exit higher)."""
+    req_long = _make_validation_req(direction="long", slippage_bps=50.0)
+    req_short = _make_validation_req(direction="short", slippage_bps=50.0,
+                                     borrow_rate_annual=0.0)
+
+    ne_l, nx_l, _, _ = tv._apply_costs(100.0, 110.0, req_long, hold_days=30)
+    ne_s, nx_s, _, _ = tv._apply_costs(100.0, 110.0, req_short, hold_days=30)
+
+    # Long: entry filled UP (worse buy), exit filled DOWN (worse sell)
+    assert ne_l > 100.0 and nx_l < 110.0
+    # Short: entry filled DOWN (worse sell-to-open), exit filled UP (worse cover)
+    assert ne_s < 100.0 and nx_s > 110.0
+
+
+def test_u2_short_borrow_accrues_with_hold_days():
+    """U2-S6b: borrow cost scales linearly with hold_days at the configured rate.
+
+    Doubling hold_days doubles the borrow drag; a long incurs zero borrow."""
+    req_short = _make_validation_req(direction="short", slippage_bps=0.0,
+                                     borrow_rate_annual=3.65)  # 0.01%/day
+    req_long = _make_validation_req(direction="long", slippage_bps=0.0,
+                                    borrow_rate_annual=3.65)
+
+    # Flat price (entry==exit) isolates the borrow drag: short net == -borrow_pct.
+    _, _, _, net_30 = tv._apply_costs(100.0, 100.0, req_short, hold_days=30)
+    _, _, _, net_60 = tv._apply_costs(100.0, 100.0, req_short, hold_days=60)
+    _, _, _, net_long = tv._apply_costs(100.0, 100.0, req_long, hold_days=60)
+
+    # 3.65%/yr = 0.01%/day → 30d = 0.30%, 60d = 0.60%
+    assert abs(net_30 - (-0.30)) < 1e-6, f"30d borrow drag: {net_30}"
+    assert abs(net_60 - (-0.60)) < 1e-6, f"60d borrow drag: {net_60}"
+    # Linear scaling: 60d is exactly twice 30d
+    assert abs(net_60 - 2 * net_30) < 1e-6
+    # Longs never pay borrow
+    assert abs(net_long) < 1e-9, f"long must have zero borrow: {net_long}"
+
+
+# ---------------------------------------------------------------------------
+# U2: legacy diagnostic fields still populated alongside v2 (additive contract)
+# ---------------------------------------------------------------------------
+
+def test_u2_legacy_diagnostic_fields_coexist_with_v2():
+    """The v1 fields (net_return_pct, horizon_end_return_pct, horizon_months,
+    hit, days_to_hit) remain populated next to the new v2 fields — additive."""
+    SPAN_START = date(2015, 1, 1)
+    SPAN_END = date(2022, 12, 31)
+    ramp = _make_ramp_df(SPAN_START, SPAN_END, base=100.0, step=1.0)
+
+    def _source(as_of, universe, bars_loader):
+        return [_make_candidate("BOTH", is_null=False),
+                _make_candidate("BOTN", is_null=True)]
+
+    source = tv.CandidateSourceConfig(
+        name="coexist_cfg", direction="long",
+        expected_events_per_year=100.0, source_fn=_source,
+    )
+    result = _run_validation_with_source(
+        _make_validation_req(start_year=2018, end_year=2018, horizon_months=12),
+        source,
+        lambda ticker: ramp,
+    )
+    assert result.events
+    for e in result.events:
+        # legacy diagnostics
+        for k in ("net_return_pct", "horizon_months", "hit", "horizon_end_return_pct"):
+            assert k in e, f"legacy field {k} must remain"
+        # v2 additive
+        for k in ("fwd_return_21d", "excess_63d", "hit_v2_126d"):
+            assert k in e, f"v2 field {k} must be present"

@@ -110,6 +110,14 @@ def _pad_cik(cik: str | int) -> str:
 def load_events() -> list[dict]:
     with open(EVENTS_PATH, encoding="utf-8") as f:
         data = json.load(f)
+    # DI-09: guard against pre-events artifacts (schema_version=0 → events=[]). These
+    # scripts open validation_result.json directly, bypassing the route backfill shim,
+    # so a stale pre-events run would silently produce all-zero statistics.
+    sv = int(data.get("schema_version", 0))
+    if sv == 0:
+        raise SystemExit(
+            "insider_stratified: pre-events artifact (schema_version=0) — re-run validation first."
+        )
     return data["events"]
 
 

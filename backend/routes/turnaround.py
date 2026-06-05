@@ -506,4 +506,23 @@ def get_validation_result() -> dict:
         "null_horizon_median_return_pct": 0.0,
     }
     data = {**_schema_v1_defaults, **data}
+
+    # DI-05: backfill the schema_version=2 per-event fields onto v1/v0 event dicts so
+    # v2-aware consumers reading through this route see a consistent (additive) shape
+    # rather than KeyError / silent None-from-.get on a missing key.  We add the nine
+    # forward-return/excess/hit_v2 fields (None) plus config_name/direction.  The
+    # on-disk artifact is NOT modified.  Research scripts that bypass this route get an
+    # explicit schema_version guard instead (DI-09).
+    if int(data.get("schema_version", 0)) < 2:
+        _v2_event_defaults: dict = {
+            "fwd_return_21d": None, "fwd_return_63d": None, "fwd_return_126d": None,
+            "excess_21d": None, "excess_63d": None, "excess_126d": None,
+            "hit_v2_21d": None, "hit_v2_63d": None, "hit_v2_126d": None,
+            "config_name": "legacy",
+            "direction": "long",
+        }
+        for _e in data.get("events", []):
+            if isinstance(_e, dict):
+                for _k, _v in _v2_event_defaults.items():
+                    _e.setdefault(_k, _v)
     return data
