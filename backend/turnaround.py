@@ -127,6 +127,26 @@ def _get_high(df: pd.DataFrame) -> pd.Series:
     raise KeyError("No High column in DataFrame")
 
 
+def _find_matching_quarter(quarters: list[dict], target_end: str) -> Optional[dict]:
+    """Find the quarter in *quarters* whose 'end' is closest to *target_end* (±45d).
+
+    COR-01: used to align GP quarters to the corresponding revenue quarter by period-end
+    date rather than by list position (gp_all[-1] may not cover the same fiscal quarter
+    as rev_all[-1] when GP has gaps or a different filing cadence).
+
+    Returns None if no quarter is within the 45-day tolerance window.
+    """
+    target_ts = pd.Timestamp(target_end)
+    best: Optional[dict] = None
+    best_delta = timedelta(days=46)
+    for q in quarters:
+        delta = abs(pd.Timestamp(q["end"]) - target_ts)
+        if delta.days <= 45 and delta < best_delta:
+            best = q
+            best_delta = delta
+    return best
+
+
 def _yoy_pair(quarters: list[dict], recent_idx: int) -> Optional[dict]:
     """Find the YoY comparison quarter for quarters[recent_idx] using end±45d tolerance."""
     recent_end = pd.Timestamp(quarters[recent_idx]["end"])
@@ -304,30 +324,73 @@ def _count_consec_positive_yoy(
 ) -> tuple[int, Optional[float]]:
     """Count consecutive trailing quarters with YoY growth >= min_growth_pct.
 
+    F326 — SIGN CHANGE REQUIREMENT: requires at least one negative YoY quarter
+    BEFORE the consecutive-positive run begins. A name whose entire available
+    history is positive YoY returns (0, most_recent_yoy) — "has turned positive"
+    cannot be inferred without a prior negative reference. This prevents
+    always-positive-but-decelerating former highfliers (GPRO-2015 shape,
+    ENPH/CRSR/BOOM 2023) from passing the inflection gate.
+
     Returns (count, most_recent_yoy_pct).
     Uses end±45d tolerance for YoY pairing.
     """
     if len(quarters) < 2:
         return 0, None
 
-    count = 0
-    most_recent_yoy = None
-    # Walk from most recent backwards
+    # ---- Pass 1: collect YoY values for every pairably quarter ----
+    yoy_by_idx: dict[int, float] = {}
     for i in range(len(quarters) - 1, -1, -1):
         prior = _yoy_pair(quarters, i)
         if prior is None:
-            break
+            continue
         current_val = quarters[i].get("val", 0.0) or 0.0
         prior_val = prior.get("val", 0.0) or 0.0
         if prior_val == 0:
-            break
-        yoy_pct = (current_val - prior_val) / abs(prior_val) * 100.0
+            continue
+        yoy_by_idx[i] = (current_val - prior_val) / abs(prior_val) * 100.0
+
+    if not yoy_by_idx:
+        return 0, None
+
+    sorted_idx = sorted(yoy_by_idx.keys())  # chronological order
+
+    # ---- Pass 2: measure trailing consecutive-positive run ----
+    count = 0
+    most_recent_yoy: Optional[float] = None
+    for i in reversed(sorted_idx):
+        yoy = yoy_by_idx[i]
         if most_recent_yoy is None:
-            most_recent_yoy = yoy_pct
-        if yoy_pct >= min_growth_pct:
+            most_recent_yoy = yoy
+        if yoy >= min_growth_pct:
             count += 1
         else:
             break
+
+    # ---- Pass 3: sign-change guard — must have ≥1 negative YoY BEFORE the run ----
+    # Find the chronological start index of the positive run.
+    positive_run_start = None
+    for i in reversed(sorted_idx):
+        yoy = yoy_by_idx[i]
+        if yoy >= min_growth_pct:
+            positive_run_start = i
+        else:
+            break
+
+    if count == 0:
+        # No positive run at all — return early, no sign change needed
+        return 0, most_recent_yoy
+
+    # There must be at least one paired quarter BEFORE positive_run_start with
+    # a negative YoY to confirm the turnaround. If the entire observable
+    # history is positive, we cannot infer a turn — fail the gate.
+    has_prior_negative = any(
+        yoy_by_idx[i] < min_growth_pct
+        for i in sorted_idx
+        if i < positive_run_start
+    )
+    if not has_prior_negative:
+        # No prior negative quarter observed — cannot confirm sign change
+        return 0, most_recent_yoy
 
     return count, most_recent_yoy
 
@@ -407,23 +470,29 @@ def is_fundamental_inflecting(
     metrics["net_income_consec_improving"] = ni_consec
 
     # ---- Gross margin delta (most recent quarter vs YoY) ----
+    # COR-01: align GP quarters to the revenue quarter's end date using end±45d
+    # tolerance.  gp_all[-1] and rev_all[-1] may cover different fiscal quarters
+    # when GP has a different filing cadence or gaps.  If no aligned GP quarter
+    # exists for either the recent or prior revenue quarter, treat GM as unavailable
+    # (gm_delta = None), consistent with the missing-data convention downstream.
     gm_delta = None
     if len(rev_all) >= 2 and len(gp_all) >= 2:
-        # Compute gross margin for most-recent and YoY quarter
-        if rev_all and gp_all:
-            try:
-                # Match by end date tolerance
-                recent_rev_q = rev_all[-1]
-                prior_rev_q = _yoy_pair(rev_all, len(rev_all) - 1)
-                recent_gp_q = gp_all[-1]
-                prior_gp_q = _yoy_pair(gp_all, len(gp_all) - 1)
-                if (prior_rev_q and prior_gp_q
-                        and recent_rev_q.get("val", 0) and prior_rev_q.get("val", 0)):
-                    gm_recent = recent_gp_q.get("val", 0) / recent_rev_q["val"] * 100
-                    gm_prior = prior_gp_q.get("val", 0) / prior_rev_q["val"] * 100
-                    gm_delta = gm_recent - gm_prior
-            except (ZeroDivisionError, TypeError):
-                pass
+        try:
+            recent_rev_q = rev_all[-1]
+            prior_rev_q = _yoy_pair(rev_all, len(rev_all) - 1)
+            # Find the GP quarter whose 'end' is closest to the revenue quarter's 'end'
+            recent_gp_q = _find_matching_quarter(gp_all, recent_rev_q["end"])
+            prior_gp_q = (
+                _find_matching_quarter(gp_all, prior_rev_q["end"])
+                if prior_rev_q is not None else None
+            )
+            if (prior_rev_q and recent_gp_q and prior_gp_q
+                    and recent_rev_q.get("val", 0) and prior_rev_q.get("val", 0)):
+                gm_recent = recent_gp_q.get("val", 0) / recent_rev_q["val"] * 100
+                gm_prior = prior_gp_q.get("val", 0) / prior_rev_q["val"] * 100
+                gm_delta = gm_recent - gm_prior
+        except (ZeroDivisionError, TypeError):
+            pass
     metrics["gross_margin_delta_pct"] = gm_delta
 
     # ---- OCF: positive in >= N of last 4 quarters ----
@@ -648,18 +717,49 @@ def compute_composite_score(candidate: CandidateResult) -> float:
 # Universe builder (D9: hygiene rules)
 # ---------------------------------------------------------------------------
 
+def _is_junk_suffix(ticker: str) -> bool:
+    """Return True if ticker matches a known junk-class suffix pattern.
+
+    F319 — Suffix-class exclusion (belt-and-braces, applied in build_universe):
+    - 5-char tickers ending W -> SPAC warrant (e.g. MDAIW, KORGW, BDMDW)
+    - 5-char tickers ending U -> SPAC unit (e.g. AACBU)
+    - 5-char tickers ending R -> SPAC right
+    - Any ticker ending Q -> bankruptcy shell (e.g. QVCDQ)
+    - 5-char tickers ending F -> foreign OTC pink-sheet (e.g. AAMTF, RTNTF)
+    - 5-char tickers ending Y -> foreign OTC ADR/pink-sheet (e.g. KOZAY, YGSHY)
+
+    Legit tickers that must NOT be excluded:
+    - GOOGL (5 chars, L suffix) -- passes (L not in the junk suffix set)
+    - AAPL (4 chars, L suffix) -- passes (W/U/R/F/Y rules are 5-char only)
+    - TSLA (4 chars) -- passes
+    """
+    t = ticker.upper()
+    n = len(t)
+    if n == 0:
+        return False
+    # Any length: ending Q -> bankruptcy shell
+    if t.endswith("Q"):
+        return True
+    # 5-char only: W/U/R -> SPAC warrant/unit/right; F/Y -> foreign OTC
+    if n == 5 and t[-1] in ("W", "U", "R", "F", "Y"):
+        return True
+    return False
+
+
 def build_universe(
     ticker_cik_map: dict,
     params: Optional[FilterParams] = None,
 ) -> list[tuple[str, str]]:
-    """Filter the raw SEC ticker→CIK map to investable candidates.
+    """Filter the raw SEC ticker->CIK map to investable candidates.
 
     D9:
     - Exclude tickers containing '.' or '-' (warrants/preferred/foreign)
     - Exclude tickers longer than 5 chars
-    - D9: cik_str is an int in the JSON — zero-pad to 10 digits here
+    - D9: cik_str is an int in the JSON -- zero-pad to 10 digits here
     - ORCH-02: exclude companies whose title contains 'ETF', ' Trust',
       or 'Acquisition Corp' (case-insensitive) to cut SPAC/ETF noise.
+    - F319: suffix-class exclusion via _is_junk_suffix() -- 5-char W/U/R
+      (SPAC warrant/unit/right), any Q (bankruptcy), 5-char F/Y (foreign OTC).
 
     Returns [(ticker, cik_10digit), ...] in deterministic alphabetical order.
     """
@@ -671,6 +771,9 @@ def build_universe(
         if len(t) > 5:
             continue
         if "." in t or "-" in t:
+            continue
+        # F319: suffix-class exclusion (SPAC warrant/unit/right, bankruptcy, foreign OTC)
+        if _is_junk_suffix(t):
             continue
         # Exclude ETF/Trust/SPAC by company title (case-insensitive substring match)
         title = str(info.get("title", "")).lower()
