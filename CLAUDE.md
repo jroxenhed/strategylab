@@ -6,6 +6,15 @@ Interactive trading strategy backtester + live paper trading platform. Read this
 
 This file documents non-obvious architecture and runtime behavior — the stuff a fresh agent (or human) needs to know before editing. Patterns marked in **Key Bugs Fixed** are authoritative: if code looks like it invites a "simpler" approach that conflicts with that section, don't take it.
 
+## Research Axioms
+
+Hard-won findings that steer premise design. Treat these like Key Bugs Fixed — authoritative until experimentally overturned.
+
+- **Price leads, filings trail.** Information diffusion order: insiders → price → filings → analysts → screeners. A quarterly filing is the *slowest public record* of things informed money acted on months earlier, so any screen using filings as the **trigger** structurally trades against people who already moved. GPRO-2015 and ENPH-2023 weren't anomalies; they were the rule (run-1/run-2 miss-list autopsy, confirmed by John's lived trading experience). Corollaries:
+  - Filings are miscast as triggers but still useful as **vetoes and filters** — going-concern exclusions, weak-side disqualifiers, "filing confirms what price already said" gates.
+  - **Form 4 is the one public filing upstream of price** — insiders act *before* the move. This is why the Insider Stack ranked #1 in the 2026-06-05 ideation and why its signal survived the 2020s while numeric PEAD died.
+  - The filing-only vs price-only selection ablation (epistemics-first survivor, ideation doc) is the experiment that turns this axiom from intuition into a number.
+
 ## Chart.tsx Architecture
 
 Key files (others are standard-named, discoverable by grep):
