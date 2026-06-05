@@ -10,22 +10,19 @@ _(none open)_
 
 ## Up Next
 
-- [F326](#f326) — [next] Inflection gate must require a SIGN CHANGE [medium]
 - [F305](#f305) — [next] sync-todo-index.py writes TODO.md with bare write_text() [easy]
 - [F313](#f313) — [next] Turnaround validation wall-clock budget + cancellation + progress [medium]
-- [F321](#f321) — [next] Conviction pillar is a silent dud [medium]
-- [F319](#f319) — [next] Turnaround universe hygiene v2 [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 31 items
+## Open Work — 29 items
 
 | Section | Open | IDs |
 |---|---|---|
-| [Features](#features) | 7 | [B9](#b9), [F316](#f316), [F324](#f324)–[F328](#f328) |
+| [Features](#features) | 5 | [B9](#b9), [F316](#f316), [F324](#f324)–[F325](#f325), [F328](#f328) |
 | [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320) |
-| [Hardening](#hardening) | 8 | [F305](#f305), [F313](#f313)–[F315](#f315), [F319](#f319), [F321](#f321)–[F323](#f323) |
+| [Hardening](#hardening) | 7 | [F305](#f305), [F313](#f313)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330) |
 | [Polish](#polish) | 1 | [F310](#f310) |
-| [Testing](#testing) | 4 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307) |
+| [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329) |
 | [Infra](#infra) | 4 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309) |
 
 ## Features
@@ -41,10 +38,6 @@ _(none open)_
 - [ ] <a id="f324"></a> **F324** Turnaround gate transparency — per-gate margins + near-miss tier + inflection stages (gate design review 2026-06-05, with John). (a) Every sub-check emits signed distance-to-threshold alongside its bool (e.g. NKE failed pillar 2 by GM −0.53pp — invisible in binary payload); (b) near-miss tier: names failing EXACTLY one sub-check get a labeled "forming" watchlist tier, never in the signal set (one parameter total; NKE + EL land here today); (c) label existing pillar-2 sub-check combos as inflection stage early/mid/confirmed (revenue→margins→NI sequence; zero parameters, pure relabeling). Keeps binary membership (validation sets + auditability); adds no threshold knobs. [medium] [features]
 
 - [ ] <a id="f325"></a> **F325** Dose-response validation cohorts — report hit rate by gates-passed cohort (all-gates vs miss-exactly-one vs washed-out-only null) in run_validation. Monotonically rising hit rate with gates passed is a much harsher falsification than single signal-vs-null; partially fixes small-n (miss-one cohort is larger); zero new tuning (gates already locked). Analysis-layer only — does not alter membership or thresholds. (gate design review 2026-06-05) [medium] [features]
-
-- [ ] <a id="f326"></a> **F326** [next] Inflection gate must require a SIGN CHANGE — spec §4 says revenue growth "has TURNED positive", implying a prior negative stretch; the implementation checks only "YoY ≥ 0 for K consecutive quarters", admitting always-positive-but-decelerating former highfliers (GPRO 2015, ENPH/CRSR/BOOM 2023, oilfield trio 2018-19 — the full-run miss-list top 10). Spec-conformance fix, not tuning (the wording predates the data; be transparent that the run surfaced it). Require ≥1 negative YoY quarter in the lookback before the positive run. Rerun protocol: F319 + F326 + F321 land first, then re-run full validation on warm caches (~minutes) and report old vs new side by side. [medium] [hardening]
-
-- [ ] <a id="f327"></a> **F327** Validation payload gaps from the full-run read — add null return distribution (mean/median/quartiles; hit-rate-only comparison hides the vol asymmetry between junky null and steadier signal names), plus a fixed-horizon return comparison alongside the touch-+50% hit metric. Analysis-layer. [easy] [hardening]
 
 - [ ] <a id="f328"></a> **F328** Miss-list horizon diagnostic — for each miss, compute time-to-+50% at extended horizons (24/36m): distinguishes "wrong name" (selection failure, thesis-threatening) from "right name, fired early" (timing failure, Stage-2's job). Motivated by ENPH: screen's #10-conviction pick at 2023-11 (−36% in window) became John's best long of 2026 after the real turn. Zero knobs; uses already-cached price spans where available. ENPH 2023→2026 point-in-time timeline is the agreed case-study vignette once F326 lands. [easy] [features]
 
@@ -70,6 +63,8 @@ _(none open)_
 
 ## Hardening
 
+- [ ] <a id="f330"></a> **F330** Events-table payload size guardrail — validation_result.json now carries the full per-event list (~3.2k events / ~1-2MB at run-1 scale); at max_universe~15k over 9y it could reach ~8-10MB through GET /validate/result in one pass (DI-04, F-RERUN-0605 review). Add a summary-only query param or gzip; revisit with F315 (watchlist schema_version still missing). [easy] [hardening]
+
 _(none open)_
 - [ ] <a id="f305"></a> **F305** [next] sync-todo-index.py writes TODO.md with bare write_text() — not atomic; adopt the tempfile+fsync+os.replace pattern close-batch.py already uses (DI-03, F-BATCH-0604D review). [easy] [hardening]
 
@@ -79,18 +74,16 @@ _(none open)_
 
 - [ ] <a id="f315"></a> **F315** Schema version field on persisted turnaround payloads (watchlist.json, validation_result.json) so future field changes don't break GET readers of old files (DI-06, F311 review). [easy] [hardening]
 
-- [ ] <a id="f321"></a> **F321** [next] Conviction pillar is a silent dud — 4 stacked bugs, all masked by graceful degradation (found by AAPL positive control 2026-06-05): (1) EFTS `ciks` param sent as bare int → silent 0 hits, needs zero-padded 10-digit; (2) `dateRange=custom` required alongside startdt/enddt+forms, else HTTP 500; (3) hit parser reads `accession_no`/`form_type` but real fields are `adsh`/`root_forms`/`file_date`; (4) fetch_form4_xml requests `{accession}-index.json` (404) — real listing is `index.json` with `directory.item[]` (contains `form4.xml` directly). Fix all four + REQUIRED positive-control tests pinned to recorded real fixtures: AAPL has_buyback_authorization(12m)=True (8-K 2026-04-30 EX-99.1), AAPL get_form4_net_buys(6m)≠0.0 (587 Form 4s in window). Regenerate live watchlist after (conviction bonuses currently flattened; running F312 validation unaffected — conviction skipped by design). [medium] [hardening]
-
 - [ ] <a id="f322"></a> **F322** get_shares_outstanding fails on dual-class filers — P/S = None (data gap, fail-closed) for PTON, NKE, EL (all class A/B structures); single-class AAPL/INTC/TGT/MRNA compute fine. Sum dei:EntityCommonStockSharesOutstanding across share-class contexts (or fall back to CommonStockSharesIssued per class) at the same as_of. 3 of 7 live-tested names hit this — material coverage gap for the valuation pillar. [medium] [hardening]
 
 - [ ] <a id="f323"></a> **F323** archive-todo.py hard-fails on same-session items: verifies by anchor slug, but freshly added `[x]` items have no anchor until sync-todo-index runs (hook runs it at commit, not at archive time). Error message names the missing slugs but not the cure. Fix: archive-todo runs sync first (or its error says "run bin/sync-todo-index.py first"). Hit live 2026-06-05 closing F311/F312. [easy] [infra]
-
-- [ ] <a id="f319"></a> **F319** [next] Turnaround universe hygiene v2 — build_universe still admits SPAC warrants/units/rights (5-char W/U/R suffixes: MDAIW, KORGW, BDMDW, AACBU), Q-suffix bankruptcy shells (QVCDQ), and F/Y-suffix foreign OTC (AAMTF, KOZAY, YGSHY) — all seen in the live full-universe run (8,909 names). Signal set is mostly immune (no XBRL revenue → dies at fundamentals gate) but the NULL set is not: junk trading 90% off its high passes the washed-out price gate and deflates the null hit rate, making the Phase-2 gate easier to pass — biased in the wrong direction. Use SEC company_tickers_exchange.json (exchange-listed only) or suffix-class exclusion. **A Phase-2 PASS verdict doesn't count until validation is re-run after this fix** (a kill verdict still counts — junk null only makes the test easier). [easy] [hardening] (added 2026-06-05)
 
 ## Polish
 
 - [ ] <a id="f310"></a> **F310** One-frame crosshair/pane misalignment possible during render-interval swap — main-pane and SubPane setData run in separate effects on the same commit; lw-charts may emit a range event between them and sync a logical range onto a sub-pane still holding the old bar count (try/catch prevents errors; visual blip only). Structural fix needs shared dep-chain plumbing. (RACE-04, A8-render-resample review, rated acceptable-as-is.) [medium] [polish]
 ## Testing
+
+- [ ] <a id="f329"></a> **F329** Record a real Form 4 P-code (purchase) fixture for edgar positive controls — the real AAPL Form 4 fixture only contains S/G transaction codes, so the P-code accumulation path in get_form4_net_buys is exercised only by synthetic XML (TST-03c, F-RERUN-0605 review). Record a live insider-buy Form 4 (any ticker) and pin net-buys > 0. [easy] [testing]
 
 - [ ] <a id="d24b"></a> **D24b** Regime bot visual verification — D24 not visually verified. Need to run a regime bot in paper trading to confirm flip sequence, pending_regime_flip retry, and BotCard regime status display. Manual QA item. [testing]
 

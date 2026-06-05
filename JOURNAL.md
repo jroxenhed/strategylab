@@ -6,6 +6,16 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-06-05
 
+- **Rerun-protocol batch (F-RERUN-0605):** shipped all four pre-rerun items in one orchestrated cycle (3 parallel impl lanes, 5-persona Tier-C review, 37 findings → 16 fixed / 6 deferred-with-rulings, holistic fixer). 924 backend tests green (+46 net).
+  - **[F326](TODO-archive.md#f326)** sign-change inflection gate — the spec-conformance fix from the run-1 autopsy; GPRO-2015-class always-positive-decelerating names now fail.
+  - **[F319](TODO-archive.md#f319)** universe hygiene v2 — junk-suffix exclusion purifies the null set.
+  - **[F321](TODO-archive.md#f321)** conviction pillar repaired (4 bugs) with REAL recorded AAPL fixtures pinning parsers, outbound params, and fixture schema.
+  - **[F327](TODO-archive.md#f327)** null return distribution + horizon-end comparison; plus the full per-event outcomes table (schema_version=1) — F325/F328/dose-response become queries, not runs.
+  - Review wave caught two experiment-integrity bugs beyond the planned scope: cross-cohort overlap suppression (shared cooldown book biased signal-vs-null) and GP/revenue quarter misalignment in gm_delta. Both fixed pre-rerun.
+  - Run-1 verdict artifact snapshotted to validation_result_run1.json; result writes now backup_depth=3.
+  - Deferred with rulings (in .run/F-RERUN-0605/decisions.md): sign-change lookback semantics (8q window IS the recency bound, no post-hoc tuning), style P2/P3s. New: F329 (P-code fixture), F330 (events payload size).
+
+
 ### Phase-2 full-universe verdict — the filter does NOT beat the null (the gate worked)
 
 - **Full write-up / fresh-session pickup doc:** [docs/plans/poor-mans-bloomberg-phase2-run1.md](plans/poor-mans-bloomberg-phase2-run1.md) — verdict, autopsy, bug ledger, rerun protocol (§8 is the next-step sequence), idea bank, data locations.
