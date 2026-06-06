@@ -13,7 +13,7 @@ _(none open)_
 - [F305](#f305) — [next] sync-todo-index.py writes TODO.md with bare write_text() [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 30 items
+## Open Work — 31 items
 
 | Section | Open | IDs |
 |---|---|---|
@@ -22,7 +22,7 @@ _(none open)_
 | [Hardening](#hardening) | 8 | [F305](#f305), [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F336](#f336)–[F337](#f337) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 6 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329), [F338](#f338) |
-| [Infra](#infra) | 5 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F344](#f344) |
+| [Infra](#infra) | 6 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F344](#f344), [F346](#f346) |
 
 ## Features
 
@@ -91,6 +91,8 @@ _(none open)_
 
 - [ ] <a id="f344"></a> **F344** Stooq delisted-coverage probe via real browser — F341's script audit was blocked by Cloudflare's JS challenge; one chrome-devtools (or Playwright) session fetching sivb.us / bbby.us / twtr.us / frcb.us CSVs answers whether Stooq can resurrect dead-company price history for free (idea 5's cheapest survivorship fix). If yes, follow with a bulk-download plan; if no, the $50 Sharadar month becomes the only path below $5. [easy] [infra]
 
+- [ ] <a id="f346"></a> **F346** Analyst-action + news event-stream audit (John's gap-spot, 2026-06-06) — go/no-go on: yfinance upgrades_downgrades (incl. a determinism/PIT re-fetch probe — does Yahoo rewrite history?), GDELT news volume (GME Jan-2021 spike anchor), 8-K item codes already in the EDGAR cache as a free news stream, Finnhub/FMP free tiers. Candidate uses kept OPEN (axiom downgraded to working hypothesis 2026-06-06 — do not pre-judge): trigger, fade/crowding, veto, and completing the insider→price→filing→analyst latency measurement. [easy] [infra] (added 2026-06-06)
+
 - [ ] <a id="f97"></a> **F97** [medium] Provision `backend/venv/` in routine builder container — overnight builds 21/22/23 all hit the same gap: §3.5 backend smoke test originally specified `cd backend && venv/bin/uvicorn …` but the routine container ships without a venv. Spec now codifies AST + import-time check as the substitute. Real fix: the container image includes `backend/venv/` with pinned deps (Pydantic, FastAPI, pytest). Once landed, restore the full uvicorn smoke test path. Container/infra change, not application code. (from build 23 process review) [infra]
 
 - [ ] <a id="f302"></a> **F302** Per-reviewer effort cap in dispatch prompts — F-BATCH-0604C's correctness reviewer ran 5m47s / 60k tokens / 55 tool-uses vs siblings' ~2m / ~13-29, and with no agent-messaging tool the orchestrator could only poll (~15 min of wall-clock went to waits). Add a standard cap clause to review dispatch prompts (e.g. "≤25 tool calls / ~3 min; if hit, return partial findings + status token") and record cap-hits in run-state so chronic offenders surface in the report. [easy] [infra]
@@ -98,6 +100,8 @@ _(none open)_
 - [ ] <a id="f309"></a> **F309** Promote the A8 zoom→auto-switch verification recipe to a scripted render-probe check (F298 rule): seed Alpaca 5m multi-year settings, drive `window.__chartDebug.setVisibleLogicalRange(0, N)`, assert lastSetDataPoints drops ≥10x + 'Auto (…)' badge, then narrow range and assert full-resolution restore. Needs DEV-build probe target or exposing the hook in preview builds behind a flag. [easy] [infra]
 
 ## Deferred (gated)
+
+- [ ] <a id="f347"></a> **F347** Information-speed heterogeneity charter candidate ("for WHOM do filings lead price?") — test the downgraded axiom's live question directly on the event harness: filing-reaction drift (8-K/10-Q events, forward excess from next open) as a function of attention proxies (market cap, volume, analyst-coverage count from F346's stream if it lands). Prediction worth testing: filings LEAD price for neglected small names, trail for covered ones. Symmetric design — the axiom itself is on the bench, not assumed. [medium] [arch] [gated: F342 shipped + John approves the charter] (added 2026-06-06)
 
 - [ ] <a id="f345"></a> **F345** Pre-register "distress recovery as long" (D2-reversal) — F339's strongest hypothesis-generating signal: beaten-down stocks still filing on time showed +11.21% excess at 126d, cohort-level bootstrap CI [+3.66,+19.12] fully positive on confirm-era data. CAUTION: this is a post-hoc read of already-unsealed confirm data — it cannot be graded on 2021–2024 again; a charter needs a fresh confirm window (2025+ forward, or event-time re-test under F342). [medium] [arch] [gated: John approves charter + F342 or a fresh confirm window exists]
 
