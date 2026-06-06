@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -44,3 +45,26 @@ def _f139_ensure_event_loop():
         # would silently receive the closed loop. set_event_loop(None) is
         # the conservative move — no stale state across tests.
         asyncio.set_event_loop(None)
+
+
+@pytest.fixture(autouse=True)
+def _f320_clear_derived_cache():
+    """Clear _load_derived mtime-keyed cache between tests (F320).
+
+    The mtime-keyed dict cache (_derived_cache) is keyed by (cik, raw_mtime,
+    derived_mtime) — clearing between tests prevents tmp_path data from test A
+    leaking into test B when both use the same fake CIK (e.g. 0000123456) with
+    different mtimes that happen to collide.
+    edgar may not be imported in every test module, so import is guarded.
+    """
+    try:
+        import edgar as _edgar
+        _edgar._load_derived_cache_clear()
+    except (ImportError, AttributeError):
+        pass
+    yield
+    try:
+        import edgar as _edgar
+        _edgar._load_derived_cache_clear()
+    except (ImportError, AttributeError):
+        pass

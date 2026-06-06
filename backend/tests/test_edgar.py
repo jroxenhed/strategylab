@@ -1366,3 +1366,373 @@ def test_f321_get_form4_net_buys_aapl_fixture(monkeypatch, tmp_path):
         f"get_form4_net_buys returned 0 for AAPL — parser is silently empty. "
         f"Check that transactionCode/shares/price are being extracted."
     )
+
+
+# ===========================================================================
+# F320 — Derived compact fundamentals cache tests
+# ===========================================================================
+
+
+def _make_full_facts(revenue_val=1_000_000, ni_val=200_000, gp_val=400_000,
+                     ocf_val=300_000, shares_val=5_000_000):
+    """Build a minimal but complete synthetic companyfacts dict covering all 5 series."""
+    def _q(val):
+        return [
+            {"end": "2023-03-31", "val": val, "accn": "a1", "fy": 2023, "fp": "Q1",
+             "form": "10-Q", "filed": "2023-05-01", "start": "2023-01-01"},
+            {"end": "2023-06-30", "val": val + 10, "accn": "a2", "fy": 2023, "fp": "Q2",
+             "form": "10-Q", "filed": "2023-08-01", "start": "2023-04-01"},
+            {"end": "2023-09-30", "val": val + 20, "accn": "a3", "fy": 2023, "fp": "Q3",
+             "form": "10-Q", "filed": "2023-11-01", "start": "2023-07-01"},
+        ]
+
+    return {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {"units": {"USD": _q(revenue_val)}},
+                "NetIncomeLoss": {"units": {"USD": _q(ni_val)}},
+                "GrossProfit": {"units": {"USD": _q(gp_val)}},
+                "NetCashProvidedByUsedInOperatingActivities": {"units": {"USD": _q(ocf_val)}},
+                "CommonStockSharesOutstanding": {
+                    "units": {
+                        "shares": [
+                            {"end": "2023-03-31", "val": shares_val, "filed": "2023-05-01",
+                             "form": "10-Q", "accn": "a1"},
+                            {"end": "2023-09-30", "val": shares_val + 100, "filed": "2023-11-01",
+                             "form": "10-Q", "accn": "a3"},
+                        ]
+                    }
+                },
+            }
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
+# test_f320_parse_companyfacts_to_derived_identity
+# ---------------------------------------------------------------------------
+
+
+def test_f320_parse_companyfacts_to_derived_identity(monkeypatch, tmp_path):
+    """parse_companyfacts_to_derived output is bit-identical to the raw-path accessors.
+
+    For each of the 5 series, the derived path must return the exact same list
+    as the original _get_quarterly_series_for_tag_list / raw get_shares_outstanding.
+    """
+    import edgar
+
+    monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
+    # DERIVED_CACHE_DIR not needed — _derived_path() reads CACHE_DIR at call time.
+
+    facts = _make_full_facts()
+    _seed_cache(tmp_path / "facts" / "0000123456.json", facts)
+
+    monkeypatch.setattr(edgar, "_get", lambda url, params=None: (_ for _ in ()).throw(
+        AssertionError("_get must not be called — facts are cached")))
+
+    # --- raw path (old) ---
+    raw_revenue = edgar._get_quarterly_series_for_tag_list("0000123456", edgar._REVENUE_TAGS)
+    raw_ni = edgar._get_quarterly_series_for_tag_list("0000123456", edgar._NET_INCOME_TAGS)
+    raw_gp = edgar._get_quarterly_series_for_tag_list("0000123456", edgar._GROSS_PROFIT_TAGS)
+    raw_ocf = edgar._get_quarterly_series_for_tag_list("0000123456", edgar._OCF_TAGS)
+    # shares raw path
+    raw_facts = edgar.fetch_companyfacts("0000123456")
+    raw_shares_entries = (
+        raw_facts.get("facts", {}).get("us-gaap", {})
+        .get("CommonStockSharesOutstanding", {}).get("units", {}).get("shares", [])
+    )
+    as_of = date(2023, 12, 1)
+    raw_shares_val = edgar.get_shares_outstanding.__wrapped__("0000123456", as_of) \
+        if hasattr(edgar.get_shares_outstanding, "__wrapped__") else None
+
+    # --- derived path ---
+    # Clear LRU so the test starts from a fresh slate.
+    edgar._load_derived_cache_clear()
+    derived = edgar.parse_companyfacts_to_derived("0000123456")
+
+    assert derived["revenue"] == raw_revenue, "revenue mismatch"
+    assert derived["net_income"] == raw_ni, "net_income mismatch"
+    assert derived["gross_profit"] == raw_gp, "gross_profit mismatch"
+    assert derived["ocf"] == raw_ocf, "ocf mismatch"
+
+    # shares: derived must contain all raw share entries (as float val + filed + form)
+    derived_share_filds = {(e["filed"], float(e["val"])) for e in derived["shares"]}
+    for se in raw_shares_entries:
+        if se.get("val") is not None:
+            assert (se["filed"], float(se["val"])) in derived_share_filds, \
+                f"share entry missing from derived: {se}"
+
+    # schema fields
+    assert derived["schema_version"] == 1
+    assert derived["cik"] == "0000123456"
+
+
+# ---------------------------------------------------------------------------
+# test_f320_public_accessors_use_derived_cache
+# ---------------------------------------------------------------------------
+
+
+def test_f320_public_accessors_use_derived_cache(monkeypatch, tmp_path):
+    """The five public accessors route through _load_derived (not fetch_companyfacts directly).
+
+    After the derived cache is warm, fetch_companyfacts must NOT be called again.
+    """
+    import edgar
+
+    monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
+    edgar._load_derived_cache_clear()
+
+    facts = _make_full_facts()
+    _seed_cache(tmp_path / "facts" / "0000123456.json", facts)
+
+    fetch_calls = {"n": 0}
+    original_fetch = edgar.fetch_companyfacts
+
+    def counting_fetch(cik):
+        fetch_calls["n"] += 1
+        return original_fetch(cik)
+
+    monkeypatch.setattr(edgar, "fetch_companyfacts", counting_fetch)
+    monkeypatch.setattr(edgar, "_get", lambda url, params=None: (_ for _ in ()).throw(
+        AssertionError("_get must not be called")))
+
+    # First call — builds derived (1 parse)
+    edgar.get_quarterly_revenue("0000123456")
+    first_count = fetch_calls["n"]
+    assert first_count == 1, f"Expected 1 fetch_companyfacts call to build derived, got {first_count}"
+
+    # Subsequent calls — LRU hit, no additional parses
+    edgar.get_quarterly_net_income("0000123456")
+    edgar.get_quarterly_gross_profit("0000123456")
+    edgar.get_quarterly_ocf("0000123456")
+    edgar.get_shares_outstanding("0000123456", date(2023, 12, 1))
+
+    assert fetch_calls["n"] == 1, (
+        f"Expected exactly 1 total fetch_companyfacts call (LRU hit for subsequent); "
+        f"got {fetch_calls['n']}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# test_f320_derived_identity_end_to_end
+# ---------------------------------------------------------------------------
+
+
+def test_f320_derived_identity_end_to_end(monkeypatch, tmp_path):
+    """Public accessors return identical values via old raw path vs new derived path."""
+    import edgar
+
+    monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
+    edgar._load_derived_cache_clear()
+
+    facts = _make_full_facts(revenue_val=9_000_000, ni_val=1_500_000,
+                             gp_val=3_000_000, ocf_val=2_100_000, shares_val=12_000_000)
+    _seed_cache(tmp_path / "facts" / "0000777777.json", facts)
+
+    monkeypatch.setattr(edgar, "_get", lambda url, params=None: (_ for _ in ()).throw(
+        AssertionError("_get must not be called")))
+
+    # Collect expected values via raw helpers directly
+    raw_facts = edgar.fetch_companyfacts("0000777777")
+    expected_rev = edgar._get_quarterly_series_for_tag_list("0000777777", edgar._REVENUE_TAGS)
+    expected_ni = edgar._get_quarterly_series_for_tag_list("0000777777", edgar._NET_INCOME_TAGS)
+    expected_gp = edgar._get_quarterly_series_for_tag_list("0000777777", edgar._GROSS_PROFIT_TAGS)
+    expected_ocf = edgar._get_quarterly_series_for_tag_list("0000777777", edgar._OCF_TAGS)
+
+    # Clear LRU so derived path runs fresh
+    edgar._load_derived_cache_clear()
+
+    assert edgar.get_quarterly_revenue("0000777777") == expected_rev
+    assert edgar.get_quarterly_net_income("0000777777") == expected_ni
+    assert edgar.get_quarterly_gross_profit("0000777777") == expected_gp
+    assert edgar.get_quarterly_ocf("0000777777") == expected_ocf
+
+    # Shares point-in-time: earliest filed → must be the Q1 entry
+    as_of_early = date(2023, 6, 1)
+    shares_early = edgar.get_shares_outstanding("0000777777", as_of_early)
+    assert shares_early == 12_000_000.0, f"Expected 12_000_000 shares, got {shares_early}"
+
+    # Later as_of → Q3 entry (higher)
+    as_of_late = date(2023, 12, 1)
+    shares_late = edgar.get_shares_outstanding("0000777777", as_of_late)
+    assert shares_late == 12_000_100.0, f"Expected 12_000_100 shares, got {shares_late}"
+
+
+# ---------------------------------------------------------------------------
+# test_f320_derived_invalidated_when_raw_newer
+# ---------------------------------------------------------------------------
+
+
+def test_f320_derived_invalidated_when_raw_newer(monkeypatch, tmp_path):
+    """Derived cache is rebuilt when raw facts file is newer — detected via mtime key.
+
+    This test proves the PRODUCTION failure mode: the in-process cache is warm
+    after the first accessor call, then raw is refreshed WITHOUT calling any
+    cache_clear(), and the second accessor call must still return the new data.
+    A naive lru_cache implementation would silently return v1 here (COR-01).
+    """
+    import edgar
+    import os
+
+    monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
+    edgar._load_derived_cache_clear()
+
+    facts_v1 = _make_full_facts(revenue_val=1_000_000)
+    _seed_cache(tmp_path / "facts" / "0000999999.json", facts_v1)
+
+    monkeypatch.setattr(edgar, "_get", lambda url, params=None: (_ for _ in ()).throw(
+        AssertionError("_get must not be called")))
+
+    # Step 1: warm the in-process cache.
+    rev_v1 = edgar.get_quarterly_revenue("0000999999")
+    assert rev_v1[0]["val"] == 1_000_000.0
+
+    # Step 2: simulate a TTL-driven raw refresh — update raw file content and advance
+    # its mtime to be NEWER than derived, WITHOUT touching the in-process cache.
+    facts_v2 = _make_full_facts(revenue_val=2_000_000)
+    raw_path = tmp_path / "facts" / "0000999999.json"
+    raw_path.write_text(json.dumps(facts_v2), encoding="utf-8")
+    # Push raw mtime forward so derived (unchanged) appears older.
+    derived_path = tmp_path / "derived" / "v1" / "0000999999.json"
+    old_derived_mtime = derived_path.stat().st_mtime
+    os.utime(derived_path, (old_derived_mtime - 10, old_derived_mtime - 10))
+
+    # Step 3: call accessor again — NO cache_clear() called.
+    # The mtime-keyed cache must detect the changed raw mtime and rebuild.
+    rev_v2 = edgar.get_quarterly_revenue("0000999999")
+    assert rev_v2[0]["val"] == 2_000_000.0, (
+        f"Expected revenue 2_000_000 after raw refresh (warm cache), got {rev_v2[0]['val']}. "
+        "lru_cache-style caching would silently return stale v1 here (COR-01 regression)."
+    )
+
+
+# ---------------------------------------------------------------------------
+# test_f320_orphan_derived_refetches_when_raw_deleted
+# ---------------------------------------------------------------------------
+
+
+def test_f320_orphan_derived_refetches_when_raw_deleted(monkeypatch, tmp_path):
+    """Orphan derived (raw deleted) is detected via mtime key — re-fetch triggered.
+
+    Proves COR-02: if raw file disappears after the in-process cache is warm,
+    the next accessor call detects raw_mtime=None (key mismatch) and triggers
+    a fresh network fetch rather than serving the orphaned LRU entry.
+    """
+    import edgar
+
+    monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
+    edgar._load_derived_cache_clear()
+
+    facts_v1 = _make_full_facts(revenue_val=5_000_000)
+    _seed_cache(tmp_path / "facts" / "0000444444.json", facts_v1)
+
+    # Track network fetch calls.
+    fetch_calls = {"n": 0}
+    facts_v2 = _make_full_facts(revenue_val=6_000_000)
+
+    def fake_get(url, params=None):
+        fetch_calls["n"] += 1
+        return _make_fake_response(facts_v2)
+
+    monkeypatch.setattr(edgar, "_get", fake_get)
+
+    # Step 1: warm the in-process cache (no network fetch — raw file is present).
+    rev_v1 = edgar.get_quarterly_revenue("0000444444")
+    assert rev_v1[0]["val"] == 5_000_000.0
+    assert fetch_calls["n"] == 0, "First load must not hit network (raw file is present)"
+
+    # Step 2: delete the raw file, simulating cache pruning or disk cleanup.
+    raw_path = tmp_path / "facts" / "0000444444.json"
+    raw_path.unlink()
+
+    # Step 3: call accessor again — NO cache_clear() called.
+    # raw_mtime is now None → key mismatch → orphan policy triggers re-fetch.
+    rev_v2 = edgar.get_quarterly_revenue("0000444444")
+    assert fetch_calls["n"] > 0, (
+        "Expected a network fetch after raw deletion (COR-02 regression: "
+        "mtime-keyed cache must detect absent raw file and re-fetch)."
+    )
+    assert rev_v2[0]["val"] == 6_000_000.0, (
+        f"Expected revenue 6_000_000 from re-fetch, got {rev_v2[0]['val']}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# test_f320_lru_cache_behavior
+# ---------------------------------------------------------------------------
+
+
+def test_f320_lru_cache_behavior(monkeypatch, tmp_path):
+    """Mtime-keyed cache: repeated calls for same CIK within a run hit the in-process cache, not disk."""
+    import edgar
+
+    monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
+    edgar._load_derived_cache_clear()
+
+    facts = _make_full_facts()
+    _seed_cache(tmp_path / "facts" / "0000111111.json", facts)
+
+    monkeypatch.setattr(edgar, "_get", lambda url, params=None: (_ for _ in ()).throw(
+        AssertionError("_get must not be called")))
+
+    disk_reads = {"n": 0}
+    orig_read_text = None
+
+    # First call — builds + persists derived, then LRU is warm
+    edgar.get_quarterly_revenue("0000111111")
+
+    # Spy on Path.read_text to count disk reads on derived file
+    from pathlib import Path as _Path
+    orig_read_text = _Path.read_text
+
+    def counting_read_text(self, *args, **kwargs):
+        if "derived" in str(self):
+            disk_reads["n"] += 1
+        return orig_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(_Path, "read_text", counting_read_text)
+
+    # Call all 5 accessors — all should be LRU hits (0 disk reads for derived)
+    edgar.get_quarterly_revenue("0000111111")
+    edgar.get_quarterly_net_income("0000111111")
+    edgar.get_quarterly_gross_profit("0000111111")
+    edgar.get_quarterly_ocf("0000111111")
+    edgar.get_shares_outstanding("0000111111", date(2023, 12, 1))
+
+    assert disk_reads["n"] == 0, (
+        f"Expected 0 derived disk reads (mtime-keyed cache should be warm), got {disk_reads['n']}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# test_f320_corrupt_derived_cache_rebuilds
+# ---------------------------------------------------------------------------
+
+
+def test_f320_corrupt_derived_cache_rebuilds(monkeypatch, tmp_path):
+    """Corrupt derived JSON triggers a clean rebuild from raw facts."""
+    import edgar
+    import os
+
+    monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
+    edgar._load_derived_cache_clear()
+
+    facts = _make_full_facts(revenue_val=7_777_777)
+    _seed_cache(tmp_path / "facts" / "0000888888.json", facts)
+
+    monkeypatch.setattr(edgar, "_get", lambda url, params=None: (_ for _ in ()).throw(
+        AssertionError("_get must not be called")))
+
+    # Create a corrupt derived file that is OLDER than raw (so freshness passes,
+    # but JSON parse will fail, triggering rebuild).
+    derived_dir = tmp_path / "derived" / "v1"
+    derived_dir.mkdir(parents=True, exist_ok=True)
+    derived_path = derived_dir / "0000888888.json"
+    derived_path.write_text("not valid json {{{{", encoding="utf-8")
+    # Make derived appear newer than raw so freshness check passes
+    raw_mtime = (tmp_path / "facts" / "0000888888.json").stat().st_mtime
+    os.utime(derived_path, (raw_mtime + 1, raw_mtime + 1))
+
+    result = edgar.get_quarterly_revenue("0000888888")
+    assert len(result) > 0, "Expected non-empty revenue after corrupt-cache rebuild"
+    assert result[0]["val"] == 7_777_777.0

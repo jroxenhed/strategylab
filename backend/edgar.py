@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 
 CACHE_DIR = Path(__file__).resolve().parent / "data" / "turnaround" / "edgar_cache"
 
+# Derived compact fundamentals cache (F320).
+# Versioned path so a schema change just bumps v2 — old derived files are ignored.
+DERIVED_CACHE_DIR = CACHE_DIR / "derived" / "v1"
+
 _UNIVERSE_TTL_DAYS = 7
 _FACTS_TTL_DAYS = 7
 _SUBMISSIONS_TTL_DAYS = 1
@@ -416,7 +420,22 @@ def _parse_form4_transactions(xml_content: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Quarterly series helpers
+# Derived compact fundamentals cache (F320)
+# ---------------------------------------------------------------------------
+# parse_companyfacts_to_derived() parses the ~1.8–5 MB raw companyfacts JSON
+# ONCE and emits a compact per-CIK derived JSON (~KB) containing the five
+# quarterly series + shares.  Accessors read from derived; derived is rebuilt
+# on miss or when older than the raw facts file (staleness = new facts TTL
+# expiry triggered a fresh HTTP fetch).
+#
+# _load_derived() uses a mtime-keyed in-process dict cache (_derived_cache).
+# Two os.stat calls per invocation (~µs) key on (cik, raw_mtime, derived_mtime)
+# so a changed raw mtime naturally misses the cache and triggers a rebuild;
+# the freshness decision is never cached (COR-01/COR-02).
+#
+# Point-in-time semantics are UNCHANGED — each series entry carries its
+# original `filed` date; `as_of` filtering happens in the callers exactly
+# as before.
 # ---------------------------------------------------------------------------
 
 _REVENUE_TAGS = [
@@ -425,6 +444,201 @@ _REVENUE_TAGS = [
     "RevenueFromContractWithCustomerIncludingAssessedTax",
     "SalesRevenueNet",
 ]
+
+# All XBRL tags we need to build the derived cache.
+_NET_INCOME_TAGS = ["NetIncomeLoss"]
+_GROSS_PROFIT_TAGS = ["GrossProfit"]
+_OCF_TAGS = ["NetCashProvidedByUsedInOperatingActivities"]
+_SHARES_TAG = "CommonStockSharesOutstanding"
+
+_DERIVED_SCHEMA_VERSION = 1
+
+
+def parse_companyfacts_to_derived(cik: str) -> dict:
+    """Parse raw companyfacts once and return compact derived dict.
+
+    Schema (v1):
+    {
+      "cik": "0000320193",
+      "schema_version": 1,
+      "revenue":     [{end, val, filed}, ...],   # oldest-first
+      "net_income":  [{end, val, filed}, ...],
+      "gross_profit":[{end, val, filed}, ...],
+      "ocf":         [{end, val, filed}, ...],
+      "shares":      [{end, val, filed, form}, ...],  # all eligible entries
+    }
+
+    All five series preserve the point-in-time `filed` field so callers can
+    apply `filed <= as_of` guards without loss of fidelity.
+    Revenue uses the same tag-fallback chain as the old path.
+    Each quarterly series merges direct quarterly entries with Q4-derived entries
+    (identical logic to the old _get_quarterly_series_for_tag_list path).
+    """
+    padded = _pad_cik(cik)
+    facts = fetch_companyfacts(padded)
+
+    def _series_for_tag_list(tags: list[str]) -> list[dict]:
+        for tag in tags:
+            series = _extract_quarterly_series(facts, tag)
+            if series:
+                q4_derived = _derive_q4_from_annual(facts, tag)
+                if q4_derived:
+                    existing_ends = {e["end"] for e in series}
+                    for d in q4_derived:
+                        if d["end"] not in existing_ends:
+                            series.append(d)
+                    series.sort(key=lambda x: x["end"])
+                return series
+        return []
+
+    # Shares: all entries (not just quarterly) — keep same fields as raw path
+    shares_entries: list[dict] = []
+    try:
+        raw_shares = (
+            facts.get("facts", {})
+            .get("us-gaap", {})
+            .get(_SHARES_TAG, {})
+            .get("units", {})
+            .get("shares", [])
+        )
+    except (AttributeError, KeyError):
+        raw_shares = []
+    for e in raw_shares:
+        filed = e.get("filed", "")
+        val = e.get("val", None)
+        end = e.get("end", "")
+        form = e.get("form", "")
+        if filed and val is not None:
+            shares_entries.append({"end": end, "val": float(val), "filed": filed, "form": form})
+
+    return {
+        "cik": padded,
+        "schema_version": _DERIVED_SCHEMA_VERSION,
+        "revenue": _series_for_tag_list(_REVENUE_TAGS),
+        "net_income": _series_for_tag_list(_NET_INCOME_TAGS),
+        "gross_profit": _series_for_tag_list(_GROSS_PROFIT_TAGS),
+        "ocf": _series_for_tag_list(_OCF_TAGS),
+        "shares": shares_entries,
+    }
+
+
+def _derived_path(cik: str) -> Path:
+    """Return the derived cache path for a CIK.
+
+    Uses CACHE_DIR at call time so monkeypatch.setattr(edgar, 'CACHE_DIR', tmp_path)
+    also redirects the derived cache to tmp_path/derived/v1/ in tests.
+    """
+    padded = _pad_cik(cik)
+    return CACHE_DIR / "derived" / "v1" / f"{padded}.json"
+
+
+def _raw_facts_path(cik: str) -> Path:
+    """Return the raw facts cache path for a CIK (used for staleness check)."""
+    padded = _pad_cik(cik)
+    return CACHE_DIR / "facts" / f"{padded}.json"
+
+
+def _derived_is_fresh(cik: str) -> bool:
+    """True if derived cache exists and is at least as new as the raw facts file."""
+    derived = _derived_path(cik)
+    raw = _raw_facts_path(cik)
+    if not derived.exists():
+        return False
+    if not raw.exists():
+        # No raw file yet (perhaps CIK was just deleted); treat derived as stale.
+        return False
+    return derived.stat().st_mtime >= raw.stat().st_mtime
+
+
+# Mtime-keyed in-process derived cache.
+# Key: (cik_padded, raw_mtime_float_or_None, derived_mtime_float_or_None)
+# Two os.stat calls per accessor invocation (~µs); a changed mtime naturally
+# misses the cache so the freshness decision is never stale (COR-01 / COR-02).
+_derived_cache: dict[tuple, dict] = {}
+_DERIVED_CACHE_MAX = 1024  # FIFO-bounded: full-universe runs would otherwise hold every CIK + stale-mtime leftovers (~50KB each) for the process lifetime
+
+
+def _derived_cache_put(key: tuple, data: dict) -> None:
+    """Insert into the in-process derived cache, FIFO-evicting past the size cap."""
+    while len(_derived_cache) >= _DERIVED_CACHE_MAX:
+        _derived_cache.pop(next(iter(_derived_cache)))
+    _derived_cache[key] = data
+
+
+def _derived_mtimes(cik: str) -> tuple[float | None, float | None]:
+    """Return (raw_mtime, derived_mtime) for CIK; None when file absent."""
+    raw = _raw_facts_path(cik)
+    derived = _derived_path(cik)
+    raw_mtime: float | None = raw.stat().st_mtime if raw.exists() else None
+    derived_mtime: float | None = derived.stat().st_mtime if derived.exists() else None
+    return raw_mtime, derived_mtime
+
+
+def _load_derived(cik: str) -> dict:
+    """Load derived compact fundamentals for CIK, building from raw on miss/stale.
+
+    Uses a mtime-keyed in-process cache (not lru_cache) so the freshness
+    decision is re-evaluated on every call via two cheap os.stat calls.
+    A changed raw or derived mtime naturally misses the cache, preventing
+    stale data from being served after a TTL-driven raw refresh (COR-01)
+    or after raw file deletion (COR-02).
+
+    Cache is per-process; server restart clears it.
+    """
+    padded = _pad_cik(cik)
+    raw_mtime, derived_mtime = _derived_mtimes(padded)
+
+    # COR-02: raw file absent — treat as orphan derived; re-fetch from network.
+    # This replicates the first-load orphan policy from _derived_is_fresh.
+    if raw_mtime is None:
+        logger.debug("edgar derived: raw absent for %s — fetching from network", padded)
+        derived_path = _derived_path(padded)
+        data = parse_companyfacts_to_derived(padded)
+        derived_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(derived_path, json.dumps(data, separators=(",", ":")), backup_depth=0)
+        # Re-read mtimes after write so the new entry is cached under fresh key.
+        raw_mtime2, derived_mtime2 = _derived_mtimes(padded)
+        key2 = (padded, raw_mtime2, derived_mtime2)
+        _derived_cache_put(key2, data)
+        return data
+
+    # Freshness: derived must exist and be at least as new as raw.
+    is_fresh = derived_mtime is not None and derived_mtime >= raw_mtime
+
+    cache_key = (padded, raw_mtime, derived_mtime)
+    if is_fresh and cache_key in _derived_cache:
+        logger.debug("edgar derived in-process cache hit: %s", padded)
+        return _derived_cache[cache_key]
+
+    derived_path = _derived_path(padded)
+
+    if is_fresh:
+        # Derived file is fresh — load from disk (first call for this mtime pair).
+        logger.debug("edgar derived cache hit (disk): %s", derived_path)
+        try:
+            data = json.loads(derived_path.read_text(encoding="utf-8"))
+            _derived_cache_put(cache_key, data)
+            return data
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("edgar: corrupt derived cache %s — rebuilding: %s", derived_path, exc)
+            derived_path.unlink(missing_ok=True)
+            # Fall through to rebuild below.
+
+    # Miss or stale or corrupt — rebuild from raw.
+    logger.debug("edgar derived cache miss/stale for %s — building from raw", padded)
+    data = parse_companyfacts_to_derived(padded)
+    derived_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(derived_path, json.dumps(data, separators=(",", ":")), backup_depth=0)
+    # Cache under the post-write mtimes so the next call is a hit.
+    raw_mtime2, derived_mtime2 = _derived_mtimes(padded)
+    new_key = (padded, raw_mtime2, derived_mtime2)
+    _derived_cache_put(new_key, data)
+    return data
+
+
+def _load_derived_cache_clear() -> None:
+    """Clear the in-process derived cache (test helper, mirrors lru_cache.cache_clear)."""
+    _derived_cache.clear()
 
 
 def _extract_quarterly_series(facts: dict, tag: str) -> list[dict]:
@@ -549,9 +763,11 @@ def _derive_q4_from_annual(facts: dict, tag: str) -> list[dict]:
 
 
 def _get_quarterly_series_for_tag_list(cik: str, tags: list[str]) -> list[dict]:
-    """Try tags in order; return first non-empty quarterly series.
+    """Try tags in order; return first non-empty quarterly series (raw-path fallback).
 
-    Merges direct quarterly entries with Q4-derived entries.
+    This function is kept for internal use by parse_companyfacts_to_derived()
+    and for test monkeypatching compatibility.  Production callers (the five
+    public accessors) now route through _load_derived() instead.
     """
     facts = fetch_companyfacts(cik)
 
@@ -573,7 +789,7 @@ def _get_quarterly_series_for_tag_list(cik: str, tags: list[str]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Public parsed accessors
+# Public parsed accessors  (F320: route through derived cache)
 # ---------------------------------------------------------------------------
 
 
@@ -582,25 +798,24 @@ def get_quarterly_revenue(cik: str) -> list[dict]:
 
     Tries XBRL tags in priority order: Revenues, RevenueFromContractWith..., SalesRevenueNet.
     Returns [] on missing data.
+    Reads from derived compact cache (F320); rebuilds from raw on miss/stale.
     """
-    return _get_quarterly_series_for_tag_list(cik, _REVENUE_TAGS)
+    return _load_derived(cik).get("revenue", [])
 
 
 def get_quarterly_net_income(cik: str) -> list[dict]:
     """Same shape as get_quarterly_revenue(). Tag: NetIncomeLoss."""
-    return _get_quarterly_series_for_tag_list(cik, ["NetIncomeLoss"])
+    return _load_derived(cik).get("net_income", [])
 
 
 def get_quarterly_gross_profit(cik: str) -> list[dict]:
     """Tag: GrossProfit."""
-    return _get_quarterly_series_for_tag_list(cik, ["GrossProfit"])
+    return _load_derived(cik).get("gross_profit", [])
 
 
 def get_quarterly_ocf(cik: str) -> list[dict]:
     """Tag: NetCashProvidedByUsedInOperatingActivities."""
-    return _get_quarterly_series_for_tag_list(
-        cik, ["NetCashProvidedByUsedInOperatingActivities"]
-    )
+    return _load_derived(cik).get("ocf", [])
 
 
 def get_shares_outstanding(cik: str, as_of: date) -> float | None:
@@ -608,19 +823,9 @@ def get_shares_outstanding(cik: str, as_of: date) -> float | None:
 
     Returns None if unavailable.
     Point-in-time: only considers entries with filed <= as_of.
+    Reads from derived compact cache (F320); rebuilds from raw on miss/stale.
     """
-    facts = fetch_companyfacts(cik)
-    try:
-        entries = (
-            facts.get("facts", {})
-            .get("us-gaap", {})
-            .get("CommonStockSharesOutstanding", {})
-            .get("units", {})
-            .get("shares", [])
-        )
-    except (AttributeError, KeyError):
-        return None
-
+    entries = _load_derived(cik).get("shares", [])
     if not entries:
         return None
 
