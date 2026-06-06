@@ -12,16 +12,15 @@ _(none open)_
 
 - [F331](#f331) — [next] Parallel price prefetch for validation runs [medium]
 - [F336](#f336) — [next] Price-frame cache eviction/staleness policy [medium]
-- [F305](#f305) — [next] sync-todo-index.py writes TODO.md with bare write_text() [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 31 items
+## Open Work — 30 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
 | [Architecture](#architecture) | 11 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F331](#f331), [F348](#f348)–[F350](#f350) |
-| [Hardening](#hardening) | 8 | [F305](#f305), [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F336](#f336)–[F337](#f337) |
+| [Hardening](#hardening) | 7 | [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F336](#f336)–[F337](#f337) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 6 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329), [F338](#f338) |
 | [Infra](#infra) | 4 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309) |
@@ -68,7 +67,7 @@ _(none open)_
 - [ ] <a id="f337"></a> **F337** null_atlas.json backup rotation — atlas writes are atomic but have zero backup depth, unlike validation_result.json (backup_depth=3); a bad build silently destroys the previous good atlas (SIGNAL-P1 DI-06, deferred). Reuse the validation-result backup helper. [easy] [hardening]
 
 _(none open)_
-- [ ] <a id="f305"></a> **F305** [next] sync-todo-index.py writes TODO.md with bare write_text() — not atomic; adopt the tempfile+fsync+os.replace pattern close-batch.py already uses (DI-03, F-BATCH-0604D review). [easy] [hardening]
+- [x] <a id="f305"></a> **F305** [next] sync-todo-index.py writes TODO.md with bare write_text() — not atomic; adopt the tempfile+fsync+os.replace pattern close-batch.py already uses (DI-03, F-BATCH-0604D review). [easy] [hardening] (resolved 2026-06-06: _write_atomic helper added — prefers backend fileutil.atomic_write_text, inline fallback — applied to both write sites incl. TODO-archive.md; also fixed the one stray bare write_text in archive-todo.py's fresh-archive branch)
 
 - [ ] <a id="f314"></a> **F314** EDGAR cache eviction/size cap — backend/data/turnaround/edgar_cache/ grows unboundedly (companyfacts are MB-scale; full-universe worst case GB-scale; expired files refreshed in place, never pruned) (DI-05/DI-10, F311 review). Measured 2026-06-05: 134MB at just 77 facts files (~1.8MB avg); full-run projection 2–5GB. Age-based prune on scan start + total-size cap. Largely superseded by F320 if that ships first (derived cache makes raw facts prunable). [easy] [hardening]
 

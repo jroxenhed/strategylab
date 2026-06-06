@@ -473,7 +473,7 @@ def main() -> None:
     # --- Write/create archive file (FIRST, before touching TODO.md) ---
     if not archive_path.exists():
         # Brand new archive file: write header + first batch
-        archive_path.write_text(ARCHIVE_HEADER + archive_addition, encoding='utf-8')
+        _write_atomic(archive_path, ARCHIVE_HEADER + archive_addition)
     else:
         # COR-05: merge into existing archive so same-month re-runs don't
         # create duplicate '## Closed YYYY-MM' headers.

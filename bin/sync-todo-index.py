@@ -66,6 +66,44 @@ import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+# F305: prefer backend's atomic_write_text (tempfile+fsync+os.replace in the
+# same dir) — same pattern as close-batch.py (DIG-01/REL-06). fileutil.py has
+# no FastAPI or heavy-package side effects — only stdlib imports + logging.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'backend'))
+try:
+    from fileutil import atomic_write_text as _atomic_write  # type: ignore[import]
+    _HAS_ATOMIC = True
+except ImportError:
+    _HAS_ATOMIC = False
+
+
+def _write_atomic(path: Path, content: str) -> None:
+    """Write content to path atomically (tempfile + os.replace)."""
+    if _HAS_ATOMIC:
+        _atomic_write(path, content, backup_depth=1)
+        return
+    # Inline fallback: tempfile in same dir + fsync + os.replace
+    fd = tempfile.NamedTemporaryFile(
+        mode='w', delete=False, dir=str(path.parent), suffix='.tmp', encoding='utf-8'
+    )
+    try:
+        fd.write(content)
+        fd.flush()
+        os.fsync(fd.fileno())
+    except Exception:
+        try:
+            os.unlink(fd.name)
+        except OSError:
+            pass
+        raise
+    finally:
+        try:
+            fd.close()
+        except OSError:
+            pass
+    os.replace(fd.name, str(path))
+
+
 # ---------------------------------------------------------------------------
 # Patterns
 # ---------------------------------------------------------------------------
@@ -740,7 +778,7 @@ def archive_old_items(
         archive_lines.append('\n')
 
     archive_path.parent.mkdir(parents=True, exist_ok=True)
-    archive_path.write_text(''.join(archive_lines), encoding='utf-8')
+    _write_atomic(archive_path, ''.join(archive_lines))
     total_archived = len(to_archive_indices) + (len(pre_numbering_lines) - 1 if pre_numbering_lines else 0)
     print(f'Archived {len(to_archive_indices)} checked items + pre-numbering block ({len(pre_numbering_lines)} lines) → {archive_path}')
 
@@ -1156,7 +1194,7 @@ def process(
         sys.stdout.writelines(diff)
         return
 
-    output_path.write_text(new_text, encoding='utf-8')
+    _write_atomic(output_path, new_text)
     print(f'Wrote {output_path} ({len(new_text.splitlines())} lines)')
 
 
