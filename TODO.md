@@ -13,16 +13,16 @@ _(none open)_
 - [F305](#f305) — [next] sync-todo-index.py writes TODO.md with bare write_text() [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 28 items
+## Open Work — 32 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
-| [Architecture](#architecture) | 8 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F331](#f331) |
+| [Architecture](#architecture) | 11 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F331](#f331), [F339](#f339)–[F340](#f340), [F342](#f342) |
 | [Hardening](#hardening) | 8 | [F305](#f305), [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F336](#f336)–[F337](#f337) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 6 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329), [F338](#f338) |
-| [Infra](#infra) | 4 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309) |
+| [Infra](#infra) | 5 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F341](#f341) |
 
 ## Features
 
@@ -50,6 +50,12 @@ _(none open)_
 - [ ] <a id="f199"></a> **F199** Middleware-level request deadline — the architecturally preferred option (c) from F127's design discussion. Today only `/api/backtest/quick/batch` enforces a wall-clock budget; `/api/backtest`, `/api/backtest/walk_forward`, `/api/optimize`, `/api/sensitivity`, `/api/scan`, and the bot-management routes have no upper bound on total response latency. A pure-ASGI middleware (mirroring F86's `BodySizeLimitMiddleware`) could set per-route deadlines via a route-tag → seconds dict, fall back to a sane global default, and respond 504 once exceeded. Trade-offs: (a) inherently can't cancel sync route work mid-call — would need cooperative checkpoints in expensive handlers like `run_backtest`; (b) needs a route-tagging convention so different routes can carry different budgets (intraday quote → 5s, batch backtest → 30s, WFA → 300s); (c) makes the partial-results contract (F127's `error="deadline exceeded"` per-symbol row) inapplicable for non-batch routes — they'd just 504. Worth designing before the next per-route timeout request lands. (from F127 build 28 — option (c) deferred) [hard] [arch] (added 2026-05-13)
 
 - [ ] <a id="f320"></a> **F320** Derived compact fundamentals cache + in-process LRU — every edgar.py parsed accessor (revenue/NI/GP/OCF/shares) independently re-reads and re-parses the full ~1.8MB companyfacts JSON: ~5 parses per (cik, as_of) × 36 as-of dates ≈ 180 redundant MB-scale parses per surviving ticker per validation run. Fix: parse once → persist compact per-CIK derived JSON (~KB: the five quarterly series + shares), accessors read derived only; small lru_cache (~64 entries) for within-run loops; raw companyfacts becomes prunable (largely solves F314). Found while watching the first full-universe run, 2026-06-05. [medium] [arch] (added 2026-06-05)
+
+- [ ] <a id="f339"></a> **F339** Outcome table + artifact re-analysis (ideation 2026-06-06 idea 4) — ETL the 4 completed experiment artifacts + null_atlas into one queryable outcome table (ticker, cohort date, forward returns, excess); then momentum decay curves, effect CIs + minimum-detectable-effect on all four nulls, benchmark swaps (vol-matched), top-1 concentration re-score, deterioration-reversal-as-long readout. All outputs labeled hypothesis-generating, never confirmatory. [medium] [arch] (added 2026-06-06)
+
+- [ ] <a id="f340"></a> **F340** Design power audit — synthetic edge injection (ideation 2026-06-06 idea 1 validation) — plant synthetic edges of known size in the price cache, measure detection power of the 4-fixed-dates design vs monthly vs event-time sampling. Answers "could the closed program even have seen a small real edge?" with a number. Pre-gates F342. [medium] [arch] (added 2026-06-06)
+
+- [ ] <a id="f342"></a> **F342** Event-time test harness (ideation 2026-06-06 idea 1 build) — rebuild the test clock around filing-arrival timestamps (EDGAR acceptanceDateTime → next tradeable open) instead of 4 fixed dates/year; FDR-based multiplicity bookkeeping replaces the per-experiment alpha budget for event panels. Unlocks the entire untested event-driven family (insider stack, 8-K, Form 144, 13D). Design informed by F340's power curves. [hard] [arch] (added 2026-06-06)
 
 - [ ] <a id="f272"></a> **F272** Inspector panel for node params — when a node has >3 params or long values (e.g. multi-line code blocks for Code nodes), inline editing gets cramped. Right-side panel shows selected-node form; selection ring already in place (F265). Defer until F269+F271 expose nodes that actually need it. (added 2026-05-25, from F268 plan §6). [medium] [arch]
 
@@ -87,6 +93,8 @@ _(none open)_
 
 ## Infra
 
+- [ ] <a id="f341"></a> **F341** Free-data source audits (ideation 2026-06-06 ideas 5+6 groundwork) — small-sample download + verification of: Stooq bulk archive (does it carry delisted-ticker prices?), SEC Financial Statement Data Sets quarterly TSVs (filed-date field integrity), SEC fails-to-deliver files (GME Jan-2021 must show elevated fails), FINRA short interest CSVs. Output: a go/no-go report per source with format notes; no ingestion pipelines yet. [easy] [infra] (added 2026-06-06)
+
 - [ ] <a id="f97"></a> **F97** [medium] Provision `backend/venv/` in routine builder container — overnight builds 21/22/23 all hit the same gap: §3.5 backend smoke test originally specified `cd backend && venv/bin/uvicorn …` but the routine container ships without a venv. Spec now codifies AST + import-time check as the substitute. Real fix: the container image includes `backend/venv/` with pinned deps (Pydantic, FastAPI, pytest). Once landed, restore the full uvicorn smoke test path. Container/infra change, not application code. (from build 23 process review) [infra]
 
 - [ ] <a id="f302"></a> **F302** Per-reviewer effort cap in dispatch prompts — F-BATCH-0604C's correctness reviewer ran 5m47s / 60k tokens / 55 tool-uses vs siblings' ~2m / ~13-29, and with no agent-messaging tool the orchestrator could only poll (~15 min of wall-clock went to waits). Add a standard cap clause to review dispatch prompts (e.g. "≤25 tool calls / ~3 min; if hit, return partial findings + status token") and record cap-hits in run-state so chronic offenders surface in the report. [easy] [infra]
@@ -94,6 +102,8 @@ _(none open)_
 - [ ] <a id="f309"></a> **F309** Promote the A8 zoom→auto-switch verification recipe to a scripted render-probe check (F298 rule): seed Alpaca 5m multi-year settings, drive `window.__chartDebug.setVisibleLogicalRange(0, N)`, assert lastSetDataPoints drops ≥10x + 'Auto (…)' badge, then narrow range and assert full-resolution restore. Needs DEV-build probe target or exposing the hook in preview builds behind a flag. [easy] [infra]
 
 ## Deferred (gated)
+
+- [ ] <a id="f343"></a> **F343** Insider Stack event study (ideation 2026-06-06 idea 2) — Form 4 cluster-buy premise (insider_stratified.py + 3.5k-filing sample on disk, never run) as the first native event study on the event-time harness, scored vs vol-matched controls. Spends confirm-budget: charter must be locked and approved first. [hard] [arch] [gated: F342 shipped + John approves the charter] (added 2026-06-06)
 
 - [ ] <a id="f318"></a> **F318** Survivorship-corrected validation universe — include delisted/failed names in the historical test universe (spec §9; ADV-02/ADV-09: biases are asymmetric, null inflated more than signal, so the measured edge is understated-to-unknown). [hard] [features] [gated: a delisted-names data source (CRSP/Tiingo/Sharadar) is selected and available]
 
