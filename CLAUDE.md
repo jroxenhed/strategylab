@@ -17,6 +17,8 @@ Hard-won findings that steer premise design. Treat these like Key Bugs Fixed —
   - **Form 4 is the one public filing upstream of price** — insiders act *before* the move. This is why the Insider Stack ranked #1 in the 2026-06-05 ideation and why its signal survived the 2020s while numeric PEAD died.
   - The filing-only vs price-only selection ablation (epistemics-first survivor, ideation doc) is the experiment that turns this axiom from intuition into a number.
 
+- **The test design is itself a premise — charter the clock, not just the thresholds.** The 2026-06-05 program escaped its idea-level premise (pond → premise-free) but unknowingly carried the pond-era *apparatus* into every experiment: quarterly decision dates, ~50-pick cohorts, same-day-median scoring. F340 measured that apparatus: its minimum detectable effect was ~3.0pp at 80% power, so any realistic-sized edge (1–2pp) was guaranteed to grade "not provable" *regardless of the premise* — four different hypotheses hit the same ceiling, and the ceiling was the one thing they shared. Two standing rules: (1) every charter must state the sampling clock and the design's MDE (run `backend/research/power_audit.py` against the design before locking); (2) a verdict of "no edge found" is only meaningful down to the design's MDE — below that it's "couldn't have seen it," which is not the same finding. (Diagnosis John's, 2026-06-06: "it got stuck in the initial premise" — the premise it was stuck in was the instrument.)
+
 ## Chart.tsx Architecture
 
 Key files (others are standard-named, discoverable by grep):
