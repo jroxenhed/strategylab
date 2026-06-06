@@ -16,10 +16,11 @@ R-1's explore ran end-to-end for the first time — full instrument stack built 
 
 ## Next actions
 
-1. **F353 [next]** — full Form 4 EDGAR fetch, liquid universe (~4,700 tickers, 2015–2024), non-stratified cache in a NEW dir (`form4_full/`); never overwrite `form4_stratified/` (it is the frozen R-1-as-run source). Reuse F331 pacing/circuit-breaker. Multi-hour wall-clock; plan as overnight or background task.
-2. **F354 [gated]** — R-1 rerun at scale needs John's gate decision: §10 source amendment vs clean R-1b charter + fresh ledger draw. The frozen design carries over verbatim either way.
-3. **R-2 explore** (distress recovery, charter `2f0cf24c…`) needs NO Form 4 data — can proceed independently any session. Its confirm window is 2025+.
-4. **F352** — ledger file lock still open; single-writer discipline holds until then.
+1. **F356 [next] — Form 4 dataset ingest layer.** F353 is DONE via the bulk route: SEC Insider Transactions Data Sets, 45 quarterly ZIPs 2015q1–2026q1 (480 MB, 79s, 0 failures) at `edgar_cache/form4_datasets/` (fetcher: `backend/research/fetch_form4_datasets.py`). 2018q1 probe: all dose-formula fields present (TRANS_CODE/SHARES/PRICEPERSHARE/ACQUIRED_DISP_CD, RPTOWNERCIK, ISSUERTRADINGSYMBOL, FOOTNOTES); 7,718 code-P buys that quarter alone. Ingest = parse tables → dose-builder event format; 10b5-1 scan on FOOTNOTES; acceptanceDateTime joined from submissions cache by accession (~83% direct, ~815 truncated issuers need older index pages); F338 anchors pre-stated (P-count matches probe; spot ticker cross-checked against its stratified-cache XMLs).
+2. **F357 — universe returns matrix** (parallel, on John's 14900k via `strategylab-worker`): one-pass forward returns for ~4,700 tickers × all days ≤2024-12-31 × (21/63/126td) → parquet; wfa_pool.py pattern (ProcessPool, worker-owns-ticker-chunk, F166 granularity lesson). Replaces a would-be ~47h serial median phase; reusable by every future event study. Must respect the 2025+ price seal. Equivalence-diff one study vs the live-loader path before trusting (F351 precedent).
+3. **F354 [gated: F356+F357]** — R-1 rerun gate decision (John's call): §10 source amendment vs clean R-1b + fresh ledger draw.
+4. **R-2 explore** (distress recovery, charter `2f0cf24c…`) needs NO Form 4 data — can proceed independently any session. Its confirm window is 2025+.
+5. **F352** — ledger file lock still open; single-writer discipline holds until then.
 
 ## Operational notes for the next session
 

@@ -11,9 +11,9 @@ _(none open)_
 ## Up Next
 
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
-- [F353](#f353) — [next] Full Form 4 fetch for the active universe [medium]
+- [F356](#f356) — [next] Form 4 dataset ingest layer [medium]
 
-## Open Work — 28 items
+## Open Work — 29 items
 
 | Section | Open | IDs |
 |---|---|---|
@@ -22,7 +22,7 @@ _(none open)_
 | [Hardening](#hardening) | 8 | [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F337](#f337), [F352](#f352), [F355](#f355) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329) |
-| [Infra](#infra) | 5 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F353](#f353) |
+| [Infra](#infra) | 6 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F356](#f356)–[F357](#f357) |
 
 ## Features
 
@@ -94,7 +94,9 @@ _(none open)_
 - [ ] <a id="f306"></a> **F306** [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) — replaces the collapse/expand substitute from F-BATCH-0604C. [easy] [infra]
 - [ ] <a id="f309"></a> **F309** Promote the A8 zoom→auto-switch verification recipe to a scripted render-probe check (F298 rule): seed Alpaca 5m multi-year settings, drive `window.__chartDebug.setVisibleLogicalRange(0, N)`, assert lastSetDataPoints drops ≥10x + 'Auto (…)' badge, then narrow range and assert full-resolution restore. Needs DEV-build probe target or exposing the hook in preview builds behind a flag. [easy] [infra]
 
-- [ ] <a id="f353"></a> **F353** [next] Full Form 4 fetch for the active universe — R-1's explore aborted UNTESTABLE-underpowered (MDE 60.4pp vs 1.0pp floor) because the stratified cache yields only 30 quintile-valid events (63% of waves below the tradeability floor). Root cause is POPULATION, not just n: the stratified sample was drawn from `validation_result.json` — the OLD turnaround program's event set (beaten-down pond cohorts + their nulls at quarterly dates, 90-day filing windows) — so R-1-as-run tested insider buys at mostly illiquid distressed names (John spotted this 2026-06-07). The old-program DNA warning in PROGRAM.md applied to the DATA, not just the premises. The instrument is built and F338-validated; the bottleneck is data. Fetch full Form 4 filing histories from EDGAR (free, rate-limited ~5 req/s — reuse the F331 pacing/circuit-breaker pattern) for the ~4,700-ticker liquid universe, 2015–2024, into a NON-stratified cache (new dir, e.g. `edgar_cache/form4_full/`; never overwrite the stratified sample — it's the frozen R-1-as-run source). Probe anchors FS-B (peer fallback <20%) and FS-C (peer/universe corr >0.6) re-attach to the first ≥50-event study on this data. Expect thousands of events; plan multi-hour fetch wall-clock + disk. [medium] [infra]
+- [ ] <a id="f356"></a> **F356** [next] Form 4 dataset ingest layer — parse the F353 quarterly tables (SUBMISSION + REPORTINGOWNER + NONDERIV_TRANS + FOOTNOTES) into the dose-builder event format, replacing per-XML parsing: filter TRANS_CODE=P + TRANS_ACQUIRED_DISP_CD=A, join owner CIKs (RPTOWNERCIK), run the 10b5-1 text-scan against FOOTNOTES, restrict to the liquid universe via ISSUERTRADINGSYMBOL/ISSUERCIK, and join acceptanceDateTime from the submissions cache by ACCESSION_NUMBER (~83% direct; ~815 truncated issuers need older index pages — small paced fetch; the remainder use the charter's filingDate+16:01 ET fallback, counted). Output: a `build_r1_events`-compatible event stream + per-quarter ingest stats. F338: pre-state anchors (a known quarter's P-count matches the probe; a spot ticker's events match its raw XMLs from the stratified cache where both exist). FS-B/FS-C probe anchors re-attach to the first ≥50-event study. [medium] [arch]
+
+- [ ] <a id="f357"></a> **F357** Universe returns matrix — one-pass precompute of forward returns for all ~4,700 liquid-universe tickers × all trading days 2015–2020 × horizons (21/63/126td) into a parquet artifact, replacing per-(date,horizon) on-demand vector builds (which would be ~47h serial at full-scale event counts). Parallelize ticker-chunk-wise on the wfa_pool.py pattern (ProcessPool, worker-owns-chunk, seconds-of-work granularity per F166); target host: strategylab-worker (14900k — rsync price cache + code, build there, pull artifact back). The matrix is PROGRAM INFRASTRUCTURE: reusable by R-1 rerun, R-2, the explore mill, every future event study. event_study.py grows a matrix-backed median path beside the live loader path (equivalence-diff one study against the loader path before trusting — F351 precedent). Hard guard: matrix build must respect the 2025+ price seal (build through 2024-12-31 only until a charter unlocks confirm). [hard] [arch]
 
 ## Deferred (gated)
 
@@ -102,7 +104,7 @@ _(none open)_
 
 - [ ] <a id="f345"></a> **F345** Pre-register "distress recovery as long" (D2-reversal) — F339's strongest hypothesis-generating signal: beaten-down stocks still filing on time showed +11.21% excess at 126d, cohort-level bootstrap CI [+3.66,+19.12] fully positive on confirm-era data. CAUTION: this is a post-hoc read of already-unsealed confirm data — it cannot be graded on 2021–2024 again; a charter needs a fresh confirm window (2025+ forward, or event-time re-test under F342). [medium] [arch] [gated: John approves charter + F342 or a fresh confirm window exists]
 
-- [ ] <a id="f354"></a> **F354** R-1 rerun at full scale — gate decision + execution. R-1-as-run aborted honestly (UNTESTABLE-underpowered; confirm sealed, no alpha spent). Rerunning the same frozen charter on the F353 full Form 4 data needs John's call at the gate: pre-outcome amendment of the §2 source ("cached stratified sample" → full cache; arguably legal — the §3a abort means no headline outcome was ever evidential) vs a clean R-1b charter with its own ledger draw (conservative). Either way the frozen score/§3b/§4/§5/§6 design carries over verbatim; the two FS anchors and the §10 amendment log ride along. [medium] [arch] [gated: F353 shipped + John's gate decision]
+- [ ] <a id="f354"></a> **F354** R-1 rerun at full scale — gate decision + execution. R-1-as-run aborted honestly (UNTESTABLE-underpowered; confirm sealed, no alpha spent). Rerunning the same frozen charter on the full Form 4 data needs John's call at the gate: pre-outcome amendment of the §2 source ("cached stratified sample" → F356 dataset ingest; arguably legal — the §3a abort means no headline outcome was ever evidential) vs a clean R-1b charter with its own ledger draw (conservative). Either way the frozen score/§3b/§4/§5/§6 design carries over verbatim; the two FS anchors and the §10 amendment log ride along. [medium] [arch] [gated: F356 + F357 shipped + John's gate decision]
 
 - [ ] <a id="f343"></a> **F343** Insider Stack event study (ideation 2026-06-06 idea 2) — Form 4 cluster-buy premise (insider_stratified.py + 3.5k-filing sample on disk, never run) as the first native event study on the event-time harness, scored vs vol-matched controls. Spends confirm-budget: charter must be locked and approved first. [hard] [arch] [gated: F342 shipped + John approves the charter] (added 2026-06-06)
 
