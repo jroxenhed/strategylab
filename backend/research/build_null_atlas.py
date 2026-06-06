@@ -16,7 +16,6 @@ import json
 import math
 import os
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -25,6 +24,13 @@ from typing import Callable
 # Paths
 # ---------------------------------------------------------------------------
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# Make backend/ importable so we can reuse fileutil.atomic_write_text.
+_BACKEND_DIR = str(_REPO_ROOT / "backend")
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
+
+from fileutil import atomic_write_text  # noqa: E402
 _VALIDATION_PATH = _REPO_ROOT / "backend" / "data" / "turnaround" / "validation_result.json"
 _UNIVERSE_PATH = _REPO_ROOT / "backend" / "data" / "turnaround" / "edgar_cache" / "universe.json"
 _SUBMISSIONS_DIR = _REPO_ROOT / "backend" / "data" / "turnaround" / "edgar_cache" / "submissions"
@@ -42,34 +48,20 @@ INSUFFICIENT_N = 30  # n<30 → cell flagged insufficient (same convention as v1
 
 
 # ---------------------------------------------------------------------------
-# Atomic write (inlined from fileutil.py pattern; no FastAPI dep)
+# Atomic write with backup rotation (F337)
 # ---------------------------------------------------------------------------
+_ATLAS_BACKUP_DEPTH = 3  # keeps .bak, .bak.2, .bak.3 — same depth as validation_result.json
+
+
 def _atomic_write_json(path: Path, obj: object) -> None:
-    """Write obj as JSON to path atomically (tmp + rename, same directory)."""
+    """Write obj as JSON to path atomically with backup rotation (depth=3).
+
+    Delegates to fileutil.atomic_write_text so the backup/rotation logic is
+    maintained in one place.  On each call the previous null_atlas.json is
+    rotated into .bak / .bak.2 / .bak.3 before the new file lands.
+    """
     content = json.dumps(obj, sort_keys=True, indent=2, ensure_ascii=False)
-    dir_ = str(path.parent)
-    fd = tempfile.NamedTemporaryFile(
-        mode="w", delete=False, dir=dir_, suffix=".tmp", encoding="utf-8"
-    )
-    try:
-        fd.write(content)
-        fd.flush()
-        os.fsync(fd.fileno())
-        try:
-            fd.close()
-        except Exception:
-            pass
-        os.replace(fd.name, str(path))
-    except Exception:
-        try:
-            fd.close()
-        except Exception:
-            pass
-        try:
-            os.unlink(fd.name)
-        except OSError:
-            pass
-        raise
+    atomic_write_text(path, content, backup_depth=_ATLAS_BACKUP_DEPTH)
 
 
 # ---------------------------------------------------------------------------

@@ -148,6 +148,43 @@ def test_build_atlas_branches_on_schema_version(tmp_path, monkeypatch):
     assert all(s.startswith("[PASS]") for s in sanity), sanity
 
 
+def test_atomic_write_json_backup_rotation(tmp_path, monkeypatch):
+    """F337: three successive writes produce a .bak chain of depth 3.
+
+    After the 4th write the oldest backup (.bak.3) is overwritten and no
+    .bak.4 appears — the chain is capped at depth=3.
+    """
+    import json as _json
+
+    target = tmp_path / "null_atlas.json"
+
+    monkeypatch.setattr(bna, "_OUTPUT_PATH", target)
+
+    # Write 1 — no prior file, no backup created yet.
+    bna._atomic_write_json(target, {"v": 1})
+    assert target.read_text()
+    assert not (tmp_path / "null_atlas.json.bak").exists()
+
+    # Write 2 — v1 rotates to .bak.
+    bna._atomic_write_json(target, {"v": 2})
+    assert _json.loads((tmp_path / "null_atlas.json.bak").read_text())["v"] == 1
+
+    # Write 3 — v2→.bak, v1→.bak.2.
+    bna._atomic_write_json(target, {"v": 3})
+    assert _json.loads((tmp_path / "null_atlas.json.bak").read_text())["v"] == 2
+    assert _json.loads((tmp_path / "null_atlas.json.bak.2").read_text())["v"] == 1
+
+    # Write 4 — v3→.bak, v2→.bak.2, v1→.bak.3 (oldest slot filled).
+    bna._atomic_write_json(target, {"v": 4})
+    assert _json.loads((tmp_path / "null_atlas.json.bak").read_text())["v"] == 3
+    assert _json.loads((tmp_path / "null_atlas.json.bak.2").read_text())["v"] == 2
+    assert _json.loads((tmp_path / "null_atlas.json.bak.3").read_text())["v"] == 1
+    # Chain capped at 3 — no .bak.4.
+    assert not (tmp_path / "null_atlas.json.bak.4").exists()
+    # Live file is the newest write.
+    assert _json.loads(target.read_text())["v"] == 4
+
+
 def test_build_atlas_v1_still_default(tmp_path, monkeypatch):
     """A schema_version=1 (or missing) events file produces a v1 atlas (touch cells)."""
     import json
