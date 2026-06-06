@@ -13,7 +13,7 @@ _(none open)_
 - [F305](#f305) — [next] sync-todo-index.py writes TODO.md with bare write_text() [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 31 items
+## Open Work — 30 items
 
 | Section | Open | IDs |
 |---|---|---|
@@ -22,7 +22,7 @@ _(none open)_
 | [Hardening](#hardening) | 8 | [F305](#f305), [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F336](#f336)–[F337](#f337) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 6 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329), [F338](#f338) |
-| [Infra](#infra) | 6 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F344](#f344), [F346](#f346) |
+| [Infra](#infra) | 5 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F344](#f344) |
 
 ## Features
 
@@ -91,7 +91,7 @@ _(none open)_
 
 - [ ] <a id="f344"></a> **F344** Stooq delisted-coverage probe via real browser — F341's script audit was blocked by Cloudflare's JS challenge; one chrome-devtools (or Playwright) session fetching sivb.us / bbby.us / twtr.us / frcb.us CSVs answers whether Stooq can resurrect dead-company price history for free (idea 5's cheapest survivorship fix). If yes, follow with a bulk-download plan; if no, the $50 Sharadar month becomes the only path below $5. [easy] [infra]
 
-- [ ] <a id="f346"></a> **F346** Analyst-action + news event-stream audit (John's gap-spot, 2026-06-06) — go/no-go on: yfinance upgrades_downgrades (incl. a determinism/PIT re-fetch probe — does Yahoo rewrite history?), GDELT news volume (GME Jan-2021 spike anchor), 8-K item codes already in the EDGAR cache as a free news stream, Finnhub/FMP free tiers. Candidate uses kept OPEN (axiom downgraded to working hypothesis 2026-06-06 — do not pre-judge): trigger, fade/crowding, veto, and completing the insider→price→filing→analyst latency measurement. [easy] [infra] (added 2026-06-06)
+- [x] <a id="f346"></a> **F346** Analyst-action + news event-stream audit (John's gap-spot, 2026-06-06) — go/no-go on: yfinance upgrades_downgrades (incl. a determinism/PIT re-fetch probe — does Yahoo rewrite history?), GDELT news volume (GME Jan-2021 spike anchor), 8-K item codes already in the EDGAR cache as a free news stream, Finnhub/FMP free tiers. Candidate uses kept OPEN (axiom downgraded to working hypothesis 2026-06-06 — do not pre-judge): trigger, fade/crowding, veto, and completing the insider→price→filing→analyst latency measurement. [easy] [infra] (added 2026-06-06) (resolved 2026-06-06 — report at docs/plans/2026-06-06-analyst-news-audit-F346.md. yfinance upgrades/downgrades: CONDITIONAL GO (AAPL 968 actions/13.7yr, second-precision timestamps, determinism probe PASS; sparse below mid-cap); GDELT: CONDITIONAL GO (GME 138× anchor PASS, daily granularity, heavy rate limits); EDGAR 8-K on disk: GO — 19,675 earnings releases + 14,733 press releases with acceptanceDateTime already cached, zero new data; Finnhub/FMP: NO-GO)
 
 - [ ] <a id="f97"></a> **F97** [medium] Provision `backend/venv/` in routine builder container — overnight builds 21/22/23 all hit the same gap: §3.5 backend smoke test originally specified `cd backend && venv/bin/uvicorn …` but the routine container ships without a venv. Spec now codifies AST + import-time check as the substitute. Real fix: the container image includes `backend/venv/` with pinned deps (Pydantic, FastAPI, pytest). Once landed, restore the full uvicorn smoke test path. Container/infra change, not application code. (from build 23 process review) [infra]
 
