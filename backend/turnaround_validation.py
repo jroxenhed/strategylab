@@ -48,6 +48,7 @@ Key design decisions:
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import os
@@ -58,6 +59,7 @@ import tempfile
 import threading
 import time
 import zlib
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
@@ -111,6 +113,11 @@ _PICKLE_PROTOCOL = 4  # Python 3.8+ portable; higher protocols not strictly need
 # for the split-adjustment staleness risk this guards against.
 _PRICE_CACHE_VERSION = "v1"
 
+# F331: worker count for parallel prefetch phase.  6 is the sweet spot for yahoo's
+# free tier (burst-tolerant without reliably triggering 429 storms); cap is 8.
+# Lower to 4 if 429s become chronic in your environment.
+_PREFETCH_WORKERS = 6
+
 
 def _safe_ticker(ticker: str) -> str:
     """Replace non-alphanumeric chars so the ticker is safe as a filename component.
@@ -139,6 +146,33 @@ def _safe_source(data_source: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "_", data_source or "unknown").lower()
 
 
+def _adjusted_close_fingerprint(df: Optional[pd.DataFrame]) -> str:
+    """F336: Return an 8-hex-char SHA256 digest of the last 5 adjusted closes.
+
+    Split-adjusted providers retroactively revise all historical closes when a
+    split occurs.  Hashing the last 5 closes gives a cheap staleness anchor:
+    if a split happened after the frame was cached, the fingerprint of the
+    reloaded frame will differ from the one stored at write time.
+
+    Returns "" for None, empty, or frames with < 5 rows or no Close column
+    (callers treat "" as "no fingerprint available" — skip the check).
+
+    Uses the 'Close' column (yfinance returns split-adjusted Close when
+    auto_adjust=True, which is the default).  8 hex chars (32-bit prefix of
+    SHA256) is sufficient for a staleness anchor — false-positive rate is ~2^-32.
+    """
+    if df is None or df.empty or len(df) < 5:
+        return ""
+    col = "Close" if "Close" in df.columns else ("close" if "close" in df.columns else None)
+    if col is None:
+        return ""
+    try:
+        closes = df[col].tail(5).astype(str).str.cat(sep="|")
+        return hashlib.sha256(closes.encode()).hexdigest()[:8]
+    except Exception:
+        return ""
+
+
 class PriceFrameCache:
     """On-disk pickle cache for validation price frames (F332 / D13).
 
@@ -156,13 +190,23 @@ class PriceFrameCache:
     - The cache-format version (_PRICE_CACHE_VERSION) is a path segment so a version
       bump globally evicts every stale frame in one move.
 
-    STALENESS / SPLIT-ADJUSTMENT RISK (DI-04): there is NO automatic eviction.  Most
-    historical bars are immutable, but split-adjusted providers RETROACTIVELY revise
-    all historical prices after a post-hoc split.  A frame cached before such a split
-    therefore carries stale (pre-adjustment) closes indefinitely — material for the
-    high-split small/mid-cap names overrepresented in the turnaround universe.  The
-    mitigation today is the manual version-bump lever above; a real time/mtime-based
-    eviction policy is deferred to a follow-up F-item (F314/F320 family).
+    STALENESS / SPLIT-ADJUSTMENT RISK (DI-04, F336):
+    - There is NO automatic eviction on every read.  Most historical bars are
+      immutable, but split-adjusted providers RETROACTIVELY revise all historical
+      prices after a post-hoc split.  A frame cached before such a split therefore
+      carries stale (pre-adjustment) closes indefinitely — material for the high-split
+      small/mid-cap names overrepresented in the turnaround universe.
+    - v1 POLICY (F336): staleness detection via an adjusted-close fingerprint is
+      available on an explicit audit path only.  The normal read path (load()) does
+      NOT re-fetch to verify; staleness checks live in load_with_staleness_check()
+      which is called from the audit script (backend/scripts/prune_price_cache.py
+      --audit) or on an explicit re-load path.  The version-bump lever (above)
+      remains the blunt-force eviction tool for a known-bad provider epoch.
+    - The manual LRU eviction script (backend/scripts/prune_price_cache.py) provides
+      --max-gb / --dry-run / --audit flags.  It operates on mtime (LRU), evicts the
+      oldest files first, and reports bytes freed.  Run it manually when disk space
+      is the constraint (3.1GB+ today); there is NO automatic eviction on any
+      read/write code path (rebuilding the cache costs ~35 min of sequential fetches).
 
     Thread-safety: multiple threads may call load/store concurrently.
     - load() is read-only (plus a best-effort unlink of a proven-corrupt file) → safe.
@@ -244,10 +288,15 @@ class PriceFrameCache:
         fetch_end: str,
         df: pd.DataFrame,
         data_source: str = "yahoo",
-    ) -> None:
-        """Persist *df* for (provider, ticker, span).  Best-effort — never raises."""
+    ) -> Optional[str]:
+        """Persist *df* for (provider, ticker, span).  Best-effort — never raises.
+
+        F336: Returns the adjusted-close fingerprint of *df* on success, or None on
+        error or if the fingerprint cannot be computed.  The fingerprint is useful
+        for staleness checks on reload (see load_with_staleness_check).
+        """
         if not self._ensure_dir():
-            return
+            return None
         p = self._path(ticker, fetch_start, fetch_end, data_source)
         # Atomic write: pickle to tmp sibling, then os.replace.
         try:
@@ -276,6 +325,65 @@ class PriceFrameCache:
                 raise
         except Exception as exc:
             logger.warning("PriceFrameCache: failed to store %s: %s", p, exc)
+            return None
+        # Compute and return fingerprint (F336 — for caller's staleness bookkeeping).
+        try:
+            return _adjusted_close_fingerprint(df)
+        except Exception:
+            return None
+
+    def load_with_staleness_check(
+        self,
+        ticker: str,
+        fetch_start: str,
+        fetch_end: str,
+        data_source: str = "yahoo",
+        fingerprint_at_write: Optional[str] = None,
+    ) -> Optional[pd.DataFrame]:
+        """Load cached frame; return None if fingerprint mismatch indicates staleness.
+
+        F336 audit path: if *fingerprint_at_write* is provided and differs from the
+        current frame's fingerprint, the cache file is unlinked and None is returned
+        (triggering a fresh network fetch on the next call to the memoized loader).
+
+        If *fingerprint_at_write* is None (frames cached before F336, or caller doesn't
+        track fingerprints), no staleness check is performed — backward-compatible.
+
+        Normal reads (load()) skip this check entirely; staleness is handled only
+        when the caller explicitly passes a prior fingerprint (e.g., from an audit run).
+        """
+        df = self.load(ticker, fetch_start, fetch_end, data_source)
+        if df is None:
+            return None
+
+        # No staleness check when no reference fingerprint is available
+        # (backward-compatible: frames cached before F336 have no anchor).
+        if fingerprint_at_write is None:
+            return df
+
+        current_fp = _adjusted_close_fingerprint(df)
+        p = self._path(ticker, fetch_start, fetch_end, data_source)
+
+        # COR-05: separate the "no anchor" case from the "degenerate frame"
+        # case.  An empty fingerprint ('' — fewer than 5 rows, or missing
+        # Close column) while a valid anchor exists at write time means the
+        # reloaded frame is short or corrupt.  Treat it as STALE and evict.
+        if not current_fp:
+            logger.warning(
+                "PriceFrameCache: degenerate reloaded frame for %s (stored=%s current='') — evicting",
+                p, fingerprint_at_write,
+            )
+            self._unlink_quiet(p)
+            return None
+
+        if current_fp != fingerprint_at_write:
+            logger.warning(
+                "PriceFrameCache: stale frame detected %s (stored=%s current=%s) — evicting",
+                p, fingerprint_at_write, current_fp,
+            )
+            self._unlink_quiet(p)
+            return None
+        return df
 
 
 # Module-level default cache instance (can be replaced in tests via monkeypatch).
@@ -372,6 +480,9 @@ class ValidationProgress:
     universe_size: int = 0       # total universe size (set once at startup)
     signal_events: int = 0       # running count of signal events recorded
     null_events: int = 0         # running count of null events recorded
+    # F331: prefetch phase progress (populated before the date loop begins)
+    prefetch_workers: int = 0              # configured worker count for this run
+    prefetch_symbols_completed: int = 0    # tickers for which prefetch finished (success or fail)
 
 
 # ---------------------------------------------------------------------------
@@ -616,6 +727,16 @@ def _quarterly_as_of_dates(start_year: int, end_year: int) -> list[date]:
 
 
 # ---------------------------------------------------------------------------
+# Rate-limit detection (shared by _make_memoized_loader and _prefetch_price_frames)
+# ---------------------------------------------------------------------------
+
+def _is_rate_limited(exc: Exception) -> bool:
+    """Return True if *exc* looks like a yahoo/network 429 / rate-limit error."""
+    msg = str(exc).lower()
+    return "429" in msg or "too many requests" in msg or "rate limit" in msg
+
+
+# ---------------------------------------------------------------------------
 # Bars loader factory (D2)
 # ---------------------------------------------------------------------------
 
@@ -670,42 +791,296 @@ def _make_memoized_loader(
     _disk_cache = price_cache if price_cache is not None else _price_frame_cache
 
     _cache: dict[str, Optional[pd.DataFrame]] = {}
+    # F331 thread-safety: per-key locks prevent duplicate fetches when multiple
+    # prefetch workers race for the same ticker.  Without this, two workers can
+    # both pass the "if ticker in _cache" check and both go to disk/network,
+    # wasting 429 budget.  The meta-lock serializes per-key lock creation; once
+    # created, each key's lock serializes disk+network work for that ticker only.
+    #
+    # Note: _loader.fetch_failures is a shared counter incremented by workers
+    # across distinct tickers concurrently.  The GIL makes individual attribute
+    # writes atomic, but "+= 1" is a read-modify-write (LOAD/ADD/STORE) and may
+    # undercount under heavy parallelism.  This is intentional — the counter is
+    # a diagnostic floor, not a precise total.  A dedicated lock is not used to
+    # avoid adding a bottleneck on the common path.
+    _cache_locks: dict[str, threading.Lock] = {}
+    _cache_locks_meta = threading.Lock()
+
+    def _get_ticker_lock(ticker: str) -> threading.Lock:
+        with _cache_locks_meta:
+            if ticker not in _cache_locks:
+                _cache_locks[ticker] = threading.Lock()
+            return _cache_locks[ticker]
 
     def _loader(ticker: str) -> Optional[pd.DataFrame]:
-        # Layer 1: in-process memo
+        # Fast path: in-process memo read WITHOUT holding any lock.
+        # A DataFrame reference assignment is atomic under the GIL, so reading
+        # an already-populated entry needs no lock.
         if ticker in _cache:
             return _cache[ticker]
 
-        # Layer 2: on-disk cache (F332 / D13).  DI-02: data_source is part of the key.
-        disk_hit = _disk_cache.load(ticker, fetch_start, fetch_end, data_source)
-        if disk_hit is not None:
-            _cache[ticker] = disk_hit
+        # Slow path: acquire per-key lock before checking again (double-checked
+        # locking pattern).  This prevents two workers from both missing the
+        # fast-path check and both doing redundant disk/network work.
+        lock = _get_ticker_lock(ticker)
+        with lock:
+            # Re-check inside the lock (another worker may have filled _cache
+            # between our fast-path check and acquiring the lock).
+            if ticker in _cache:
+                return _cache[ticker]
+
+            # Layer 2: on-disk cache (F332 / D13).  DI-02: data_source is part of the key.
+            disk_hit = _disk_cache.load(ticker, fetch_start, fetch_end, data_source)
+            if disk_hit is not None:
+                _cache[ticker] = disk_hit
+                return _cache[ticker]
+
+            # Layer 3: network fetch
+            try:
+                df = _fetch(ticker, fetch_start, fetch_end, "1d", data_source)
+                result = df if df is not None and not df.empty else None
+                _cache[ticker] = result
+                # Persist to disk on successful fetch (non-None only)
+                if result is not None:
+                    _disk_cache.store(ticker, fetch_start, fetch_end, result, data_source)
+            except Exception as exc:
+                if _is_rate_limited(exc):
+                    # 429 handling is path-dependent:
+                    #   Prefetch path (_in_prefetch=True): re-raise so
+                    #     _prefetch_price_frames can apply exponential backoff
+                    #     and retry.  Do NOT cache None yet — the retry may
+                    #     succeed.  Do NOT increment fetch_failures yet —
+                    #     _prefetch_price_frames counts only terminal failures.
+                    #   Sequential / date-loop path (_in_prefetch=False):
+                    #     Swallow, cache None, and count as a terminal failure
+                    #     so cohort shrinkage is visible.  No retry here —
+                    #     the date loop does not retry individual tickers.
+                    if _loader._in_prefetch:  # type: ignore[attr-defined]
+                        raise
+                    # Sequential path: log, count, cache None.
+                    logger.warning(
+                        "bars_loader: 429 for %s during date-loop (no retry) — skipping",
+                        ticker,
+                    )
+                    _loader.fetch_failures += 1  # type: ignore[attr-defined]
+                    _cache[ticker] = None
+                else:
+                    # Non-429 error: log, retry once, then cache None.
+                    logger.warning("bars_loader: failed to fetch %s: %s", ticker, exc)
+                    try:
+                        df2 = _fetch(ticker, fetch_start, fetch_end, "1d", data_source)
+                        result2 = df2 if df2 is not None and not df2.empty else None
+                        _cache[ticker] = result2
+                        if result2 is not None:
+                            _disk_cache.store(ticker, fetch_start, fetch_end, result2, data_source)
+                    except Exception:
+                        _cache[ticker] = None
+                        # Terminal non-429 failure: count it.
+                        _loader.fetch_failures += 1  # type: ignore[attr-defined]
             return _cache[ticker]
 
-        # Layer 3: network fetch
-        try:
-            df = _fetch(ticker, fetch_start, fetch_end, "1d", data_source)
-            result = df if df is not None and not df.empty else None
-            _cache[ticker] = result
-            # Persist to disk on successful fetch (non-None only)
-            if result is not None:
-                _disk_cache.store(ticker, fetch_start, fetch_end, result, data_source)
-        except Exception as exc:
-            logger.warning("bars_loader: failed to fetch %s: %s", ticker, exc)
-            _loader.fetch_failures += 1  # type: ignore[attr-defined]
-            # Retry once before caching None
-            try:
-                df2 = _fetch(ticker, fetch_start, fetch_end, "1d", data_source)
-                result2 = df2 if df2 is not None and not df2.empty else None
-                _cache[ticker] = result2
-                if result2 is not None:
-                    _disk_cache.store(ticker, fetch_start, fetch_end, result2, data_source)
-            except Exception:
-                _cache[ticker] = None
-        return _cache[ticker]
-
     _loader.fetch_failures = 0  # type: ignore[attr-defined]
+    # _in_prefetch flag: set to True by _prefetch_price_frames while submitting
+    # parallel work; False at all other times (sequential / date-loop path).
+    # Controls whether a 429 is re-raised (prefetch) or swallowed+counted (date loop).
+    _loader._in_prefetch = False  # type: ignore[attr-defined]
+    # Expose _cache for testing / prefetch warm-check purposes.
+    _loader._cache = _cache  # type: ignore[attr-defined]
     return _loader
+
+
+# ---------------------------------------------------------------------------
+# F331: Parallel prefetch phase
+# ---------------------------------------------------------------------------
+
+def _prefetch_price_frames(
+    universe: list[tuple[str, str]],
+    loader: Callable[[str], Optional[pd.DataFrame]],
+    cancel_event: Optional[threading.Event] = None,
+    progress: Optional[ValidationProgress] = None,
+    workers: int = _PREFETCH_WORKERS,
+) -> dict[str, Exception]:
+    """Warm the memoized loader with parallel fetches before the date loop.
+
+    Submits one loader() call per ticker using a ThreadPoolExecutor.  Because
+    the loader is memoized (per-key lock + _cache dict), each ticker is fetched
+    at most once even if multiple workers race — the double-checked locking in
+    _make_memoized_loader serializes duplicate callers.
+
+    Args:
+        universe: list of (ticker, name) tuples.
+        loader: the memoized bars_loader returned by _make_memoized_loader().
+        cancel_event: abort prefetch if set (checked before each submission).
+        progress: mutable ValidationProgress; prefetch_symbols_completed is
+            incremented atomically (GIL-safe single-key write) after each ticker.
+        workers: thread count (capped at 8 to avoid yahoo rate-limit storms).
+
+    Returns:
+        dict of {ticker: Exception} for tickers that failed after retries.
+        Non-fatal — run_validation falls through to the sequential date-loop
+        path on any exception or circuit-breaker trip.
+
+    Pacing (REL-01 / REL-07):
+        A shared semaphore limits concurrent outstanding requests to workers*2
+        with a small inter-acquisition sleep (1s / rate_target) to spread
+        the initial burst and stay under yahoo's burst tolerance.  This is
+        proactive (politeness-first), complementing the reactive backoff.
+
+    Backoff policy (F331):
+        On HTTP 429 the loader raises (it has _in_prefetch=True during this
+        function).  We apply exponential backoff (1s → 2s → 4s, cap 10s) and
+        retry up to 3 times per ticker.  After 3 consecutive 429 backoff cycles
+        (the circuit breaker), the entire prefetch is aborted and we fall through
+        to the sequential path — which is the status quo before F331 and always
+        completes.  The circuit breaker degrade is logged at WARNING.
+
+    Cancellation (COR-02):
+        The executor is created manually (not via 'with') so that the cancel
+        path can call executor.shutdown(wait=False, cancel_futures=True) and
+        return immediately without being blocked by __exit__(wait=True).
+        In-flight requests (≤ workers threads already running) may still
+        complete after cancel — this is acceptable (threads cannot be
+        interrupted); queued-but-not-started futures are cancelled.
+
+    fetch_failures (COR-03 / REL-04):
+        Incremented only for TERMINAL per-ticker failures (after all backoff
+        retries exhausted).  Transient 429s that succeed on retry do not
+        increment the counter.
+    """
+    workers = min(max(1, workers), 8)
+    tickers = [t for t, _name in universe]
+    if not tickers:
+        return {}
+
+    if progress is not None:
+        progress.prefetch_workers = workers
+
+    failed: dict[str, Exception] = {}
+    completed = 0
+
+    # Proactive pacing: semaphore limits concurrent outstanding requests;
+    # a small sleep after each acquisition targets ~4-5 req/s aggregate.
+    _RATE_TARGET = 5.0  # requests per second (politeness goal)
+    _pace_sem = threading.Semaphore(max(1, workers * 2))
+    _pace_sleep = 1.0 / _RATE_TARGET
+
+    def _fetch_one_paced(ticker: str) -> None:
+        """Acquire pacing semaphore, call loader, release on exit."""
+        _pace_sem.acquire()
+        try:
+            time.sleep(_pace_sleep)  # inter-request delay for politeness
+            loader(ticker)
+        finally:
+            _pace_sem.release()
+
+    # Circuit breaker: abort the entire prefetch after this many consecutive
+    # full backoff cycles (3 × backoff attempts exhausted = sustained storm).
+    _CIRCUIT_BREAKER_CYCLES = 3
+    consecutive_backoff_exhaustions = 0
+
+    # Mark the loader as being in prefetch mode so 429s are re-raised
+    # rather than swallowed (the sequential path uses a different code path).
+    if hasattr(loader, "_in_prefetch"):
+        loader._in_prefetch = True  # type: ignore[attr-defined]
+
+    executor = ThreadPoolExecutor(max_workers=workers)
+    cancelled = False
+    circuit_tripped = False
+    try:
+        # Submit all tickers; check cancel_event before each submission.
+        future_to_ticker: dict[Future[None], str] = {}
+        for ticker in tickers:
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info("_prefetch_price_frames: cancelled before submitting %s", ticker)
+                cancelled = True
+                break
+            future_to_ticker[executor.submit(_fetch_one_paced, ticker)] = ticker
+
+        # Collect results; track per-ticker 429-backoff retries inline.
+        for future in as_completed(future_to_ticker):
+            if cancel_event is not None and cancel_event.is_set():
+                # Cancel remaining queued futures; in-flight threads finish
+                # (≤ workers, acceptable residual — see docstring).
+                executor.shutdown(wait=False, cancel_futures=True)
+                logger.info("_prefetch_price_frames: cancelled during collection")
+                cancelled = True
+                break
+
+            ticker = future_to_ticker[future]
+            exc = future.exception()
+            if exc is not None:
+                if _is_rate_limited(exc):
+                    # Exponential backoff + retry loop (up to 3 attempts).
+                    delay = 1.0
+                    last_exc: Optional[Exception] = exc
+                    for attempt in range(3):
+                        logger.warning(
+                            "_prefetch_price_frames: 429 on %s (attempt %d/3) — backing off %.1fs",
+                            ticker, attempt + 1, delay,
+                        )
+                        time.sleep(delay)
+                        delay = min(delay * 2, 10.0)
+                        if cancel_event is not None and cancel_event.is_set():
+                            break
+                        try:
+                            loader(ticker)
+                            last_exc = None
+                            break
+                        except Exception as retry_exc:
+                            last_exc = retry_exc
+                            if not _is_rate_limited(retry_exc):
+                                break  # Non-429 error; stop retrying.
+
+                    if last_exc is not None:
+                        logger.warning(
+                            "_prefetch_price_frames: giving up on %s after backoff: %s",
+                            ticker, last_exc,
+                        )
+                        failed[ticker] = last_exc
+                        # Count only terminal per-ticker failures (COR-03 / REL-04).
+                        if hasattr(loader, "fetch_failures"):
+                            loader.fetch_failures += 1  # type: ignore[attr-defined]
+                        # Circuit breaker: N exhausted backoff cycles → abort.
+                        consecutive_backoff_exhaustions += 1
+                        if consecutive_backoff_exhaustions >= _CIRCUIT_BREAKER_CYCLES:
+                            logger.warning(
+                                "_prefetch_price_frames: %d consecutive backoff exhaustions — "
+                                "aborting prefetch, falling through to sequential path",
+                                consecutive_backoff_exhaustions,
+                            )
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            circuit_tripped = True
+                            break
+                    else:
+                        # Successful retry — reset the consecutive cycle counter.
+                        consecutive_backoff_exhaustions = 0
+                else:
+                    logger.warning("_prefetch_price_frames: %s failed: %s", ticker, exc)
+                    failed[ticker] = exc
+                    if hasattr(loader, "fetch_failures"):
+                        loader.fetch_failures += 1  # type: ignore[attr-defined]
+                    consecutive_backoff_exhaustions = 0
+
+            completed += 1
+            if progress is not None:
+                progress.prefetch_symbols_completed = completed
+
+    finally:
+        # Restore sequential mode on the loader regardless of how we exit.
+        if hasattr(loader, "_in_prefetch"):
+            loader._in_prefetch = False  # type: ignore[attr-defined]
+        # On normal exit (no cancel / no circuit trip), wait for in-flight work.
+        if not cancelled and not circuit_tripped:
+            executor.shutdown(wait=True)
+        # On cancel/circuit trip, executor.shutdown(wait=False) was already called
+        # above; the finally block is a no-op for those paths.
+
+    logger.info(
+        "_prefetch_price_frames: %d/%d tickers completed (%d failed) with %d workers%s",
+        completed, len(tickers), len(failed), workers,
+        " [circuit breaker tripped]" if circuit_tripped else "",
+    )
+    return failed
 
 
 # ---------------------------------------------------------------------------
@@ -1297,6 +1672,31 @@ def run_validation(
     if progress is not None:
         progress.dates_total = len(as_of_dates)
         progress.universe_size = len(universe)
+
+    # F331: parallel prefetch — warm the memoized loader before the date loop so
+    # the first as-of date finds a 100% memo hit rate instead of a cold network wall.
+    # Non-fatal: if prefetch fails entirely, the date loop falls back to the normal
+    # sequential (cold) loader path.  Prefetch is skipped on an empty universe.
+    if universe:
+        try:
+            prefetch_errors = _prefetch_price_frames(
+                universe,
+                _inner_loader,
+                cancel_event=cancel_event,
+                progress=progress,
+                workers=_PREFETCH_WORKERS,
+            )
+            if prefetch_errors:
+                logger.warning(
+                    "run_validation: prefetch: %d/%d tickers failed (will retry during date loop): %s",
+                    len(prefetch_errors), len(universe),
+                    list(prefetch_errors.keys())[:5],  # log first 5 for brevity
+                )
+        except Exception as prefetch_exc:
+            logger.warning(
+                "run_validation: prefetch aborted (%s) — continuing with cold date-loop loads",
+                prefetch_exc,
+            )
 
     signal_outcomes: list[TradeOutcome] = []
     null_outcomes: list[TradeOutcome] = []

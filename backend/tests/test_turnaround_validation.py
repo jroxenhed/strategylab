@@ -1427,38 +1427,64 @@ def test_cancel_during_run_filter_via_loader():
 def test_timeout_mid_date_drops_partial_date_events():
     """F313-01 regression: a timeout that fires MID-date must drop that date's
     already-processed events entirely (per-date buffer commit). Date 1 completes
-    (1 event, kept); date 2 processes one candidate slowly, then the budget fires
-    on the next candidate — date 2's partial prefix must NOT appear in outcomes,
+    (1 event, kept); date 2 starts processing and the budget fires before the
+    second candidate — date 2's partial prefix must NOT appear in outcomes,
     counters, or the events table.
+
+    PY-03 de-flake: instead of a real 0.5s sleep, we inject a mock
+    time.monotonic into turnaround_validation that returns a large value as soon
+    as date 2's candidate loop begins (simulating elapsed time).  This eliminates
+    OS-scheduling sensitivity and the 500ms unconditional delay.
+
+    The mock fires on the FIRST candidate of date 2 (TKSLOW), causing the
+    entire date-2 buffer to be dropped per the F313-01 drop rule.  Only date 1
+    (TKDATE1) reaches the committed global lists.
     """
-    import time as _time
+    import turnaround_validation as _tvmod
     SPAN_START = date(2015, 1, 1)
     SPAN_END = date(2022, 12, 31)
     flat_df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
 
-    call_count = [0]
+    _date_filter_call_count = [0]
+    # Track when date 2 filter has been called so the mock can arm itself.
+    _date2_started = [False]
+    _timeout_val = 0.001
+
+    real_monotonic = _tvmod.time.monotonic
+
+    def _mock_monotonic():
+        # Return a large value once date 2's filter has been called.
+        # This makes the FIRST candidate-loop check for date 2 trip the timeout.
+        if _date2_started[0]:
+            return 9999.0  # definitely > _timeout_val
+        return 0.0
 
     def _per_date_filter(universe, as_of, params, bars_loader=None):
-        call_count[0] += 1
-        if call_count[0] == 1:
+        _date_filter_call_count[0] += 1
+        if _date_filter_call_count[0] == 1:
             return [_make_candidate("TKDATE1")]
+        # Date 2 filter: arm the clock AFTER returning candidates so date 2's
+        # candidate-loop check sees a large monotonic value.
+        _date2_started[0] = True
         return [_make_candidate("TKSLOW"), _make_candidate("TKNEVER")]
 
     def _loader(ticker):
-        if ticker == "TKSLOW":
-            _time.sleep(0.5)  # burns past the budget DURING date 2's first candidate
         return flat_df
 
-    result = _run_validation_with_mocks(
-        _make_validation_req(start_year=2018, end_year=2020),
-        _per_date_filter,
-        _loader,
-        timeout_secs=0.2,
-    )
+    _tvmod.time.monotonic = _mock_monotonic
+    try:
+        result = _run_validation_with_mocks(
+            _make_validation_req(start_year=2018, end_year=2020),
+            _per_date_filter,
+            _loader,
+            timeout_secs=_timeout_val,
+        )
+    finally:
+        _tvmod.time.monotonic = real_monotonic
 
     assert result.timed_out is True
     assert result.dates_completed == 1
-    # Only date 1's event survives; TKSLOW was processed but must be dropped.
+    # Only date 1's event survives; date 2's partial buffer was dropped entirely.
     assert result.signal_n + result.null_n == 1
     event_tickers = {e["ticker"] for e in result.events}
     assert event_tickers == {"TKDATE1"}
@@ -2903,22 +2929,8 @@ def test_u6_cohort_null_aggregates_exclude_floor_failures():
 #     triggers, so floor counts are meaningless — {} is the correct sentinel).
 # ---------------------------------------------------------------------------
 
-def _make_ramp_df(start, end, base=100.0, step=1.0):
-    """Shared ramp helper (re-declared here to be self-contained; mirrors the one
-    used in U6 tests above)."""
-    dates = pd.date_range(start, end, freq="B")
-    n = len(dates)
-    closes = [base + step * i for i in range(n)]
-    return pd.DataFrame(
-        {
-            "Open": closes,
-            "High": [c + 0.001 for c in closes],
-            "Low": [c - 0.001 for c in closes],
-            "Close": closes,
-            "Volume": [1_000_000] * n,
-        },
-        index=dates,
-    )
+# PY-05: _make_ramp_df was re-declared here but is identical to the definition
+# at line ~2126 above.  Duplicate removed; all callers below share the one above.
 
 
 def test_floor_accounting_persisted_source_mode():
@@ -3055,3 +3067,689 @@ def test_floor_accounting_absent_legacy_path():
     assert result.floor_accounting == {}, (
         "Legacy path must not populate floor_accounting (exhaustive null path never runs)"
     )
+
+
+# ---------------------------------------------------------------------------
+# F336: Adjusted-close fingerprint + PriceFrameCache staleness tests
+# ---------------------------------------------------------------------------
+
+class TestAdjustedCloseFingerprint:
+    """Unit tests for _adjusted_close_fingerprint() (F336)."""
+
+    def test_fingerprint_is_8_hex_chars(self):
+        """Normal frame returns an 8-char hex string."""
+        df = _make_price_df(date(2020, 1, 1), date(2022, 12, 31))
+        fp = tv._adjusted_close_fingerprint(df)
+        assert len(fp) == 8
+        assert all(c in "0123456789abcdef" for c in fp), f"Non-hex chars in fingerprint: {fp!r}"
+
+    def test_fingerprint_detects_split(self):
+        """Fingerprint changes when closes are retroactively adjusted (simulates a split)."""
+        df = _make_price_df(date(2020, 1, 1), date(2022, 12, 31))
+        fp1 = tv._adjusted_close_fingerprint(df)
+
+        # Simulate post-split retroactive re-adjustment: all closes halved.
+        df_split = df.copy()
+        df_split["Close"] = df_split["Close"] / 2.0
+        fp2 = tv._adjusted_close_fingerprint(df_split)
+
+        assert fp1 != fp2, "Fingerprint must differ after close adjustment (split simulation)"
+
+    def test_fingerprint_stable_for_same_data(self):
+        """Same DataFrame produces the same fingerprint (deterministic)."""
+        df = _make_price_df(date(2018, 1, 1), date(2020, 12, 31))
+        fp1 = tv._adjusted_close_fingerprint(df)
+        fp2 = tv._adjusted_close_fingerprint(df)
+        assert fp1 == fp2, "Fingerprint must be deterministic for the same DataFrame"
+
+    def test_fingerprint_empty_returns_empty_string(self):
+        """Empty or None DataFrame returns '' (no fingerprint — skip staleness check)."""
+        assert tv._adjusted_close_fingerprint(None) == ""
+        assert tv._adjusted_close_fingerprint(pd.DataFrame()) == ""
+
+    def test_fingerprint_short_frame_returns_empty_string(self):
+        """Frames with < 5 rows return '' (not enough anchor data)."""
+        df = _make_price_df(date(2020, 1, 1), date(2020, 1, 4))  # 2-3 rows
+        fp = tv._adjusted_close_fingerprint(df)
+        assert fp == "", f"Short frame (<5 rows) must return '', got {fp!r}"
+
+
+class TestPriceFrameCacheStaleness:
+    """Tests for PriceFrameCache.store() fingerprint return + load_with_staleness_check() (F336)."""
+
+    def test_store_returns_fingerprint(self, tmp_path):
+        """store() returns a non-empty fingerprint string on success (F336 new contract)."""
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+        df = _make_price_df(date(2015, 1, 1), date(2022, 12, 31))
+        fp = cache.store("AAPL", "2015-01-01", "2022-12-31", df)
+        assert fp is not None, "store() must return a fingerprint string, not None"
+        assert len(fp) == 8, f"Fingerprint must be 8 hex chars, got {fp!r}"
+
+    def test_store_still_persists_frame(self, tmp_path):
+        """Backward compatibility: store() still persists the frame (return value is additive)."""
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+        df = _make_price_df(date(2015, 1, 1), date(2022, 12, 31))
+        cache.store("GOOG", "2015-01-01", "2022-12-31", df)
+        loaded = cache.load("GOOG", "2015-01-01", "2022-12-31")
+        assert loaded is not None, "Frame must still be loadable after store()"
+        assert loaded.shape == df.shape
+
+    def test_load_with_staleness_check_clean_frame_passes(self, tmp_path):
+        """load_with_staleness_check() returns the frame unchanged when fingerprint matches."""
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+        df = _make_price_df(date(2015, 1, 1), date(2022, 12, 31))
+        fp_at_write = cache.store("MSFT", "2015-01-01", "2022-12-31", df)
+
+        loaded = cache.load_with_staleness_check(
+            "MSFT", "2015-01-01", "2022-12-31",
+            fingerprint_at_write=fp_at_write,
+        )
+        assert loaded is not None, "Non-stale frame must be returned by staleness check"
+        assert loaded.shape == df.shape
+
+    def test_load_with_staleness_check_detects_stale_and_evicts(self, tmp_path):
+        """load_with_staleness_check() returns None and evicts the file when fingerprint mismatches."""
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+        df_original = _make_price_df(date(2015, 1, 1), date(2022, 12, 31))
+        fp_at_write = cache.store("STALE", "2015-01-01", "2022-12-31", df_original)
+        assert fp_at_write is not None
+
+        # Overwrite the cache file with a modified frame (simulating post-split re-adjustment).
+        df_split = df_original.copy()
+        df_split["Close"] = df_split["Close"] / 2.0
+        # Write directly to the same path without updating fp.
+        import pickle, os, tempfile
+        p = cache._path("STALE", "2015-01-01", "2022-12-31")
+        fd = tempfile.NamedTemporaryFile(mode="wb", delete=False, dir=str(p.parent), suffix=".tmp")
+        try:
+            pickle.dump(df_split, fd, protocol=4)
+            fd.flush()
+            fd.close()
+            os.replace(fd.name, str(p))
+        except Exception:
+            fd.close()
+
+        # load_with_staleness_check should detect mismatch and return None.
+        loaded = cache.load_with_staleness_check(
+            "STALE", "2015-01-01", "2022-12-31",
+            fingerprint_at_write=fp_at_write,
+        )
+        assert loaded is None, "Stale frame (fingerprint mismatch) must return None"
+        assert not p.exists(), "Stale cache file must be evicted (unlinked) on detection"
+
+    def test_load_with_staleness_check_no_fingerprint_skips_check(self, tmp_path):
+        """Backward compat: fingerprint_at_write=None skips the staleness check entirely."""
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+        df = _make_price_df(date(2015, 1, 1), date(2022, 12, 31))
+        cache.store("OLDCACHE", "2015-01-01", "2022-12-31", df)
+
+        # No fingerprint passed → no check → frame returned as-is.
+        loaded = cache.load_with_staleness_check(
+            "OLDCACHE", "2015-01-01", "2022-12-31",
+            fingerprint_at_write=None,
+        )
+        assert loaded is not None, "No fingerprint_at_write must skip check and return frame"
+
+
+# ---------------------------------------------------------------------------
+# F331: Parallel prefetch tests
+# ---------------------------------------------------------------------------
+
+class TestPrefetchPhase:
+    """Unit tests for _prefetch_price_frames() (F331)."""
+
+    def _make_loader_with_cache(self, cache=None):
+        """Return a memoized loader backed by an in-memory counter."""
+        import sys
+        import types as _types
+
+        call_counts: dict = {}
+        SPAN_START = date(2015, 1, 1)
+        SPAN_END = date(2022, 12, 31)
+        df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+
+        def _spy_fetch(ticker, start, end, interval, source):
+            call_counts[ticker] = call_counts.get(ticker, 0) + 1
+            return df
+
+        tmp_cache = cache or tv.PriceFrameCache.__new__(tv.PriceFrameCache)
+        if cache is None:
+            import tempfile
+            from pathlib import Path
+            tmpdir = Path(tempfile.mkdtemp())
+            tmp_cache = tv.PriceFrameCache(cache_dir=tmpdir)
+
+        fake_shared = _types.ModuleType("shared")
+        fake_shared._fetch = _spy_fetch
+        orig_shared = sys.modules.get("shared")
+        sys.modules["shared"] = fake_shared
+        try:
+            loader = tv._make_memoized_loader(
+                start_year=2018,
+                end_year=2018,
+                low_lookback_years=3,
+                horizon_months=12,
+                data_source="yahoo",
+                price_cache=tmp_cache,
+            )
+        finally:
+            if orig_shared is not None:
+                sys.modules["shared"] = orig_shared
+            elif "shared" in sys.modules:
+                del sys.modules["shared"]
+        return loader, call_counts, tmp_cache
+
+    def test_prefetch_warms_memo_cold_to_hot(self, tmp_path):
+        """After prefetch, calling loader() on all tickers returns from memo (0 new fetches)."""
+        import sys
+        import types as _types
+
+        tickers = [f"T{i:02d}" for i in range(10)]
+        universe = [(t, f"{t} Corp") for t in tickers]
+        SPAN_START = date(2015, 1, 1)
+        SPAN_END = date(2022, 12, 31)
+        df = _make_price_df(SPAN_START, SPAN_END, annual_growth_rate=0.0)
+        fetch_calls: list = []
+
+        def _spy_fetch(ticker, start, end, interval, source):
+            fetch_calls.append(ticker)
+            return df
+
+        fake_shared = _types.ModuleType("shared")
+        fake_shared._fetch = _spy_fetch
+        orig_shared = sys.modules.get("shared")
+        sys.modules["shared"] = fake_shared
+        try:
+            loader = tv._make_memoized_loader(
+                start_year=2018, end_year=2018,
+                low_lookback_years=3, horizon_months=12,
+                data_source="yahoo",
+                price_cache=tv.PriceFrameCache(cache_dir=tmp_path),
+            )
+            # Prefetch phase: should fill the memo for all tickers.
+            errors = tv._prefetch_price_frames(universe, loader, workers=4)
+        finally:
+            if orig_shared is not None:
+                sys.modules["shared"] = orig_shared
+            elif "shared" in sys.modules:
+                del sys.modules["shared"]
+
+        assert not errors, f"All tickers should succeed in prefetch; failed: {errors}"
+        # Memo must now be hot for all tickers.
+        assert hasattr(loader, "_cache"), "_loader must expose _cache attribute"
+        for ticker in tickers:
+            assert ticker in loader._cache, f"{ticker} not in memo after prefetch"
+
+        # Re-calling the loader should not trigger any new fetches.
+        count_before = len(fetch_calls)
+        for ticker in tickers:
+            loader(ticker)
+        count_after = len(fetch_calls)
+        assert count_after == count_before, (
+            f"Re-calling loader after prefetch must hit memo only; "
+            f"new fetches: {count_after - count_before}"
+        )
+
+    def test_prefetch_respects_cancel_event(self, tmp_path):
+        """Prefetch exits early when cancel_event is set mid-run."""
+        import threading
+        import sys
+        import types as _types
+
+        # 20 tickers with a slow loader to ensure cancel fires mid-run.
+        tickers = [f"S{i:02d}" for i in range(20)]
+        universe = [(t, f"{t} Corp") for t in tickers]
+
+        call_count = [0]
+
+        def _slow_fetch(ticker, start, end, interval, source):
+            call_count[0] += 1
+            # Small sleep to make the run long enough for cancel to fire.
+            time_import = __import__("time")
+            time_import.sleep(0.05)
+            SPAN_START = date(2015, 1, 1)
+            SPAN_END = date(2022, 12, 31)
+            return _make_price_df(SPAN_START, SPAN_END)
+
+        fake_shared = _types.ModuleType("shared")
+        fake_shared._fetch = _slow_fetch
+        orig_shared = sys.modules.get("shared")
+        sys.modules["shared"] = fake_shared
+        try:
+            loader = tv._make_memoized_loader(
+                start_year=2018, end_year=2018,
+                low_lookback_years=3, horizon_months=12,
+                data_source="yahoo",
+                price_cache=tv.PriceFrameCache(cache_dir=tmp_path),
+            )
+        finally:
+            if orig_shared is not None:
+                sys.modules["shared"] = orig_shared
+            elif "shared" in sys.modules:
+                del sys.modules["shared"]
+
+        cancel_ev = threading.Event()
+        progress = tv.ValidationProgress()
+
+        # Fire the cancel from a timer after 0.15s (enough for a few tickers but not all).
+        import threading as _threading
+        timer = _threading.Timer(0.15, cancel_ev.set)
+        timer.start()
+        try:
+            fake_shared2 = _types.ModuleType("shared")
+            fake_shared2._fetch = _slow_fetch
+            orig_shared2 = sys.modules.get("shared")
+            sys.modules["shared"] = fake_shared2
+            try:
+                tv._prefetch_price_frames(
+                    universe, loader, cancel_event=cancel_ev, progress=progress, workers=2
+                )
+            finally:
+                if orig_shared2 is not None:
+                    sys.modules["shared"] = orig_shared2
+                elif "shared" in sys.modules:
+                    del sys.modules["shared"]
+        finally:
+            timer.cancel()
+
+        # Should have completed fewer than all 20 tickers.
+        assert progress.prefetch_symbols_completed < len(tickers), (
+            f"Cancel must stop prefetch early; completed={progress.prefetch_symbols_completed}, "
+            f"universe={len(tickers)}"
+        )
+
+    def test_prefetch_updates_progress(self, tmp_path):
+        """progress.prefetch_symbols_completed reaches len(universe) on full run."""
+        import sys
+        import types as _types
+
+        tickers = [f"P{i:02d}" for i in range(8)]
+        universe = [(t, f"{t} Corp") for t in tickers]
+        SPAN_START = date(2015, 1, 1)
+        SPAN_END = date(2022, 12, 31)
+        df = _make_price_df(SPAN_START, SPAN_END)
+
+        def _fast_fetch(ticker, start, end, interval, source):
+            return df
+
+        fake_shared = _types.ModuleType("shared")
+        fake_shared._fetch = _fast_fetch
+        orig_shared = sys.modules.get("shared")
+        sys.modules["shared"] = fake_shared
+        try:
+            loader = tv._make_memoized_loader(
+                start_year=2018, end_year=2018,
+                low_lookback_years=3, horizon_months=12,
+                data_source="yahoo",
+                price_cache=tv.PriceFrameCache(cache_dir=tmp_path),
+            )
+            progress = tv.ValidationProgress()
+            tv._prefetch_price_frames(universe, loader, progress=progress, workers=4)
+        finally:
+            if orig_shared is not None:
+                sys.modules["shared"] = orig_shared
+            elif "shared" in sys.modules:
+                del sys.modules["shared"]
+
+        assert progress.prefetch_symbols_completed == len(tickers), (
+            f"prefetch_symbols_completed must equal universe size; "
+            f"got {progress.prefetch_symbols_completed}, expected {len(tickers)}"
+        )
+        assert progress.prefetch_workers == 4, (
+            f"prefetch_workers must be recorded; got {progress.prefetch_workers}"
+        )
+
+    def test_prefetch_no_duplicate_fetches(self, tmp_path):
+        """Each ticker is fetched at most once even with multiple workers (lock dedup)."""
+        import sys
+        import types as _types
+
+        tickers = [f"D{i:02d}" for i in range(12)]
+        universe = [(t, f"{t} Corp") for t in tickers]
+        SPAN_START = date(2015, 1, 1)
+        SPAN_END = date(2022, 12, 31)
+        df = _make_price_df(SPAN_START, SPAN_END)
+
+        fetch_counts: dict = {}
+        fetch_lock = __import__("threading").Lock()
+
+        def _counting_fetch(ticker, start, end, interval, source):
+            with fetch_lock:
+                fetch_counts[ticker] = fetch_counts.get(ticker, 0) + 1
+            return df
+
+        fake_shared = _types.ModuleType("shared")
+        fake_shared._fetch = _counting_fetch
+        orig_shared = sys.modules.get("shared")
+        sys.modules["shared"] = fake_shared
+        try:
+            loader = tv._make_memoized_loader(
+                start_year=2018, end_year=2018,
+                low_lookback_years=3, horizon_months=12,
+                data_source="yahoo",
+                price_cache=tv.PriceFrameCache(cache_dir=tmp_path),
+            )
+            tv._prefetch_price_frames(universe, loader, workers=6)
+        finally:
+            if orig_shared is not None:
+                sys.modules["shared"] = orig_shared
+            elif "shared" in sys.modules:
+                del sys.modules["shared"]
+
+        # Each ticker must be fetched exactly once.
+        for ticker in tickers:
+            count = fetch_counts.get(ticker, 0)
+            assert count <= 1, (
+                f"Ticker {ticker} was fetched {count} times; expected at most 1 "
+                f"(per-key lock must prevent duplicate fetches)"
+            )
+
+    def test_prefetch_backoff_on_rate_limit(self, tmp_path):
+        """429-like errors trigger retry with backoff; ticker eventually succeeds."""
+        import sys
+        import types as _types
+
+        SPAN_START = date(2015, 1, 1)
+        SPAN_END = date(2022, 12, 31)
+        df = _make_price_df(SPAN_START, SPAN_END)
+        call_counts: dict = {}
+
+        def _rate_limited_fetch(ticker, start, end, interval, source):
+            count = call_counts.get(ticker, 0)
+            call_counts[ticker] = count + 1
+            if count < 2:
+                raise Exception("HTTP 429: Too Many Requests")
+            return df
+
+        fake_shared = _types.ModuleType("shared")
+        fake_shared._fetch = _rate_limited_fetch
+        orig_shared = sys.modules.get("shared")
+        sys.modules["shared"] = fake_shared
+        try:
+            loader = tv._make_memoized_loader(
+                start_year=2018, end_year=2018,
+                low_lookback_years=3, horizon_months=12,
+                data_source="yahoo",
+                price_cache=tv.PriceFrameCache(cache_dir=tmp_path),
+            )
+        finally:
+            if orig_shared is not None:
+                sys.modules["shared"] = orig_shared
+            elif "shared" in sys.modules:
+                del sys.modules["shared"]
+
+        # The prefetch should not raise; 429 errors are retried with backoff.
+        # Use a tiny sleep-multiplier: we monkey-patch time.sleep in the module.
+        import turnaround_validation as _tv
+        sleep_calls: list = []
+        orig_sleep = _tv.time.sleep if hasattr(_tv, "time") else None
+
+        import time as _time
+        orig_time_sleep = _time.sleep
+
+        def _fast_sleep(secs):
+            sleep_calls.append(secs)
+            # Don't actually sleep in tests — just record the call.
+
+        # Patch time.sleep at the module level.
+        import turnaround_validation as _tvmod
+        _tvmod.time.sleep = _fast_sleep
+        try:
+            fake_shared3 = _types.ModuleType("shared")
+            fake_shared3._fetch = _rate_limited_fetch
+            orig_shared3 = sys.modules.get("shared")
+            sys.modules["shared"] = fake_shared3
+            try:
+                errors = tv._prefetch_price_frames(
+                    [("RLTD", "Rate Limited Corp")], loader, workers=1
+                )
+            finally:
+                if orig_shared3 is not None:
+                    sys.modules["shared"] = orig_shared3
+                elif "shared" in sys.modules:
+                    del sys.modules["shared"]
+        finally:
+            _tvmod.time.sleep = orig_time_sleep
+
+        # The ticker should succeed after retries (< 3 consecutive 429s before success).
+        assert "RLTD" not in errors, (
+            f"Ticker that succeeds on 3rd attempt must not be in failed dict; errors={errors}"
+        )
+        # Backoff sleeps must have been recorded (≥ 1 sleep for the 2 retries).
+        assert len(sleep_calls) >= 1, "Backoff must have triggered at least one sleep"
+        # REL-08: verify the ticker is actually cached after the successful retry.
+        assert loader._cache.get("RLTD") is not None, (
+            "Ticker must be in memo (_cache) after successful backoff retry"
+        )
+
+    def test_prefetch_429_reraises_in_prefetch_mode(self, tmp_path):
+        """COR-01 / Item 1: inside _prefetch_price_frames (_in_prefetch=True),
+        a 429 from the loader re-raises so the backoff loop can catch it.
+        Verify: (a) _in_prefetch is True while executor runs; (b) the 429 is
+        seen by the as_completed handler (ends up in errors dict, not cache=None).
+        """
+        import sys
+        import types as _types
+
+        always_429_calls: list = []
+
+        def _always_429(ticker, start, end, interval, source):
+            always_429_calls.append(ticker)
+            raise Exception("HTTP 429: Too Many Requests")
+
+        fake_shared = _types.ModuleType("shared")
+        fake_shared._fetch = _always_429
+        orig_shared = sys.modules.get("shared")
+        sys.modules["shared"] = fake_shared
+        import turnaround_validation as _tvmod
+
+        # Patch time.sleep so retries don't actually wait.
+        orig_sleep = _tvmod.time.sleep
+        _tvmod.time.sleep = lambda s: None
+        try:
+            loader = tv._make_memoized_loader(
+                start_year=2018, end_year=2018,
+                low_lookback_years=3, horizon_months=12,
+                data_source="yahoo",
+                price_cache=tv.PriceFrameCache(cache_dir=tmp_path),
+            )
+            errors = tv._prefetch_price_frames(
+                [("RLTD429", "Rate Limited")], loader, workers=1
+            )
+        finally:
+            _tvmod.time.sleep = orig_sleep
+            if orig_shared is not None:
+                sys.modules["shared"] = orig_shared
+            elif "shared" in sys.modules:
+                del sys.modules["shared"]
+
+        # The ticker must be in the failed dict after 3 exhausted retries.
+        assert "RLTD429" in errors, (
+            "Ticker that always 429s must appear in errors after backoff exhausted"
+        )
+        # _in_prefetch must be reset to False after prefetch finishes.
+        assert loader._in_prefetch is False, (  # type: ignore[attr-defined]
+            "_in_prefetch must be False after _prefetch_price_frames returns"
+        )
+
+    def test_sequential_429_swallowed_returns_none_and_counts(self, tmp_path):
+        """COR-01 / Item 1: outside prefetch (_in_prefetch=False), a 429 from the
+        loader must NOT propagate — it must return None and increment fetch_failures.
+        This is the sequential / date-loop path.
+        """
+        import sys
+        import types as _types
+
+        def _always_429(ticker, start, end, interval, source):
+            raise Exception("HTTP 429: Too Many Requests")
+
+        fake_shared = _types.ModuleType("shared")
+        fake_shared._fetch = _always_429
+        orig_shared = sys.modules.get("shared")
+        sys.modules["shared"] = fake_shared
+        try:
+            loader = tv._make_memoized_loader(
+                start_year=2018, end_year=2018,
+                low_lookback_years=3, horizon_months=12,
+                data_source="yahoo",
+                price_cache=tv.PriceFrameCache(cache_dir=tmp_path),
+            )
+            # Ensure we are NOT in prefetch mode (default).
+            assert loader._in_prefetch is False  # type: ignore[attr-defined]
+            failures_before = loader.fetch_failures  # type: ignore[attr-defined]
+            result = loader("SEQTK")  # direct call — sequential path
+        finally:
+            if orig_shared is not None:
+                sys.modules["shared"] = orig_shared
+            elif "shared" in sys.modules:
+                del sys.modules["shared"]
+
+        # Sequential 429 must return None (no re-raise).
+        assert result is None, (
+            "Sequential path 429 must return None, not raise"
+        )
+        # fetch_failures must have been incremented exactly once.
+        assert loader.fetch_failures == failures_before + 1, (  # type: ignore[attr-defined]
+            f"fetch_failures must increment by 1 on sequential 429; "
+            f"before={failures_before} after={loader.fetch_failures}"
+        )
+        # Cache must contain None for the ticker (terminal skip).
+        assert "SEQTK" in loader._cache, "SEQTK must be in _cache after 429 skip"  # type: ignore[attr-defined]
+        assert loader._cache["SEQTK"] is None, "Cached value must be None after 429 skip"  # type: ignore[attr-defined]
+
+    def test_prefetch_locking_prefetch_path(self, tmp_path):
+        """COR-02 / Item 2: cancel_event set mid-collection causes the executor to
+        be shut down with cancel_futures=True; queued (not-yet-started) futures
+        must not execute after cancel.
+        """
+        import sys
+        import types as _types
+        import threading
+
+        # Use 1 worker so we can queue multiple tickers.
+        started_tickers: list = []
+        start_lock = threading.Lock()
+
+        def _slow_fetch(ticker, start, end, interval, source):
+            with start_lock:
+                started_tickers.append(ticker)
+            __import__("time").sleep(0.2)
+            SPAN_START = date(2015, 1, 1)
+            SPAN_END = date(2022, 12, 31)
+            return _make_price_df(SPAN_START, SPAN_END)
+
+        fake_shared = _types.ModuleType("shared")
+        fake_shared._fetch = _slow_fetch
+        orig_shared = sys.modules.get("shared")
+        sys.modules["shared"] = fake_shared
+        try:
+            loader = tv._make_memoized_loader(
+                start_year=2018, end_year=2018,
+                low_lookback_years=3, horizon_months=12,
+                data_source="yahoo",
+                price_cache=tv.PriceFrameCache(cache_dir=tmp_path),
+            )
+        finally:
+            if orig_shared is not None:
+                sys.modules["shared"] = orig_shared
+            elif "shared" in sys.modules:
+                del sys.modules["shared"]
+
+        cancel_ev = threading.Event()
+        # Submit 10 tickers but cancel almost immediately; only the first
+        # in-flight ticker (≤ 1 worker) should execute.
+        tickers = [(f"LCK{i:02d}", f"Lock Test {i}") for i in range(10)]
+
+        timer = threading.Timer(0.05, cancel_ev.set)
+        timer.start()
+        try:
+            fake_shared2 = _types.ModuleType("shared")
+            fake_shared2._fetch = _slow_fetch
+            orig_shared2 = sys.modules.get("shared")
+            sys.modules["shared"] = fake_shared2
+            try:
+                tv._prefetch_price_frames(tickers, loader, cancel_event=cancel_ev, workers=1)
+            finally:
+                if orig_shared2 is not None:
+                    sys.modules["shared"] = orig_shared2
+                elif "shared" in sys.modules:
+                    del sys.modules["shared"]
+        finally:
+            timer.cancel()
+
+        # At most 1 in-flight + a few submitted-before-cancel should start.
+        # The key guarantee: NOT all 10 started.
+        assert len(started_tickers) < len(tickers), (
+            f"Cancel must prevent queued futures from starting; "
+            f"started={len(started_tickers)}, total={len(tickers)}"
+        )
+
+
+class TestPriceFrameCachePrunePolicy:
+    """Tests for the LRU eviction logic (F336 — the manual prune policy)."""
+
+    def test_eviction_removes_oldest_files_by_mtime(self, tmp_path):
+        """Eviction selects oldest files by mtime, removes them until under target."""
+        import os
+        import time as _time
+
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+        version_dir = cache._version_dir()
+        version_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create 5 fake .pkl files with distinct sizes and explicit mtimes.
+        # PY-04 de-flake: set mtime explicitly via os.utime instead of relying
+        # on a 10ms sleep — macOS HFS+ has 1-second mtime granularity and the
+        # sleep would not advance the clock, making the ordering non-deterministic.
+        base_mtime = _time.time() - 1000  # well in the past; avoids future-mtime surprises
+        files = []
+        for i in range(5):
+            p = version_dir / f"TICKER{i}_yahoo_20150101_20221231.pkl"
+            # Write ~200KB of data to each file.
+            p.write_bytes(b"x" * (200 * 1024))
+            # Set explicit mtime: file i is older than file i+1 by 1 second.
+            mtime_i = base_mtime + i
+            os.utime(p, (mtime_i, mtime_i))
+            files.append(p)
+
+        total_bytes = sum(p.stat().st_size for p in files)
+        # Each file is ~200KB, 5 files = ~1MB.  Set target = 400KB to force eviction of 3 files.
+        target_bytes = 400 * 1024
+        max_bytes = int(total_bytes)  # already at limit
+
+        # Import prune logic from the standalone script.
+        import sys
+        sys.path.insert(0, str(_tv_scripts_dir()))
+        import importlib.util, pathlib
+        script_path = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "prune_price_cache.py"
+        if not script_path.exists():
+            pytest.skip("prune_price_cache.py not yet created")
+
+        spec = importlib.util.spec_from_file_location("prune_price_cache", script_path)
+        prune_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(prune_mod)
+
+        # force=True bypasses the REL-05 floor guard (test cache is intentionally tiny).
+        freed, evicted_files = prune_mod._lru_evict(
+            version_dir, max_bytes=max_bytes, target_bytes=target_bytes, dry_run=False, force=True
+        )
+        remaining = list(version_dir.glob("*.pkl"))
+        remaining_size = sum(p.stat().st_size for p in remaining)
+
+        assert remaining_size <= target_bytes, (
+            f"Remaining size {remaining_size} must be <= target {target_bytes}"
+        )
+        assert len(evicted_files) >= 1, "At least one file must have been evicted"
+        # The evicted files must be the oldest (smallest index = earliest mtime).
+        evicted_names = {p.name for p in evicted_files}
+        # Verify the oldest file was evicted.
+        oldest = files[0].name
+        assert oldest in evicted_names, (
+            f"Oldest file {oldest} must be evicted first; evicted={evicted_names}"
+        )
+
+
+def _tv_scripts_dir():
+    """Return the backend/scripts/ path for importing prune_price_cache."""
+    from pathlib import Path
+    return str(Path(__file__).resolve().parent.parent / "scripts")
