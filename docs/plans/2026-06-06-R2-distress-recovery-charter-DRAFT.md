@@ -1,11 +1,13 @@
-# R-2: Distress Recovery (long) — Pre-Registered Charter
+# R-2: Distress Recovery (long) — Pre-Registered Charter — DRAFT v2
 
-**STATUS: DRAFT — AWAITING JOHN'S APPROVAL. NOTHING RUNS UNTIL APPROVED.**
+**STATUS: DRAFT v2 — AWAITING JOHN'S APPROVAL. NOTHING RUNS UNTIL APPROVED.**
 **To be FROZEN ON WRITE (sha-pinned at approval, same convention as REGIME-TEST / MOMENTUM-TEST / DETERIORATION-TEST / EPISTEMICS-ABLATION).**
 **Date drafted:** 2026-06-06. **Author:** outcome-blind charter agent (no results data consulted — see §0).
 **Experiment ID:** R-2. **Engine:** event-clock harness (`backend/research/event_study.py`, `run_event_study`, schema v2).
 
 This is a pre-registered **hypothesis test**. No claim of "edge", "alpha", or "tradeable" structure is made anywhere except in negation. The premise is a deliberate **inversion** of the frozen D2 deterioration-short screen (`backend/research/config_deterioration.py`), re-cast as a **long** recovery hypothesis. The single criterion (the D2 state) is fixed; there is no grid and nothing to tune.
+
+> **v2 revision note (pre-outcome, legal under §6 amendment rule).** John reviewed the v1 DRAFT and flagged a *dose-response* critique of the lab's binary screens generally ("what if the drawdown is 49% not 50%? is the effect proportional to how distressed?"). For R-2 this critique is **deliberately deferred, not adopted**: the D2 state is kept **frozen exactly as-is** because R-2's whole purpose is to test the *specific historical phenomenon* the deterioration-short screen already defined (a continuous-distress variant would be a *different* premise, not this one). v2 makes two additions only: (1) a **pre-registered perturbation band** (§3b) that re-runs the primary under small nudges to the D2 thresholds and requires *sign stability only* — institutionalizing John's "what if 49% not 50%?" as a robustness check without changing the frozen screen; and (2) a **registered FUTURE variant R-2b** (§1) — "depth of distress as a continuous dose" — *explicitly deferred to its own charter* so it cannot be confused with this charter's scope. The 2021–2024 contamination ban is **untouched**. No outcome data was read in making this revision; pre-outcome amendment is legal under §6.
 
 ---
 
@@ -38,6 +40,14 @@ This is a pre-registered **hypothesis test**. No claim of "edge", "alpha", or "t
 - **(b) EXPLORE / REFINEMENT = 2015–2020 ONLY.** Hypothesis-generating, open. This is pre-2021 data the deterioration experiment's *confirm* read never touched (its confirm was 2021–2024; its explore was 2015–2020 but for the SHORT framing, not this LONG inversion). 2015–2020 is the legitimate sandbox for checking the mechanism is wired correctly and reporting an explore-window direction, with **no alpha drawn** there.
 
 **Mechanically:** the harness partitions on `entry_date <= explore_cutoff → "explore"` else `"confirm"`. With `explore_cutoff = 2020-12-31` (the hard ceiling, NOT overridden), every 2021+ event lands in the harness's `"confirm"` bucket. **The grading agent (§8) MUST further filter that bucket to `entry_date ≥ 2025-01-01` before reading any confirm number, and MUST discard every 2021-01-01…2024-12-31 event as contaminated.** The 2021–2024 events are emitted into the events table only so survivorship counting is complete; they are tagged and excluded from all evidential reads. This filtering rule is frozen here so it cannot be relaxed post-hoc to borrow 2021–2024 power.
+
+### NOTE — John's dose-response critique, and why R-2 keeps the D2 state BINARY (the deferred R-2b variant)
+
+John's standing critique of the lab's binary screens is the **dose-response** one: a hard 50%-off-high cutoff is arbitrary at its edge (why not 49%? why not 55%?), and a richer design would treat *depth of distress* as a continuous dose and ask whether forward recovery rises smoothly with it. **R-2 deliberately does NOT adopt that here**, for a specific and frozen reason:
+
+> **R-2's purpose is to test the *specific historical phenomenon* the deterioration-short screen already defined — the D2 *state* exactly as `config_deterioration.py` froze it.** Re-casting distress as a continuous dose would change *what is being tested*: it would no longer be "does the D2 cohort (as historically defined) recover?" but "is recovery monotone in distress depth?" — a different question with a different cohort, a different null, and its own multiplicity. Folding that into R-2 would silently mutate the premise mid-flight and forfeit the clean inversion of an already-frozen screen. So the binary D2 state is **kept frozen as-is on purpose** (it is a feature, not an oversight), and the dose-response idea is **registered as a separate future experiment**:
+
+> **R-2b (REGISTERED FUTURE VARIANT — DEFERRED, not in scope here): "depth-of-distress as continuous dose."** A future charter that replaces the binary D2 gates with a *continuous distress score* (e.g. a monotone function of `pct_off_high` and `pct_above_low`, frozen with its own constants and hashed) and tests **dose-response monotonicity** of forward long excess across distress-depth quintiles — analogous to R-1's dose-response design. **R-2b is explicitly NOT this charter**: it would carry its own ID, its own pre-registration, its own alpha draw, its own contamination analysis (its score is *also* post-hoc relative to 2021–2024 and would inherit the same 2025+-only confirm discipline), and its own sha pin. It is named here **solely so that R-2's binary scope is unambiguous and the dose-response idea is not quietly smuggled into R-2's verdict.** Nothing in R-2b is decided, run, or graded by this charter. (The §3b perturbation band below is the *only* nod to John's edge-sensitivity concern that R-2 itself carries — and it is a sign-stability robustness check on the frozen binary screen, NOT a continuous-dose redesign.)
 
 ---
 
@@ -84,6 +94,24 @@ R-2 does **not** rank-truncate to a fixed N-per-cohort (unlike the EPISTEMICS ar
 
 Until BOTH hold, R-2 is **PENDING — INSUFFICIENT FRESH EVENTS**; the charter **waits** and re-checks on a later cache refresh. It does NOT grade a thin window and it does NOT relax the threshold. (N_min = 30 is the conventional small-sample floor below which the moving-block bootstrap on cohort-relative excess is too coarse to exclude zero meaningfully; ~30 events across ≥ 4 quarters is the minimum at which the §4 era-agreement gate is even defined.)
 
+### 3b. PRE-REGISTERED PERTURBATION BAND (John's "what if 49% not 50%?", institutionalized — frozen)
+
+The D2 state is kept **frozen as-is** (§0, §1 NOTE) — the dose-response redesign is deferred to R-2b. But John's *edge-sensitivity* point still applies to a binary screen: a verdict that hinges on whether the drawdown cut is 50% vs 49% is fragile. So the charter **mandates** re-running the §4 primary (the H1 63td mean-excess sign on the fresh 2025+ confirm) under a small, frozen band of nudges to the D2 thresholds, and requires **sign stability only** — *not* significance at every setting. This is a **frozen robustness check, NOT a search and NOT a re-tune of the screen**: its only output is a per-perturbation sign of the mean 63td excess and the binary verdict-capping flag below. No perturbation result is ever selected as "the" answer; the frozen-D2 result of §2 remains the headline. (This band is the *only* edge-sensitivity nod R-2 carries; the continuous-dose treatment is R-2b's, not this charter's.)
+
+**The frozen perturbation set (decided now, no additions post-hoc):**
+
+| Perturbation | Settings re-run | What it answers |
+|---|---|---|
+| **Drawdown gate (Gate A) 50% → ±5pp** | `pct_off_high` threshold ∈ {**45, 50 (frozen primary), 55**} % | John's "what if 49% not 50%?" — does nudging the crash-depth cut flip the recovery sign? |
+| **Low-proximity gate (Gate B) ±5pp** | `pct_above_low` threshold ∈ {**20, 25 (frozen primary), 30**} % | Does where we draw "near the 1-year low" flip the sign? |
+
+For **each** of the {Gate-A ∈ {45,50,55}} × {Gate-B ∈ {20,25,30}} = 9 settings, the events are re-derived (the as_of point-in-time D2 test re-evaluated at the perturbed thresholds), the same §3 accrual/occupancy discipline applies (a perturbed setting that falls below accrual is reported as *thin, sign-only*), and the mean 63td excess sign on the 2025+ confirm is recorded. Gate D (≥252 td history) and the revenue-veto-OFF choice are **not** perturbed (they are structural, not edge-thresholds). The band is run on **both** explore (2015–2020, reported) and, if R-2 reaches grading, the 2025+ confirm (part of the single sealed touch).
+
+**SIGN-STABILITY REQUIREMENT (frozen, verdict-capping):**
+- The requirement is **sign stability of the mean 63td excess across the *entire* band** — every setting in the 3×3 grid that meets accrual must show the **same sign** as the frozen-D2 primary. Statistical significance is **not** required at every band setting (perturbed cohorts shrink and small-n bootstraps are coarse); only the **direction** must hold.
+- **A sign flip anywhere in the (accrual-meeting) band → the verdict is CAPPED at WEAKENED / NOT-CONFIRMED**, regardless of how significant the headline (frozen-D2) p-value is. A recovery finding that depends on whether the crash cut is 45% vs 55%, or the low-proximity cut is 20% vs 30%, is fragile by John's own standard and is not promotable to CONFIRMED.
+- Settings that **fail accrual** (too few perturbed events) are reported as `thin/undetermined` and do **not** by themselves trigger the cap (absence of a sign is not a flip); the cap fires only on an actual sign flip among accrual-meeting settings. The full 3×3 band table (sign / `thin` per cell) is **reported in the verdict** so the cap is auditable. This is a pre-registered branch, not a post-hoc carve-out.
+
 ---
 
 ## 4. OUTCOME SPEC + HYPOTHESES (frozen before any outcome data)
@@ -105,10 +133,11 @@ Until BOTH hold, R-2 is **PENDING — INSUFFICIENT FRESH EVENTS**; the charter *
   1. accrual gate met (§3: ≥ 30 completed-63td confirm events across ≥ 4 quarters) AND occupancy pre-check passes;
   2. explore MDE gate passed (§3: explore 63td excess MDE ≤ 4.0 ppt) — recorded before confirm contact;
   3. confirm-window 63td mean-excess **moving-block-bootstrap CI excludes zero on the positive side** (lower bound > 0) at the per-comparison α (§5);
-  4. **per-quarter direction agreement ≥ 0.60** on the confirm window (fraction of 2025+ quarters whose median 63td excess > 0 is ≥ 0.60).
+  4. **per-quarter direction agreement ≥ 0.60** on the confirm window (fraction of 2025+ quarters whose median 63td excess > 0 is ≥ 0.60);
+  5. **perturbation sign-stability holds (§3b)** — the confirm mean 63td excess sign is stable across the entire accrual-meeting 3×3 D2-threshold band. A sign flip caps the verdict at WEAKENED / NOT-CONFIRMED (§3b).
 - **VERDICT DEFINITIONS:**
-  - **CONFIRMED** — all four hold.
-  - **WEAKENED / NOT-CONFIRMED** — CI touches/crosses zero, or quarter-agreement < 0.60, while the point estimate is non-negative. The recovery premise is not established as a positive long excess; it remains an inverted-intuition, not a measured edge.
+  - **CONFIRMED** — all five hold (including §3b perturbation sign-stability).
+  - **WEAKENED / NOT-CONFIRMED** — CI touches/crosses zero, or quarter-agreement < 0.60, **or a §3b perturbation-band sign flip occurred** (the cap fires even if the frozen-D2 headline cleared), while the point estimate is non-negative. The recovery premise is not established as a positive long excess; it remains an inverted-intuition, not a measured edge.
   - **REFUTED-AS-STATED** — sign-inverted: mean 63td excess **< 0 with the bootstrap CI excluding zero on the negative side**. The distressed-but-still-filing names *underperformed* their peers — the short framing (D2 as short) is the better-supported reading and the recovery inversion is wrong.
   - **UNTESTABLE / PENDING** — accrual gate unmet (PENDING, wait per §3), or occupancy < the §3/§4 minimum (UNTESTABLE), or explore MDE > 4.0 ppt (UNDERPOWERED — NOT GRADED).
 
@@ -131,6 +160,7 @@ Until BOTH hold, R-2 is **PENDING — INSUFFICIENT FRESH EVENTS**; the charter *
 | 5 | Per-2025+-quarter excess breakdown (H2 mechanism) | 2025+ confirm | No — within-H1 agreement, no separate draw |
 | 6 | GROSS-of-cost figure alongside NET | both | No — NET is judged; one decision rule |
 | 7 | **CONTAMINATED 2021–2024 diagnostic** (if computed at all) | 2021–2024 | **No — non-evidential by construction (§1); draws no alpha, updates no axiom** |
+| 8 | **Perturbation band** (3×3 D2-threshold nudges, §3b) | both | No — sign-stability robustness re-run of H1; draws no alpha (its only effect is the WEAKENED cap on a sign flip) |
 
 **Count: 1 primary alpha-bearing comparison (H1, 63td, confirm).** A single pre-registered hypothesis on a single pre-registered horizon on a single fresh window.
 
@@ -159,7 +189,7 @@ Until BOTH hold, R-2 is **PENDING — INSUFFICIENT FRESH EVENTS**; the charter *
 
 **SEED = 20260606** (all bootstrap and NW draws, explore and confirm).
 
-**Amendment rule:** this charter is **FROZEN ON WRITE** (sha-pinned at approval). Any change after outcome contact — to the event definition (the D2-state test, the on-time-filing form set, the entry lag), the windows (especially the 2025+ confirm floor or the 2021–2024 exclusion), N_min / accrual gate, the MDE abort bar (4.0 ppt), the horizons, the de-clustering window, the cost/outcome spec, the bootstrap seed, the hypotheses, or the alpha allocation — constitutes a **NEW experiment** with its own charter and its own alpha draw; it does not amend this one. Pre-outcome implementation-mechanics fixes (a bug caught before any result is read) are permitted and logged, provided no outcome data has been consulted. The §3 accrual/occupancy/MDE branches and the §1 contamination-exclusion rule are **pre-registered branches, NOT amendments**.
+**Amendment rule:** this charter is **FROZEN ON WRITE** (sha-pinned at approval). Any change after outcome contact — to the event definition (the D2-state test, the on-time-filing form set, the entry lag), the windows (especially the 2025+ confirm floor or the 2021–2024 exclusion), N_min / accrual gate, the MDE abort bar (4.0 ppt), the horizons, the de-clustering window, the cost/outcome spec, the bootstrap seed, the hypotheses, **the §3b perturbation band (its members or the sign-stability cap)**, or the alpha allocation — constitutes a **NEW experiment** with its own charter and its own alpha draw; it does not amend this one. Pre-outcome implementation-mechanics fixes (a bug caught before any result is read) are permitted and logged, provided no outcome data has been consulted. The §3 accrual/occupancy/MDE branches, the §3b perturbation band, and the §1 contamination-exclusion rule are **pre-registered branches, NOT amendments**. **The deferred R-2b continuous-dose variant (§1 NOTE) is explicitly OUT OF SCOPE** — it is a separate future experiment with its own ID/charter/alpha/sha, never an amendment of R-2. **This v2 revision itself is a legal pre-outcome amendment** of the v1 DRAFT (no result was ever read for R-2; v1 was never run): it keeps the D2 state frozen and only *adds* the §3b band, the §1 R-2b note, and the matching verdict/grading wiring.
 
 ---
 
@@ -173,7 +203,7 @@ Until BOTH hold, R-2 is **PENDING — INSUFFICIENT FRESH EVENTS**; the charter *
 3. Confirm the explore **MDE gate** was recorded and passed (explore 63td excess MDE ≤ 4.0 ppt) BEFORE any confirm contact. If MDE > 4.0 ppt → **UNDERPOWERED — NOT GRADED**, stop.
 4. Apply the §1 **contamination filter** (`entry_date ≥ 2025-01-01`; discard 2021–2024) before reading any confirm number.
 5. Run the F338 face-validity anchors (§6) and read the artifact before interpreting it.
-6. Evaluate H1 against its four-part CONFIRMED bar (§4) at α = 0.0125 (§5), check the survivorship `SUSPECT` flag (§6), and emit a verdict doc + the per-quarter breakdown.
+6. Evaluate H1 against its five-part CONFIRMED bar (§4) at α = 0.0125 (§5), run the §3b perturbation band on the confirm window and apply the sign-stability cap, check the survivorship `SUSPECT` flag (§6), and emit a verdict doc + the per-quarter breakdown + the 3×3 perturbation-band sign table.
 
 **ABORT / STAND-DOWN criteria (any one halts grading, frozen):**
 - Explore 63td excess **MDE > 4.0 ppt** → UNDERPOWERED — NOT GRADED (test cannot resolve an economically-meaningful edge).
@@ -181,10 +211,11 @@ Until BOTH hold, R-2 is **PENDING — INSUFFICIENT FRESH EVENTS**; the charter *
 - **Occupancy** < 3 populated sub-eras in the relevant window → UNTESTABLE for that window.
 - **Survivorship warning fires** (no-price-data fraction > 10%) → verdict marked SUSPECT regardless of the bootstrap result; a CONFIRMED that does not survive F335 worst-case phantom-delisting injection triggers the R7 paid-data path and is NOT promoted.
 - **Bootstrap block-size cap binds** (`block_size_capped = True`) at 63td → flagged in the verdict as reduced inferential value (iid-labelled-as-block); a CONFIRMED resting on a capped bootstrap is reported with that caveat foregrounded.
+- **Perturbation-band sign flip** (§3b) among accrual-meeting D2-threshold settings → caps the verdict at WEAKENED / NOT-CONFIRMED regardless of the frozen-D2 headline p-value.
 
 **VERDICT DEFINITIONS (restated, single source):**
-- **CONFIRMED** — accrual + occupancy + MDE gates pass; 2025+ 63td mean-excess bootstrap CI lower bound > 0 at α = 0.0125; per-quarter agreement ≥ 0.60; not SUSPECT. The distress-recovery long premise is a **measured** positive medium-horizon excess on virgin 2025+ data.
-- **WEAKENED / NOT-CONFIRMED** — gates pass but CI touches/crosses zero or quarter-agreement < 0.60, point estimate non-negative. Inversion not established as a measured edge.
+- **CONFIRMED** — accrual + occupancy + MDE gates pass; 2025+ 63td mean-excess bootstrap CI lower bound > 0 at α = 0.0125; per-quarter agreement ≥ 0.60; **§3b perturbation sign-stability holds**; not SUSPECT. The distress-recovery long premise is a **measured** positive medium-horizon excess on virgin 2025+ data, stable to small D2-threshold nudges.
+- **WEAKENED / NOT-CONFIRMED** — gates pass but CI touches/crosses zero, or quarter-agreement < 0.60, **or a §3b perturbation-band sign flip occurred**, point estimate non-negative. Inversion not established as a measured (or edge-stable) edge.
 - **REFUTED-AS-STATED** — 63td mean excess < 0 with CI excluding zero on the negative side. The distressed-but-still-filing names underperformed peers; the original short framing is the better-supported reading.
 - **PENDING** — accrual gate unmet; wait.
 - **UNTESTABLE** — occupancy insufficient.
@@ -203,6 +234,8 @@ No verdict row is selected until the confirm number is read; the definitions are
 
 **How we judge it.** For each trade we compute **excess return** = how much the stock beat (or trailed) the *typical* tradeable stock on the same day. We add up the excesses and ask, with a statistical resampling method (a "bootstrap" — it shuffles the data thousands of times to see if the average could just be luck), whether the average beat is **reliably above zero**, not a fluke. We also require the result to be **positive in most calendar quarters**, not driven by one lucky stretch.
 
+**The wiggle test (why a 50% cutoff doesn't make-or-break the answer).** John pointed out that a hard line — "crashed at least *50%*" — is arbitrary at the edge: why not 49%, why not 55%? So before we trust a result, we are *required* to re-run the whole thing with the crash cut nudged to **45% and 55%**, and the "near the low" cut nudged to **20% and 30%** — nine combinations in all — and check that the answer **keeps the same direction** every time (we don't demand it stay statistically strong at every nudge, just that it doesn't *flip* from "they recover" to "they keep falling"). If a one-step nudge flips the sign, the finding is fragile and we downgrade it to "not confirmed" no matter how good the headline number looked. (This is a robustness check on the *existing* yes/no screen. A deeper redesign — treating "how distressed" as a sliding *dose* and asking whether recovery grows smoothly with distress depth — is John's bigger idea, and we've written it down as a **separate future experiment, R-2b**, kept out of this one on purpose so the two don't get tangled. R-2 tests the specific historical group exactly as it was originally defined; R-2b would test the dose idea, later, on its own terms.)
+
 **Why 2021–2024 is forbidden — the most important rule here.** A fair test of an idea has to be judged on data the idea *had never seen* when it was dreamed up. This particular idea — "flip the short bet into a long bet" — was **invented by looking at how these stocks behaved in 2021–2024.** That data already shaped the idea. Grading the idea on the *same* 2021–2024 data would be like writing exam questions by peeking at the answer key and then congratulating yourself for getting them right — it proves nothing. So **2021–2024 is banned as evidence for this idea, in either direction**: we may not use it to support the idea *or* to attack it. Instead:
 - The **real test** uses **2025 onward** — data the whole research program was deliberately *locked out of* until now (the software literally refuses to let earlier experiments peek at 2025+), which keeps it genuinely "unseen" and fair. We grade it **once**, and only after enough 2025+ trades have had time to play out (at least **30 trades** spread over at least **4 different quarters**, each with its full 3-month window finished). If there aren't enough yet, we **wait** — we do not grade a thin, unreliable sample.
 - We're allowed to **practice and sanity-check** on **2015–2020** (older data, never used to grade this idea), but nothing there counts as proof.
@@ -219,7 +252,4 @@ No verdict row is selected until the confirm number is read; the definitions are
 
 ---
 
-**sha256 fingerprint (of this file's content up to and excluding this fingerprint footer):**
-`3151185c64cf444448a194b835d9d3a8d53bc220f1d67ff9d09758c03992ff2e`
-
-Recompute to verify: `awk '/^\*\*sha256 fingerprint/{exit} {print}' <file> | sed '$d' | shasum -a 256` — or more simply, the fingerprint pins the charter body that precedes this footer. On approval, John re-pins the final approved file's full sha256 as the frozen-on-write hash.*
+**sha256 fingerprint.** The v1 self-referential body-hash footer is retired in v2. The **full-file sha256** of this revised v2 DRAFT is recorded in the revision author's return (computed with `shasum -a 256` over the entire file) and is what John re-pins as the frozen-on-write hash on approval. Recompute to verify: `shasum -a 256 docs/plans/2026-06-06-R2-distress-recovery-charter-DRAFT.md`.*
