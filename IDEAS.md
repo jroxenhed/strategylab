@@ -35,7 +35,7 @@ The edgar_cache/form4 store covers 0.40% of pond tickers and is ~97× biased tow
 ## Delisting-complete pond universe (2026-06-05, from premise-free EDA)
 The one out-of-time-confirmed EDA candidate (penny-entry <$2: Δ+31.5pt hit rate, 10/11 confirm cohorts) sits exactly where the currently-listed-only universe bias is worst — bankrupt/delisted sub-$2 names are invisible, inflating touch rates by construction. Any penny-slice claim (and honestly the whole pond's base rates) needs a delisting-inclusive universe source (e.g., EDGAR submissions of deregistered filers, or a survivorship-free price vendor) before validation. This is the single highest-leverage data-quality upgrade the EDA identified. Details in the same doc.
 
-## The Radar desk — event-driven trading system alongside the bots (2026-06-06, John + Claude design conversation)
+## The Desk — event-driven trading system alongside the bots (2026-06-06, John + Claude design conversation; name locked by John 2026-06-06: future full trade-desk page, research/picks/news/event-inbox subpanes, tab label "Desk")
 
 The end-product shape for the research program: **an event desk with receipts**, living as a Discovery panel — not an autopilot. Full reasoning in the 2026-06-06 session; condensed:
 

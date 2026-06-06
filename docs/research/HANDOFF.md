@@ -4,7 +4,7 @@
 
 ## Where we are, in one paragraph
 
-The old quarterly-clock program closed with zero confirmed edges — and we then proved (F340) its design couldn't have detected a realistic edge anyway (minimum detectable effect ~3.0pp; its own momentum result was 1.9pp). The new program ("Radar" — name pending John's blessing) tests reactions to *events* (filings, insider trades, ratings) at their actual arrival time. Its engine is built, panel-reviewed, and hardened; its first two experiments are drafted and waiting at John's gate. The product end-state is captured in IDEAS.md: an event inbox in Discovery with conviction-graded playbook cards, paper-tracking every signal forever.
+The old quarterly-clock program closed with zero confirmed edges — and we then proved (F340) its design couldn't have detected a realistic edge anyway (minimum detectable effect ~3.0pp; its own momentum result was 1.9pp). The new program ("The Desk" — locked 2026-06-06) tests reactions to *events* (filings, insider trades, ratings) at their actual arrival time. Its engine is built, panel-reviewed, and hardened; its first two experiments are drafted and waiting at John's gate. The product end-state is captured in IDEAS.md: an event inbox in Discovery with conviction-graded playbook cards, paper-tracking every signal forever.
 
 ## Done (2026-06-06)
 
@@ -21,7 +21,7 @@ The old quarterly-clock program closed with zero confirmed edges — and we then
 1. **R-1 insider-cluster charter** — read §0 (plain English, ~3 min) → approve / edit / reject. Approval triggers: build F349+F350 (charter preconditions), extend SIC coverage, run explore + MDE gate; sealed confirm only if gates pass.
 2. **R-2 distress-recovery charter** — same; note its confirm window is 2025+ only (starts a long clock; explore runs immediately).
 3. **Sharadar $50/mo** — only path to delisted prices; defer until a charter needs it (none current does).
-4. **The name** — "Radar" is the standing proposal.
+4. **The name** — RESOLVED: "The Desk" (John, 2026-06-06).
 
 ## Next work, independent of the gate
 
@@ -29,7 +29,7 @@ The old quarterly-clock program closed with zero confirmed edges — and we then
 - **F348** — fundamental-surprise event payloads (revenue acceleration, dilution) on the derived cache → unlocks PEAD-family + F347 conditioning.
 - **Explore mill** — the standing instrument that screens premise-grid cells on 2015–2020 only, FDR-ledgered; the long-term source of charters 3+ (diversification guard: they must come from OUTSIDE the insider/crashed-stock lineage).
 - **F331 + F336** tagged `[next]` for overnight (price prefetch, cache staleness).
-- **Radar desk** stays in IDEAS.md until a first charter confirms; its two charter-independent pieces (live EDGAR poller on the harness schema; paper-tracking tier) can graduate to F-items any time.
+- **The Desk** (product surface) stays in IDEAS.md until a first charter confirms; its two charter-independent pieces (live EDGAR poller on the harness schema; paper-tracking tier) can graduate to F-items any time.
 
 ## Working agreements worth remembering
 
