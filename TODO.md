@@ -13,16 +13,16 @@ _(none open)_
 - [F305](#f305) — [next] sync-todo-index.py writes TODO.md with bare write_text() [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 31 items
+## Open Work — 29 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
-| [Architecture](#architecture) | 10 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F331](#f331), [F342](#f342), [F348](#f348) |
+| [Architecture](#architecture) | 9 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F331](#f331), [F348](#f348) |
 | [Hardening](#hardening) | 8 | [F305](#f305), [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F336](#f336)–[F337](#f337) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 6 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329), [F338](#f338) |
-| [Infra](#infra) | 5 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F344](#f344) |
+| [Infra](#infra) | 4 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309) |
 
 ## Features
 
@@ -50,8 +50,6 @@ _(none open)_
 - [ ] <a id="f199"></a> **F199** Middleware-level request deadline — the architecturally preferred option (c) from F127's design discussion. Today only `/api/backtest/quick/batch` enforces a wall-clock budget; `/api/backtest`, `/api/backtest/walk_forward`, `/api/optimize`, `/api/sensitivity`, `/api/scan`, and the bot-management routes have no upper bound on total response latency. A pure-ASGI middleware (mirroring F86's `BodySizeLimitMiddleware`) could set per-route deadlines via a route-tag → seconds dict, fall back to a sane global default, and respond 504 once exceeded. Trade-offs: (a) inherently can't cancel sync route work mid-call — would need cooperative checkpoints in expensive handlers like `run_backtest`; (b) needs a route-tagging convention so different routes can carry different budgets (intraday quote → 5s, batch backtest → 30s, WFA → 300s); (c) makes the partial-results contract (F127's `error="deadline exceeded"` per-symbol row) inapplicable for non-batch routes — they'd just 504. Worth designing before the next per-route timeout request lands. (from F127 build 28 — option (c) deferred) [hard] [arch] (added 2026-05-13)
 
 - [ ] <a id="f320"></a> **F320** Derived compact fundamentals cache + in-process LRU — every edgar.py parsed accessor (revenue/NI/GP/OCF/shares) independently re-reads and re-parses the full ~1.8MB companyfacts JSON: ~5 parses per (cik, as_of) × 36 as-of dates ≈ 180 redundant MB-scale parses per surviving ticker per validation run. Fix: parse once → persist compact per-CIK derived JSON (~KB: the five quarterly series + shares), accessors read derived only; small lru_cache (~64 entries) for within-run loops; raw companyfacts becomes prunable (largely solves F314). Found while watching the first full-universe run, 2026-06-05. [medium] [arch] (added 2026-06-05)
-
-- [ ] <a id="f342"></a> **F342** Event-time test harness (ideation 2026-06-06 idea 1 build) — rebuild the test clock around filing-arrival timestamps (EDGAR acceptanceDateTime → next tradeable open) instead of 4 fixed dates/year; FDR-based multiplicity bookkeeping replaces the per-experiment alpha budget for event panels. Unlocks the entire untested event-driven family (insider stack, 8-K, Form 144, 13D). Design informed by F340's power curves. Statistics note from F340 review: overlapping forward windows make plain t-tests overconfident on dense event panels, and Newey-West only partially corrects at high overlap (measured FPR ≤20% on MA(8) null vs >30% plain) — the harness's primary test should be block bootstrap or non-overlapping evaluation windows, NW as cross-check. Power context: 40-pick event-time designs reach MDE ≈0.8ppt vs quarterly's 3.0. [hard] [arch] (added 2026-06-06)
 
 - [ ] <a id="f348"></a> **F348** Fundamental-surprise event payloads (John's gap-spot #2, 2026-06-06) — feature-builder on F320's derived cache: for any filing event (10-Q/10-K/8-K 2.02), compute point-in-time deltas vs the company's OWN history as the event's payload — revenue acceleration vs prior 4 quarters, margin inflection, share-count change (dilution — documented negative signal, sitting unused in cache). Estimate-free surprise (no paid consensus data needed). Unlocks PEAD-family charters + the F347 heterogeneity test's conditioning variables. Fundamentals' third role: veto (covered), picker (tested-null on the blind clock), payload (never tested). [medium] [arch] [gated: F342 shipped] (added 2026-06-06)
 
@@ -90,10 +88,6 @@ _(none open)_
 - [ ] <a id="f307"></a> **F307** test_tooling.py COR-06 open-work count test derives its expected count via a text-split heuristic that can diverge from the script's own grouping logic — assert against explicitly constructed fixture expectations instead (COR P3, F-BATCH-0604D review). [easy] [testing]
 
 ## Infra
-
-- [ ] <a id="f344"></a> **F344** Stooq delisted-coverage probe via real browser — F341's script audit was blocked by Cloudflare's JS challenge; one chrome-devtools (or Playwright) session fetching sivb.us / bbby.us / twtr.us / frcb.us CSVs answers whether Stooq can resurrect dead-company price history for free (idea 5's cheapest survivorship fix). If yes, follow with a bulk-download plan; if no, the $50 Sharadar month becomes the only path below $5. [easy] [infra]
-
-- [x] <a id="f346"></a> **F346** Analyst-action + news event-stream audit (John's gap-spot, 2026-06-06) — go/no-go on: yfinance upgrades_downgrades (incl. a determinism/PIT re-fetch probe — does Yahoo rewrite history?), GDELT news volume (GME Jan-2021 spike anchor), 8-K item codes already in the EDGAR cache as a free news stream, Finnhub/FMP free tiers. Candidate uses kept OPEN (axiom downgraded to working hypothesis 2026-06-06 — do not pre-judge): trigger, fade/crowding, veto, and completing the insider→price→filing→analyst latency measurement. [easy] [infra] (added 2026-06-06) (resolved 2026-06-06 — report at docs/plans/2026-06-06-analyst-news-audit-F346.md. yfinance upgrades/downgrades: CONDITIONAL GO (AAPL 968 actions/13.7yr, second-precision timestamps, determinism probe PASS; sparse below mid-cap); GDELT: CONDITIONAL GO (GME 138× anchor PASS, daily granularity, heavy rate limits); EDGAR 8-K on disk: GO — 19,675 earnings releases + 14,733 press releases with acceptanceDateTime already cached, zero new data; Finnhub/FMP: NO-GO)
 
 - [ ] <a id="f97"></a> **F97** [medium] Provision `backend/venv/` in routine builder container — overnight builds 21/22/23 all hit the same gap: §3.5 backend smoke test originally specified `cd backend && venv/bin/uvicorn …` but the routine container ships without a venv. Spec now codifies AST + import-time check as the substitute. Real fix: the container image includes `backend/venv/` with pinned deps (Pydantic, FastAPI, pytest). Once landed, restore the full uvicorn smoke test path. Container/infra change, not application code. (from build 23 process review) [infra]
 
