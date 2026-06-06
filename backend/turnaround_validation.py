@@ -826,6 +826,60 @@ def _bar_counted_forward_returns(
     return out
 
 
+def _bar_counted_forward_returns_from_open(
+    df: pd.DataFrame,
+    entry_date: date,
+    entry_open: float,
+    horizons: tuple[int, ...] = V2_HORIZONS_TRADING_DAYS,
+    direction: str = "long",
+) -> dict[int, Optional[float]]:
+    """F342 / Fork-A: bar-counted forward GROSS return from the entry bar's Open.
+
+    Identical semantics to `_bar_counted_forward_returns` but the baseline price
+    is the *Open* of the entry bar rather than its Close.  Forward exits still
+    use the Close of the row at offset N from the entry row, so the first bar's
+    return spans Open-to-close-N (not intra-bar open-to-close).
+
+    Additive only — existing Close-based callers are unaffected.
+
+    If `Open` is missing from a row, falls back to `Close` with a warning logged
+    once per call.  Callers should log a warning at the call site if entry_open
+    was already derived from a Close fallback.
+
+    Returns {horizon_n: fwd_return_pct or None}.  Gross (pre-cost).
+    """
+    out: dict[int, Optional[float]] = {h: None for h in horizons}
+    if df is None or df.empty or entry_open <= 0:
+        return out
+    dates = _frame_dates(df)
+    entry_idx: Optional[int] = None
+    for i, d in enumerate(dates):
+        if d == entry_date:
+            entry_idx = i
+            break
+    if entry_idx is None:
+        for i, d in enumerate(dates):
+            if d >= entry_date:
+                entry_idx = i
+                break
+    if entry_idx is None:
+        return out
+    if "Close" not in df.columns:
+        raise KeyError("No 'Close' column in DataFrame during Open-anchored forward return")
+    n_rows = len(dates)
+    for h in horizons:
+        exit_idx = entry_idx + h
+        if exit_idx >= n_rows:
+            out[h] = None
+            continue
+        exit_close = float(df.iloc[exit_idx]["Close"])
+        if direction == "short":
+            out[h] = (entry_open - exit_close) / entry_open * 100.0
+        else:
+            out[h] = (exit_close - entry_open) / entry_open * 100.0
+    return out
+
+
 # ---------------------------------------------------------------------------
 # fix-nulls (U6): cohort-exhaustive null aggregates for injected sources.
 #
