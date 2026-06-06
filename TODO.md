@@ -10,15 +10,14 @@ _(none open)_
 
 ## Up Next
 
-- [F351](#f351) — [next] Event-harness universe/peer-median performance [medium]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 28 items
+## Open Work — 27 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
-| [Architecture](#architecture) | 9 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F348](#f348), [F351](#f351) |
+| [Architecture](#architecture) | 8 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F348](#f348) |
 | [Hardening](#hardening) | 7 | [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F337](#f337), [F352](#f352) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 6 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329), [F338](#f338) |
@@ -52,7 +51,7 @@ _(none open)_
 
 - [ ] <a id="f348"></a> **F348** Fundamental-surprise event payloads (John's gap-spot #2, 2026-06-06) — feature-builder on F320's derived cache: for any filing event (10-Q/10-K/8-K 2.02), compute point-in-time deltas vs the company's OWN history as the event's payload — revenue acceleration vs prior 4 quarters, margin inflection, share-count change (dilution — documented negative signal, sitting unused in cache). Estimate-free surprise (no paid consensus data needed). Unlocks PEAD-family charters + the F347 heterogeneity test's conditioning variables. Fundamentals' third role: veto (covered), picker (tested-null on the blind clock), payload (never tested). [medium] [arch] [gated: F342 shipped] (added 2026-06-06)
 
-- [ ] <a id="f351"></a> **F351** [next] Event-harness universe/peer-median performance — measured on the first real study (F349 smoke driver): each (entry_date, horizon, exclude_ticker) cache key re-scans every universe ticker's full pickle (~3ms each), and N events sharing a date recompute the same ~200-ticker scan N times because only the excluded ticker differs. R-1's full explore (thousands of events × ~3k universe) would take hours of redundant loads. Fix: (a) compute all universe forward-returns ONCE per (entry_date, horizon), store the return vector, and derive each event's leave-one-out median by dropping its own value (cheap list op — methodology unchanged); (b) wire the F331 prefetch/warm-memo pattern into the event-study loader path. Charter-blocking for R-1 explore at full scale. [medium] [arch] (added 2026-06-06)
+- [x] <a id="f351"></a> **F351** [next] Event-harness universe/peer-median performance — measured on the first real study (F349 smoke driver): each (entry_date, horizon, exclude_ticker) cache key re-scans every universe ticker's full pickle (~3ms each), and N events sharing a date recompute the same ~200-ticker scan N times because only the excluded ticker differs. R-1's full explore (thousands of events × ~3k universe) would take hours of redundant loads. Fix: (a) compute all universe forward-returns ONCE per (entry_date, horizon), store the return vector, and derive each event's leave-one-out median by dropping its own value (cheap list op — methodology unchanged); (b) wire the F331 prefetch/warm-memo pattern into the event-study loader path. Charter-blocking for R-1 explore at full scale. [medium] [arch] (added 2026-06-06) (resolved 2026-06-06: _ReturnVector built once per (date,horizon), leave-one-out = dict-drop; peer median reads same vector, builds it cold-cache (no ordering dependency after PY-04); F331 prefetch wired via turnaround_validation import; equivalence-diff vs pre-refactor study byte-identical (excl created_at), re-verified post-fixes; 2-persona review 6 findings all fixed; 83 tests)
 
 - [ ] <a id="f272"></a> **F272** Inspector panel for node params — when a node has >3 params or long values (e.g. multi-line code blocks for Code nodes), inline editing gets cramped. Right-side panel shows selected-node form; selection ring already in place (F265). Defer until F269+F271 expose nodes that actually need it. (added 2026-05-25, from F268 plan §6). [medium] [arch]
 

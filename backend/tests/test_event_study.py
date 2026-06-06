@@ -79,6 +79,8 @@ from research.event_study import (
     _load_ticker_to_sic,
     _get_peer_set_by_sic,
     _compute_peer_median,
+    _compute_universe_median,
+    _build_return_vector,
     _regime_breakdown,
     compute_study_stats,
     run_event_study,
@@ -1633,3 +1635,316 @@ class TestRegimeBreakdownF350:
         assert counts["STRESS"] > 100, (
             f"STRESS (stormy) should be >100 days, got {counts['STRESS']}"
         )
+
+
+# -------------------------------------------------------------------------
+# F351: Shared return vector cache — unit + equivalence tests
+# -------------------------------------------------------------------------
+
+class TestReturnVectorCacheF351:
+    """Unit tests for the _build_return_vector / _compute_universe_median /
+    _compute_peer_median vector-cache path introduced in F351."""
+
+    def _frames(self):
+        """Three-ticker synthetic universe spanning 2018-2021."""
+        universe = ["AAPL", "MSFT", "GOOG"]
+        return {t: _make_price_df(date(2018, 1, 1), date(2021, 12, 31), 0.10) for t in universe}
+
+    def _loader(self, frames):
+        return lambda t: frames.get(t)
+
+    def test_build_return_vector_contains_all_floor_passing_symbols(self):
+        """_build_return_vector includes every universe ticker that passes floor +
+        trades on entry_date + has an Open price (here: all three)."""
+        frames = self._frames()
+        loader = self._loader(frames)
+        entry = date(2019, 6, 3)   # business day well within frame
+        vector = _build_return_vector(entry, 21, loader, list(frames.keys()))
+        # All three tickers trade on this day and pass the floor.
+        assert set(vector.keys()) == {"AAPL", "MSFT", "GOOG"}, (
+            f"expected all 3 tickers in vector, got {set(vector.keys())}"
+        )
+        # Each entry is (fwd_return: float, is_terminal: bool).
+        for sym, (r, is_term) in vector.items():
+            assert r is not None, f"{sym}: return should not be None"
+            assert isinstance(is_term, bool), f"{sym}: is_terminal should be bool"
+
+    def test_leave_one_out_drops_correct_symbol(self):
+        """_compute_universe_median with vector cache excludes only the event ticker."""
+        frames = self._frames()
+        loader = self._loader(frames)
+        vc: dict[tuple, dict[str, tuple[Optional[float], bool]]] = {}
+        entry = date(2019, 6, 3)
+        h = 21
+
+        med_aa, n_aa, _ = _compute_universe_median(
+            entry, h, "AAPL", loader, list(frames.keys()), _vector_cache=vc
+        )
+        med_ms, n_ms, _ = _compute_universe_median(
+            entry, h, "MSFT", loader, list(frames.keys()), _vector_cache=vc
+        )
+        # After the first call, vector is cached — second call must reuse it.
+        assert (entry, h) in vc, "vector cache should be populated after first call"
+        # Leave-one-out: each excludes one of 3 → 2 symbols in denominator.
+        assert n_aa == 2, f"AAPL excluded → should have 2 peers, got {n_aa}"
+        assert n_ms == 2, f"MSFT excluded → should have 2 peers, got {n_ms}"
+        # The two medians are computed over different sets so they may differ.
+        # Neither should be None (both have 2 valid peers).
+        assert med_aa is not None
+        assert med_ms is not None
+
+    def test_vector_cache_reused_across_calls_same_date(self):
+        """Second call with same (entry_date, horizon) must NOT reload frames."""
+        frames = self._frames()
+        call_log: list[str] = []
+
+        def counting_loader(ticker):
+            call_log.append(ticker)
+            return frames.get(ticker)
+
+        vc: dict[tuple, dict[str, tuple[Optional[float], bool]]] = {}
+        entry = date(2019, 6, 3)
+        h = 21
+        universe = list(frames.keys())
+
+        # First call: builds the vector, loads 3 frames.
+        _compute_universe_median(entry, h, "AAPL", counting_loader, universe, _vector_cache=vc)
+        first_call_count = len(call_log)
+        assert first_call_count == len(universe), (
+            f"first call should load each ticker once, got {first_call_count}"
+        )
+
+        # Second call (different exclude_ticker): must reuse cached vector → 0 extra loads.
+        _compute_universe_median(entry, h, "MSFT", counting_loader, universe, _vector_cache=vc)
+        second_call_extra = len(call_log) - first_call_count
+        assert second_call_extra == 0, (
+            f"second call on same (date, horizon) should load 0 extra frames, "
+            f"got {second_call_extra} (vector cache not reused)"
+        )
+
+    def test_peer_subset_pulls_from_shared_vector(self):
+        """_compute_peer_median with vector cache uses shared vector without
+        additional frame loads."""
+        frames = self._frames()
+        call_log: list[str] = []
+
+        def counting_loader(ticker):
+            call_log.append(ticker)
+            return frames.get(ticker)
+
+        vc: dict[tuple, dict[str, tuple[Optional[float], bool]]] = {}
+        entry = date(2019, 6, 3)
+        h = 21
+        universe = list(frames.keys())
+
+        # Warm the vector cache via universe median (simulates the event loop order).
+        _compute_universe_median(entry, h, "AAPL", counting_loader, universe, _vector_cache=vc)
+        after_universe = len(call_log)
+
+        # Peer median on a subset should reuse the vector: 0 extra loads.
+        _compute_peer_median(entry, h, "AAPL", ["MSFT", "GOOG"], counting_loader, _vector_cache=vc)
+        peer_extra = len(call_log) - after_universe
+        assert peer_extra == 0, (
+            f"peer median on cached date should load 0 extra frames, got {peer_extra}"
+        )
+
+    def test_peer_median_cold_cache_builds_vector_and_matches_warmed_result(self):
+        """PY-04: _compute_peer_median called with a non-None but empty cache (cold)
+        must build-and-store the return vector itself, removing the implicit ordering
+        dependency that universe median must run first.
+
+        Assert: cold-cache call result == universe-then-peer (warmed) call result.
+        """
+        frames = self._frames()
+        loader = self._loader(frames)
+        entry = date(2019, 6, 3)
+        h = 21
+        universe = list(frames.keys())
+        peers = [t for t in universe if t != "AAPL"]
+
+        # --- Cold cache: peer median called FIRST with an empty cache. ---
+        vc_cold: dict[tuple, dict[str, tuple[Optional[float], bool]]] = {}
+        pm_cold, pn_cold, pt_cold = _compute_peer_median(
+            entry, h, "AAPL", peers, loader, _vector_cache=vc_cold
+        )
+        # Verify that the vector was stored into the cold cache.
+        assert (entry, h) in vc_cold, (
+            "PY-04: cold-cache peer median must store the vector in _vector_cache"
+        )
+
+        # --- Warmed cache: universe median runs first, then peer median. ---
+        vc_warm: dict[tuple, dict[str, tuple[Optional[float], bool]]] = {}
+        _compute_universe_median(entry, h, "AAPL", loader, universe, _vector_cache=vc_warm)
+        pm_warm, pn_warm, pt_warm = _compute_peer_median(
+            entry, h, "AAPL", peers, loader, _vector_cache=vc_warm
+        )
+
+        # Results must be numerically identical regardless of call order.
+        assert pm_cold == pm_warm, (
+            f"PY-04: peer median cold={pm_cold} warm={pm_warm} — ordering dependency!"
+        )
+        assert pn_cold == pn_warm, (
+            f"PY-04: peer_n cold={pn_cold} warm={pn_warm}"
+        )
+        assert pt_cold == pt_warm, (
+            f"PY-04: terminal count cold={pt_cold} warm={pt_warm}"
+        )
+
+    def test_peer_subset_excludes_self(self):
+        """_compute_peer_median excludes pick_ticker even if in peer_tickers list."""
+        frames = self._frames()
+        loader = self._loader(frames)
+        vc: dict[tuple, dict[str, tuple[Optional[float], bool]]] = {}
+        entry = date(2019, 6, 3)
+        h = 21
+        # Warm the vector.
+        vc[(entry, h)] = _build_return_vector(entry, h, loader, list(frames.keys()))
+
+        # Pass AAPL in peer_tickers (incorrect caller) — must still be excluded (PY-03).
+        _, n_peers, _ = _compute_peer_median(
+            entry, h, "AAPL", ["AAPL", "MSFT", "GOOG"], loader, _vector_cache=vc
+        )
+        # AAPL must be excluded → at most 2 peers.
+        assert n_peers <= 2, f"self should be excluded from peer count, got {n_peers}"
+
+    def test_terminal_counts_preserved_in_vector_path(self):
+        """terminal_count from the vector path matches a direct scan (no vector)."""
+        frames = self._frames()
+        loader = self._loader(frames)
+        entry = date(2019, 6, 3)
+        h = 21
+        universe = list(frames.keys())
+
+        # With vector cache.
+        vc: dict[tuple, dict[str, tuple[Optional[float], bool]]] = {}
+        _, _, term_with_cache = _compute_universe_median(
+            entry, h, "AAPL", loader, universe, _vector_cache=vc
+        )
+        # Without vector cache (legacy path).
+        _, _, term_no_cache = _compute_universe_median(
+            entry, h, "AAPL", loader, universe, _vector_cache=None
+        )
+        assert term_with_cache == term_no_cache, (
+            f"terminal count mismatch: cache={term_with_cache} legacy={term_no_cache}"
+        )
+
+    def test_equivalence_run_event_study_results_identical(self, tmp_path):
+        """F351 equivalence regression: run_event_study produces IDENTICAL numeric
+        results with the vector-cache path as with the legacy per-ticker scan.
+
+        Method: run the harness with vector cache (new default) and compare
+        fwd_excess_pct, fwd_peer_excess_pct, universe_n, peer_n on every outcome
+        against the results of running WITHOUT the vector cache (old path) on the
+        SAME data.  Methodology must be byte-identical.
+
+        We test this indirectly: run_event_study always uses the vector cache now.
+        To verify equivalence, we call _compute_universe_median and _compute_peer_median
+        directly with both paths and assert numeric equality.
+        """
+        universe = ["AAPL", "MSFT", "GOOG", "AMZN"]
+        frames = {t: _make_price_df(date(2017, 1, 1), date(2022, 12, 31), 0.12) for t in universe}
+        loader = lambda t: frames.get(t)
+        entry = date(2019, 4, 1)
+        h = 21
+
+        # Build vector cache once.
+        vc: dict[tuple, dict[str, tuple[Optional[float], bool]]] = {}
+        vc[(entry, h)] = _build_return_vector(entry, h, loader, universe)
+
+        for exclude_ticker in universe:
+            med_cache, n_cache, term_cache = _compute_universe_median(
+                entry, h, exclude_ticker, loader, universe, _vector_cache=vc
+            )
+            med_legacy, n_legacy, term_legacy = _compute_universe_median(
+                entry, h, exclude_ticker, loader, universe, _vector_cache=None
+            )
+            assert med_cache == med_legacy, (
+                f"[{exclude_ticker}] universe median: cache={med_cache} legacy={med_legacy}"
+            )
+            assert n_cache == n_legacy, (
+                f"[{exclude_ticker}] universe_n: cache={n_cache} legacy={n_legacy}"
+            )
+            assert term_cache == term_legacy, (
+                f"[{exclude_ticker}] terminal count: cache={term_cache} legacy={term_legacy}"
+            )
+
+            # Also check peer median for a subset.
+            peers = [t for t in universe if t != exclude_ticker]
+            pm_cache, pn_cache, pt_cache = _compute_peer_median(
+                entry, h, exclude_ticker, peers, loader, _vector_cache=vc
+            )
+            pm_legacy, pn_legacy, pt_legacy = _compute_peer_median(
+                entry, h, exclude_ticker, peers, loader, _vector_cache=None
+            )
+            assert pm_cache == pm_legacy, (
+                f"[{exclude_ticker}] peer median: cache={pm_cache} legacy={pm_legacy}"
+            )
+            assert pn_cache == pn_legacy, (
+                f"[{exclude_ticker}] peer_n: cache={pn_cache} legacy={pn_legacy}"
+            )
+            assert pt_cache == pt_legacy, (
+                f"[{exclude_ticker}] peer terminal: cache={pt_cache} legacy={pt_legacy}"
+            )
+
+    def test_run_event_study_two_events_same_date_identical_to_legacy(self, tmp_path):
+        """F351 integration equivalence: two events sharing the same entry_date produce
+        the same excess values via the vector cache as a manually-computed leave-one-out.
+
+        This is the core perf scenario: same-date events previously re-scanned the
+        universe N times; now they share one vector.  Results must be identical.
+        """
+        universe = ["AAPL", "MSFT", "GOOG", "AMZN"]
+        frames = {t: _make_price_df(date(2017, 1, 1), date(2022, 12, 31), 0.10) for t in universe}
+
+        # Two events on different tickers — use after-hours on the SAME event_ts date
+        # so both land on the same entry_date after the 1-day lag.
+        # 2019-06-02 after-hours (22:00 UTC) → ET 2019-06-02 18:00 → ET date 2019-06-02
+        # lag=1 → entry_date 2019-06-03 (Mon)
+        events = [
+            EventRecord("AAPL", datetime(2019, 6, 2, 22, 0, 0, tzinfo=timezone.utc), {}),
+            EventRecord("MSFT", datetime(2019, 6, 2, 22, 0, 0, tzinfo=timezone.utc), {}),
+        ]
+        config = EventStudyConfig(
+            study_name="f351_same_date",
+            horizons=(21,),
+            dedup_same_ticker=False,  # different tickers, no dedup
+            output_dir=tmp_path / "f351_same_date",
+        )
+        outcomes, _ = run_event_study(
+            events, config, lambda t: frames.get(t), universe_tickers=universe
+        )
+        # Both events should have entered (floor ok, price data present).
+        entered = [o for o in outcomes if o.floor_status == "ok"]
+        assert len(entered) == 2, f"expected 2 entered events, got {len(entered)}"
+
+        # Manually compute expected excess using the legacy path for each event.
+        loader = lambda t: frames.get(t)
+        for o in entered:
+            med_legacy, _, _ = _compute_universe_median(
+                o.entry_date, 21, o.ticker, loader, universe, _vector_cache=None
+            )
+            if med_legacy is not None and o.fwd_return_pct.get(21) is not None:
+                expected_excess = o.fwd_return_pct[21] - med_legacy
+                assert abs(o.fwd_excess_pct[21] - expected_excess) < 1e-9, (
+                    f"[{o.ticker}] excess mismatch: harness={o.fwd_excess_pct[21]:.6f} "
+                    f"expected={expected_excess:.6f}"
+                )
+
+            # COR-01: validate fwd_peer_excess_pct and peer_n match the legacy peer path.
+            # No SIC cache in this test → harness uses universe fallback (all tickers
+            # except the event ticker) as the peer set.
+            peers_legacy = [t for t in universe if t != o.ticker]
+            peer_med_legacy, expected_peer_n, _ = _compute_peer_median(
+                o.entry_date, 21, o.ticker, peers_legacy, loader, _vector_cache=None
+            )
+            assert o.peer_n.get(21) == expected_peer_n, (
+                f"[{o.ticker}] peer_n mismatch: harness={o.peer_n.get(21)} "
+                f"expected={expected_peer_n}"
+            )
+            if peer_med_legacy is not None and o.fwd_return_pct.get(21) is not None:
+                expected_peer_excess = o.fwd_return_pct[21] - peer_med_legacy
+                assert abs(o.fwd_peer_excess_pct[21] - expected_peer_excess) < 1e-9, (
+                    f"[{o.ticker}] peer_excess mismatch: "
+                    f"harness={o.fwd_peer_excess_pct[21]:.6f} "
+                    f"expected={expected_peer_excess:.6f}"
+                )

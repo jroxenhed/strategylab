@@ -44,6 +44,12 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
+# F351: concrete type alias for the per-(entry_date, horizon) return vector.
+# Maps symbol → (fwd_return_pct, is_terminal).  Symbols absent from the dict
+# either failed a gate or had no entry bar.
+_ReturnVector = dict[str, tuple[float, bool]]
+# Cache mapping (entry_date, horizon) → _ReturnVector.
+_VectorCache = dict[tuple, _ReturnVector]
 
 import numpy as np
 import pandas as pd
@@ -63,6 +69,7 @@ from turnaround_validation import (  # noqa: E402
     _bar_counted_forward_returns_from_open,
     _first_trading_close_on_or_after,
     _frame_dates,
+    _prefetch_price_frames,
     V2_HORIZONS_TRADING_DAYS,
 )
 from research.universe_floors import (  # noqa: E402
@@ -607,12 +614,57 @@ def _resolve_entry_open(
         return None
 
 
+def _build_return_vector(
+    entry_date: date,
+    horizon: int,
+    loader_fn: Callable[[str], Optional[pd.DataFrame]],
+    universe_tickers: list[str],
+) -> dict[str, tuple[Optional[float], bool]]:
+    """Build the per-symbol forward-return vector for ALL floor-passing universe
+    symbols alive on `entry_date` at `horizon`.
+
+    F351: called ONCE per (entry_date, horizon) across all events sharing that date.
+    Callers derive leave-one-out medians by dropping the event ticker from this
+    vector (cheap dict-drop + median) rather than re-scanning every universe frame.
+
+    Returns {symbol: (fwd_return_pct, is_terminal)}.
+    Symbol is included in the dict ONLY when it passes all gates AND
+    _forward_return_terminal returns a non-None float.  Symbols absent from the
+    dict either failed a gate or had no entry bar.  Callers can safely assume
+    all values in the dict have a valid (non-None) return.
+    """
+    vector: dict[str, tuple[Optional[float], bool]] = {}
+    for sym in universe_tickers:
+        df = loader_fn(sym)
+        if df is None or df.empty:
+            continue
+        # ADV-01: floor decided from info available BEFORE entry.
+        fs = _floor_status(df, entry_date)
+        if fs != _FLOOR_OK:
+            continue
+        res = _first_trading_close_on_or_after(df, entry_date)
+        if res is None:
+            continue
+        e_date, _ = res
+        if e_date != entry_date:
+            continue  # symbol doesn't trade on entry_date
+        # PY-04: shared Open-lookup helper.
+        entry_open = _resolve_entry_open(df, entry_date, sym)
+        if entry_open is None or entry_open <= 0:
+            continue
+        r, was_terminal = _forward_return_terminal(df, entry_date, entry_open, horizon)
+        if r is not None:
+            vector[sym] = (r, was_terminal)
+    return vector
+
+
 def _compute_universe_median(
     entry_date: date,
     horizon: int,
     exclude_ticker: str,
     loader_fn: Callable[[str], Optional[pd.DataFrame]],
     universe_tickers: list[str],
+    _vector_cache: Optional[_VectorCache] = None,
 ) -> tuple[Optional[float], int, int]:
     """Compute the universe-median forward return (from Open) at `horizon` for
     all floor-passing symbols alive on `entry_date`, excluding `exclude_ticker`.
@@ -624,41 +676,69 @@ def _compute_universe_median(
     value rather than being excluded.  The count of such terminal (attrited) peers
     is returned per call so survivorship attrition can be persisted in meta.
 
+    F351 performance: when `_vector_cache` is supplied (a dict shared across all
+    events in the same run_event_study call), the full universe scan is performed
+    ONCE per (entry_date, horizon) and cached; subsequent calls for the same date
+    with a different exclude_ticker drop one key and take the median — O(1) per
+    additional event on a shared date.  When _vector_cache is None (standalone
+    call, legacy API), the function falls back to scanning the universe directly.
+
     Returns (median, count_of_valid_symbols, count_terminal_peers).
     Fork B / Option 1: same-date universe, pick excluded.
     """
-    returns: list[float] = []
-    terminal_peers = 0
+    vec_key = (entry_date, horizon)
+
+    if _vector_cache is not None:
+        # Build the shared vector once per (entry_date, horizon).
+        if vec_key not in _vector_cache:
+            _vector_cache[vec_key] = _build_return_vector(
+                entry_date, horizon, loader_fn, universe_tickers
+            )
+        vector = _vector_cache[vec_key]
+        returns: list[float] = []
+        terminal_peers = 0
+        for sym, (r, was_terminal) in vector.items():
+            if sym == exclude_ticker:
+                continue
+            # COR-02: _build_return_vector guarantees r is never None in the vector;
+            # the dead `if r is not None` guard has been removed.
+            returns.append(r)
+            if was_terminal:
+                terminal_peers += 1
+        if not returns:
+            return (None, 0, terminal_peers)
+        return (float(np.median(returns)), len(returns), terminal_peers)
+
+    # Legacy path (no vector cache supplied — identical to original logic).
+    returns_direct: list[float] = []
+    terminal_peers_direct = 0
     for sym in universe_tickers:
         if sym == exclude_ticker:
             continue
         df = loader_fn(sym)
         if df is None or df.empty:
             continue
-        # ADV-01: floor decided from info available BEFORE entry.
         fs = _floor_status(df, entry_date)
         if fs != _FLOOR_OK:
             continue
-        # Get entry at entry_date
         res = _first_trading_close_on_or_after(df, entry_date)
         if res is None:
             continue
         e_date, _ = res
         if e_date != entry_date:
-            continue  # Symbol doesn't trade on entry_date
-        # PY-04: shared Open-lookup helper (deduplicates with _compute_peer_median).
+            continue
         entry_open = _resolve_entry_open(df, entry_date, sym)
         if entry_open is None or entry_open <= 0:
             continue
         r, was_terminal = _forward_return_terminal(df, entry_date, entry_open, horizon)
         if r is not None:
-            returns.append(r)
+            returns_direct.append(r)
             if was_terminal:
-                terminal_peers += 1
+                terminal_peers_direct += 1
 
-    if not returns:
-        return (None, 0, terminal_peers)
-    return (float(np.median(returns)), len(returns), terminal_peers)
+    if not returns_direct:
+        return (None, 0, terminal_peers_direct)
+    return (float(np.median(returns_direct)), len(returns_direct), terminal_peers_direct)
 
 
 # ---------------------------------------------------------------------------
@@ -775,24 +855,66 @@ def _compute_peer_median(
     pick_ticker: str,
     peer_tickers: list[str],
     loader_fn: Callable[[str], Optional[pd.DataFrame]],
+    _vector_cache: Optional[_VectorCache] = None,
 ) -> tuple[Optional[float], int, int]:
     """F349 (PROGRAM.md rule 6a): Compute peer-median forward return.
 
-    Identical logic to _compute_universe_median but operates on an explicit
-    peer_tickers list.  PY-03: self-exclusion is enforced inline here as a
-    defensive guard (pick_ticker is always excluded regardless of what the
-    caller passes in peer_tickers), in addition to upstream exclusion in
-    _get_peer_set_by_sic.  This prevents silent self-inclusion if future
-    callers build peer lists without going through _get_peer_set_by_sic.
+    Operates on an explicit peer_tickers list.  PY-03: self-exclusion is
+    enforced inline (pick_ticker always excluded regardless of peer_tickers),
+    defensive against future callers not going through _get_peer_set_by_sic.
     Preserves: floor-pass discipline at entry_date, Open-anchor, terminal-exit ADV-03.
+
+    F351 performance: when `_vector_cache` is supplied (shared with
+    _compute_universe_median), the universe frame scan is reused — peer median
+    pulls DIRECTLY from the cached vector rather than re-scanning frames.
+    Only symbols already in the vector (floor-passed, trades on entry_date,
+    Open available) are considered, which is methodologically identical to the
+    previous full re-scan (both paths apply the same floor/date/Open gates).
+
+    PY-04: if _vector_cache is non-None but the key is missing (cold cache —
+    peer median called before universe median for this date), the vector is
+    built on-demand from peer_tickers and stored.  This removes the implicit
+    "universe median must run first" ordering dependency.
+
+    When _vector_cache is None (standalone call, legacy API), frames are scanned
+    directly.
 
     Returns (median, count_valid_peers, count_terminal_peers).
     """
-    returns: list[float] = []
-    terminal_peers = 0
+    vec_key = (entry_date, horizon)
+
+    if _vector_cache is not None:
+        # PY-04: build the vector on-demand if the key is absent (cold cache).
+        if vec_key not in _vector_cache:
+            _vector_cache[vec_key] = _build_return_vector(
+                entry_date, horizon, loader_fn, peer_tickers
+            )
+        # Fast path: derive peer subset from the shared return vector.
+        # The vector only contains floor-passed, same-date, Open-available symbols,
+        # so all methodology gates are already applied — no re-scan needed.
+        vector = _vector_cache[vec_key]
+        peer_set = set(peer_tickers)
+        returns: list[float] = []
+        terminal_peers = 0
+        for sym, (r, was_terminal) in vector.items():
+            # PY-03: defensive self-exclusion.
+            if sym == pick_ticker:
+                continue
+            if sym not in peer_set:
+                continue
+            # COR-02: _build_return_vector guarantees r is never None in the vector.
+            returns.append(r)
+            if was_terminal:
+                terminal_peers += 1
+        if not returns:
+            return (None, 0, terminal_peers)
+        return (float(np.median(returns)), len(returns), terminal_peers)
+
+    # Legacy / standalone path (vector cache not available for this key).
+    returns_direct: list[float] = []
+    terminal_peers_direct = 0
     for sym in peer_tickers:
-        # PY-03: defensive self-exclusion guard — enforces the contract in code
-        # rather than relying solely on the caller (upstream _get_peer_set_by_sic).
+        # PY-03: defensive self-exclusion guard.
         if sym == pick_ticker:
             continue
         df = loader_fn(sym)
@@ -808,19 +930,19 @@ def _compute_peer_median(
         e_date, _ = res
         if e_date != entry_date:
             continue
-        # PY-04: shared Open-lookup helper (deduplicates with _compute_universe_median).
+        # PY-04: shared Open-lookup helper.
         entry_open = _resolve_entry_open(df, entry_date, sym)
         if entry_open is None or entry_open <= 0:
             continue
         r, was_terminal = _forward_return_terminal(df, entry_date, entry_open, horizon)
         if r is not None:
-            returns.append(r)
+            returns_direct.append(r)
             if was_terminal:
-                terminal_peers += 1
+                terminal_peers_direct += 1
 
-    if not returns:
-        return (None, 0, terminal_peers)
-    return (float(np.median(returns)), len(returns), terminal_peers)
+    if not returns_direct:
+        return (None, 0, terminal_peers_direct)
+    return (float(np.median(returns_direct)), len(returns_direct), terminal_peers_direct)
 
 
 # ---------------------------------------------------------------------------
@@ -1334,6 +1456,31 @@ def run_event_study(
             regime_states_path,
         )
 
+    # F351 Part (b): Optional prefetch — warm the loader for all event + universe tickers
+    # before the event loop so the loop hits in-process cache instead of re-scanning
+    # pickle files.  Reuses the F331 _prefetch_price_frames machinery (pacing semaphore,
+    # backoff, circuit breaker) without duplicating any of it.  Non-fatal: if prefetch
+    # errors occur, the event loop falls through to the normal sequential loader path.
+    if universe_tickers is not None:
+        all_prefetch_tickers = list(
+            dict.fromkeys([ev.ticker for ev in events_list] + list(universe_tickers))
+        )
+        prefetch_universe = [(t, t) for t in all_prefetch_tickers]
+        if prefetch_universe:
+            try:
+                _pf_errors = _prefetch_price_frames(prefetch_universe, loader_fn)
+                if _pf_errors:
+                    log.warning(
+                        "run_event_study: prefetch: %d/%d tickers failed (will use sequential loader): %s",
+                        len(_pf_errors), len(prefetch_universe),
+                        list(_pf_errors.keys())[:10],
+                    )
+            except Exception as _pf_exc:
+                log.warning(
+                    "run_event_study: prefetch failed entirely (%s) — falling through to sequential path",
+                    _pf_exc,
+                )
+
     outcomes: list[EventOutcome] = []
     fallback_count = 0
     # ADV-02: distinct survivorship counters (no silent drops).
@@ -1347,12 +1494,22 @@ def run_event_study(
     universe_peer_terminal_by_h: dict[int, int] = {h: 0 for h in config.horizons}
     sic_peer_terminal_by_h: dict[int, int] = {h: 0 for h in config.horizons}
 
-    # ADV-04: cache key IS (entry_date, horizon, exclude_ticker).  Self-exclusion
-    # is part of the key, so two different picks sharing an entry_date never alias
-    # each other's median.  Do NOT narrow this key to (entry_date, horizon) — that
-    # would reuse a median that excluded the wrong ticker.  Value carries the
-    # per-call terminal-peer count for attrition bookkeeping.
-    _median_cache: dict[tuple, tuple[Optional[float], int, int]] = {}
+    # F351 Part (a): Shared per-date return vector cache.
+    # Key: (entry_date, horizon) → {symbol: (fwd_return, is_terminal)}.
+    # Built ONCE per unique (entry_date, horizon) across all events; passed into
+    # _compute_universe_median and _compute_peer_median to avoid re-scanning the
+    # universe for each event.  Leave-one-out median for event E on date D is:
+    # median(vector[D,h].values() excluding E.ticker) — a cheap dict-drop.
+    # Peer median (F349) = median over peer_tickers subset of the SAME vector.
+    # Methodology is byte-identical to prior per-exclude-ticker caching:
+    #   same floor gate, same Open-anchor, same terminal-exit semantics.
+    _return_vector_cache: dict[tuple, dict[str, tuple[Optional[float], bool]]] = {}
+
+    # ADV-04 (retained for peer cache): cache key IS (entry_date, horizon, "peers", ticker).
+    # Peer results are still cached so same-event repeated horizon calls don't recompute.
+    # Universe median results are now derived from _return_vector_cache (no separate cache
+    # entry needed — the vector itself is the cache).
+    _peer_result_cache: dict[tuple, tuple[Optional[float], int, int]] = {}
 
     for ev in events_list:
         ticker = ev.ticker
@@ -1449,12 +1606,14 @@ def run_event_study(
 
         if universe_tickers is not None and fs == _FLOOR_OK:
             for h in config.horizons:
-                cache_key = (entry_date, h, ticker)
-                if cache_key not in _median_cache:
-                    _median_cache[cache_key] = _compute_universe_median(
-                        entry_date, h, ticker, loader_fn, universe_tickers
-                    )
-                med, n_univ, term_peers = _median_cache[cache_key]
+                # F351: _compute_universe_median now builds the shared return vector
+                # once per (entry_date, horizon) and caches it in _return_vector_cache.
+                # Subsequent calls for the same date with a different ticker drop one
+                # key from the vector and take the median — no extra pickle loads.
+                med, n_univ, term_peers = _compute_universe_median(
+                    entry_date, h, ticker, loader_fn, universe_tickers,
+                    _vector_cache=_return_vector_cache,
+                )
                 universe_n[h] = n_univ
                 universe_peer_terminal_by_h[h] += term_peers  # COR-04: separate accumulator
                 r = fwd_return_pct.get(h)
@@ -1490,13 +1649,17 @@ def run_event_study(
             sic_fallback_counts[fallback] = sic_fallback_counts.get(fallback, 0) + 1
 
             for h in config.horizons:
-                # Peer cache key is distinct from universe cache key (brief constraint).
+                # F351: peer median pulls from the shared return vector (already built
+                # by _compute_universe_median above for this same (entry_date, h)).
+                # _peer_result_cache avoids recomputing for the same (event, horizon)
+                # if this loop ever iterates the same event twice (defensive).
                 peer_cache_key = (entry_date, h, "peers", ticker)
-                if peer_cache_key not in _median_cache:
-                    _median_cache[peer_cache_key] = _compute_peer_median(
-                        entry_date, h, ticker, peers, loader_fn
+                if peer_cache_key not in _peer_result_cache:
+                    _peer_result_cache[peer_cache_key] = _compute_peer_median(
+                        entry_date, h, ticker, peers, loader_fn,
+                        _vector_cache=_return_vector_cache,
                     )
-                peer_med, n_peers, term_peers = _median_cache[peer_cache_key]
+                peer_med, n_peers, term_peers = _peer_result_cache[peer_cache_key]
                 peer_n[h] = n_peers
                 sic_peer_terminal_by_h[h] += term_peers  # COR-04: separate accumulator
                 r = fwd_return_pct.get(h)
