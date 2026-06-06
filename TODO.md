@@ -10,6 +10,8 @@ _(none open)_
 
 ## Up Next
 
+- [F331](#f331) — [next] Parallel price prefetch for validation runs [medium]
+- [F336](#f336) — [next] Price-frame cache eviction/staleness policy [medium]
 - [F305](#f305) — [next] sync-todo-index.py writes TODO.md with bare write_text() [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
@@ -34,7 +36,7 @@ _(none open)_
 
 ## Architecture
 
-- [ ] <a id="f331"></a> **F331** Parallel price prefetch for validation runs — the date-1 wall is ~7k sequential yahoo fetches (~35min at ~3.5/sec, I/O-bound). Add a ThreadPoolExecutor prefetch phase (4-8 workers) that warms the memoized loader before the date loop; run_filter then sweeps a warm memo. NOT the WFA ProcessPool pattern (that's CPU-bound windows) — this is network I/O. Prereqs: verify _fetch() TTL-cache dict + memo dict thread-safety (add locks), keep the yf.Ticker-only rule (yf.download global-state bug), cap workers + backoff to dodge yahoo 429s, keep progress counter + cancel responsiveness (loader wrapper already per-call). Suggested by John watching the run-2 bar, 2026-06-05. [medium] [arch]
+- [ ] <a id="f331"></a> **F331** [next] Parallel price prefetch for validation runs — the date-1 wall is ~7k sequential yahoo fetches (~35min at ~3.5/sec, I/O-bound). Add a ThreadPoolExecutor prefetch phase (4-8 workers) that warms the memoized loader before the date loop; run_filter then sweeps a warm memo. NOT the WFA ProcessPool pattern (that's CPU-bound windows) — this is network I/O. Prereqs: verify _fetch() TTL-cache dict + memo dict thread-safety (add locks), keep the yf.Ticker-only rule (yf.download global-state bug), cap workers + backoff to dodge yahoo 429s, keep progress counter + cancel responsiveness (loader wrapper already per-call). Suggested by John watching the run-2 bar, 2026-06-05. [medium] [arch]
 - [ ] <a id="a8"></a> **A8** Chart performance — large dataset optimizations (100K+ 5-min bars): [arch]
   - [x] Equity curve detail mode downsample: root cause was missing `toDisplayTime()` shift on equity timestamps — raw UTC timestamps didn't match the main chart's ET-shifted timestamps, breaking crosshair sync and bucket alignment. Fixed by adding `toDisplayTime` to `shared/utils/time.ts` (mirrors Chart.tsx `toET`) and applying it to equity/baseline/trade-tick timestamps in Results.tsx before downsampling. `downsampleEquity()` itself was always correct.
   - [x] Equity curve detail mode sync: pixel-perfect alignment with main chart via bar-count matching. Passed OHLCV timestamps (`mainTimestamps` prop) from App.tsx, built equity/baseline/tick data with same bar positions (whitespace entries for missing values), logical-range sync. Five sub-fixes: `timeVisible`, baseline bar-matching, tick snapping, deferred width sync, invisible left axis.
@@ -58,7 +60,7 @@ _(none open)_
 ## Hardening
 
 - [ ] <a id="f330"></a> **F330** Events-table payload size guardrail — validation_result.json now carries the full per-event list (~3.2k events / ~1-2MB at run-1 scale); at max_universe~15k over 9y it could reach ~8-10MB through GET /validate/result in one pass (DI-04, F-RERUN-0605 review). Add a summary-only query param or gzip; revisit with F315 (watchlist schema_version still missing). [easy] [hardening]
-- [ ] <a id="f336"></a> **F336** Price-frame cache eviction/staleness policy — PriceFrameCache (F332, plan U3) has no eviction and pickled yahoo frames go stale on splits/dividend adjustments (history rewrites). v1/ path-versioning + docstring caveat shipped as stopgap (SIGNAL-P1 DI-04 ruling); real fix joins the F314/F320 prune-policy family: span-aware staleness check or adjusted-close fingerprint, plus size-capped pruning. [medium] [hardening]
+- [ ] <a id="f336"></a> **F336** [next] Price-frame cache eviction/staleness policy — PriceFrameCache (F332, plan U3) has no eviction and pickled yahoo frames go stale on splits/dividend adjustments (history rewrites). v1/ path-versioning + docstring caveat shipped as stopgap (SIGNAL-P1 DI-04 ruling); real fix joins the F314/F320 prune-policy family: span-aware staleness check or adjusted-close fingerprint, plus size-capped pruning. [medium] [hardening]
 - [ ] <a id="f337"></a> **F337** null_atlas.json backup rotation — atlas writes are atomic but have zero backup depth, unlike validation_result.json (backup_depth=3); a bad build silently destroys the previous good atlas (SIGNAL-P1 DI-06, deferred). Reuse the validation-result backup helper. [easy] [hardening]
 
 _(none open)_
