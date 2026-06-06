@@ -86,6 +86,8 @@ If build fails, fix and re-verify.
 
 ### 3.5. Smoke Test (if backend changes)
 
+**F338 — research instruments need a REAL-DATA probe, not just green tests (binding).** If the task adds or modifies a research measurement instrument (anything under `backend/research/` whose output feeds a verdict, gate, or ledger), green synthetic tests are NOT sufficient to ship it — fixtures share the implementer's blind spots (proven 3× on 2026-06-05, 7 more in the 2026-06-06 reviews, plus the 108-entry ledger pollution the same day). Before the instrument's output is believed or committed: (1) state face-validity anchors BEFORE running (known-window expectations, sane distributions, populated fields); (2) run the instrument on real cached data (`backend/data/turnaround/`); (3) read the actual artifact and check the anchors — each reported PASS / FAIL / NOT-RUN, where a skipped check is NOT-RUN, never PASS. Existing probes (`backend/research/smoke_probe_*.py`, `probe_r1_explore.py`) are the pattern. If no real cached data exists for the instrument, say so in the PR body and mark the instrument's output unvalidated — do not let green unit tests imply otherwise. Full rule: `docs/research/PROGRAM.md` standing methodology rule 2.
+
 The routine container does NOT ship with `backend/venv/` (confirmed across builds 21-23 — tracked as F97 for infra fix). The full uvicorn smoke test cannot run; substitute with import-time + helper-logic validation that catches the most common bug classes (broken imports, helper logic regressions, type-validator wiring errors).
 
 ```bash
