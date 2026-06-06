@@ -76,6 +76,10 @@ from research.event_study import (
     _to_et,
     _forward_return_terminal,
     _dedup_events,
+    _load_ticker_to_sic,
+    _get_peer_set_by_sic,
+    _compute_peer_median,
+    _regime_breakdown,
     compute_study_stats,
     run_event_study,
     iter_form4_events,
@@ -1199,3 +1203,433 @@ class TestFDRLedgerPersistence:
         assert rows[0]["study_name"] == "run_a"
         assert rows[1]["study_name"] == "run_b"
         assert "study_config_hash" in rows[0]
+
+
+# -------------------------------------------------------------------------
+# F349: Sector-peer benchmark
+# -------------------------------------------------------------------------
+
+@pytest.fixture
+def sample_ticker_to_sic() -> dict:
+    """Synthetic SIC map: XOM/CVX share 3-digit "131", MSFT/ADBE share 2-digit "73"."""
+    return {
+        "XOM": "1311",   # Crude Petroleum & Natural Gas
+        "CVX": "1311",   # same SIC
+        "COP": "1382",   # Oil & Gas Field Services (same 2-digit "13")
+        "MSFT": "7372",  # Prepackaged Software
+        "ADBE": "7372",  # same SIC
+        "CRM": "7374",   # same 2-digit "73"
+        "ENPH": "3621",  # Electrical Industrial Apparatus (unique 3-digit in this set)
+    }
+
+
+class TestPeerExcessF349:
+    """F349: sector-peer benchmark — helper function unit tests."""
+
+    def _loader(self, frames):
+        return lambda t: frames.get(t)
+
+    def test_get_peer_set_3digit_match(self, sample_ticker_to_sic):
+        """_get_peer_set_by_sic returns 3-digit SIC peers when count >= min_peers."""
+        universe = ["XOM", "CVX", "COP", "MSFT", "ADBE", "CRM", "ENPH"]
+        peers, sic, level = _get_peer_set_by_sic(
+            "XOM", universe, sample_ticker_to_sic, min_peers=2
+        )
+        # XOM "1311" → 3-digit "131"; only CVX shares "131X" match at 3 digits.
+        # CVX="1311" → yes; COP="1382" → "138" ≠ "131" → no.  Count=1 < min=2.
+        # Fall back to 2-digit "13": CVX + COP = 2 >= 2 → "2_digit".
+        assert level in ("2_digit", "universe")
+        # XOM itself must be excluded from peers
+        assert "XOM" not in peers
+
+    def test_get_peer_set_fallback_universe(self, sample_ticker_to_sic):
+        """ENPH has a unique 3- and 2-digit SIC in the sample → universe fallback."""
+        universe = ["XOM", "CVX", "COP", "MSFT", "ADBE", "CRM", "ENPH"]
+        peers, sic, level = _get_peer_set_by_sic(
+            "ENPH", universe, sample_ticker_to_sic, min_peers=3
+        )
+        # ENPH "3621" — no other ticker has "36X" or "3X" in this set → fallback.
+        assert level == "universe"
+        assert "ENPH" not in peers
+        assert set(peers) == {"XOM", "CVX", "COP", "MSFT", "ADBE", "CRM"}
+
+    def test_get_peer_set_excludes_self(self, sample_ticker_to_sic):
+        """Event ticker itself must never appear in the peer set (any fallback level)."""
+        universe = ["XOM", "CVX", "COP", "MSFT", "ADBE", "CRM", "ENPH"]
+        for ticker in universe:
+            peers, _, _ = _get_peer_set_by_sic(ticker, universe, sample_ticker_to_sic, min_peers=1)
+            assert ticker not in peers, f"{ticker} should not be in its own peer set"
+
+    def test_get_peer_set_no_sic(self):
+        """Ticker with no SIC in map falls back to full universe."""
+        ticker_to_sic: dict = {}
+        universe = ["A", "B", "C", "D", "E", "F"]
+        peers, sic, level = _get_peer_set_by_sic("A", universe, ticker_to_sic, min_peers=2)
+        assert level == "universe"
+        assert sic is None
+        assert "A" not in peers
+
+    def test_compute_peer_median_matches_universe_median_when_equal(self):
+        """When peer_set = all universe tickers minus event ticker, result matches."""
+        from research.event_study import _compute_universe_median
+        universe = ["AAPL", "MSFT", "GOOG"]
+        frames = {t: _make_price_df(date(2018, 1, 1), date(2021, 12, 31), 0.15) for t in universe}
+        loader = lambda t: frames.get(t)
+        entry = date(2019, 6, 3)  # business day in the frame
+        h = 21
+        # Peers = universe minus "AAPL"
+        peers = ["MSFT", "GOOG"]
+        peer_med, peer_n, peer_term = _compute_peer_median(entry, h, "AAPL", peers, loader)
+        univ_med, univ_n, univ_term = _compute_universe_median(entry, h, "AAPL", loader, universe)
+        # Both computed over same two tickers → same median.
+        if peer_med is not None and univ_med is not None:
+            assert abs(peer_med - univ_med) < 1e-9, (
+                f"peer_median {peer_med} != universe_median {univ_med} with equal sets"
+            )
+
+    def test_load_ticker_to_sic_from_cache(self, tmp_path):
+        """_load_ticker_to_sic reads universe.json + submissions/*.json."""
+        # Build a minimal fake edgar_cache layout.
+        submissions_dir = tmp_path / "submissions"
+        submissions_dir.mkdir()
+        # universe.json in normalized format: {TICKER: {"cik_str": "0000000001", ...}}
+        universe_data = {
+            "XOM": {"cik_str": "0000000001", "title": "Exxon Mobil"},
+            "MSFT": {"cik_str": "0000000002", "title": "Microsoft"},
+            "UNKNOWN": {"cik_str": "0000000099", "title": "No Submission"},
+        }
+        universe_path = tmp_path / "universe.json"
+        universe_path.write_text(json.dumps(universe_data))
+        # submission for XOM
+        (submissions_dir / "0000000001.json").write_text(
+            json.dumps({"sic": "1311", "sicDescription": "Crude Petroleum"})
+        )
+        # submission for MSFT
+        (submissions_dir / "0000000002.json").write_text(
+            json.dumps({"sic": "7372", "sicDescription": "Prepackaged Software"})
+        )
+        # UNKNOWN has no submission file
+        # DI-03: _load_ticker_to_sic returns (dict, parse_error_count).
+        result, parse_errors = _load_ticker_to_sic(["XOM", "MSFT", "UNKNOWN"], sic_cache_path=submissions_dir)
+        assert result["XOM"] == "1311"
+        assert result["MSFT"] == "7372"
+        assert result["UNKNOWN"] is None
+        assert parse_errors == 0  # no JSON decode failures in this set
+
+    def test_run_event_study_includes_peer_excess(self, tmp_path):
+        """run_event_study populates fwd_peer_excess_pct and meta.sic_coverage."""
+        universe = ["AAPL", "MSFT", "GOOG"]
+        frames = {t: _make_price_df(date(2017, 1, 1), date(2020, 12, 31), 0.10) for t in universe}
+        events = [
+            EventRecord("AAPL", datetime(2018, 6, 15, 22, 0, tzinfo=timezone.utc), {}),
+        ]
+        config = EventStudyConfig(
+            study_name="peer_test", horizons=(21,),
+            dedup_same_ticker=False, output_dir=tmp_path / "peer_test",
+        )
+        outcomes, meta = run_event_study(
+            events, config, lambda t: frames.get(t), universe_tickers=universe
+        )
+        # fwd_peer_excess_pct always present on entered outcomes.
+        entered = [o for o in outcomes if o.split == "explore"]
+        assert len(entered) >= 1
+        for o in entered:
+            assert hasattr(o, "fwd_peer_excess_pct")
+            assert hasattr(o, "peer_n")
+        # meta.sic_coverage always present when universe_tickers supplied.
+        assert "sic_coverage" in meta
+        assert "tickers_with_sic" in meta["sic_coverage"]
+        assert "tickers_without_sic" in meta["sic_coverage"]
+        assert "coverage_pct" in meta["sic_coverage"]
+        assert "sic_fallback_stats" in meta
+        total_fallbacks = sum(meta["sic_fallback_stats"].values())
+        assert total_fallbacks >= 0  # at least 0 (may be universe-fallback if no SIC file)
+
+    def test_meta_sic_coverage_absent_without_universe(self, tmp_path):
+        """When universe_tickers=None, meta.sic_coverage is None (backward-compat)."""
+        frames = {"AAPL": _make_price_df(date(2017, 1, 1), date(2020, 12, 31))}
+        events = [EventRecord("AAPL", datetime(2018, 6, 15, 22, 0, tzinfo=timezone.utc), {})]
+        config = EventStudyConfig(
+            study_name="no_univ", horizons=(21,), output_dir=tmp_path / "no_univ"
+        )
+        _, meta = run_event_study(events, config, lambda t: frames.get(t))
+        assert meta["sic_coverage"] is None
+        assert meta["sic_fallback_stats"] is None
+
+    def test_peer_median_excess_pct_populated_in_per_horizon(self, tmp_path):
+        """COR-01 locking test: per_horizon[h].peer_median_excess_pct is written (int key).
+
+        Regression: h_str = str(h) key lookup silently missed the int-keyed dict,
+        leaving peer_median_excess_pct absent from every study run.
+        """
+        universe = ["AAPL", "MSFT", "GOOG", "AMZN", "META", "NVDA"]
+        frames = {t: _make_price_df(date(2016, 1, 1), date(2022, 12, 31), 0.15) for t in universe}
+        # Wire up a fake SIC cache so at least some peers are resolved.
+        sic_dir = tmp_path / "sic_cache"
+        sic_dir.mkdir()
+        universe_data = {t: {"cik_str": str(i + 1).zfill(10)} for i, t in enumerate(universe)}
+        (sic_dir.parent / "universe.json").write_text(json.dumps(universe_data))
+        # Write submission JSON with all same SIC so 3-digit peers always found.
+        for i, t in enumerate(universe):
+            cik = str(i + 1).zfill(10)
+            (sic_dir / f"{cik}.json").write_text(json.dumps({"sic": "7372"}))
+
+        events = [
+            EventRecord("AAPL", datetime(2019, 3, 14, 22, 0, tzinfo=timezone.utc), {}),
+        ]
+        config = EventStudyConfig(
+            study_name="cor01_lock",
+            horizons=(21, 63),
+            output_dir=tmp_path / "cor01_lock",
+            sic_coverage_path=sic_dir,
+        )
+        _, meta = run_event_study(
+            events, config, lambda t: frames.get(t), universe_tickers=universe
+        )
+        per_h = meta.get("per_horizon", {})
+        for h in (21, 63):
+            assert h in per_h, f"per_horizon missing int key {h}"
+            # peer_median_excess_pct must be present (not absent) — None means no peer vals,
+            # but the key itself must exist.
+            assert "peer_median_excess_pct" in per_h[h], (
+                f"per_horizon[{h}].peer_median_excess_pct missing (COR-01 regression)"
+            )
+
+    def test_parse_errors_counted_in_sic_coverage(self, tmp_path):
+        """DI-03 locking test: corrupted submission JSON increments parse_errors in meta.sic_coverage."""
+        submissions_dir = tmp_path / "submissions"
+        submissions_dir.mkdir()
+        universe_data = {
+            "XOM": {"cik_str": "0000000001"},
+            "MSFT": {"cik_str": "0000000002"},
+        }
+        (tmp_path / "universe.json").write_text(json.dumps(universe_data))
+        (submissions_dir / "0000000001.json").write_text("{bad json")  # corrupted
+        (submissions_dir / "0000000002.json").write_text(json.dumps({"sic": "7372"}))
+
+        result, parse_errors = _load_ticker_to_sic(["XOM", "MSFT"], sic_cache_path=submissions_dir)
+        assert parse_errors == 1, f"expected 1 parse error, got {parse_errors}"
+        assert result["XOM"] is None  # failed parse → None
+        assert result["MSFT"] == "7372"
+
+    def test_sic_fallback_stats_consistent_when_universe_json_absent(self, tmp_path):
+        """DI-08 locking test: sic_fallback_stats total == floor-ok events even when universe.json missing.
+
+        When universe.json is absent, ticker_to_sic is empty.  Floor-passing events must
+        still increment sic_fallback_counts (as 'universe') so probe anchor 5 passes.
+        """
+        universe = ["AAPL", "MSFT", "GOOG"]
+        frames = {t: _make_price_df(date(2017, 1, 1), date(2020, 12, 31), 0.10) for t in universe}
+        events = [
+            EventRecord("AAPL", datetime(2018, 6, 15, 22, 0, tzinfo=timezone.utc), {}),
+        ]
+        # Use a sic_cache_path with no universe.json → empty ticker_to_sic.
+        empty_sic_dir = tmp_path / "empty_submissions"
+        empty_sic_dir.mkdir()
+        config = EventStudyConfig(
+            study_name="di08_lock",
+            horizons=(21,),
+            output_dir=tmp_path / "di08_lock",
+            sic_coverage_path=empty_sic_dir,
+        )
+        outcomes, meta = run_event_study(
+            events, config, lambda t: frames.get(t), universe_tickers=universe
+        )
+        entered = [o for o in outcomes if o.floor_status == "ok"]
+        fs = meta.get("sic_fallback_stats", {})
+        fs_total = sum(fs.values())
+        assert fs_total == len(entered), (
+            f"sic_fallback_stats total {fs_total} != floor-ok events {len(entered)} "
+            "(DI-08 regression: empty universe.json path breaks probe anchor 5)"
+        )
+
+    def test_cor04_separate_terminal_exit_accumulators(self, tmp_path):
+        """COR-04 locking test: peer_attrition has sic_peer_terminal_exits key (separate from universe).
+
+        Regression: both universe-median and SIC-peer-median paths incremented the same
+        peer_terminal_by_h accumulator, double-counting attrition.
+        """
+        universe = ["AAPL", "MSFT", "GOOG"]
+        frames = {t: _make_price_df(date(2017, 1, 1), date(2020, 12, 31), 0.10) for t in universe}
+        events = [EventRecord("AAPL", datetime(2018, 6, 15, 22, 0, tzinfo=timezone.utc), {})]
+        config = EventStudyConfig(
+            study_name="cor04_lock",
+            horizons=(21,),
+            output_dir=tmp_path / "cor04_lock",
+        )
+        _, meta = run_event_study(events, config, lambda t: frames.get(t), universe_tickers=universe)
+        pa = meta.get("peer_attrition", {})
+        assert 21 in pa, "peer_attrition must have horizon 21"
+        assert "peer_terminal_exits" in pa[21], "peer_terminal_exits missing"
+        assert "sic_peer_terminal_exits" in pa[21], (
+            "sic_peer_terminal_exits missing (COR-04 regression: separate accumulator not wired)"
+        )
+
+
+# -------------------------------------------------------------------------
+# F350: Regime-breakdown lens
+# -------------------------------------------------------------------------
+
+def _make_regime_states(states: dict[str, str]) -> dict:
+    """Build a minimal regime_states.json dict with the given {date_str: state} map."""
+    return {
+        "meta": {"start_date": min(states), "end_date": max(states), "state_counts": {}},
+        "schema_version": 1,
+        "states": {d: {"state": s} for d, s in states.items()},
+    }
+
+
+class TestRegimeBreakdownF350:
+    """F350: regime-breakdown lens."""
+
+    def _loader(self, frames):
+        return lambda t: frames.get(t)
+
+    def test_regime_breakdown_structure(self):
+        """_regime_breakdown returns {regime: {n_events, per_horizon}} for all 4 states."""
+        # Build synthetic outcomes with known regime states.
+        def _make_outcome(regime, excess):
+            return EventOutcome(
+                ticker="T", event_ts=datetime(2019, 1, 2, 22, tzinfo=timezone.utc),
+                entry_date=date(2019, 1, 3), entry_price=100.0, payload={},
+                split="explore",
+                fwd_return_pct={21: 0.05},
+                fwd_excess_pct={21: excess},
+                floor_status="ok", universe_n={21: 5},
+                regime_state=regime,
+            )
+        outcomes = [
+            _make_outcome("RISK_ON", 0.02),
+            _make_outcome("RISK_ON", 0.01),
+            _make_outcome("NEUTRAL", -0.01),
+            _make_outcome("RISK_OFF", 0.005),
+            _make_outcome("STRESS", -0.03),
+        ]
+        result = _regime_breakdown(outcomes, (21,), low_count_threshold=10)
+        # All 4 states must appear.
+        assert set(result.keys()) == {"RISK_ON", "NEUTRAL", "RISK_OFF", "STRESS"}
+        assert result["RISK_ON"]["n_events"] == 2
+        assert result["NEUTRAL"]["n_events"] == 1
+        assert result["RISK_OFF"]["n_events"] == 1
+        assert result["STRESS"]["n_events"] == 1
+        # per_horizon structure
+        ph = result["RISK_ON"]["per_horizon"]
+        assert 21 in ph
+        assert "n" in ph[21]
+        assert "mean_excess_pct" in ph[21]
+        assert "sign_agreement" in ph[21]
+
+    def test_regime_breakdown_low_count_flag(self):
+        """Regime with n < low_count_threshold gets LOW_COUNT_FLAG=True."""
+        outcomes = [
+            EventOutcome(
+                ticker="T", event_ts=datetime(2019, 1, 2, 22, tzinfo=timezone.utc),
+                entry_date=date(2019, 1, 3), entry_price=100.0, payload={},
+                split="explore", fwd_return_pct={21: 0.01}, fwd_excess_pct={21: 0.01},
+                floor_status="ok", universe_n={21: 5},
+                regime_state="RISK_OFF",  # rare state
+            )
+        ]
+        result = _regime_breakdown(outcomes, (21,), low_count_threshold=10)
+        # RISK_OFF has 1 event < threshold=10 → flagged.
+        assert result["RISK_OFF"].get("LOW_COUNT_FLAG") is True
+        # States with 0 events also flag (0 < 10).
+        for state in ("RISK_ON", "NEUTRAL", "STRESS"):
+            assert result[state].get("LOW_COUNT_FLAG") is True
+
+    def test_run_event_study_includes_regime_state(self, tmp_path):
+        """run_event_study populates regime_state on outcomes and meta.regime_breakdown."""
+        frames = {"AAPL": _make_price_df(date(2017, 1, 1), date(2021, 12, 31), 0.10)}
+        events = [
+            EventRecord("AAPL", datetime(2019, 3, 18, 22, 0, tzinfo=timezone.utc), {}),
+        ]
+        # Create a minimal regime_states.json in tmp_path.
+        regime_file = tmp_path / "regime_states.json"
+        regime_data = _make_regime_states({
+            "2019-03-18": "RISK_ON",
+            "2019-03-19": "RISK_ON",
+        })
+        regime_file.write_text(json.dumps(regime_data))
+        config = EventStudyConfig(
+            study_name="regime_test", horizons=(21,),
+            dedup_same_ticker=False,
+            output_dir=tmp_path / "regime_test",
+            regime_states_path=regime_file,
+        )
+        outcomes, meta = run_event_study(
+            events, config, self._loader(frames), universe_tickers=["AAPL"]
+        )
+        entered = [o for o in outcomes if o.split in ("explore", "confirm")]
+        assert len(entered) >= 1
+        for o in entered:
+            assert o.regime_state in ("RISK_ON", "NEUTRAL", "RISK_OFF", "STRESS", None)
+        # meta.regime_breakdown present.
+        assert "regime_breakdown" in meta
+        bd = meta["regime_breakdown"]
+        assert set(bd.keys()) == {"RISK_ON", "NEUTRAL", "RISK_OFF", "STRESS"}
+
+    def test_regime_breakdown_missing_file_graceful(self, tmp_path):
+        """Missing regime_states.json produces regime_state=None on all outcomes (no crash)."""
+        frames = {"AAPL": _make_price_df(date(2017, 1, 1), date(2021, 12, 31))}
+        events = [EventRecord("AAPL", datetime(2019, 3, 18, 22, 0, tzinfo=timezone.utc), {})]
+        config = EventStudyConfig(
+            study_name="no_regime", horizons=(21,),
+            output_dir=tmp_path / "no_regime",
+            regime_states_path=tmp_path / "nonexistent_regime_states.json",
+        )
+        outcomes, meta = run_event_study(
+            events, config, self._loader(frames), universe_tickers=["AAPL"]
+        )
+        for o in outcomes:
+            assert o.regime_state is None
+        # regime_breakdown still present (all zeros, all LOW_COUNT_FLAG).
+        assert "regime_breakdown" in meta
+
+    def test_regime_state_entry_date_discipline(self, tmp_path):
+        """regime_state is tagged at entry_date (ET), consistent with ADV-01."""
+        # Entry is 2019-03-19 (lag=1 from 2019-03-18 after-hours).
+        frames = {"AAPL": _make_price_df(date(2017, 1, 1), date(2021, 12, 31))}
+        events = [EventRecord("AAPL", datetime(2019, 3, 18, 22, 0, tzinfo=timezone.utc), {})]
+        regime_file = tmp_path / "rs.json"
+        # 2019-03-18=STRESS, 2019-03-19=RISK_ON → entry_date=2019-03-19 → RISK_ON.
+        regime_data = _make_regime_states({
+            "2019-03-18": "STRESS",
+            "2019-03-19": "RISK_ON",
+        })
+        regime_file.write_text(json.dumps(regime_data))
+        config = EventStudyConfig(
+            study_name="dt_disc", horizons=(21,), entry_lag_days=1,
+            dedup_same_ticker=False,
+            output_dir=tmp_path / "dt_disc",
+            regime_states_path=regime_file,
+        )
+        outcomes, _ = run_event_study(
+            events, config, self._loader(frames), universe_tickers=["AAPL"]
+        )
+        entered = [o for o in outcomes if o.entry_date != date.min]
+        assert len(entered) == 1
+        # Entry date should be 2019-03-19 → regime RISK_ON.
+        assert entered[0].regime_state == "RISK_ON", (
+            f"Expected RISK_ON at entry_date {entered[0].entry_date}, "
+            f"got {entered[0].regime_state}"
+        )
+
+    def test_real_regime_states_json_schema(self):
+        """Real regime_states.json has expected schema: RISK_OFF is the rare state."""
+        regime_path = Path(_BACKEND) / "data" / "turnaround" / "regime_states.json"
+        if not regime_path.exists():
+            pytest.skip("regime_states.json not present in cache")
+        data = json.loads(regime_path.read_text())
+        counts = data["meta"]["state_counts"]
+        # RISK_OFF is the crisis (rare) state: ~6 days 2015-2024.
+        assert counts["RISK_OFF"] < 20, (
+            f"RISK_OFF should be rare (<20 days), got {counts['RISK_OFF']}"
+        )
+        # RISK_ON dominates.
+        assert counts["RISK_ON"] > 1000, (
+            f"RISK_ON should dominate (>1000 days), got {counts['RISK_ON']}"
+        )
+        # STRESS is the second-largest "bad weather" state.
+        assert counts["STRESS"] > 100, (
+            f"STRESS (stormy) should be >100 days, got {counts['STRESS']}"
+        )

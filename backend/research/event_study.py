@@ -76,6 +76,18 @@ from research.power_audit import (  # noqa: E402
     _compute_nw_lag,
 )
 from research.outcome_table import minimum_detectable_effect  # noqa: E402
+from research.regime_validation import regime_state_for_as_of as _regime_state_for_as_of  # noqa: E402  # F350
+
+# DI-06: prefer house-standard atomic writer (fsync before replace) for durability.
+# Fall back to local _atomic_write if fileutil is unavailable (e.g. older installs).
+try:
+    _BACKEND_DIR_FOR_FU = Path(__file__).resolve().parent.parent
+    if str(_BACKEND_DIR_FOR_FU) not in sys.path:
+        sys.path.insert(0, str(_BACKEND_DIR_FOR_FU))
+    from fileutil import atomic_write_text as _fileutil_atomic_write_text  # type: ignore[import]
+    _HAS_FILEUTIL = True
+except ImportError:
+    _HAS_FILEUTIL = False
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +97,8 @@ log = logging.getLogger(__name__)
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent
 _STUDIES_DIR = _BASE_DIR / "backend" / "data" / "turnaround" / "event_studies"
 _SUBMISSIONS_DIR = _BASE_DIR / "backend" / "data" / "turnaround" / "edgar_cache" / "submissions"
+_EDGAR_CACHE_DIR = _BASE_DIR / "backend" / "data" / "turnaround" / "edgar_cache"
+_REGIME_STATES_PATH = _BASE_DIR / "backend" / "data" / "turnaround" / "regime_states.json"
 # ADV-05: append-only cross-run FDR ledger — survives across runs, records the
 # full multiplicity context (n_boot, block sizes, q, horizons) per study run so
 # optional-stopping / parameter-shopping across reruns is auditable after the fact.
@@ -152,6 +166,19 @@ class EventOutcome:
     # below-floor exclusion, so survivorship of the event stream is counted.
     no_price_data: bool = False
     is_fallback: bool = False        # COR-03: forwarded from EventRecord
+    # F349: sector-peer benchmark fields (None when universe_tickers not supplied
+    # or SIC not found for event ticker).
+    peer_sic: Optional[str] = None
+    peer_sic_fallback_level: Optional[str] = None  # "3_digit" | "2_digit" | "universe" | None
+    fwd_peer_excess_pct: dict = field(default_factory=dict)  # {21: float|None, ...}
+    peer_n: dict = field(default_factory=dict)               # {21: int, ...}
+    # F350: regime state at entry_date (RISK_ON|NEUTRAL|RISK_OFF|STRESS|None).
+    # COR-03: None has two distinct meanings:
+    #   (1) entry_date is outside regime_states.json date range (or file missing)
+    #   (2) event was out_of_range / had no price data (early-continue path)
+    # Future analysis that distinguishes these cases should add a sentinel value
+    # rather than relying on None alone.
+    regime_state: Optional[str] = None
 
 
 @dataclass
@@ -190,6 +217,11 @@ class EventStudyConfig:
     # (_FDR_LEDGER_PATH).  Tests pass a tmp path so they never pollute the real
     # ledger.  This stays a single append-only file per chosen path.
     fdr_ledger_path: Optional[Path] = None
+    # F349: sector-peer benchmark configuration.
+    min_peer_count: int = 5            # fallback cascade minimum (3-digit → 2-digit → universe)
+    sic_coverage_path: Optional[Path] = None   # override submissions cache location
+    # F350: regime-breakdown lens configuration.
+    regime_states_path: Optional[Path] = None  # override regime_states.json location
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +577,36 @@ def _forward_return_terminal(
     return (r, was_terminal)
 
 
+def _resolve_entry_open(
+    df: pd.DataFrame,
+    entry_date: date,
+    sym: str,
+) -> Optional[float]:
+    """PY-04: Shared helper — resolve entry Open price for sym on entry_date.
+
+    Prefers Open column; falls back to Close when Open is missing or zero.
+    Returns None if the date is not in df or if an exception occurs.
+    Logs a warning on exception so shrinkage of the peer/universe set is
+    observable (PY-07).
+    """
+    try:
+        dates_list = _frame_dates(df)
+        for i, d in enumerate(dates_list):
+            if d == entry_date:
+                row = df.iloc[i]
+                if "Open" in df.columns and not pd.isna(row["Open"]) and float(row["Open"]) > 0:
+                    return float(row["Open"])
+                else:
+                    return float(row["Close"])
+        return None
+    except Exception as exc:
+        log.warning(
+            "Open lookup failed for %s at %s: %s",
+            sym, entry_date, exc,
+        )
+        return None
+
+
 def _compute_universe_median(
     entry_date: date,
     horizon: int,
@@ -581,28 +643,174 @@ def _compute_universe_median(
         res = _first_trading_close_on_or_after(df, entry_date)
         if res is None:
             continue
-        e_date, e_close = res
+        e_date, _ = res
         if e_date != entry_date:
             continue  # Symbol doesn't trade on entry_date
-        # Get Open for entry
+        # PY-04: shared Open-lookup helper (deduplicates with _compute_peer_median).
+        entry_open = _resolve_entry_open(df, entry_date, sym)
+        if entry_open is None or entry_open <= 0:
+            continue
+        r, was_terminal = _forward_return_terminal(df, entry_date, entry_open, horizon)
+        if r is not None:
+            returns.append(r)
+            if was_terminal:
+                terminal_peers += 1
+
+    if not returns:
+        return (None, 0, terminal_peers)
+    return (float(np.median(returns)), len(returns), terminal_peers)
+
+
+# ---------------------------------------------------------------------------
+# F349: Sector-peer benchmark helpers
+# ---------------------------------------------------------------------------
+
+def _load_ticker_to_sic(
+    universe_tickers: list[str],
+    sic_cache_path: Optional[Path] = None,
+) -> tuple[dict[str, Optional[str]], int]:
+    """F349 (PROGRAM.md rule 6a): Load ticker→SIC map from EDGAR submissions cache.
+
+    Reads edgar_cache/universe.json for ticker→CIK, then
+    submissions/{cik}.json for the 'sic' field.
+    Returns ({TICKER: "1311" or None}, parse_error_count).
+
+    TICKER maps to None if the submission file is missing, unreadable, or has
+    no sic entry.  parse_error_count counts JSON decode failures so callers can
+    surface them in meta (DI-03: silent cache-corruption is observable post-run
+    without changing the graceful-degradation behaviour).
+
+    sic_cache_path: override for the submissions directory (tests use tmp).
+    """
+    submissions_dir = sic_cache_path or _SUBMISSIONS_DIR
+    universe_path = (submissions_dir.parent / "universe.json")
+
+    # Load ticker→CIK mapping from universe.json.
+    ticker_to_cik: dict[str, str] = {}
+    if universe_path.exists():
         try:
-            dates_list = _frame_dates(df)
-            entry_open = None
-            for i, d in enumerate(dates_list):
-                if d == entry_date:
-                    row = df.iloc[i]
-                    if "Open" in df.columns and not pd.isna(row["Open"]) and float(row["Open"]) > 0:
-                        entry_open = float(row["Open"])
-                    else:
-                        entry_open = float(row["Close"])
-                    break
-            if entry_open is None or entry_open <= 0:
-                continue
-        except Exception as exc:  # PY-07: log instead of silently shrinking universe
-            log.warning(
-                "universe_median: Open lookup failed for %s at %s: %s",
-                sym, entry_date, exc,
-            )
+            raw = json.loads(universe_path.read_text(encoding="utf-8"))
+            # universe.json layout: {"0": {"cik_str": int, "ticker": "NVDA", "title": ...}, ...}
+            # or normalized {TICKER: {"cik_str": "0000320193", "title": ...}}.
+            # edgar.fetch_universe() returns the normalized form; the raw SEC file uses the
+            # numeric-key form.  Detect by checking whether first value has "ticker" key.
+            sample = next(iter(raw.values()), {})
+            if "ticker" in sample:
+                # Raw SEC format
+                for entry in raw.values():
+                    t = str(entry.get("ticker", "")).upper()
+                    cik_raw = entry.get("cik_str", 0)
+                    if t:
+                        ticker_to_cik[t] = str(cik_raw).zfill(10)
+            else:
+                # Normalized format: {TICKER: {"cik_str": "0000320193", ...}}
+                for t, info in raw.items():
+                    cik_raw = info.get("cik_str", 0)
+                    ticker_to_cik[t.upper()] = str(cik_raw).zfill(10)
+        except Exception as exc:
+            log.warning("F349: failed to load universe.json from %s: %s", universe_path, exc)
+
+    result: dict[str, Optional[str]] = {}
+    parse_errors = 0
+    for ticker in universe_tickers:
+        cik = ticker_to_cik.get(ticker.upper())
+        if cik is None:
+            result[ticker] = None
+            continue
+        sub_path = submissions_dir / f"{cik}.json"
+        if not sub_path.exists():
+            result[ticker] = None
+            continue
+        try:
+            sub = json.loads(sub_path.read_text(encoding="utf-8"))
+            sic = sub.get("sic")
+            result[ticker] = str(sic) if sic else None
+        except Exception as exc:
+            log.warning("F349: failed to read submission %s: %s", sub_path, exc)
+            result[ticker] = None
+            parse_errors += 1
+    return result, parse_errors
+
+
+def _get_peer_set_by_sic(
+    ticker: str,
+    universe_tickers: list[str],
+    ticker_to_sic: dict[str, Optional[str]],
+    min_peers: int = 5,
+) -> tuple[list[str], Optional[str], str]:
+    """F349 (PROGRAM.md rule 6a): Find peer set for ticker via SIC fallback cascade.
+
+    1. Try 3-digit SIC match (excluding event ticker itself).
+    2. If count < min_peers, try 2-digit prefix.
+    3. If still < min_peers, use full universe (excluding event ticker).
+
+    Returns (peer_tickers, sic_code_or_None, fallback_level).
+    fallback_level ∈ {"3_digit", "2_digit", "universe"}.
+    """
+    sic = ticker_to_sic.get(ticker)
+    # Exclude the event ticker itself (mirrors universe-median exclude_ticker discipline).
+    others = [t for t in universe_tickers if t != ticker]
+
+    # COR-02: cascade is independent per prefix length — a 2-char SIC must still
+    # reach the 2-digit branch even though it cannot enter the 3-digit branch.
+    if sic and len(sic) >= 3:
+        prefix3 = sic[:3]
+        peers3 = [t for t in others if (ticker_to_sic.get(t) or "")[:3] == prefix3]
+        if len(peers3) >= min_peers:
+            return (peers3, sic, "3_digit")
+
+    if sic and len(sic) >= 2:
+        prefix2 = sic[:2]
+        peers2 = [t for t in others if (ticker_to_sic.get(t) or "")[:2] == prefix2]
+        if len(peers2) >= min_peers:
+            return (peers2, sic, "2_digit")
+
+    # Full-universe fallback
+    return (others, sic, "universe")
+
+
+def _compute_peer_median(
+    entry_date: date,
+    horizon: int,
+    pick_ticker: str,
+    peer_tickers: list[str],
+    loader_fn: Callable[[str], Optional[pd.DataFrame]],
+) -> tuple[Optional[float], int, int]:
+    """F349 (PROGRAM.md rule 6a): Compute peer-median forward return.
+
+    Identical logic to _compute_universe_median but operates on an explicit
+    peer_tickers list.  PY-03: self-exclusion is enforced inline here as a
+    defensive guard (pick_ticker is always excluded regardless of what the
+    caller passes in peer_tickers), in addition to upstream exclusion in
+    _get_peer_set_by_sic.  This prevents silent self-inclusion if future
+    callers build peer lists without going through _get_peer_set_by_sic.
+    Preserves: floor-pass discipline at entry_date, Open-anchor, terminal-exit ADV-03.
+
+    Returns (median, count_valid_peers, count_terminal_peers).
+    """
+    returns: list[float] = []
+    terminal_peers = 0
+    for sym in peer_tickers:
+        # PY-03: defensive self-exclusion guard — enforces the contract in code
+        # rather than relying solely on the caller (upstream _get_peer_set_by_sic).
+        if sym == pick_ticker:
+            continue
+        df = loader_fn(sym)
+        if df is None or df.empty:
+            continue
+        # ADV-01: floor decided from info available BEFORE entry.
+        fs = _floor_status(df, entry_date)
+        if fs != _FLOOR_OK:
+            continue
+        res = _first_trading_close_on_or_after(df, entry_date)
+        if res is None:
+            continue
+        e_date, _ = res
+        if e_date != entry_date:
+            continue
+        # PY-04: shared Open-lookup helper (deduplicates with _compute_universe_median).
+        entry_open = _resolve_entry_open(df, entry_date, sym)
+        if entry_open is None or entry_open <= 0:
             continue
         r, was_terminal = _forward_return_terminal(df, entry_date, entry_open, horizon)
         if r is not None:
@@ -698,6 +906,67 @@ def _era_breakdown(
                 "sign_agreement": round(agree, 4),
             }
         out[label] = {"n_events": len(in_era), "per_horizon": per_h}
+    return out
+
+
+def _regime_breakdown(
+    outcomes: list[EventOutcome],
+    horizons: tuple[int, ...],
+    low_count_threshold: int = 10,
+) -> dict:
+    """F350 (PROGRAM.md rule 6a): Group outcomes by regime state and report
+    per-regime effect + sign agreement.
+
+    Mirrors _era_breakdown() structure:
+      {regime: {n_events, per_horizon: {h: {n, mean_excess_pct, sign_agreement}}}}
+
+    Both universe excess (fwd_excess_pct) AND peer excess (fwd_peer_excess_pct)
+    are reported per horizon when available, so regime is a lens on both numbers.
+
+    Regime vocabulary (charter): RISK_ON / NEUTRAL / RISK_OFF / STRESS.
+    RISK_OFF is the rare state (~6 trading days 2015-2024); regimes with
+    n_events < low_count_threshold get LOW_COUNT_FLAG=True.
+    """
+    # Collect all states present (guaranteed order for consistent output).
+    _STATE_ORDER = ("RISK_ON", "NEUTRAL", "RISK_OFF", "STRESS")
+    out: dict = {}
+    for state in _STATE_ORDER:
+        in_state = [o for o in outcomes if o.regime_state == state]
+        per_h: dict = {}
+        for h in horizons:
+            # Universe excess
+            univ_vals = [
+                o.fwd_excess_pct.get(h)
+                for o in in_state
+                if o.fwd_excess_pct.get(h) is not None
+            ]
+            # Peer excess (F349; may be empty if SIC not loaded)
+            peer_vals = [
+                o.fwd_peer_excess_pct.get(h)
+                for o in in_state
+                if o.fwd_peer_excess_pct.get(h) is not None
+            ]
+            if not univ_vals:
+                per_h[h] = {
+                    "n": 0,
+                    "mean_excess_pct": None,
+                    "sign_agreement": None,
+                    "peer_mean_excess_pct": float(np.mean(peer_vals)) if peer_vals else None,
+                }
+                continue
+            arr = np.array(univ_vals, dtype=float)
+            mean = float(np.mean(arr))
+            agree = float(np.mean(arr >= 0)) if mean >= 0 else float(np.mean(arr < 0))
+            per_h[h] = {
+                "n": len(univ_vals),
+                "mean_excess_pct": round(mean, 4),
+                "sign_agreement": round(agree, 4),
+                "peer_mean_excess_pct": round(float(np.mean(peer_vals)), 4) if peer_vals else None,
+            }
+        blk: dict = {"n_events": len(in_state), "per_horizon": per_h}
+        if len(in_state) < low_count_threshold:
+            blk["LOW_COUNT_FLAG"] = True
+        out[state] = blk
     return out
 
 
@@ -829,6 +1098,8 @@ def compute_study_stats(
     stats["era_consistency"] = _era_breakdown(explore, config.horizons, config.explore_eras)
     # Confirm-era breakdown mechanics (flagged; populated once confirm exists).
     stats["confirm_era_breakdown"] = _era_breakdown(confirm, config.horizons, config.confirm_eras)
+    # F350: regime-breakdown lens — per-regime effect across all outcomes (explore+confirm).
+    stats["regime_breakdown"] = _regime_breakdown(outcomes, config.horizons)
 
     # Non-overlapping variant for primary horizon (first in list) if requested
     if config.use_non_overlapping and explore:
@@ -903,6 +1174,36 @@ def print_study_report(meta: dict) -> None:
             m = ph.get("mean_excess_pct")
             parts.append(f"{label}: {m if m is not None else 'n/a'}ppt (n={blk.get('n_events', 0)})")
         print(f"  Era-consistency [{h0}d excess]: " + " | ".join(parts))
+
+    # F350: Regime-breakdown one-liner (all outcomes; RISK_OFF is the rare ~6-day state).
+    # Plain-English gloss: RISK_ON (calm) / NEUTRAL / RISK_OFF (crisis) / STRESS (stormy).
+    _REGIME_GLOSS = {
+        "RISK_ON": "RISK_ON (calm)",
+        "NEUTRAL": "NEUTRAL",
+        "RISK_OFF": "RISK_OFF (crisis)",
+        "STRESS": "STRESS (stormy)",
+    }
+    regime = meta.get("regime_breakdown", {})
+    if regime:
+        h0 = meta.get("horizons", [None])[0]
+        parts = []
+        for state in ("RISK_ON", "NEUTRAL", "RISK_OFF", "STRESS"):
+            blk = regime.get(state, {})
+            ph = blk.get("per_horizon", {}).get(h0) or blk.get("per_horizon", {}).get(str(h0)) or {}
+            m = ph.get("mean_excess_pct")
+            low_flag = " [LOW-COUNT]" if blk.get("LOW_COUNT_FLAG") else ""
+            gloss = _REGIME_GLOSS.get(state, state)
+            parts.append(
+                f"{gloss}: {m if m is not None else 'n/a'}ppt (n={blk.get('n_events', 0)}){low_flag}"
+            )
+        # F349: peer-excess summary if available at primary horizon.
+        peer_summary = ""
+        per_h_meta = meta.get("per_horizon", {})
+        h0_str = str(h0)
+        if h0_str in per_h_meta and per_h_meta[h0_str].get("peer_median_excess_pct") is not None:
+            pme = per_h_meta[h0_str]["peer_median_excess_pct"]
+            peer_summary = f" | Peer-excess (median across explore): {pme:.2f}ppt"
+        print(f"  Regime breakdown [{h0}d excess]: " + " | ".join(parts) + peer_summary)
     print()
 
 
@@ -1002,6 +1303,37 @@ def run_event_study(
     else:
         n_declustered = 0
 
+    # F349: Load SIC cache once per study (not per event).
+    # universe_tickers may be None when caller doesn't supply a universe; SIC lookup
+    # is silently disabled in that case (backward-compatible).
+    ticker_to_sic: dict[str, Optional[str]] = {}
+    sic_fallback_counts = {"3_digit": 0, "2_digit": 0, "universe": 0}
+    sic_parse_errors = 0
+    if universe_tickers is not None:
+        ticker_to_sic, sic_parse_errors = _load_ticker_to_sic(
+            universe_tickers, sic_cache_path=config.sic_coverage_path
+        )
+        sic_found = sum(1 for t in universe_tickers if ticker_to_sic.get(t))
+    else:
+        sic_found = 0
+
+    # F350: Load regime_states.json once per study (not per event).
+    regime_states_path = config.regime_states_path or _REGIME_STATES_PATH
+    regime_states: Optional[dict] = None
+    if regime_states_path.exists():
+        try:
+            regime_states = json.loads(regime_states_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            log.warning(
+                "F350: failed to load regime_states.json at %s: %s; regime tagging disabled",
+                regime_states_path, exc,
+            )
+    else:
+        log.warning(
+            "F350: regime_states.json not found at %s; regime tagging disabled",
+            regime_states_path,
+        )
+
     outcomes: list[EventOutcome] = []
     fallback_count = 0
     # ADV-02: distinct survivorship counters (no silent drops).
@@ -1010,7 +1342,10 @@ def run_event_study(
     events_entered = 0
     # ADV-03: per-horizon peer-attrition (terminal-exit) totals for the picks.
     pick_terminal_by_h: dict[int, int] = {h: 0 for h in config.horizons}
-    peer_terminal_by_h: dict[int, int] = {h: 0 for h in config.horizons}
+    # COR-04: separate accumulators for universe-median peers vs SIC-peer-median peers
+    # so peer_attrition.peer_terminal_exits is not double-counted.
+    universe_peer_terminal_by_h: dict[int, int] = {h: 0 for h in config.horizons}
+    sic_peer_terminal_by_h: dict[int, int] = {h: 0 for h in config.horizons}
 
     # ADV-04: cache key IS (entry_date, horizon, exclude_ticker).  Self-exclusion
     # is part of the key, so two different picks sharing an entry_date never alias
@@ -1082,6 +1417,12 @@ def run_event_study(
         # PY-03: split is a clean two-way partition on entry_date.
         split = "explore" if entry_date <= config.explore_cutoff else "confirm"
 
+        # F350: Tag event with regime state at entry_date (ET, ADV-01 point-in-time).
+        # None when regime_states.json missing or entry_date outside its date range.
+        regime_state: Optional[str] = None
+        if regime_states is not None:
+            regime_state = _regime_state_for_as_of(entry_date, regime_states)
+
         # Forward returns (Open-anchored, Fork A) with ADV-03 terminal-exit.
         if fs == _FLOOR_OK and df is not None:
             fwd_return_pct = {}
@@ -1115,7 +1456,7 @@ def run_event_study(
                     )
                 med, n_univ, term_peers = _median_cache[cache_key]
                 universe_n[h] = n_univ
-                peer_terminal_by_h[h] += term_peers
+                universe_peer_terminal_by_h[h] += term_peers  # COR-04: separate accumulator
                 r = fwd_return_pct.get(h)
                 if r is not None and med is not None:
                     fwd_excess_pct[h] = r - med
@@ -1125,6 +1466,48 @@ def run_event_study(
             for h in config.horizons:
                 fwd_excess_pct[h] = None
                 universe_n[h] = 0
+
+        # F349: Sector-peer benchmark — compute peer median via SIC fallback cascade.
+        # Only runs when universe_tickers supplied, event passed the floor, and SIC
+        # data was loaded.  Silently skips (all None) otherwise (backward-compatible).
+        fwd_peer_excess_pct: dict[int, Optional[float]] = {}
+        peer_n: dict[int, int] = {}
+        peer_sic: Optional[str] = ticker_to_sic.get(ticker) if ticker_to_sic else None
+        peer_sic_fallback_level: Optional[str] = None
+
+        if universe_tickers is not None and fs == _FLOOR_OK:
+            if ticker_to_sic:
+                peers, peer_sic, fallback = _get_peer_set_by_sic(
+                    ticker, universe_tickers, ticker_to_sic, config.min_peer_count
+                )
+                peer_sic_fallback_level = fallback
+            else:
+                # DI-08: universe.json absent → no SIC data → forced universe fallback.
+                # Still count it so sic_fallback_stats total == floor-ok events (probe A5).
+                peers = [t for t in universe_tickers if t != ticker]
+                fallback = "universe"
+                peer_sic_fallback_level = fallback
+            sic_fallback_counts[fallback] = sic_fallback_counts.get(fallback, 0) + 1
+
+            for h in config.horizons:
+                # Peer cache key is distinct from universe cache key (brief constraint).
+                peer_cache_key = (entry_date, h, "peers", ticker)
+                if peer_cache_key not in _median_cache:
+                    _median_cache[peer_cache_key] = _compute_peer_median(
+                        entry_date, h, ticker, peers, loader_fn
+                    )
+                peer_med, n_peers, term_peers = _median_cache[peer_cache_key]
+                peer_n[h] = n_peers
+                sic_peer_terminal_by_h[h] += term_peers  # COR-04: separate accumulator
+                r = fwd_return_pct.get(h)
+                if r is not None and peer_med is not None:
+                    fwd_peer_excess_pct[h] = r - peer_med
+                else:
+                    fwd_peer_excess_pct[h] = None
+        else:
+            for h in config.horizons:
+                fwd_peer_excess_pct[h] = None
+                peer_n[h] = 0
 
         outcomes.append(EventOutcome(
             ticker=ticker,
@@ -1139,6 +1522,11 @@ def run_event_study(
             universe_n=universe_n,
             no_price_data=False,
             is_fallback=ev.is_fallback,
+            peer_sic=peer_sic,
+            peer_sic_fallback_level=peer_sic_fallback_level,
+            fwd_peer_excess_pct=fwd_peer_excess_pct,
+            peer_n=peer_n,
+            regime_state=regime_state,
         ))
 
     # Compute statistics (on explore slice; excess must be populated)
@@ -1164,10 +1552,14 @@ def run_event_study(
         )
 
     # ADV-03: per-horizon delisting attrition (terminal-exit substitutions).
+    # COR-04: universe-median and SIC-peer-median terminal exits tracked separately
+    # to avoid double-counting.  peer_terminal_exits = universe path (backward-compat);
+    # sic_peer_terminal_exits = SIC-peer-median path (new key, F349).
     peer_attrition = {
         h: {
             "pick_terminal_exits": pick_terminal_by_h.get(h, 0),
-            "peer_terminal_exits": peer_terminal_by_h.get(h, 0),
+            "peer_terminal_exits": universe_peer_terminal_by_h.get(h, 0),
+            "sic_peer_terminal_exits": sic_peer_terminal_by_h.get(h, 0),
         }
         for h in config.horizons
     }
@@ -1216,6 +1608,40 @@ def run_event_study(
     }
     if "non_overlapping" in stats:
         meta["non_overlapping"] = stats["non_overlapping"]
+
+    # F349: SIC coverage + fallback stats (additive; absent when universe_tickers=None).
+    if universe_tickers is not None:
+        n_univ = len(universe_tickers)
+        meta["sic_coverage"] = {
+            "tickers_with_sic": sic_found,
+            "tickers_without_sic": n_univ - sic_found,
+            "coverage_pct": round((sic_found / n_univ * 100) if n_univ else 0.0, 1),
+            "parse_errors": sic_parse_errors,  # DI-03: JSON decode failures in submissions cache
+        }
+        meta["sic_fallback_stats"] = dict(sic_fallback_counts)
+
+        # Per-horizon peer-median excess summary (explore slice, for print_study_report).
+        # COR-01: per_horizon uses int keys (stats["per_horizon"][h] where h is int).
+        # Must use h (int) not str(h) — otherwise the key lookup always misses and
+        # peer_median_excess_pct is never written.
+        explore_outcomes = [o for o in outcomes if o.split == "explore"]
+        per_h = meta.get("per_horizon", {})
+        for h in config.horizons:
+            peer_vals = [
+                o.fwd_peer_excess_pct.get(h)
+                for o in explore_outcomes
+                if o.fwd_peer_excess_pct.get(h) is not None
+            ]
+            if h in per_h:
+                per_h[h]["peer_median_excess_pct"] = (
+                    round(float(np.median(peer_vals)), 4) if peer_vals else None
+                )
+    else:
+        meta["sic_coverage"] = None
+        meta["sic_fallback_stats"] = None
+
+    # F350: Regime breakdown (additive; empty when regime_states.json absent).
+    meta["regime_breakdown"] = stats.get("regime_breakdown", {})
 
     # Persist to disk
     out_dir = config.output_dir or (_STUDIES_DIR / config.study_name)
@@ -1306,8 +1732,13 @@ def _write_study_artifacts(
             "fwd_excess_pct": {str(k): v for k, v in o.fwd_excess_pct.items()},
             "floor_status": o.floor_status,
             "universe_n": {str(k): v for k, v in o.universe_n.items()},
+            "fwd_peer_excess_pct": {str(k): v for k, v in o.fwd_peer_excess_pct.items()},
+            "peer_n": {str(k): v for k, v in o.peer_n.items()},
+            "peer_sic": o.peer_sic,
+            "peer_sic_fallback_level": o.peer_sic_fallback_level,
             "no_price_data": o.no_price_data,
             "is_fallback": o.is_fallback,
+            "regime_state": o.regime_state,
         }
         rows.append(json.dumps(row))
 
@@ -1319,7 +1750,15 @@ def _write_study_artifacts(
 
 
 def _atomic_write(path: Path, content: str) -> None:
-    """Write content to path atomically (tmp + os.replace)."""
+    """Write content to path atomically (fsync + os.replace).
+
+    DI-06: delegates to fileutil.atomic_write_text (house standard, fsync before
+    replace) when available.  Falls back to local tmp+replace when import fails.
+    """
+    if _HAS_FILEUTIL:
+        _fileutil_atomic_write_text(path, content)
+        return
+    # Local fallback (no fsync — acceptable for test/dev environments).
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     try:
         tmp_path.write_text(content, encoding="utf-8")
