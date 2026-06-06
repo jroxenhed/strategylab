@@ -15,12 +15,12 @@ _(none open)_
 - [F305](#f305) — [next] sync-todo-index.py writes TODO.md with bare write_text() [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 29 items
+## Open Work — 30 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
-| [Architecture](#architecture) | 9 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F331](#f331), [F348](#f348) |
+| [Architecture](#architecture) | 10 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F331](#f331), [F348](#f348)–[F349](#f349) |
 | [Hardening](#hardening) | 8 | [F305](#f305), [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F336](#f336)–[F337](#f337) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 6 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329), [F338](#f338) |
@@ -54,6 +54,8 @@ _(none open)_
 - [ ] <a id="f320"></a> **F320** Derived compact fundamentals cache + in-process LRU — every edgar.py parsed accessor (revenue/NI/GP/OCF/shares) independently re-reads and re-parses the full ~1.8MB companyfacts JSON: ~5 parses per (cik, as_of) × 36 as-of dates ≈ 180 redundant MB-scale parses per surviving ticker per validation run. Fix: parse once → persist compact per-CIK derived JSON (~KB: the five quarterly series + shares), accessors read derived only; small lru_cache (~64 entries) for within-run loops; raw companyfacts becomes prunable (largely solves F314). Found while watching the first full-universe run, 2026-06-05. [medium] [arch] (added 2026-06-05)
 
 - [ ] <a id="f348"></a> **F348** Fundamental-surprise event payloads (John's gap-spot #2, 2026-06-06) — feature-builder on F320's derived cache: for any filing event (10-Q/10-K/8-K 2.02), compute point-in-time deltas vs the company's OWN history as the event's payload — revenue acceleration vs prior 4 quarters, margin inflection, share-count change (dilution — documented negative signal, sitting unused in cache). Estimate-free surprise (no paid consensus data needed). Unlocks PEAD-family charters + the F347 heterogeneity test's conditioning variables. Fundamentals' third role: veto (covered), picker (tested-null on the blind clock), payload (never tested). [medium] [arch] [gated: F342 shipped] (added 2026-06-06)
+
+- [ ] <a id="f349"></a> **F349** Sector-peer benchmark for the event harness (John's bucket critique, 2026-06-06) — add a same-SIC peer-median excess alongside the universe-median in event_study.py: peer set = floor-passing names sharing SIC prefix (3-digit, fallback 2-digit, fallback universe; min-peer-count rule; fallback rate reported in meta). SIC from cached EDGAR submissions (verified present; coverage currently 564 CIKs — needs the bulk submissions index extended to the active universe). Rationale: tickers trade in buckets (solar/semis/memory); universe-excess credits sector waves to the signal — the vol-matching lesson, sector edition. Verdicts then report both: universe excess = what you'd earn; peer excess = what the signal knew. [medium] [arch] [gated: needed by first charter run] (added 2026-06-06)
 
 - [ ] <a id="f272"></a> **F272** Inspector panel for node params — when a node has >3 params or long values (e.g. multi-line code blocks for Code nodes), inline editing gets cramped. Right-side panel shows selected-node form; selection ring already in place (F265). Defer until F269+F271 expose nodes that actually need it. (added 2026-05-25, from F268 plan §6). [medium] [arch]
 
