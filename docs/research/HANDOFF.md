@@ -16,7 +16,7 @@
 ## Next actions
 
 1. **F359 [next]** — midnight-UTC ADT investigation (~20-sample check vs EDGAR web) BEFORE any R-1 rerun interpretation; events carry `adt_midnight_utc` flags so exclusion needs no re-ingest. The last technical prerequisite before F354.
-2. **F354 — R-1 rerun gate (John's decision).** Both prerequisites closed. Decision inputs: the four F356 measured divergences + the F357 facts (both in PROGRAM.md). Whatever the §10-amend vs R-1b call, the charter text must **pin "universe medians from matrix build 2026-06-07"** (vintage freeze — see equivalence verdict). The rerun's compute target is the commissioned worker; check F355 (bootstrap vectorization) before full scale — it's the wall-clock dominator at thousands of events.
+2. **F354 — GATE DECIDED (John, 2026-06-07): clean R-1b charter, not a §10 amendment** (rationale + locked requirements in PROGRAM.md "F354 GATE DECIDED"). Next concrete step after F359: **blind-author the R-1b charter** (R-1 design verbatim, F356 ingest as source, matrix-build pin, FS anchors re-attach) → John approves → run explore at full scale on the worker (check F355 bootstrap perf first — wall-clock dominator at thousands of events).
 3. **R-2 explore** (distress recovery, charter `2f0cf24c…`) — needs NO Form 4 data; runnable any session; confirm window 2025+.
 4. **Open hardening surfaced tonight:** F361 (coverage accounting wrong under chunk failure — cosmetic but dishonest logging), F362 (review-wave ↔ run-state usage), F358 (universe-loader consolidation, now 3+ copies), F352 (ledger file lock), F360 (re-measure MCP snapshots at populated chart state).
 
