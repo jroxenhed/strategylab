@@ -65,6 +65,17 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
+def _charter_cost_fn(ev, entry_price) -> float:
+    """§7 frozen cost model: 2bps/leg × 2 legs = 4bps = 0.04 pct.
+
+    Module-level (not a lambda) so it pickles into ProcessPool workers —
+    a run.<locals>.<lambda> here crashed the first parallel calibrate
+    (the F365 probe called run_event_study directly with its own picklable
+    cost fn, so this driver path was never exercised under workers>1).
+    """
+    return 0.04
+
+
 def _attach_run_log(output_dir: Path) -> None:
     """Tee all driver/harness logging to <study_dir>/run.log.
 
@@ -524,7 +535,7 @@ def run(calibrate: bool = False, workers: int = 1) -> None:
         n_boot=999,                       # §5 / brief
         fdr_q=0.10,                       # §5
         min_peer_count=8,                 # §2c: fallback cascade minimum
-        cost_fn=lambda ev, entry_price: 0.04,  # §7: 2bps/leg × 2 legs = 4bps = 0.04 pct
+        cost_fn=_charter_cost_fn,  # §7: 2bps/leg × 2 legs = 4bps = 0.04 pct (module-level: pickles to workers)
         output_dir=output_dir,
         fdr_ledger_path=fdr_ledger_path,
         allow_post_2020_explore=False,    # §8: hard guard
