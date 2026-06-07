@@ -10,6 +10,7 @@ _(none open)_
 
 ## Up Next
 
+- [F359](#f359) — [next] Investigate midnight-UTC acceptanceDateTimes before any R-1 rerun interpretation [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
 ## Open Work — 32 items
@@ -64,7 +65,7 @@ _(none open)_
 
 - [ ] <a id="f362"></a> **F362** review-wave workflow ↔ run-state integration — the new `.claude/workflows/review-wave.js` (piloted 2026-06-07) returns a wave-level `tokens_spent` but run-state.py expects per-agent rows (`add-agent --tokens`). Decide: record the wave as one synthetic agent row, or extend the workflow to return per-persona usage from the engine's accounting. Also fold the playbook's review-tier section into referencing the workflow as the default Tier-B/C mechanism once the pilot verdict is in. [easy] [infra]
 
-- [ ] <a id="f359"></a> **F359** Investigate midnight-UTC acceptanceDateTimes before any R-1 rerun interpretation — ~0.6% of ADTs are T00:00:00Z (2,972 of 507K sampled); `_to_et` maps them to 19:00 the PRIOR ET day, a potential 1-day look-ahead if they're data artifacts rather than genuine midnight acceptances. Events carry `adt_midnight_utc: true` payload flags (F356) so they're excludable without re-ingest; sample ~20 against EDGAR web acceptance stamps and decide keep/exclude/clamp. ADV-04 from the F356 review. [easy] [hardening]
+- [ ] <a id="f359"></a> **F359** [next] Investigate midnight-UTC acceptanceDateTimes before any R-1 rerun interpretation — ~0.6% of ADTs are T00:00:00Z (2,972 of 507K sampled); `_to_et` maps them to 19:00 the PRIOR ET day, a potential 1-day look-ahead if they're data artifacts rather than genuine midnight acceptances. Events carry `adt_midnight_utc: true` payload flags (F356) so they're excludable without re-ingest; sample ~20 against EDGAR web acceptance stamps and decide keep/exclude/clamp. ADV-04 from the F356 review. [easy] [hardening]
 
 - [ ] <a id="f355"></a> **F355** r1_analysis bounded-perf cleanups deferred from the R-1 review wave — PERF-06 (9× per-variant quintile re-derivation in the perturbation band; restructure to share the per-year sort) and PERF-07 (Python-loop bootstrap with per-iteration np.concatenate ×999 draws in both MBB helpers; vectorize with pregenerated index arrays). Bounded at current scale (~215 events) but will matter at F353 scale (thousands of events × 9 variants). Findings detail: .run/R1-explore/review-performance.json. [easy] [hardening]
 - [ ] <a id="f337"></a> **F337** null_atlas.json backup rotation — atlas writes are atomic but have zero backup depth, unlike validation_result.json (backup_depth=3); a bad build silently destroys the previous good atlas (SIGNAL-P1 DI-06, deferred). Reuse the validation-result backup helper. [easy] [hardening]
