@@ -689,15 +689,13 @@ class TestOutputStructure:
 
 
 class TestRegimeLens:
-    """Regime lens: STRESS is never evidential; cells with <15 events non-evidential."""
+    """Regime lens: STRESS and RISK_OFF are always non-evidential; RISK_ON/NEUTRAL gate at n>=15."""
 
     def test_rare_state_always_non_evidential(self, tmp_path):
-        """The rare crisis state (RISK_OFF) is non-evidential even with many events;
-        STRESS with >=15 events IS evidential.
+        """RISK_OFF is non-evidential even with many events (always-non-evidential).
 
-        §10 pre-outcome fix 2026-06-06: the charter's "never load-bearing ~6
-        days/decade" state is RISK_OFF in the real classifier (3 days in
-        2015-2020); STRESS (11.1% of days) joins the evidential trio.
+        F367 charter fix: STRESS is also ALWAYS non-evidential regardless of n —
+        it is a rare crisis state; the n>=15 gate applies only to RISK_ON/NEUTRAL.
         """
         groups = [
             (0.10, -5.0), (0.50, 0.0), (1.00, 5.0), (2.00, 10.0), (5.00, 15.0)
@@ -723,6 +721,7 @@ class TestRegimeLens:
                     ))
             return rows
 
+        # RISK_OFF: always non-evidential (3 days / 6 years in real data)
         study_dir = _write_study(
             tmp_path, _rows_in_state("RISK_OFF", "RARE"), "rare_state_study")
         result = run_r1_analysis(study_dir, seed=20260606)
@@ -730,12 +729,78 @@ class TestRegimeLens:
         assert rare["is_stress_non_evidential"] is True
         assert rare["is_evidential"] is False
 
+        # F367: STRESS is ALWAYS non-evidential regardless of n (n=50 here, well above 15)
         study_dir2 = _write_study(
-            tmp_path, _rows_in_state("STRESS", "STR"), "stress_evidential_study")
+            tmp_path, _rows_in_state("STRESS", "STR"), "stress_non_evidential_study")
         result2 = run_r1_analysis(study_dir2, seed=20260606)
         stress = result2["regime_lens"]["per_state"]["STRESS"]
-        assert stress["is_stress_non_evidential"] is False
-        assert stress["is_evidential"] is True
+        assert stress["is_stress_non_evidential"] is True, (
+            "STRESS must always be non-evidential regardless of n (charter §4 / F367)"
+        )
+        assert stress["is_evidential"] is False, (
+            "STRESS must never be evidential — it is a rare crisis state (F367)"
+        )
+
+    def test_stress_non_evidential_large_n(self, tmp_path):
+        """F367: STRESS cell with n=607 must be non-evidential.
+
+        This asserts the F367 fix: before the fix, n>=15 STRESS would be marked
+        evidential.  Charter §4 intent is that STRESS is ALWAYS non-evidential.
+        """
+        # Build 607 STRESS events (5 score quintiles × 122 events + 7 overflow to q1)
+        rows = []
+        groups = [
+            (0.10, -5.0),   # quintile 1 (low score)
+            (0.50,  0.0),   # quintile 2
+            (1.00,  5.0),   # quintile 3
+            (2.00, 10.0),   # quintile 4
+            (5.00, 15.0),   # quintile 5 (high score)
+        ]
+        idx = 0
+        for q_grp, (score_val, excess_val) in enumerate(groups):
+            n_in_group = 122 if q_grp < 3 else 120  # yields 122+122+122+120+120 = 606; add 1 more
+            for j in range(n_in_group):
+                entry_dt = _day_from_idx(2015, idx)
+                idx += 1
+                rows.append(_make_event_row(
+                    ticker=f"STR{q_grp}{j:04d}",
+                    entry_date=entry_dt.isoformat(),
+                    score=score_val + j * 0.0001,
+                    excess_63=excess_val,
+                    excess_21=excess_val * 0.5,
+                    excess_126=excess_val * 1.5,
+                    peer_excess_63=excess_val * 0.8,
+                    peer_excess_21=excess_val * 0.4,
+                    peer_excess_126=excess_val * 1.2,
+                    regime_state="STRESS",
+                ))
+        # Add one more to reach 607
+        rows.append(_make_event_row(
+            ticker="STR_extra",
+            entry_date=_day_from_idx(2015, idx).isoformat(),
+            score=1.5,
+            excess_63=5.0,
+            excess_21=2.5,
+            excess_126=7.5,
+            peer_excess_63=4.0,
+            peer_excess_21=2.0,
+            peer_excess_126=6.0,
+            regime_state="STRESS",
+        ))
+        assert len(rows) == 607
+
+        study_dir = _write_study(tmp_path, rows, "stress_607_study")
+        result = run_r1_analysis(study_dir, seed=20260606)
+        stress = result["regime_lens"]["per_state"]["STRESS"]
+        assert stress["n_total_quintile_valid"] == 607, (
+            f"Expected 607 STRESS events, got {stress['n_total_quintile_valid']}"
+        )
+        assert stress["is_stress_non_evidential"] is True, (
+            "STRESS(n=607): is_stress_non_evidential must be True (F367)"
+        )
+        assert stress["is_evidential"] is False, (
+            "STRESS(n=607) must be non-evidential — STRESS is always non-evidential (F367)"
+        )
 
     def test_low_count_regime_non_evidential(self, tmp_path):
         """Regime cell with <15 events is non-evidential."""

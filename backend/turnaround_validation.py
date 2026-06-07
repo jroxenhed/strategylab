@@ -113,6 +113,12 @@ _PICKLE_PROTOCOL = 4  # Python 3.8+ portable; higher protocols not strictly need
 # for the split-adjustment staleness risk this guards against.
 _PRICE_CACHE_VERSION = "v1"
 
+# F368: TTL for persistent negative-fetch markers (days).  30 days is
+# conservative — most delisted tickers stay dead for years; the TTL exists
+# only to prevent permanent poisoning of tickers that temporarily go dark
+# (e.g. halted securities that eventually relisted under the same symbol).
+_MISS_TTL_DAYS: int = 30
+
 # F331: worker count for parallel prefetch phase.  6 is the sweet spot for yahoo's
 # free tier (burst-tolerant without reliably triggering 429 storms); cap is 8.
 # Lower to 4 if 429s become chronic in your environment.
@@ -385,6 +391,106 @@ class PriceFrameCache:
             return None
         return df
 
+    # ------------------------------------------------------------------
+    # F368: Persistent negative-fetch cache (miss markers)
+    # ------------------------------------------------------------------
+
+    def _miss_dir(self) -> Path:
+        """Directory for miss markers: <version_dir>/_miss/"""
+        return self._version_dir() / "_miss"
+
+    def _miss_path(
+        self,
+        ticker: str,
+        fetch_start: str,
+        fetch_end: str,
+        data_source: str = "yahoo",
+    ) -> Path:
+        """Marker path mirrors the frame path key exactly, with .miss extension.
+
+        Keyed identically to _path() so there is no cross-span poisoning:
+        a miss for span A never blocks a lookup for span B.
+        """
+        key = _ticker_key(ticker)
+        ds = _safe_source(data_source)
+        span = f"{fetch_start}_{fetch_end}".replace("-", "")
+        return self._miss_dir() / f"{key}_{ds}_{span}.miss"
+
+    def store_miss(
+        self,
+        ticker: str,
+        fetch_start: str,
+        fetch_end: str,
+        data_source: str = "yahoo",
+    ) -> None:
+        """Write a miss marker for (provider, ticker, span).  Best-effort; never raises.
+
+        F368: Marker contains an ISO-8601 UTC timestamp so check_miss can apply TTL
+        without touching filesystem mtimes.  Atomic write (tmp+replace) matching
+        the frame store() pattern.
+        """
+        import datetime as _dt
+        p = self._miss_path(ticker, fetch_start, fetch_end, data_source)
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+            dir_ = str(p.parent)
+            fd = tempfile.NamedTemporaryFile(
+                mode="w", delete=False, dir=dir_, suffix=".tmp", encoding="utf-8"
+            )
+            try:
+                fd.write(ts)
+                fd.flush()
+                os.fsync(fd.fileno())
+                try:
+                    fd.close()
+                except Exception:
+                    pass
+                os.replace(fd.name, str(p))
+            except Exception:
+                try:
+                    fd.close()
+                except Exception:
+                    pass
+                try:
+                    os.unlink(fd.name)
+                except OSError:
+                    pass
+                raise
+        except Exception as exc:
+            logger.debug("PriceFrameCache.store_miss: failed for %s: %s", ticker, exc)
+
+    def check_miss(
+        self,
+        ticker: str,
+        fetch_start: str,
+        fetch_end: str,
+        data_source: str = "yahoo",
+        ttl_days: int = _MISS_TTL_DAYS,
+    ) -> bool:
+        """Return True if a valid (within-TTL) miss marker exists for this key.
+
+        F368: Stale markers (older than ttl_days) are deleted on read so they
+        don't accumulate indefinitely.  Returns False on any I/O error so the
+        caller falls through to the normal network fetch path.
+        """
+        import datetime as _dt
+        p = self._miss_path(ticker, fetch_start, fetch_end, data_source)
+        if not p.exists():
+            return False
+        try:
+            raw = p.read_text(encoding="utf-8").strip()
+            written_at = _dt.datetime.fromisoformat(raw)
+            age = _dt.datetime.now(_dt.timezone.utc) - written_at
+            if age.total_seconds() > ttl_days * 86400:
+                # Stale — evict and let the caller re-fetch.
+                self._unlink_quiet(p)
+                return False
+            return True
+        except Exception as exc:
+            logger.debug("PriceFrameCache.check_miss: error reading marker %s: %s", p, exc)
+            return False
+
 
 # Module-level default cache instance (can be replaced in tests via monkeypatch).
 _price_frame_cache: PriceFrameCache = PriceFrameCache()
@@ -617,6 +723,8 @@ class ValidationResult:
     truncated_events: int = 0
     # REL-07: network fetch failures during memoized loading
     fetch_failures: int = 0
+    # F368: persistent miss-cache hits (dead tickers skipped without a network call)
+    miss_cache_hits: int = 0
     # ADV-05: ticker-horizon overlaps suppressed (same ticker, prior event still open)
     overlap_suppressed: int = 0
     # Item 2a (F327): null cohort return distribution — was missing from prior payload
@@ -747,6 +855,7 @@ def _make_memoized_loader(
     horizon_months: int,
     data_source: str,
     price_cache: Optional[PriceFrameCache] = None,
+    negative_cache: bool = True,
 ) -> Callable[[str], Optional[pd.DataFrame]]:
     """Return a memoized loader that fetches each symbol's full price span ONCE.
 
@@ -770,7 +879,8 @@ def _make_memoized_loader(
     Layer order (cheapest first):
       1. In-process _cache dict (free; lives only for this run)
       2. On-disk PriceFrameCache (fast; survives server restarts / reruns)
-      3. _fetch() network call (slow; only on cold miss)
+      3. Persistent miss marker (F368; skips network for known-dead tickers)
+      4. _fetch() network call (slow; only on cold miss)
 
     The existing TTL-cache inside shared._fetch() is NOT bypassed — a network
     call populates both the TTL-cache and the on-disk frame cache.  However,
@@ -780,6 +890,16 @@ def _make_memoized_loader(
     price_cache=None falls back to the module-level _price_frame_cache default
     (which is a PriceFrameCache pointing at the standard cache directory).
     Pass a custom PriceFrameCache to redirect writes in tests.
+
+    F368 — negative_cache (default True):
+        When True, a persistent miss marker is written on fetch failure OR
+        empty/delisted result, and consulted BEFORE the network call on
+        subsequent runs.  A marker hit returns None immediately (no socket
+        opened) and increments miss_cache_hits.
+        Invariant: this layer changes only failure LATENCY, never any
+        successful data path — a known-dead ticker returns None either way.
+        Set to False to disable (e.g. when explicitly probing a formerly
+        dead ticker that may have relisted).
     """
     from shared import _fetch  # noqa: runtime import, safe inside thread
 
@@ -835,14 +955,33 @@ def _make_memoized_loader(
                 _cache[ticker] = disk_hit
                 return _cache[ticker]
 
-            # Layer 3: network fetch
+            # Layer 3: F368 persistent miss marker (negative cache).
+            # Consulted BEFORE the network call; returns None immediately on
+            # a valid (within-TTL) marker so no socket is opened for dead tickers.
+            # Invariant: only failure latency changes — a dead ticker returns None
+            # with or without this layer; a live ticker is never affected.
+            if negative_cache and _disk_cache.check_miss(
+                ticker, fetch_start, fetch_end, data_source
+            ):
+                logger.debug(
+                    "bars_loader: miss-cache hit for %s (skipping network fetch)",
+                    ticker,
+                )
+                _loader.miss_cache_hits += 1  # type: ignore[attr-defined]
+                _cache[ticker] = None
+                return None
+
+            # Layer 4: network fetch
             try:
                 df = _fetch(ticker, fetch_start, fetch_end, "1d", data_source)
                 result = df if df is not None and not df.empty else None
                 _cache[ticker] = result
-                # Persist to disk on successful fetch (non-None only)
+                # Persist to disk on successful fetch (non-None only);
+                # store a miss marker on empty/delisted result.
                 if result is not None:
                     _disk_cache.store(ticker, fetch_start, fetch_end, result, data_source)
+                elif negative_cache:
+                    _disk_cache.store_miss(ticker, fetch_start, fetch_end, data_source)
             except Exception as exc:
                 if _is_rate_limited(exc):
                     # 429 handling is path-dependent:
@@ -873,13 +1012,20 @@ def _make_memoized_loader(
                         _cache[ticker] = result2
                         if result2 is not None:
                             _disk_cache.store(ticker, fetch_start, fetch_end, result2, data_source)
+                        elif negative_cache:
+                            _disk_cache.store_miss(ticker, fetch_start, fetch_end, data_source)
                     except Exception:
                         _cache[ticker] = None
-                        # Terminal non-429 failure: count it.
+                        # Terminal non-429 failure: count it and store a miss marker.
                         _loader.fetch_failures += 1  # type: ignore[attr-defined]
+                        if negative_cache:
+                            _disk_cache.store_miss(ticker, fetch_start, fetch_end, data_source)
             return _cache[ticker]
 
     _loader.fetch_failures = 0  # type: ignore[attr-defined]
+    # F368: miss_cache_hits counts in-run marker hits (diagnostic; same GIL caveat
+    # as fetch_failures — a floor, not a precise total under heavy parallelism).
+    _loader.miss_cache_hits = 0  # type: ignore[attr-defined]
     # _in_prefetch flag: set to True by _prefetch_price_frames while submitting
     # parallel work; False at all other times (sequential / date-loop path).
     # Controls whether a 429 is re-raised (prefetch) or swallowed+counted (date loop).
@@ -2265,6 +2411,7 @@ def run_validation(
     # F313: failures accumulate on the inner memoized loader (the wrapper only
     # instruments progress/cancel)
     fetch_failures = getattr(_inner_loader, "fetch_failures", 0)
+    miss_cache_hits = getattr(_inner_loader, "miss_cache_hits", 0)
 
     # PART 2 durable fix: finalize floor_accounting with cross-cohort totals.
     # Populated only for source-mode runs that triggered the exhaustive null path.
@@ -2316,6 +2463,7 @@ def run_validation(
         unique_tickers=len(seen_tickers),
         truncated_events=truncated_events,
         fetch_failures=fetch_failures,
+        miss_cache_hits=miss_cache_hits,
         overlap_suppressed=overlap_suppressed,
         # Item 2a (F327): null cohort return distribution
         null_mean_return_pct=null_mean,

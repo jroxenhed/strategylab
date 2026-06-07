@@ -1025,6 +1025,7 @@ def build_r1b_events(
     dataset_dir: Optional[Path] = None,
     submissions_dir: Optional[Path] = None,
     fetch_missing: bool = True,
+    ingest_workers: int = 1,
 ) -> tuple[list[EventRecord], dict]:
     """Build R-1b EventRecord list with dose payload, sourcing events from
     form4_ingest.build_form4_dataset_events.
@@ -1049,6 +1050,10 @@ def build_r1b_events(
         Override for form4_ingest submissions directory.
     fetch_missing
         Passed through to form4_ingest (default True).
+    ingest_workers
+        Worker count for form4_ingest parallel quarter parsing (default 1 =
+        serial legacy path; F366 sorted-merge guarantees determinism at any
+        worker count).  Passed directly to build_form4_dataset_events.
 
     Returns
     -------
@@ -1088,6 +1093,7 @@ def build_r1b_events(
     ingest_kwargs: dict = {
         "dedup_amendments": True,  # pinned per charter §2 binding property (b)
         "fetch_missing": fetch_missing,
+        "workers": ingest_workers,
     }
     if quarters is not None:
         ingest_kwargs["quarters"] = quarters
@@ -1098,8 +1104,8 @@ def build_r1b_events(
 
     log.info(
         "build_r1b_events: calling build_form4_dataset_events "
-        "(dedup_amendments=True, fetch_missing=%s, quarters=%s) ...",
-        fetch_missing, quarters,
+        "(dedup_amendments=True, fetch_missing=%s, quarters=%s, workers=%d) ...",
+        fetch_missing, quarters, ingest_workers,
     )
     raw_ingest_events, ingest_meta = build_form4_dataset_events(**ingest_kwargs)
     log.info(

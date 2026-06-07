@@ -3753,3 +3753,192 @@ def _tv_scripts_dir():
     """Return the backend/scripts/ path for importing prune_price_cache."""
     from pathlib import Path
     return str(Path(__file__).resolve().parent.parent / "scripts")
+
+
+# ---------------------------------------------------------------------------
+# F368: PriceFrameCache negative-fetch (miss marker) tests
+# ---------------------------------------------------------------------------
+
+class TestNegativeFetchCache:
+    """Tests for PriceFrameCache.store_miss / check_miss (F368)."""
+
+    def _make_cache(self, tmp_path):
+        return tv.PriceFrameCache(cache_dir=tmp_path)
+
+    # ------------------------------------------------------------------
+    # store_miss / check_miss basic contract
+    # ------------------------------------------------------------------
+
+    def test_marker_written_on_store_miss(self, tmp_path):
+        """store_miss writes a .miss marker file in the _miss subdir."""
+        cache = self._make_cache(tmp_path)
+        assert not cache.check_miss("DEAD", "2012-01-01", "2022-12-31")
+        cache.store_miss("DEAD", "2012-01-01", "2022-12-31")
+        p = cache._miss_path("DEAD", "2012-01-01", "2022-12-31")
+        assert p.exists(), "Miss marker file must exist after store_miss"
+
+    def test_check_miss_returns_true_after_store(self, tmp_path):
+        """check_miss returns True immediately after store_miss."""
+        cache = self._make_cache(tmp_path)
+        cache.store_miss("GONE", "2012-01-01", "2022-12-31")
+        assert cache.check_miss("GONE", "2012-01-01", "2022-12-31") is True
+
+    def test_check_miss_false_without_marker(self, tmp_path):
+        """check_miss returns False for a ticker with no marker."""
+        cache = self._make_cache(tmp_path)
+        assert cache.check_miss("LIVE", "2012-01-01", "2022-12-31") is False
+
+    def test_stale_marker_returns_false_and_is_deleted(self, tmp_path):
+        """Marker older than ttl_days is evicted and check_miss returns False."""
+        import datetime as _dt
+        cache = self._make_cache(tmp_path)
+        cache.store_miss("OLD", "2012-01-01", "2022-12-31")
+        p = cache._miss_path("OLD", "2012-01-01", "2022-12-31")
+        # Overwrite with an old timestamp (35 days ago)
+        old_ts = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=35)).isoformat()
+        p.write_text(old_ts, encoding="utf-8")
+        # TTL=30: marker is stale
+        result = cache.check_miss("OLD", "2012-01-01", "2022-12-31", ttl_days=30)
+        assert result is False, "Stale marker must return False"
+        assert not p.exists(), "Stale marker must be deleted on check"
+
+    def test_no_cross_span_poisoning(self, tmp_path):
+        """A miss marker for span A does not block a different span B."""
+        cache = self._make_cache(tmp_path)
+        cache.store_miss("TICKER", "2012-01-01", "2018-12-31")  # span A
+        # span B has a different end date — must NOT be a miss hit
+        assert cache.check_miss("TICKER", "2012-01-01", "2022-12-31") is False
+
+    # ------------------------------------------------------------------
+    # Integration with _make_memoized_loader
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Helper: build a loader with a fake shared._fetch, using the
+    # sys.modules["shared"] patching pattern (required because _make_memoized_loader
+    # does `from shared import _fetch` at factory call time, not at import time).
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _make_loader_with_fake_shared(cache, fetch_fn, negative_cache=True):
+        import sys
+        import types as _types
+        fake_shared = _types.ModuleType("shared")
+        fake_shared._fetch = fetch_fn
+        orig_shared = sys.modules.get("shared")
+        sys.modules["shared"] = fake_shared
+        try:
+            loader = tv._make_memoized_loader(
+                start_year=2015, end_year=2020,
+                low_lookback_years=2, horizon_months=6,
+                data_source="yahoo",
+                price_cache=cache,
+                negative_cache=negative_cache,
+            )
+        finally:
+            if orig_shared is not None:
+                sys.modules["shared"] = orig_shared
+            else:
+                sys.modules.pop("shared", None)
+        return loader
+
+    def test_hit_within_ttl_skips_network(self, tmp_path):
+        """A valid miss marker makes the loader return None without calling _fetch."""
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+        cache.store_miss("DEADTICK", "2012-01-01", "2022-12-31")
+
+        fetch_calls = []
+
+        def _should_not_be_called(*args, **kwargs):
+            fetch_calls.append(args)
+            return None
+
+        loader = self._make_loader_with_fake_shared(cache, _should_not_be_called)
+        result = loader("DEADTICK")
+
+        assert result is None, "Loader must return None on miss-cache hit"
+        assert len(fetch_calls) == 0, "Network fetch must NOT be called on miss-cache hit"
+        assert loader.miss_cache_hits == 1
+
+    def test_marker_written_on_empty_fetch(self, tmp_path):
+        """An empty/delisted fetch result writes a miss marker."""
+        import pandas as pd
+
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+
+        def _empty_fetch(*args, **kwargs):
+            return pd.DataFrame()  # empty = delisted
+
+        loader = self._make_loader_with_fake_shared(cache, _empty_fetch)
+        result = loader("DELISTED")
+
+        assert result is None
+        assert cache.check_miss("DELISTED", "2012-01-01", "2022-12-31") is True
+
+    def test_marker_written_on_exception(self, tmp_path):
+        """A network exception (non-429) on both attempts writes a miss marker."""
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+
+        def _crash_fetch(*args, **kwargs):
+            raise Exception("no data — connection refused")
+
+        loader = self._make_loader_with_fake_shared(cache, _crash_fetch)
+        result = loader("CRASH")
+
+        assert result is None
+        assert cache.check_miss("CRASH", "2012-01-01", "2022-12-31") is True
+        assert loader.fetch_failures == 1
+
+    def test_successful_fetch_after_expiry_clears_marker(self, tmp_path):
+        """After a stale marker, a successful fetch stores the frame; marker is gone."""
+        import datetime as _dt
+        import pandas as pd
+
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+        # Write a stale marker (60 days old, TTL=30)
+        p = cache._miss_path("REVIVED", "2012-01-01", "2022-12-31")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        old_ts = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=60)).isoformat()
+        p.write_text(old_ts, encoding="utf-8")
+
+        dates = pd.date_range("2012-01-03", periods=20, freq="B")
+        good_df = pd.DataFrame(
+            {"Close": 100.0, "Open": 100.0, "High": 101.0, "Low": 99.0, "Volume": 1000},
+            index=dates,
+        )
+
+        def _good_fetch(*args, **kwargs):
+            return good_df
+
+        loader = self._make_loader_with_fake_shared(cache, _good_fetch)
+        result = loader("REVIVED")
+
+        assert result is not None, "Successful fetch must return the DataFrame"
+        # Stale marker was evicted; successful fetch must not write a new one
+        assert not cache.check_miss("REVIVED", "2012-01-01", "2022-12-31"), (
+            "Miss marker must not be present after a successful fetch"
+        )
+
+    def test_negative_cache_false_skips_miss_check(self, tmp_path):
+        """With negative_cache=False the miss layer is bypassed entirely."""
+        import pandas as pd
+
+        cache = tv.PriceFrameCache(cache_dir=tmp_path)
+        # Pre-store a marker that would block the fetch if negative_cache=True
+        cache.store_miss("MAYBELIVE", "2012-01-01", "2022-12-31")
+
+        fetch_calls = []
+        dates = pd.date_range("2012-01-03", periods=20, freq="B")
+        good_df = pd.DataFrame(
+            {"Close": 50.0, "Open": 50.0, "High": 51.0, "Low": 49.0, "Volume": 500},
+            index=dates,
+        )
+
+        def _counting_fetch(*args, **kwargs):
+            fetch_calls.append(args)
+            return good_df
+
+        loader = self._make_loader_with_fake_shared(cache, _counting_fetch, negative_cache=False)
+        result = loader("MAYBELIVE")
+
+        assert len(fetch_calls) == 1, "Network must be called when negative_cache=False"
+        assert result is not None

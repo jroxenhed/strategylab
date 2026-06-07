@@ -707,13 +707,22 @@ def _regime_lens(
 ) -> dict:
     """Per-regime Q5-Q1 breakdown.
 
-    Charter §4 intent: the rare crisis state is never evidential; the other three
-    states are evidential at >=15 valid events each.  Per the §10 pre-outcome fix
-    (see RARE_NON_EVIDENTIAL_STATE), the real rare state is RISK_OFF (3 days in
-    2015-2020), so the evidential trio is {RISK_ON, NEUTRAL, STRESS}.
+    F367 charter §4 label fix:
+    - STRESS is ALWAYS non-evidential regardless of n — it is a rare crisis
+      state ("never load-bearing") and carries the suffix annotation in the
+      report.  The n>=15 evidential gate applies only to RISK_ON and NEUTRAL.
+    - RISK_OFF (the original RARE_NON_EVIDENTIAL_STATE) remains always
+      non-evidential (3 days in 2015-2020 — vanishingly rare).
+    - Evidential pair: {RISK_ON, NEUTRAL} only.
+
+    is_stress_non_evidential key covers both STRESS and RISK_OFF (any state
+    that is never evidential regardless of n).  Key name kept for
+    artifact-schema stability.
     regime_unresolved counted separately.
     """
-    evidential_states = {"RISK_ON", "NEUTRAL", "STRESS"}
+    evidential_states = {"RISK_ON", "NEUTRAL"}
+    # States that are ALWAYS non-evidential regardless of n (rare/crisis states)
+    always_non_evidential_states = {RARE_NON_EVIDENTIAL_STATE, "STRESS"}
     state_groups: dict[str, list[tuple[int, float]]] = {
         "RISK_ON": [], "NEUTRAL": [], "RISK_OFF": [], "STRESS": [],
     }
@@ -744,9 +753,9 @@ def _regime_lens(
             gap = float(np.mean(q5_vals)) - float(np.mean(q1_vals))
             gap_sign = 1 if gap > 0 else (-1 if gap < 0 else 0)
 
-        is_rare_state = (state == RARE_NON_EVIDENTIAL_STATE)
+        is_always_non_evidential = (state in always_non_evidential_states)
         is_evidential = (
-            not is_rare_state
+            not is_always_non_evidential
             and state in evidential_states
             and n_total >= REGIME_EVIDENTIAL_MIN
         )
@@ -759,13 +768,13 @@ def _regime_lens(
             "gap_q5q1": round(gap, 4) if gap is not None else None,
             "gap_sign": gap_sign,
             "is_evidential": is_evidential,
-            # Key name kept for artifact-schema stability; semantics = "is the
-            # rare never-load-bearing state" (RISK_OFF per the §10 fix).
-            "is_stress_non_evidential": is_rare_state,
+            # is_stress_non_evidential: True for any always-non-evidential state
+            # (RISK_OFF and STRESS).  Key name kept for artifact-schema stability.
+            "is_stress_non_evidential": is_always_non_evidential,
         }
 
     # REGIME-CARRIED qualifier: positive in exactly ONE of evidential states, <=0 in others
-    # (each evidential and >=15 events)
+    # (each evidential and >=15 events); only RISK_ON/NEUTRAL can qualify.
     evidential_cells = [
         (state, breakdown[state])
         for state in evidential_states
@@ -1516,9 +1525,13 @@ def _print_plain_english_summary(result: dict) -> None:
     print(f"  Peer lens underpowered (>40% fallback): {peer['underpowered']}")
     regime = result["regime_lens"]
     print(f"\nREGIME LENS (does the effect vary by market weather?)")
+    _ALWAYS_NON_EVIDENTIAL_NOTES = {
+        "RISK_OFF": " — rare crisis state: never load-bearing (3 days in 2015-2020)",
+        "STRESS":   " — rare crisis state: never load-bearing",
+    }
     for state, d in regime["per_state"].items():
         ev_str = "(evidential)" if d["is_evidential"] else "(non-evidential)"
-        stress_note = " — rare crisis state: never load-bearing (3 days in 2015-2020)" if d["is_stress_non_evidential"] else ""
+        stress_note = _ALWAYS_NON_EVIDENTIAL_NOTES.get(state, "") if d["is_stress_non_evidential"] else ""
         g = d["gap_q5q1"]
         print(f"  {state}: n={d['n_total_quintile_valid']}, Q5-Q1 gap={f'{g:.2f}pp' if g is not None else 'N/A'} {ev_str}{stress_note}")
     if regime["regime_carried"]:

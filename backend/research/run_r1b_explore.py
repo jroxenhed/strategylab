@@ -202,6 +202,85 @@ def make_disk_only_loader(
 
 
 # ---------------------------------------------------------------------------
+# F368: Required data artifacts manifest (checked at pre-flight)
+# ---------------------------------------------------------------------------
+# Items are checked in _check_data_artifacts() before any work starts.
+# The FDR ledger entry (real or smoke depending on mode) is passed in at
+# call time so the manifest is mode-aware.
+_FORM4_DATASETS_DIR = _EDGAR_CACHE_DIR / "form4_datasets"
+_DERIVED_DIR = _EDGAR_CACHE_DIR / "derived" / "v1"
+_PRICE_CACHE_V1_DIR = _PRICE_CACHE_DIR / "v1"
+_FORM4_MIN_ZIPS = 24  # guard: 24 quarters covers 2015-2020 + buffer
+
+
+def _check_data_artifacts(fdr_ledger_path: Path) -> None:
+    """Hard-fail before any work if required data artifacts are missing.
+
+    F368: Collects ALL missing items and reports them together (not fail-on-first)
+    so the operator can fix everything in one rsync pass.
+
+    Raises RuntimeError listing every missing / empty artifact if any check fails.
+    """
+    missing: list[str] = []
+
+    def _require_file(p: Path, label: str) -> None:
+        if not p.exists() or not p.is_file():
+            missing.append(f"  MISSING FILE:  {label} ({p})")
+
+    def _require_dir_nonempty(p: Path, label: str) -> None:
+        if not p.exists() or not p.is_dir():
+            missing.append(f"  MISSING DIR:   {label} ({p})")
+            return
+        if not any(p.iterdir()):
+            missing.append(f"  EMPTY DIR:     {label} ({p})")
+
+    def _require_zip_count(p: Path, label: str, min_count: int) -> None:
+        if not p.exists() or not p.is_dir():
+            missing.append(f"  MISSING DIR:   {label} ({p})")
+            return
+        zips = list(p.glob("*.zip"))
+        if len(zips) < min_count:
+            missing.append(
+                f"  TOO FEW ZIPS:  {label} — found {len(zips)}, need >= {min_count} ({p})"
+            )
+
+    # regime_states.json (regime classifier output — must be present for regime cells)
+    _require_file(
+        _BACKEND_DIR / "data" / "regime_states.json",
+        "regime_states.json",
+    )
+
+    # FDR ledger (real or smoke per mode)
+    _require_file(fdr_ledger_path, f"FDR ledger ({fdr_ledger_path.name})")
+
+    # price_cache/v1 — non-empty (any .pkl means the cache was populated)
+    _require_dir_nonempty(_PRICE_CACHE_V1_DIR, "price_cache/v1")
+
+    # edgar_cache/derived/v1 — non-empty
+    _require_dir_nonempty(_DERIVED_DIR, "edgar_cache/derived/v1")
+
+    # edgar_cache/form4_datasets — >= 24 zips
+    _require_zip_count(_FORM4_DATASETS_DIR, "edgar_cache/form4_datasets", _FORM4_MIN_ZIPS)
+
+    # edgar_cache/submissions — non-empty
+    _require_dir_nonempty(_SUBS_DIR, "edgar_cache/submissions")
+
+    # universe matrix artifact (parquet dir, checked by _check_matrix_sidecar too)
+    if not _MATRIX_PATH.exists():
+        missing.append(f"  MISSING:       universe_matrix.parquet ({_MATRIX_PATH})")
+
+    if missing:
+        items = "\n".join(missing)
+        raise RuntimeError(
+            f"F368 pre-flight: {len(missing)} required data artifact(s) missing or empty.\n"
+            f"Run bin/sync-worker-data.sh on the Mac to push them to this worker, then retry.\n\n"
+            f"{items}\n"
+        )
+
+    log.info("F368 data-artifact manifest: all required artifacts present.")
+
+
+# ---------------------------------------------------------------------------
 # Charter sha256 verification
 # ---------------------------------------------------------------------------
 
@@ -392,11 +471,15 @@ def run(calibrate: bool = False, workers: int = 1) -> None:
     t0 = time.monotonic()
 
     # ------------------------------------------------------------------
-    # 0. Pre-flight: verify charter SHA256 + matrix sidecar
+    # 0. Pre-flight: verify charter SHA256 + matrix sidecar + data artifacts
     # ------------------------------------------------------------------
     log.info("R-1b pre-flight checks ...")
     _verify_charter_sha256()
     matrix_meta = _check_matrix_sidecar()
+    # F368: data-artifact manifest — determine ledger path now (mode-aware)
+    # so the check can verify the correct ledger exists before any work.
+    _preflight_ledger = _SMOKE_FDR_LEDGER if calibrate else _REAL_FDR_LEDGER
+    _check_data_artifacts(_preflight_ledger)
 
     # ------------------------------------------------------------------
     # 1. Build events via R-1b dose builder (form4_ingest path)
@@ -441,11 +524,16 @@ def run(calibrate: bool = False, workers: int = 1) -> None:
         _explore_quarters[-1],
     )
 
+    # F368 D2: parallel quarter ingest — F366 sorted-merge guarantees determinism.
+    _ingest_workers = min(8, os.cpu_count() or 1)
+    log.info("Ingest workers: %d (min(8, cpu_count=%s))", _ingest_workers, os.cpu_count())
+
     events_raw, dose_meta = build_r1b_events(
         start=_EXPLORE_START,
         end=_EXPLORE_END,
         loader_fn=loader,
         quarters=_explore_quarters,
+        ingest_workers=_ingest_workers,
         # shares_fn=None uses the default _shares_outstanding_disk_only (offline-safe)
     )
 
