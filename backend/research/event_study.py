@@ -946,6 +946,60 @@ def _compute_peer_median(
 
 
 # ---------------------------------------------------------------------------
+# F357: Matrix-backed _VectorCache loader
+# ---------------------------------------------------------------------------
+
+# Default path for the precomputed universe matrix (built by returns_matrix.py).
+_MATRIX_DEFAULT_PATH = _BASE_DIR / "backend" / "data" / "universe_matrix.parquet"
+
+
+def _load_universe_matrix(
+    matrix_path: Optional[Path] = None,
+    horizons: tuple[int, ...] = _DEFAULT_HORIZONS,
+    entry_dates: Optional[list[date]] = None,
+) -> _VectorCache:
+    """Load the precomputed universe returns matrix and return a _VectorCache.
+
+    F357: Uses the matrix-backed loader from returns_matrix.py to reconstruct
+    the _VectorCache format compatible with _compute_universe_median and
+    _compute_peer_median (which read from the cache via dict key lookups).
+
+    Performance: reads only the requested horizon partitions; never iterrows.
+    Optionally filters by entry_dates to avoid loading the full artifact.
+
+    Args:
+        matrix_path: path to the partitioned Parquet directory (default: _MATRIX_DEFAULT_PATH).
+        horizons: which horizon partitions to load.
+        entry_dates: optional date filter (load only these dates).
+
+    Returns:
+        {(entry_date, horizon): {symbol: (fwd_return_pct, is_terminal)}}
+
+    Raises:
+        FileNotFoundError: if the matrix artifact does not exist.
+    """
+    if matrix_path is None:
+        matrix_path = _MATRIX_DEFAULT_PATH
+    matrix_path = Path(matrix_path)
+    if not matrix_path.exists():
+        raise FileNotFoundError(f"Universe matrix not found: {matrix_path}")
+
+    # Import lazily to keep event_study.py independent of returns_matrix.py
+    # at module-import time (avoids circular deps and keeps test isolation clean).
+    try:
+        from research.returns_matrix import load_matrix_as_vector_cache_multi
+    except ImportError:
+        # Support running event_study.py from within backend/ without the package prefix.
+        from returns_matrix import load_matrix_as_vector_cache_multi  # type: ignore[no-redef]
+
+    return load_matrix_as_vector_cache_multi(
+        matrix_path=matrix_path,
+        horizons=horizons,
+        entry_dates=entry_dates,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Non-overlapping filter
 # ---------------------------------------------------------------------------
 
@@ -1380,6 +1434,8 @@ def run_event_study(
     loader_fn: Callable[[str], Optional[pd.DataFrame]],
     universe_tickers: Optional[list[str]] = None,
     rng: Optional[np.random.Generator] = None,
+    use_matrix: bool = False,
+    matrix_path: Optional[Path] = None,
 ) -> tuple[list[EventOutcome], dict]:
     """Run an event study.
 
@@ -1392,6 +1448,12 @@ def run_event_study(
     universe_tickers : list of tickers to use as universe reference.
         If None, only per-event returns are computed (no excess).
     rng : seeded RNG for reproducibility (default: seed=42).
+    use_matrix : bool
+        F357: when True, pre-populate _return_vector_cache from the precomputed
+        universe matrix instead of building vectors on demand.  Falls back to the
+        live path if the matrix cannot be loaded (logged as warning).
+    matrix_path : Optional[Path]
+        F357: path to the partitioned Parquet directory (default: _MATRIX_DEFAULT_PATH).
 
     Survivorship & point-in-time discipline (P0 fixes):
       - ADV-01: floor/universe inclusion is decided from the last close ON OR
@@ -1504,6 +1566,36 @@ def run_event_study(
     # Methodology is byte-identical to prior per-exclude-ticker caching:
     #   same floor gate, same Open-anchor, same terminal-exit semantics.
     _return_vector_cache: dict[tuple, dict[str, tuple[Optional[float], bool]]] = {}
+
+    # F357: Optional matrix-backed pre-population of _return_vector_cache.
+    # When use_matrix=True, load the precomputed matrix for the dates needed by
+    # this study, so all (entry_date, horizon) lookups are served from disk
+    # rather than built on-demand.  Falls back to the live path on any failure.
+    if use_matrix and universe_tickers is not None:
+        try:
+            # Collect the set of entry_dates we'll need (from events after dedup).
+            # For explore events we need all dates <= explore_cutoff.
+            # Pre-load all horizons for those dates.
+            _matrix_load_path = matrix_path or _MATRIX_DEFAULT_PATH
+            log.info(
+                "run_event_study: loading precomputed matrix from %s (use_matrix=True)",
+                _matrix_load_path,
+            )
+            _return_vector_cache = _load_universe_matrix(
+                matrix_path=_matrix_load_path,
+                horizons=config.horizons,
+                entry_dates=None,   # load all; date filtering via partition reads is fast
+            )
+            log.info(
+                "run_event_study: matrix loaded, %d (date, horizon) keys in cache",
+                len(_return_vector_cache),
+            )
+        except Exception as _matrix_exc:
+            log.warning(
+                "run_event_study: matrix load failed (%s) — falling back to live path",
+                _matrix_exc,
+            )
+            _return_vector_cache = {}
 
     # ADV-04 (retained for peer cache): cache key IS (entry_date, horizon, "peers", ticker).
     # Peer results are still cached so same-event repeated horizon calls don't recompute.
