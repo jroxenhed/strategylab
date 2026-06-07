@@ -13,7 +13,7 @@ _(none open)_
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 - [F357](#f357) — [next] Universe returns matrix [hard]
 
-## Open Work — 30 items
+## Open Work — 31 items
 
 | Section | Open | IDs |
 |---|---|---|
@@ -21,7 +21,7 @@ _(none open)_
 | [Architecture](#architecture) | 8 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F348](#f348) |
 | [Hardening](#hardening) | 10 | [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F337](#f337), [F352](#f352), [F355](#f355), [F358](#f358)–[F359](#f359) |
 | [Polish](#polish) | 1 | [F310](#f310) |
-| [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329) |
+| [Testing](#testing) | 6 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329), [F360](#f360) |
 | [Infra](#infra) | 5 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F357](#f357) |
 
 ## Features
@@ -89,6 +89,7 @@ _(none open)_
 
 - [ ] <a id="f211"></a> **F211** F206 audit found `close_all_positions` (line ~258) delegates to `provider.close_all_positions()` (a broker primitive) with no per-symbol direction probe. Verify the IBKR and Alpaca primitives actually buy-to-cover shorts correctly when called from this endpoint — particularly IBKR's `close_all` if it exists, since the SMART-routing trap previously hid this kind of bug. May require a paper-trading test (open one long + one short on the same broker, then hit the Close-All button, check both close cleanly + journal correctly). (from F206 audit follow-up 2026-05-15) [medium] [hardening]
 - [ ] <a id="f307"></a> **F307** test_tooling.py COR-06 open-work count test derives its expected count via a text-split heuristic that can diverge from the script's own grouping logic — assert against explicitly constructed fixture expectations instead (COR P3, F-BATCH-0604D review). [easy] [testing]
+- [ ] <a id="f360"></a> **F360** Re-measure both browser MCPs' snapshot size at the F217 blowup condition (chart view WITH populated backtest results, not the default empty state) — the 2026-06-07 shakedown measured playwright 18.5KB vs chrome-devtools 16.3KB at default state and could NOT reproduce the ~117k cdt blowup, so the "comparable" verdict in live-browser-verification.md is only validated for unpopulated pages. Run a backtest via `curl POST /api/backtest` + seeded state, re-snapshot both, update the doc. [easy] [testing] (added 2026-06-07)
 
 ## Infra
 
