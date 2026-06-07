@@ -84,6 +84,27 @@ def _df_up_to(df: pd.DataFrame, as_of: date) -> pd.DataFrame:
     return df[mask]
 
 
+def precompute_df_up_to(df: pd.DataFrame) -> tuple[pd.DataFrame, "pd.Index"]:
+    """Precompute the per-frame invariants of `_df_up_to` for hot loops.
+
+    Returns (df_out, norm_idx) where `df_out` is the (tz-stripped if needed)
+    frame and `norm_idx` is the normalized comparable index — exactly what
+    `_df_up_to` derives per call.  F357 matrix builder: `_df_up_to`'s per-call
+    `df.copy()` + tz-strip on tz-aware frames dominated build cost at
+    2,608 calls/symbol.  Pass the result as `floor_status(..., pre=...)`;
+    slicing semantics are identical by construction (same mask expression).
+    """
+    idx = df.index
+    if isinstance(idx, pd.DatetimeIndex):
+        if idx.tz is not None:
+            df = df.copy()
+            df.index = idx = idx.tz_localize(None)
+        return (df, idx.normalize())
+    if len(idx) and hasattr(idx[0], "date"):
+        return (df, pd.to_datetime(idx).normalize())
+    return (df, idx)
+
+
 def _get_close(df: pd.DataFrame) -> Optional[pd.Series]:
     for col in ("Close", "close", "Adj Close", "adj close"):
         if col in df.columns:
@@ -98,7 +119,11 @@ def _get_volume(df: pd.DataFrame) -> Optional[pd.Series]:
     return None
 
 
-def floor_status(df: Optional[pd.DataFrame], as_of: date) -> str:
+def floor_status(
+    df: Optional[pd.DataFrame],
+    as_of: date,
+    pre: Optional[tuple[pd.DataFrame, "pd.Index"]] = None,
+) -> str:
     """Return the UNIVERSE_V2 floor status for `df` evaluated at `as_of`.
 
     One of:
@@ -114,11 +139,18 @@ def floor_status(df: Optional[pd.DataFrame], as_of: date) -> str:
     cannot be trusted, so it is reported as corrupt_frame rather than below_floor.
 
     All evaluation reads only rows with index date <= as_of.
+
+    `pre` (optional): result of `precompute_df_up_to(df)` for the same df —
+    hot loops pass it to skip `_df_up_to`'s per-call copy/tz-strip.
     """
     if df is None or (hasattr(df, "empty") and df.empty):
         return BELOW_FLOOR
 
-    sliced = _df_up_to(df, as_of)
+    if pre is not None:
+        df_out, norm_idx = pre
+        sliced = df_out[norm_idx <= pd.Timestamp(as_of)]
+    else:
+        sliced = _df_up_to(df, as_of)
     if sliced is None or sliced.empty:
         return BELOW_FLOOR
 

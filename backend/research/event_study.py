@@ -537,6 +537,7 @@ def _forward_return_terminal(
     entry_open: float,
     horizon: int,
     direction: str = "long",
+    dates: Optional[list[date]] = None,
 ) -> tuple[Optional[float], bool]:
     """Open-anchored forward return at `horizon` with SYMMETRIC delisting handling.
 
@@ -549,10 +550,16 @@ def _forward_return_terminal(
     Returns (return_pct, was_terminal) where was_terminal is True when the exit
     was taken from the last available bar rather than the bar at offset N.  Returns
     (None, False) only when the entry bar itself cannot be located.
+
+    `dates` (optional): precomputed `_frame_dates(df)` result.  Hot loops (F357
+    matrix builder) pass it to avoid re-deriving the full index per call —
+    per-element tz conversion was ~40s/ticker at matrix scale.  Must be exactly
+    `_frame_dates(df)` for the same df; results are identical by construction.
     """
     if df is None or df.empty or entry_open <= 0:
         return (None, False)
-    dates = _frame_dates(df)
+    if dates is None:
+        dates = _frame_dates(df)
     entry_idx: Optional[int] = None
     for i, d in enumerate(dates):
         if d == entry_date:
@@ -588,6 +595,7 @@ def _resolve_entry_open(
     df: pd.DataFrame,
     entry_date: date,
     sym: str,
+    dates: Optional[list[date]] = None,
 ) -> Optional[float]:
     """PY-04: Shared helper — resolve entry Open price for sym on entry_date.
 
@@ -595,9 +603,12 @@ def _resolve_entry_open(
     Returns None if the date is not in df or if an exception occurs.
     Logs a warning on exception so shrinkage of the peer/universe set is
     observable (PY-07).
+
+    `dates` (optional): precomputed `_frame_dates(df)` — see
+    `_forward_return_terminal` for the hot-loop rationale.
     """
     try:
-        dates_list = _frame_dates(df)
+        dates_list = dates if dates is not None else _frame_dates(df)
         for i, d in enumerate(dates_list):
             if d == entry_date:
                 row = df.iloc[i]

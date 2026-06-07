@@ -84,13 +84,29 @@ def _worker_build_chunk(
     horizon_months: int,
     data_source: str,
     price_cache_dir: str,         # str path for pickle-safety
-) -> list[tuple]:
+    progress_path: Optional[str] = None,  # per-worker progress file (str for pickle-safety)
+) -> tuple[list[tuple], dict[str, list[str]]]:
     """Worker: compute forward returns for a ticker chunk.
 
-    Returns list of (entry_date_str, horizon_days, symbol, fwd_return_pct, is_terminal).
+    Returns (rows, coverage) where rows is a list of
+    (entry_date_str, horizon_days, symbol, fwd_return_pct, is_terminal) and
+    coverage = {"no_frame": [syms], "no_rows": [syms]} — the accounting for
+    tickers that produced nothing.  "no_frame" = loader returned None/empty
+    (includes TRANSIENT network-fetch failures — observed live 2026-06-07:
+    7/100 probe tickers fetch-failed in one run and loaded fine in the next,
+    so an uncounted no-frame ticker is an invisible, nondeterministic coverage
+    hole).  "no_rows" = frame loaded but zero (date, horizon) cells passed the
+    floor/entry gates (deterministic).  Both surface in the artifact sidecar.
 
     Spawn-safe: receives only primitives/plain containers; imports are local;
     no closures or module-level state passed in.
+
+    `progress_path`: when set, the worker overwrites this file with
+    "<done>/<total> <last_symbol>" after each ticker — the followable progress
+    channel for within-chunk visibility (John: long-running tasks must always
+    have a way to follow progress; chunk-level parent logging alone goes silent
+    for the entire chunk duration).  Best-effort: progress-write failures never
+    fail the chunk.
     """
     import sys
     from pathlib import Path as _Path
@@ -111,6 +127,7 @@ def _worker_build_chunk(
         _resolve_entry_open,
         _forward_return_terminal,
     )
+    from research.universe_floors import precompute_df_up_to as _precompute_floor_pre
 
     # Build loader for this worker
     cache = PriceFrameCache(cache_dir=_Path(price_cache_dir))
@@ -129,9 +146,19 @@ def _worker_build_chunk(
     _wlog = _logging.getLogger(__name__)
 
     rows: list[tuple] = []
-    for sym in ticker_chunk:
+    no_frame_syms: list[str] = []
+    no_row_syms: list[str] = []
+    for sym_i, sym in enumerate(ticker_chunk):
+        if progress_path is not None:
+            try:
+                _Path(progress_path).write_text(
+                    f"{sym_i}/{len(ticker_chunk)} {sym}\n"
+                )
+            except OSError:
+                pass  # progress is best-effort, never fails the chunk
         df = loader(sym)
         if df is None or df.empty:
+            no_frame_syms.append(sym)
             continue
 
         # Build a set of dates this symbol actually trades on (fast check)
@@ -139,8 +166,23 @@ def _worker_build_chunk(
             dates_list = _frame_dates(df)
         except Exception as _exc:
             _wlog.warning("skip %s: _frame_dates failed: %s", sym, _exc)
+            no_frame_syms.append(sym)
             continue
         trading_date_set: set[_date] = set(dates_list)
+
+        # F357 perf: precompute the per-frame invariants ONCE per symbol and
+        # pass them into the per-date helpers below.  Without this, each helper
+        # re-derived the full index per (symbol, date) call — per-element tz
+        # conversion + a frame copy that measured ~40 CPU-seconds per ticker
+        # (~52 CPU-hours for the full universe).  Helpers produce identical
+        # results with or without the precomputed args (probe-diffed).
+        try:
+            floor_pre = _precompute_floor_pre(df)
+        except Exception as _exc:
+            _wlog.warning("skip %s: precompute_df_up_to failed: %s", sym, _exc)
+            no_frame_syms.append(sym)
+            continue
+        rows_before_sym = len(rows)
 
         sym_errors = 0
         for entry_date in entry_dates_parsed:
@@ -150,7 +192,7 @@ def _worker_build_chunk(
 
             # ADV-01: floor decided from info available BEFORE entry
             try:
-                fs = _floor_status(df, entry_date)
+                fs = _floor_status(df, entry_date, pre=floor_pre)
             except Exception as _exc:
                 sym_errors += 1
                 _wlog.debug("skip %s %s floor: %s", sym, entry_date, _exc)
@@ -160,7 +202,7 @@ def _worker_build_chunk(
 
             # Verify first trading close on or after entry_date IS entry_date
             try:
-                res = _first_trading_close_on_or_after(df, entry_date)
+                res = _first_trading_close_on_or_after(df, entry_date, dates=dates_list)
             except Exception as _exc:
                 sym_errors += 1
                 _wlog.debug("skip %s %s ftco: %s", sym, entry_date, _exc)
@@ -173,7 +215,7 @@ def _worker_build_chunk(
 
             # Resolve entry open (prefer Open, fallback to Close)
             try:
-                entry_open = _resolve_entry_open(df, entry_date, sym)
+                entry_open = _resolve_entry_open(df, entry_date, sym, dates=dates_list)
             except Exception as _exc:
                 sym_errors += 1
                 _wlog.debug("skip %s %s entry_open: %s", sym, entry_date, _exc)
@@ -185,7 +227,8 @@ def _worker_build_chunk(
             for h in horizons:
                 try:
                     r, was_terminal = _forward_return_terminal(
-                        df, entry_date, entry_open, h, direction="long"
+                        df, entry_date, entry_open, h, direction="long",
+                        dates=dates_list,
                     )
                 except Exception as _exc:
                     sym_errors += 1
@@ -203,7 +246,18 @@ def _worker_build_chunk(
         if sym_errors > 0:
             _wlog.warning("sym %s: %d unexpected errors (dates/horizons skipped)", sym, sym_errors)
 
-    return rows
+        if len(rows) == rows_before_sym:
+            no_row_syms.append(sym)
+
+    if progress_path is not None:
+        try:
+            _Path(progress_path).write_text(
+                f"{len(ticker_chunk)}/{len(ticker_chunk)} done\n"
+            )
+        except OSError:
+            pass
+
+    return rows, {"no_frame": no_frame_syms, "no_rows": no_row_syms}
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +400,13 @@ def _build_universe_returns_matrix_inner(
     entry_dates_strs = [d.isoformat() for d in entry_dates]
     price_cache_dir_str = str(price_cache_dir)
 
+    # Within-chunk progress files: workers overwrite chunk_<i>.txt per ticker.
+    # Followable via `cat <progress_dir>/chunk_*.txt` while a chunk is mid-flight
+    # (parent chunk-completion logs alone go silent for a whole chunk's duration).
+    progress_dir = out_path.parent / f"{out_path.name}.progress"
+    progress_dir.mkdir(parents=True, exist_ok=True)
+    log.info("Within-chunk progress files: %s/chunk_<i>.txt", progress_dir)
+
     # Worker args (all primitives + plain containers — no closures)
     worker_kwargs = dict(
         entry_dates=entry_dates_strs,
@@ -362,6 +423,8 @@ def _build_universe_returns_matrix_inner(
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
     all_rows: list[tuple] = []
+    no_frame_tickers: list[str] = []
+    no_row_tickers: list[str] = []
     t0 = time.monotonic()
     completed = 0
     errors = 0
@@ -369,14 +432,20 @@ def _build_universe_returns_matrix_inner(
     ctx = mp.get_context("spawn")
     with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as ex:
         future_to_chunk_idx = {
-            ex.submit(_worker_build_chunk, chunk, **worker_kwargs): i
+            ex.submit(
+                _worker_build_chunk, chunk,
+                progress_path=str(progress_dir / f"chunk_{i}.txt"),
+                **worker_kwargs,
+            ): i
             for i, chunk in enumerate(chunks)
         }
         for fut in as_completed(future_to_chunk_idx):
             idx = future_to_chunk_idx[fut]
             try:
-                rows = fut.result()
+                rows, chunk_coverage = fut.result()
                 all_rows.extend(rows)
+                no_frame_tickers.extend(chunk_coverage["no_frame"])
+                no_row_tickers.extend(chunk_coverage["no_rows"])
                 completed += 1
                 if completed % 10 == 0 or completed == n_chunks:
                     elapsed = time.monotonic() - t0
@@ -400,6 +469,22 @@ def _build_universe_returns_matrix_inner(
         "All chunks done: %d/%d completed, %d errors, %d total rows in %.1fs",
         completed, n_chunks, errors, len(all_rows), elapsed_total,
     )
+    # Coverage accounting: no-frame tickers may be TRANSIENT fetch failures
+    # (nondeterministic across runs — observed live 2026-06-07), so they must
+    # be visible, never silently absent.
+    log.info(
+        "Ticker coverage: %d/%d produced rows, %d no-frame (loader None/empty), "
+        "%d loaded-but-no-rows",
+        n_tickers - len(no_frame_tickers) - len(no_row_tickers), n_tickers,
+        len(no_frame_tickers), len(no_row_tickers),
+    )
+    if no_frame_tickers:
+        log.warning(
+            "no-frame tickers (possible transient fetch failures — rerun to "
+            "check determinism): %s%s",
+            ", ".join(sorted(no_frame_tickers)[:20]),
+            f" … +{len(no_frame_tickers) - 20} more" if len(no_frame_tickers) > 20 else "",
+        )
 
     if not all_rows:
         raise RuntimeError(
@@ -457,6 +542,8 @@ def _build_universe_returns_matrix_inner(
         elapsed_total=elapsed_total,
         status=status,
         last_full_coverage=last_full_coverage,
+        no_frame_tickers=no_frame_tickers,
+        no_row_tickers=no_row_tickers,
     )
     _write_parquet_and_meta_atomic(df, out_path, meta)
 
@@ -510,6 +597,8 @@ def _build_metadata(
     elapsed_total: float,
     status: str,
     last_full_coverage: dict[str, str],
+    no_frame_tickers: Optional[list[str]] = None,
+    no_row_tickers: Optional[list[str]] = None,
 ) -> dict:
     """Build metadata dict (no I/O — caller writes it)."""
     now_utc = datetime.now(tz=timezone.utc)
@@ -538,6 +627,21 @@ def _build_metadata(
             "ticker_count": len(universe_tickers),
             "source": str(price_cache_dir),
             "gating": "SIC-bearing + 2012+ coverage + _FLOOR_OK on every date",
+        },
+        # Ticker-level coverage accounting. no_frame entries may be TRANSIENT
+        # network-fetch failures (observed 2026-06-07: 7/100 probe tickers
+        # fetch-failed in one run, loaded in the next) — a nonzero count means
+        # a rerun may produce MORE coverage; compare before trusting "complete".
+        "ticker_coverage": {
+            "tickers_with_rows": (
+                len(universe_tickers)
+                - len(no_frame_tickers or [])
+                - len(no_row_tickers or [])
+            ),
+            "no_frame_count": len(no_frame_tickers or []),
+            "no_frame_symbols": sorted(no_frame_tickers or []),
+            "no_rows_count": len(no_row_tickers or []),
+            "no_rows_symbols": sorted(no_row_tickers or []),
         },
         "horizons_trading_days": list(horizons),
         "last_full_coverage_date": last_full_coverage,

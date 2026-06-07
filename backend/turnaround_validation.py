@@ -1087,21 +1087,38 @@ def _prefetch_price_frames(
 # Entry / exit price helpers (D11)
 # ---------------------------------------------------------------------------
 
-def _first_trading_close_on_or_after(df: pd.DataFrame, target: date) -> Optional[tuple[date, float]]:
-    """Return (trading_date, close_price) for the first row >= target date."""
+def _first_trading_close_on_or_after(
+    df: pd.DataFrame, target: date, dates: Optional[list[date]] = None
+) -> Optional[tuple[date, float]]:
+    """Return (trading_date, close_price) for the first row >= target date.
+
+    `dates` (optional): precomputed `_frame_dates(df)` result.  Hot loops (F357
+    matrix builder) pass it to skip the per-call full-index conversion below
+    (per-element tz conversion dominated matrix-build cost).  The fast path is
+    a positional linear scan — identical semantics to the mask path (first row
+    in positional order with date >= target).
+    """
     if df is None or df.empty:
+        return None
+    if dates is not None:
+        for i, d in enumerate(dates):
+            if d >= target:
+                row = df.iloc[i]
+                if "Close" not in row.index:
+                    raise KeyError(f"No 'Close' column in DataFrame for row at {d}")
+                return (d, float(row["Close"]))
         return None
     # Normalise index to date objects
     if hasattr(df.index, "date"):
-        dates = pd.Series([d.date() if hasattr(d, "date") else d for d in df.index], index=df.index)
+        dates_s = pd.Series([d.date() if hasattr(d, "date") else d for d in df.index], index=df.index)
     else:
-        dates = pd.Series(df.index, index=df.index)
+        dates_s = pd.Series(df.index, index=df.index)
 
-    mask = dates >= target
+    mask = dates_s >= target
     if not mask.any():
         return None
     row = df[mask].iloc[0]
-    row_date = dates[mask].iloc[0]
+    row_date = dates_s[mask].iloc[0]
     # PY-10: always use named 'Close' column; fail loudly rather than read wrong column
     if "Close" not in row.index:
         raise KeyError(f"No 'Close' column in DataFrame for row at {row_date}")
