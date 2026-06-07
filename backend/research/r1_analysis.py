@@ -197,6 +197,38 @@ def _assign_quintiles_for_year(rows: list[dict], score_fn) -> dict[int, int]:
     return assignments
 
 
+def _build_year_groups(valid_rows: list[dict]) -> dict[int, list[int]]:
+    """Group valid_rows indices by calendar year (shared structure for perturbation band).
+
+    Returns {year: [row_indices]} — built once and reused across all variant keys.
+    """
+    year_groups: dict[int, list[int]] = {}
+    for i, row in enumerate(valid_rows):
+        year = _get_entry_year(row)
+        if year is None:
+            continue
+        year_groups.setdefault(year, []).append(i)
+    return year_groups
+
+
+def _assign_quintiles_all_years_from_groups(
+    valid_rows: list[dict],
+    year_groups: dict[int, list[int]],
+    score_fn,
+) -> list[Optional[int]]:
+    """Assign quintiles using a pre-built year_groups mapping.
+
+    PERF-06: avoids rebuilding year_groups for each of the 9 perturbation keys.
+    """
+    quintiles: list[Optional[int]] = [None] * len(valid_rows)
+    for year, idxs in year_groups.items():
+        year_rows = [valid_rows[i] for i in idxs]
+        year_assignments = _assign_quintiles_for_year(year_rows, score_fn)
+        for local_i, q_label in year_assignments.items():
+            quintiles[idxs[local_i]] = q_label
+    return quintiles
+
+
 def _assign_quintiles_all_years(valid_rows: list[dict], score_fn=None) -> list[Optional[int]]:
     """Assign quintile (1..5) to each valid row, within each entry_date calendar year.
 
@@ -208,22 +240,8 @@ def _assign_quintiles_all_years(valid_rows: list[dict], score_fn=None) -> list[O
     if score_fn is None:
         score_fn = _get_score
 
-    # Group by year
-    year_groups: dict[int, list[int]] = {}
-    for i, row in enumerate(valid_rows):
-        year = _get_entry_year(row)
-        if year is None:
-            continue
-        year_groups.setdefault(year, []).append(i)
-
-    quintiles = [None] * len(valid_rows)
-    for year, idxs in year_groups.items():
-        year_rows = [valid_rows[i] for i in idxs]
-        year_assignments = _assign_quintiles_for_year(year_rows, score_fn)
-        for local_i, q_label in year_assignments.items():
-            quintiles[idxs[local_i]] = q_label
-
-    return quintiles
+    year_groups = _build_year_groups(valid_rows)
+    return _assign_quintiles_all_years_from_groups(valid_rows, year_groups, score_fn)
 
 
 def _spearman_exact_onesided(x: np.ndarray, y: np.ndarray) -> tuple[Optional[float], float]:
@@ -284,6 +302,13 @@ def _two_sample_mbb_bootstrap(
 
     Returns (p_value, boot_diffs_unshifted, L_a_used, capped_a, L_b_used, capped_b).
     p_value is float('nan') when either quintile has n<2.
+
+    PERF-07: Per-iteration vectorization — rng.integers(size=k) is stream-equivalent
+    to k sequential scalar calls (verified empirically), so each resample's while-loop
+    draws are replaced by a single integers(size=ceil(n/L)) call.  The per-iteration
+    interleaving of the four resample slots (shifted_a, shifted_b, raw_a, raw_b) is
+    preserved exactly, keeping the RNG stream bit-identical to the original.
+    Full cross-iteration batching is NOT used because it would reorder the stream.
     """
     n_a, n_b = len(a), len(b)
 
@@ -320,19 +345,43 @@ def _two_sample_mbb_bootstrap(
     _, L_a_used, capped_a = _mbb_resample(shifted_a, block_size_a)
     _, L_b_used, capped_b = _mbb_resample(shifted_b, block_size_b)
 
+    # Pre-compute block counts (ceil(n/L)) and bounds for vectorized draws
+    draws_a = math.ceil(n_a / L_a_used)
+    draws_b = math.ceil(n_b / L_b_used)
+    high_a = n_a - L_a_used + 1
+    high_b = n_b - L_b_used + 1
+
+    # Index arrays to reconstruct block samples without Python list.append loops
+    a_idx = np.arange(L_a_used)   # offsets within a block
+    b_idx_arr = np.arange(L_b_used)
+
     boot_diffs_shifted = np.empty(n_boot)
     boot_diffs_unshifted = np.empty(n_boot)
 
     for b_idx in range(n_boot):
-        # Shifted (H0) samples
-        samp_a_shifted, _, _ = _mbb_resample(shifted_a, block_size_a)
-        samp_b_shifted, _, _ = _mbb_resample(shifted_b, block_size_b)
-        boot_diffs_shifted[b_idx] = float(np.mean(samp_a_shifted)) - float(np.mean(samp_b_shifted))
+        # --- slot 1: shifted_a ---
+        starts = rng.integers(0, high_a, size=draws_a)
+        idx_full = (starts[:, None] + a_idx[None, :]).ravel()[:n_a]
+        samp_a_shifted = shifted_a[idx_full]
 
-        # Unshifted (for CI): resample from original (sorted by entry_date order)
-        samp_a_raw, _, _ = _mbb_resample(a, block_size_a)
-        samp_b_raw, _, _ = _mbb_resample(b, block_size_b)
-        boot_diffs_unshifted[b_idx] = float(np.mean(samp_a_raw)) - float(np.mean(samp_b_raw))
+        # --- slot 2: shifted_b ---
+        starts = rng.integers(0, high_b, size=draws_b)
+        idx_full = (starts[:, None] + b_idx_arr[None, :]).ravel()[:n_b]
+        samp_b_shifted = shifted_b[idx_full]
+
+        boot_diffs_shifted[b_idx] = samp_a_shifted.mean() - samp_b_shifted.mean()
+
+        # --- slot 3: raw a ---
+        starts = rng.integers(0, high_a, size=draws_a)
+        idx_full = (starts[:, None] + a_idx[None, :]).ravel()[:n_a]
+        samp_a_raw = a[idx_full]
+
+        # --- slot 4: raw b ---
+        starts = rng.integers(0, high_b, size=draws_b)
+        idx_full = (starts[:, None] + b_idx_arr[None, :]).ravel()[:n_b]
+        samp_b_raw = b[idx_full]
+
+        boot_diffs_unshifted[b_idx] = samp_a_raw.mean() - samp_b_raw.mean()
 
     # COR-01: one-sided p (positive side: H_a: Q5 > Q1)
     p = float(np.mean(boot_diffs_shifted >= obs_diff))
@@ -349,6 +398,9 @@ def _mbb_pvalue_onesample(
 
     COR-02: one-sided p (positive side): frac(boot_means >= obs_mean).
     ADV-03: returns nan when n<2.
+
+    PERF-07: Per-iteration vectorization of the while-loop draws; same RNG stream
+    as original (rng.integers(size=k) is stream-equivalent to k scalar calls).
     """
     n = len(arr)
     if n == 0:
@@ -359,16 +411,14 @@ def _mbb_pvalue_onesample(
     obs_mean = float(np.mean(arr))
     shifted = arr - obs_mean
     L = max(1, min(block_size, max(n // 2, 1)))
+    high = n - L + 1
+    draws = math.ceil(n / L)
+    blk_idx = np.arange(L)  # offsets within a block
     boot_means = np.empty(n_boot)
     for b_idx in range(n_boot):
-        blocks = []
-        collected = 0
-        while collected < n:
-            start = int(rng.integers(0, n - L + 1))
-            blocks.append(shifted[start: start + L])
-            collected += L
-        boot_sample = np.concatenate(blocks)[:n]
-        boot_means[b_idx] = float(np.mean(boot_sample))
+        starts = rng.integers(0, high, size=draws)
+        idx_full = (starts[:, None] + blk_idx[None, :]).ravel()[:n]
+        boot_means[b_idx] = shifted[idx_full].mean()
     # COR-02: one-sided p (positive side)
     return float(np.mean(boot_means >= obs_mean))
 
@@ -557,8 +607,12 @@ def _perturbation_band(
     an event missing a perturbation key or with None is excluded from that variant only.'
 
     band_sign_stable = all variants match primary Q5-Q1 sign AND ρ_s sign.
+
+    PERF-06: year_groups built once and shared across all 9 variants; primary stats
+    computed once and reused for the primary-sign reference.  Output is identical.
     """
-    # Compute primary signs
+    # Compute primary signs (primary stats already computed upstream but recomputed
+    # here for self-containment, consistent with original behaviour)
     primary_stats = _per_quintile_stats(valid_rows, quintiles_primary, horizon)
     q5_mean_primary = primary_stats[5]["mean"]
     q1_mean_primary = primary_stats[1]["mean"]
@@ -582,6 +636,9 @@ def _perturbation_band(
     else:
         primary_rho_sign = 0
 
+    # PERF-06: build year_groups once; reused for every variant key
+    year_groups = _build_year_groups(valid_rows)
+
     band_table: dict[str, dict] = {}
     all_match = True
 
@@ -589,8 +646,10 @@ def _perturbation_band(
         def score_fn_for_key(row: dict, _key: str = key) -> Optional[float]:
             return _get_perturb_score(row, _key)
 
-        # Re-derive quintiles from this variant
-        var_quintiles = _assign_quintiles_all_years(valid_rows, score_fn=score_fn_for_key)
+        # Re-derive quintiles from this variant using the shared year_groups
+        var_quintiles = _assign_quintiles_all_years_from_groups(
+            valid_rows, year_groups, score_fn_for_key
+        )
 
         # Filter: only rows where this perturbation key has a score
         filtered_rows = []

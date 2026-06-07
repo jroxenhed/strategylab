@@ -11,16 +11,15 @@ _(none open)_
 ## Up Next
 
 - [F364](#f364) — [next] Review-contract rule: findings citing population statistics must state the population measured [easy]
-- [F355](#f355) — [next] r1_analysis bounded-perf cleanups deferred from the R-1 review wave [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 32 items
+## Open Work — 31 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
 | [Architecture](#architecture) | 8 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F348](#f348) |
-| [Hardening](#hardening) | 12 | [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F337](#f337), [F352](#f352), [F355](#f355), [F358](#f358), [F362](#f362)–[F364](#f364) |
+| [Hardening](#hardening) | 11 | [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F337](#f337), [F352](#f352), [F358](#f358), [F362](#f362)–[F364](#f364) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 6 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329), [F360](#f360) |
 | [Infra](#infra) | 4 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309) |
@@ -68,7 +67,6 @@ _(none open)_
 
 - [ ] <a id="f364"></a> **F364** [next] Review-contract rule: findings citing population statistics must state the population measured — ADV-04's 0.6% (whole submissions cache, all forms/years) vs the study population's 0.0016% mis-sized F359 by three orders of magnitude; one scope sentence would have sized it correctly. Add the rule to the review-wave persona prompts (`.claude/workflows/review-wave.js`) and the playbook review section. [easy] [hardening]
 
-- [ ] <a id="f355"></a> **F355** [next] r1_analysis bounded-perf cleanups deferred from the R-1 review wave — PERF-06 (9× per-variant quintile re-derivation in the perturbation band; restructure to share the per-year sort) and PERF-07 (Python-loop bootstrap with per-iteration np.concatenate ×999 draws in both MBB helpers; vectorize with pregenerated index arrays). Bounded at current scale (~215 events) but will matter at F353 scale (thousands of events × 9 variants). Findings detail: .run/R1-explore/review-performance.json. [easy] [hardening]
 - [ ] <a id="f337"></a> **F337** null_atlas.json backup rotation — atlas writes are atomic but have zero backup depth, unlike validation_result.json (backup_depth=3); a bad build silently destroys the previous good atlas (SIGNAL-P1 DI-06, deferred). Reuse the validation-result backup helper. [easy] [hardening]
 
 _(none open)_
