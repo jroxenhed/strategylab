@@ -11,18 +11,18 @@ _(none open)_
 ## Up Next
 
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
-- [F356](#f356) — [next] Form 4 dataset ingest layer [medium]
+- [F357](#f357) — [next] Universe returns matrix [hard]
 
-## Open Work — 29 items
+## Open Work — 30 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
 | [Architecture](#architecture) | 8 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F348](#f348) |
-| [Hardening](#hardening) | 8 | [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F337](#f337), [F352](#f352), [F355](#f355) |
+| [Hardening](#hardening) | 10 | [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F337](#f337), [F352](#f352), [F355](#f355), [F358](#f358)–[F359](#f359) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329) |
-| [Infra](#infra) | 6 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F356](#f356)–[F357](#f357) |
+| [Infra](#infra) | 5 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F357](#f357) |
 
 ## Features
 
@@ -59,6 +59,10 @@ _(none open)_
 - [ ] <a id="f330"></a> **F330** Events-table payload size guardrail — validation_result.json now carries the full per-event list (~3.2k events / ~1-2MB at run-1 scale); at max_universe~15k over 9y it could reach ~8-10MB through GET /validate/result in one pass (DI-04, F-RERUN-0605 review). Add a summary-only query param or gzip; revisit with F315 (watchlist schema_version still missing). [easy] [hardening]
 - [ ] <a id="f352"></a> **F352** FDR ledger read-modify-write has no file lock — concurrent study runs can silently drop ledger entries (DI-07, F349/F350 review; pre-existing, predates the lens work). The ledger is the program's multiplicity accounting — losing entries quietly understates how many hypotheses were tested. Reuse the house file-lock pattern or single-writer convention. [easy] [hardening] (added 2026-06-06)
 
+- [ ] <a id="f358"></a> **F358** Consolidate the universe-loader copies — `run_r1_explore._build_universe_tickers`, `run_smoke_study._build_universe_tickers`, `returns_matrix._get_universe_tickers` (price-cache-span + SIC construction, ~40 lines × 3) plus `form4_ingest._load_liquid_universe` (structural map, deliberately broader — keep separate but co-document) into one shared helper with an explicit span-end parameter. PY-03 from the F357 review; a 4th copy is one lazy session away. [easy] [hardening]
+
+- [ ] <a id="f359"></a> **F359** Investigate midnight-UTC acceptanceDateTimes before any R-1 rerun interpretation — ~0.6% of ADTs are T00:00:00Z (2,972 of 507K sampled); `_to_et` maps them to 19:00 the PRIOR ET day, a potential 1-day look-ahead if they're data artifacts rather than genuine midnight acceptances. Events carry `adt_midnight_utc: true` payload flags (F356) so they're excludable without re-ingest; sample ~20 against EDGAR web acceptance stamps and decide keep/exclude/clamp. ADV-04 from the F356 review. [easy] [hardening]
+
 - [ ] <a id="f355"></a> **F355** r1_analysis bounded-perf cleanups deferred from the R-1 review wave — PERF-06 (9× per-variant quintile re-derivation in the perturbation band; restructure to share the per-year sort) and PERF-07 (Python-loop bootstrap with per-iteration np.concatenate ×999 draws in both MBB helpers; vectorize with pregenerated index arrays). Bounded at current scale (~215 events) but will matter at F353 scale (thousands of events × 9 variants). Findings detail: .run/R1-explore/review-performance.json. [easy] [hardening]
 - [ ] <a id="f337"></a> **F337** null_atlas.json backup rotation — atlas writes are atomic but have zero backup depth, unlike validation_result.json (backup_depth=3); a bad build silently destroys the previous good atlas (SIGNAL-P1 DI-06, deferred). Reuse the validation-result backup helper. [easy] [hardening]
 
@@ -94,9 +98,7 @@ _(none open)_
 - [ ] <a id="f306"></a> **F306** [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) — replaces the collapse/expand substitute from F-BATCH-0604C. [easy] [infra]
 - [ ] <a id="f309"></a> **F309** Promote the A8 zoom→auto-switch verification recipe to a scripted render-probe check (F298 rule): seed Alpaca 5m multi-year settings, drive `window.__chartDebug.setVisibleLogicalRange(0, N)`, assert lastSetDataPoints drops ≥10x + 'Auto (…)' badge, then narrow range and assert full-resolution restore. Needs DEV-build probe target or exposing the hook in preview builds behind a flag. [easy] [infra]
 
-- [ ] <a id="f356"></a> **F356** [next] Form 4 dataset ingest layer — parse the F353 quarterly tables (SUBMISSION + REPORTINGOWNER + NONDERIV_TRANS + FOOTNOTES) into the dose-builder event format, replacing per-XML parsing: filter TRANS_CODE=P + TRANS_ACQUIRED_DISP_CD=A, join owner CIKs (RPTOWNERCIK), run the 10b5-1 text-scan against FOOTNOTES, restrict to the liquid universe via ISSUERTRADINGSYMBOL/ISSUERCIK, and join acceptanceDateTime from the submissions cache by ACCESSION_NUMBER (~83% direct; ~815 truncated issuers need older index pages — small paced fetch; the remainder use the charter's filingDate+16:01 ET fallback, counted). Output: a `build_r1_events`-compatible event stream + per-quarter ingest stats. F338: pre-state anchors (a known quarter's P-count matches the probe; a spot ticker's events match its raw XMLs from the stratified cache where both exist). FS-B/FS-C probe anchors re-attach to the first ≥50-event study. [medium] [arch]
-
-- [ ] <a id="f357"></a> **F357** Universe returns matrix — one-pass precompute of forward returns for all ~4,700 liquid-universe tickers × all trading days 2015–2020 × horizons (21/63/126td) into a parquet artifact, replacing per-(date,horizon) on-demand vector builds (which would be ~47h serial at full-scale event counts). Parallelize ticker-chunk-wise on the wfa_pool.py pattern (ProcessPool, worker-owns-chunk, seconds-of-work granularity per F166); target host: strategylab-worker (14900k — rsync price cache + code, build there, pull artifact back). The matrix is PROGRAM INFRASTRUCTURE: reusable by R-1 rerun, R-2, the explore mill, every future event study. event_study.py grows a matrix-backed median path beside the live loader path (equivalence-diff one study against the loader path before trusting — F351 precedent). Hard guard: matrix build must respect the 2025+ price seal (build through 2024-12-31 only until a charter unlocks confirm). [hard] [arch]
+- [ ] <a id="f357"></a> **F357** [next] Universe returns matrix — REMAINING: full-scale build on strategylab-worker (rsync price cache, run `bin/build-returns-matrix-remote.sh` after VERIFY-marked assumptions checked, pull artifact, then full-scale equivalence-diff one real study). Code SHIPPED 2026-06-07: builder/loader/CLI (`returns_matrix.py`, float64, completeness sidecar, loader refuses partials), matrix-backed median path in event_study.py, calib equivalence byte-identical, spawn-smoke green. Original spec: one-pass precompute of forward returns for all ~4,700 liquid-universe tickers × all trading days 2015–2020 × horizons (21/63/126td) into a parquet artifact, replacing per-(date,horizon) on-demand vector builds (which would be ~47h serial at full-scale event counts). Parallelize ticker-chunk-wise on the wfa_pool.py pattern (ProcessPool, worker-owns-chunk, seconds-of-work granularity per F166); target host: strategylab-worker (14900k — rsync price cache + code, build there, pull artifact back). The matrix is PROGRAM INFRASTRUCTURE: reusable by R-1 rerun, R-2, the explore mill, every future event study. event_study.py grows a matrix-backed median path beside the live loader path (equivalence-diff one study against the loader path before trusting — F351 precedent). Hard guard: matrix build must respect the 2025+ price seal (build through 2024-12-31 only until a charter unlocks confirm). [hard] [arch]
 
 ## Deferred (gated)
 
