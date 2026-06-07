@@ -35,11 +35,13 @@ No FastAPI dependency (consistent with backend/research/ README rule).
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import logging
 import math
 import os
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -50,6 +52,14 @@ from typing import Callable, Iterable, Iterator, Optional
 _ReturnVector = dict[str, tuple[float, bool]]
 # Cache mapping (entry_date, horizon) → _ReturnVector.
 _VectorCache = dict[tuple, _ReturnVector]
+
+# F365 Part 1: module-level strict flag.  Set to True by run_event_study when
+# matrix_strict=True and a matrix loaded successfully; reset in a finally block.
+# Point-of-use enforcement in _compute_universe_median / _compute_peer_median
+# raises RuntimeError on any cold-cache build while this flag is active, so a
+# missing key is discovered the moment it is accessed (not in a pre-validation
+# scan that uses calendar arithmetic and demands weekend keys).
+_MATRIX_STRICT: bool = False
 
 import numpy as np
 import pandas as pd
@@ -702,6 +712,17 @@ def _compute_universe_median(
     if _vector_cache is not None:
         # Build the shared vector once per (entry_date, horizon).
         if vec_key not in _vector_cache:
+            # F365 Part 1: point-of-use strict enforcement.  When the matrix is
+            # active and strict, a cold cache key means the matrix is missing
+            # coverage for this (entry_date, horizon) — raise immediately rather
+            # than silently building a live vector that violates the charter pin.
+            if _MATRIX_STRICT:
+                raise RuntimeError(
+                    f"_compute_universe_median: matrix_strict=True (charter pin: "
+                    f"'universe medians from matrix build 2026-06-07') — "
+                    f"cold cache key {vec_key!r} not in matrix; "
+                    f"rebuild the matrix or set matrix_strict=False to allow live fallback."
+                )
             _vector_cache[vec_key] = _build_return_vector(
                 entry_date, horizon, loader_fn, universe_tickers
             )
@@ -897,6 +918,14 @@ def _compute_peer_median(
     if _vector_cache is not None:
         # PY-04: build the vector on-demand if the key is absent (cold cache).
         if vec_key not in _vector_cache:
+            # F365 Part 1: point-of-use strict enforcement (mirrors _compute_universe_median).
+            if _MATRIX_STRICT:
+                raise RuntimeError(
+                    f"_compute_peer_median: matrix_strict=True (charter pin: "
+                    f"'universe medians from matrix build 2026-06-07') — "
+                    f"cold cache key {vec_key!r} not in matrix; "
+                    f"rebuild the matrix or set matrix_strict=False to allow live fallback."
+                )
             _vector_cache[vec_key] = _build_return_vector(
                 entry_date, horizon, loader_fn, peer_tickers
             )
@@ -1436,6 +1465,291 @@ def _dedup_events(
 
 
 # ---------------------------------------------------------------------------
+# F365 Part 2: parallel per-event outcome computation
+# ---------------------------------------------------------------------------
+
+# Per-worker globals (initialised in _worker_init; lives in the worker process only).
+_worker_loader_fn: Optional[Callable] = None
+_worker_vector_cache: Optional[_VectorCache] = None
+_worker_matrix_strict: bool = False
+
+
+def _worker_init(
+    loader_factory_dotted: str,
+    loader_factory_kwargs: dict,
+    matrix_path_str: Optional[str],
+    horizons: tuple[int, ...],
+    strict: bool,
+) -> None:
+    """Initializer for each ProcessPoolExecutor worker.
+
+    Called once per worker process.  Builds a disk-only loader (no network
+    fetch; parent's prefetch already wrote all frames to disk) and, when a
+    matrix path is supplied, pre-loads the matrix vector cache (~6s, acceptable).
+
+    macOS spawn safety: this function is a module-level callable and must not
+    capture closures from the parent process.
+    """
+    global _worker_loader_fn, _worker_vector_cache, _worker_matrix_strict
+
+    # Resolve loader factory from dotted "module:function" string.
+    mod_name, fn_name = loader_factory_dotted.rsplit(":", 1)
+    mod = importlib.import_module(mod_name)
+    factory_fn = getattr(mod, fn_name)
+    _worker_loader_fn = factory_fn(**loader_factory_kwargs)
+
+    # Pre-load the matrix vector cache if a matrix path is provided.
+    if matrix_path_str is not None:
+        try:
+            _worker_vector_cache = _load_universe_matrix(
+                matrix_path=Path(matrix_path_str),
+                horizons=horizons,
+                entry_dates=None,
+            )
+        except Exception as exc:
+            if strict:
+                raise
+            _worker_vector_cache = {}
+    else:
+        _worker_vector_cache = {}
+
+    _worker_matrix_strict = strict
+
+
+def _process_event_chunk(
+    chunk: list[tuple[int, EventRecord]],
+    config: EventStudyConfig,
+    universe_tickers: Optional[list[str]],
+    ticker_to_sic: dict[str, Optional[str]],
+    regime_states: Optional[dict],
+) -> list[tuple[int, Optional[EventOutcome], dict]]:
+    """Process a contiguous chunk of (original_index, EventRecord) pairs.
+
+    Runs entirely in the worker process using the per-worker loader and vector
+    cache populated by _worker_init.
+
+    Returns list of (original_index, EventOutcome_or_None, per_event_counters).
+    per_event_counters keys: fallback_count, events_no_price_data, events_below_floor,
+    events_entered, plus pick_terminal_by_h and universe/sic peer terminal counters.
+    """
+    global _worker_loader_fn, _worker_vector_cache, _worker_matrix_strict
+
+    loader_fn = _worker_loader_fn
+    vector_cache = _worker_vector_cache
+    strict = _worker_matrix_strict
+
+    # Per-chunk accumulators (will be summed by parent in original index order).
+    fallback_count = 0
+    events_no_price_data = 0
+    events_below_floor = 0
+    events_entered = 0
+    pick_terminal_by_h: dict[int, int] = {h: 0 for h in config.horizons}
+    universe_peer_terminal_by_h: dict[int, int] = {h: 0 for h in config.horizons}
+    sic_peer_terminal_by_h: dict[int, int] = {h: 0 for h in config.horizons}
+
+    # Per-chunk peer result cache (avoids redundant peer-median recomputation
+    # within a chunk; does NOT span chunks — that's acceptable since the same
+    # (entry_date, h, ticker) won't appear across chunks by construction).
+    peer_result_cache: dict[tuple, tuple[Optional[float], int, int]] = {}
+
+    results: list[tuple[int, Optional[EventOutcome], dict]] = []
+
+    for orig_idx, ev in chunk:
+        ticker = ev.ticker
+        event_ts = ev.event_ts
+        if ev.is_fallback:
+            fallback_count += 1
+
+        if event_ts.tzinfo is None:
+            event_ts = event_ts.replace(tzinfo=timezone.utc)
+        event_et_date = _to_et(event_ts).date()
+
+        df = loader_fn(ticker)
+
+        no_price_data = df is None or (hasattr(df, "empty") and df.empty)
+        if no_price_data:
+            fs = _FLOOR_BELOW
+            entry_result = None
+            events_no_price_data += 1
+        else:
+            entry_result = _entry_date_from_event_ts(event_ts, df, config.entry_lag_days)
+            if entry_result is None:
+                fs = _FLOOR_BELOW
+            else:
+                entry_date, entry_price, used_close_fallback = entry_result
+                fs = _floor_status(df, event_et_date)
+
+        if entry_result is None:
+            if not no_price_data:
+                events_below_floor += 1
+            outcome = EventOutcome(
+                ticker=ticker,
+                event_ts=event_ts,
+                entry_date=date.min,
+                entry_price=float("nan"),
+                payload=ev.payload,
+                split="out_of_range",
+                fwd_return_pct={h: None for h in config.horizons},
+                fwd_excess_pct={h: None for h in config.horizons},
+                floor_status=fs,
+                universe_n={h: 0 for h in config.horizons},
+                no_price_data=no_price_data,
+                is_fallback=ev.is_fallback,
+            )
+            counters = {
+                "fallback_count": fallback_count,
+                "events_no_price_data": events_no_price_data,
+                "events_below_floor": events_below_floor,
+                "events_entered": events_entered,
+                "pick_terminal_by_h": dict(pick_terminal_by_h),
+                "universe_peer_terminal_by_h": dict(universe_peer_terminal_by_h),
+                "sic_peer_terminal_by_h": dict(sic_peer_terminal_by_h),
+            }
+            results.append((orig_idx, outcome, counters))
+            # Reset per-event accumulators (they're per-chunk aggregates;
+            # we flush them into each result so the parent can sum in order).
+            fallback_count = 0
+            events_no_price_data = 0
+            events_below_floor = 0
+            events_entered = 0
+            pick_terminal_by_h = {h: 0 for h in config.horizons}
+            universe_peer_terminal_by_h = {h: 0 for h in config.horizons}
+            sic_peer_terminal_by_h = {h: 0 for h in config.horizons}
+            continue
+
+        entry_date, entry_price, used_close_fallback = entry_result
+
+        if fs != _FLOOR_OK:
+            events_below_floor += 1
+        else:
+            events_entered += 1
+
+        split = "explore" if entry_date <= config.explore_cutoff else "confirm"
+
+        regime_state: Optional[str] = None
+        if regime_states is not None:
+            regime_state = _regime_state_for_as_of(entry_date, regime_states)
+
+        if fs == _FLOOR_OK and df is not None:
+            fwd_return_pct = {}
+            for h in config.horizons:
+                r, was_terminal = _forward_return_terminal(
+                    df, entry_date, entry_price, h, direction="long",
+                )
+                fwd_return_pct[h] = r
+                if was_terminal and r is not None:
+                    pick_terminal_by_h[h] += 1
+            if config.cost_fn is not None:
+                cost = config.cost_fn(ev, entry_price)
+                fwd_return_pct = {
+                    h: (v - cost if v is not None else None)
+                    for h, v in fwd_return_pct.items()
+                }
+        else:
+            fwd_return_pct = {h: None for h in config.horizons}
+
+        fwd_excess_pct: dict[int, Optional[float]] = {}
+        universe_n: dict[int, int] = {}
+
+        if universe_tickers is not None and fs == _FLOOR_OK:
+            for h in config.horizons:
+                vec_key = (entry_date, h)
+                # Strict enforcement: cold cache key in a worker is an error.
+                if strict and vector_cache is not None and vec_key not in vector_cache:
+                    raise RuntimeError(
+                        f"_process_event_chunk (worker): matrix_strict=True — "
+                        f"cold cache key {vec_key!r} not in worker matrix; "
+                        f"rebuild the matrix or set matrix_strict=False."
+                    )
+                med, n_univ, term_peers = _compute_universe_median(
+                    entry_date, h, ticker, loader_fn, universe_tickers,
+                    _vector_cache=vector_cache,
+                )
+                universe_n[h] = n_univ
+                universe_peer_terminal_by_h[h] += term_peers
+                r = fwd_return_pct.get(h)
+                fwd_excess_pct[h] = (r - med) if r is not None and med is not None else None
+        else:
+            for h in config.horizons:
+                fwd_excess_pct[h] = None
+                universe_n[h] = 0
+
+        fwd_peer_excess_pct: dict[int, Optional[float]] = {}
+        peer_n: dict[int, int] = {}
+        peer_sic: Optional[str] = ticker_to_sic.get(ticker) if ticker_to_sic else None
+        peer_sic_fallback_level: Optional[str] = None
+
+        if universe_tickers is not None and fs == _FLOOR_OK:
+            if ticker_to_sic:
+                peers, peer_sic, fallback = _get_peer_set_by_sic(
+                    ticker, universe_tickers, ticker_to_sic, config.min_peer_count
+                )
+                peer_sic_fallback_level = fallback
+            else:
+                peers = [t for t in universe_tickers if t != ticker]
+                fallback = "universe"
+                peer_sic_fallback_level = fallback
+
+            for h in config.horizons:
+                peer_cache_key = (entry_date, h, "peers", ticker)
+                if peer_cache_key not in peer_result_cache:
+                    peer_result_cache[peer_cache_key] = _compute_peer_median(
+                        entry_date, h, ticker, peers, loader_fn,
+                        _vector_cache=vector_cache,
+                    )
+                peer_med, n_peers, term_peers = peer_result_cache[peer_cache_key]
+                peer_n[h] = n_peers
+                sic_peer_terminal_by_h[h] += term_peers
+                r = fwd_return_pct.get(h)
+                fwd_peer_excess_pct[h] = (r - peer_med) if r is not None and peer_med is not None else None
+        else:
+            for h in config.horizons:
+                fwd_peer_excess_pct[h] = None
+                peer_n[h] = 0
+
+        outcome = EventOutcome(
+            ticker=ticker,
+            event_ts=event_ts,
+            entry_date=entry_date,
+            entry_price=entry_price,
+            payload=ev.payload,
+            split=split,
+            fwd_return_pct=fwd_return_pct,
+            fwd_excess_pct=fwd_excess_pct,
+            floor_status=fs,
+            universe_n=universe_n,
+            no_price_data=False,
+            is_fallback=ev.is_fallback,
+            peer_sic=peer_sic,
+            peer_sic_fallback_level=peer_sic_fallback_level,
+            fwd_peer_excess_pct=fwd_peer_excess_pct,
+            peer_n=peer_n,
+            regime_state=regime_state,
+        )
+
+        counters = {
+            "fallback_count": fallback_count,
+            "events_no_price_data": events_no_price_data,
+            "events_below_floor": events_below_floor,
+            "events_entered": events_entered,
+            "pick_terminal_by_h": dict(pick_terminal_by_h),
+            "universe_peer_terminal_by_h": dict(universe_peer_terminal_by_h),
+            "sic_peer_terminal_by_h": dict(sic_peer_terminal_by_h),
+        }
+        results.append((orig_idx, outcome, counters))
+        # Reset per-event accumulators.
+        fallback_count = 0
+        events_no_price_data = 0
+        events_below_floor = 0
+        events_entered = 0
+        pick_terminal_by_h = {h: 0 for h in config.horizons}
+        universe_peer_terminal_by_h = {h: 0 for h in config.horizons}
+        sic_peer_terminal_by_h = {h: 0 for h in config.horizons}
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Main harness
 # ---------------------------------------------------------------------------
 
@@ -1447,6 +1761,9 @@ def run_event_study(
     rng: Optional[np.random.Generator] = None,
     use_matrix: bool = False,
     matrix_path: Optional[Path] = None,
+    matrix_strict: bool = False,
+    workers: int = 1,
+    loader_factory: Optional[tuple[str, dict]] = None,
 ) -> tuple[list[EventOutcome], dict]:
     """Run an event study.
 
@@ -1465,6 +1782,25 @@ def run_event_study(
         live path if the matrix cannot be loaded (logged as warning).
     matrix_path : Optional[Path]
         F357: path to the partitioned Parquet directory (default: _MATRIX_DEFAULT_PATH).
+    matrix_strict : bool
+        R-1b: when True and use_matrix is True, a matrix load failure RAISES
+        (re-raises the exception) instead of falling back to the live path.
+        After loading, a zero-key cache also raises RuntimeError.
+        Default False preserves every existing caller's behaviour exactly.
+        The charter pins "universe medians from matrix build 2026-06-07" —
+        a silent live fallback would violate the pin.
+    workers : int
+        F365: number of worker processes for the per-event outcome loop.
+        1 (default) = exact legacy serial path (byte-for-byte identical output).
+        >1 = ProcessPoolExecutor over contiguous event chunks.
+        Bit-identical output to serial is the binding contract.
+    loader_factory : Optional[tuple[str, dict]]
+        F365: required when workers > 1.  A (dotted_module_colon_function, kwargs)
+        tuple that each worker resolves at init time to construct its own disk-only
+        price loader.  Example: ("research.run_r1b_explore:make_disk_only_loader",
+        {"start_year": 2015, ...}).  The factory MUST return a loader that only
+        reads from disk (no network fetch) since workers share no in-process cache
+        with the parent and the parent's prefetch already wrote all frames to disk.
 
     Survivorship & point-in-time discipline (P0 fixes):
       - ADV-01: floor/universe inclusion is decided from the last close ON OR
@@ -1479,6 +1815,19 @@ def run_event_study(
     -------
     (outcomes, meta_dict)
     """
+    # F365 Part 1: module-level strict flag — must be declared global at the top
+    # of the function body so Python knows the assignment inside `finally` refers
+    # to the module-level name, not a local.
+    global _MATRIX_STRICT
+
+    # F365 Part 2: validate parallel params early (before any expensive work).
+    if workers > 1 and loader_factory is None:
+        raise ValueError(
+            "run_event_study: workers > 1 requires loader_factory to be set. "
+            "The parent's loader closure is not picklable; each worker must "
+            "reconstruct its own loader via the factory."
+        )
+
     if rng is None:
         rng = np.random.default_rng(42)
 
@@ -1578,6 +1927,14 @@ def run_event_study(
     #   same floor gate, same Open-anchor, same terminal-exit semantics.
     _return_vector_cache: dict[tuple, dict[str, tuple[Optional[float], bool]]] = {}
 
+    # Belt-and-suspenders counter: counts any live _build_return_vector call made
+    # while a matrix cache is active.  Should be 0 in strict mode; non-zero
+    # means a key miss slipped through the strict validation gate below.
+    # Set by monkey-patching the module-level function inside this scope when
+    # matrix_strict=True (we use a closure counter instead to avoid side-effects
+    # on the module).  Exposed in harness meta as "matrix_key_misses".
+    _matrix_key_misses: int = 0
+
     # F357: Optional matrix-backed pre-population of _return_vector_cache.
     # When use_matrix=True, load the precomputed matrix for the dates needed by
     # this study, so all (entry_date, horizon) lookups are served from disk
@@ -1602,11 +1959,30 @@ def run_event_study(
                 len(_return_vector_cache),
             )
         except Exception as _matrix_exc:
+            if matrix_strict:
+                raise
             log.warning(
                 "run_event_study: matrix load failed (%s) — falling back to live path",
                 _matrix_exc,
             )
             _return_vector_cache = {}
+
+    # COR-03 / PY-02: zero-key check is done OUTSIDE the try/except above so
+    # it cannot be swallowed by the fallback handler.  A zero-key cache must
+    # fail closed in strict mode — the charter pins the benchmark.
+    if use_matrix and universe_tickers is not None and matrix_strict:
+        if len(_return_vector_cache) == 0:
+            raise RuntimeError(
+                "run_event_study: matrix loaded but cache is empty (zero keys) "
+                "— matrix artifact may be corrupt or empty; matrix_strict=True refuses to proceed"
+            )
+        # F365 Part 1: activate point-of-use enforcement.  _compute_universe_median
+        # and _compute_peer_median will raise RuntimeError on any cold-cache build
+        # while this flag is set — catching real missing keys at the moment they
+        # are accessed rather than in a pre-scan that uses calendar arithmetic and
+        # demands weekend keys (the false-positive bug this replaces).
+        # The flag is reset in the finally block below.
+        _MATRIX_STRICT = True
 
     # ADV-04 (retained for peer cache): cache key IS (entry_date, horizon, "peers", ticker).
     # Peer results are still cached so same-event repeated horizon calls don't recompute.
@@ -1614,186 +1990,287 @@ def run_event_study(
     # entry needed — the vector itself is the cache).
     _peer_result_cache: dict[tuple, tuple[Optional[float], int, int]] = {}
 
-    for ev in events_list:
-        ticker = ev.ticker
-        event_ts = ev.event_ts
-        if ev.is_fallback:
-            fallback_count += 1
+    # F365 Part 2: parallel per-event outcome loop.
+    # When workers > 1, split the event list into chunks and process via
+    # ProcessPoolExecutor; results are reassembled in ORIGINAL input order.
+    # workers == 1 uses the exact legacy serial path (byte-for-byte identical).
+    if workers > 1:
+        assert loader_factory is not None  # already validated above
+        factory_dotted, factory_kwargs = loader_factory
+        matrix_path_str = str(matrix_path or _MATRIX_DEFAULT_PATH) if use_matrix else None
 
-        # Ensure event_ts is UTC-aware
-        if event_ts.tzinfo is None:
-            event_ts = event_ts.replace(tzinfo=timezone.utc)
-        # ADV-01: the ET date on which the information became public.
-        event_et_date = _to_et(event_ts).date()
+        # Chunking: contiguous index ranges, chunk count = workers * 4 for balance.
+        n_events = len(events_list)
+        n_chunks = min(n_events, workers * 4)
+        chunk_size = max(1, (n_events + n_chunks - 1) // n_chunks)
+        indexed_events: list[tuple[int, EventRecord]] = list(enumerate(events_list))
+        chunks: list[list[tuple[int, EventRecord]]] = [
+            indexed_events[i: i + chunk_size]
+            for i in range(0, n_events, chunk_size)
+        ]
 
-        df = loader_fn(ticker)
+        log.info(
+            "run_event_study: parallel path — %d workers, %d events, %d chunks "
+            "(chunk_size ~%d); matrix_strict=%s",
+            workers, n_events, len(chunks), chunk_size, matrix_strict,
+        )
 
-        # ADV-02: missing-from-cache is a DISTINCT survivorship outcome.
-        no_price_data = df is None or (hasattr(df, "empty") and df.empty)
-        if no_price_data:
-            fs = _FLOOR_BELOW
-            entry_result = None
-            events_no_price_data += 1
-        else:
-            entry_result = _entry_date_from_event_ts(event_ts, df, config.entry_lag_days)
-            if entry_result is None:
-                fs = _FLOOR_BELOW
-            else:
+        # Collect all (orig_index, outcome, counters) results from all chunks.
+        all_results: list[tuple[int, Optional[EventOutcome], dict]] = []
+
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=_worker_init,
+            initargs=(
+                factory_dotted,
+                factory_kwargs,
+                matrix_path_str,
+                config.horizons,
+                matrix_strict,
+            ),
+        ) as pool:
+            future_to_chunk = {
+                pool.submit(
+                    _process_event_chunk,
+                    chunk,
+                    config,
+                    universe_tickers,
+                    ticker_to_sic,
+                    regime_states,
+                ): chunk
+                for chunk in chunks
+            }
+            for future in as_completed(future_to_chunk):
+                chunk_results = future.result()  # re-raises worker exceptions
+                all_results.extend(chunk_results)
+
+        # Sort by original index to restore deterministic ordering.
+        all_results.sort(key=lambda x: x[0])
+
+        # Reassemble outcomes and merge counters (summed in index order = deterministic).
+        sic_fallback_counts_parallel: dict[str, int] = {"3_digit": 0, "2_digit": 0, "universe": 0}
+        for orig_idx, outcome, counters in all_results:
+            if outcome is not None:
+                outcomes.append(outcome)
+                # Reconstruct sic_fallback_counts from outcome (parallel path).
+                fl = outcome.peer_sic_fallback_level
+                if fl is not None:
+                    sic_fallback_counts_parallel[fl] = sic_fallback_counts_parallel.get(fl, 0) + 1
+            fallback_count += counters.get("fallback_count", 0)
+            events_no_price_data += counters.get("events_no_price_data", 0)
+            events_below_floor += counters.get("events_below_floor", 0)
+            events_entered += counters.get("events_entered", 0)
+            for h in config.horizons:
+                pick_terminal_by_h[h] += counters["pick_terminal_by_h"].get(h, 0)
+                universe_peer_terminal_by_h[h] += counters["universe_peer_terminal_by_h"].get(h, 0)
+                sic_peer_terminal_by_h[h] += counters["sic_peer_terminal_by_h"].get(h, 0)
+
+        # Merge sic_fallback_counts from parallel path.
+        for k, v in sic_fallback_counts_parallel.items():
+            sic_fallback_counts[k] = sic_fallback_counts.get(k, 0) + v
+
+        log.info(
+            "run_event_study: parallel path done — %d outcomes assembled",
+            len(outcomes),
+        )
+    else:
+        # F365 Part 1 / serial path (workers == 1):
+        # _MATRIX_STRICT is set before the event loop and reset in the
+        # finally block below.  Any cold-cache build inside _compute_universe_median
+        # or _compute_peer_median will raise RuntimeError while the flag is active.
+        try:
+            for ev in events_list:
+                ticker = ev.ticker
+                event_ts = ev.event_ts
+                if ev.is_fallback:
+                    fallback_count += 1
+
+                # Ensure event_ts is UTC-aware
+                if event_ts.tzinfo is None:
+                    event_ts = event_ts.replace(tzinfo=timezone.utc)
+                # ADV-01: the ET date on which the information became public.
+                event_et_date = _to_et(event_ts).date()
+
+                df = loader_fn(ticker)
+
+                # ADV-02: missing-from-cache is a DISTINCT survivorship outcome.
+                no_price_data = df is None or (hasattr(df, "empty") and df.empty)
+                if no_price_data:
+                    fs = _FLOOR_BELOW
+                    entry_result = None
+                    events_no_price_data += 1
+                else:
+                    entry_result = _entry_date_from_event_ts(event_ts, df, config.entry_lag_days)
+                    if entry_result is None:
+                        fs = _FLOOR_BELOW
+                    else:
+                        entry_date, entry_price, used_close_fallback = entry_result
+                        if used_close_fallback:
+                            log.warning("%s %s: Open missing, using Close as entry price", ticker, entry_date)
+                        # ADV-01: floor decided at the event date (info available BEFORE
+                        # entry), NOT at entry_date — the entry bar's price must never
+                        # gate inclusion (would condition on the post-event open).
+                        fs = _floor_status(df, event_et_date)
+
+                if entry_result is None:
+                    # Cannot resolve entry — record as excluded (counted, not dropped).
+                    if not no_price_data:
+                        events_below_floor += 1
+                    outcomes.append(EventOutcome(
+                        ticker=ticker,
+                        event_ts=event_ts,
+                        entry_date=date.min,
+                        entry_price=float("nan"),
+                        payload=ev.payload,
+                        split="out_of_range",
+                        fwd_return_pct={h: None for h in config.horizons},
+                        fwd_excess_pct={h: None for h in config.horizons},
+                        floor_status=fs,
+                        universe_n={h: 0 for h in config.horizons},
+                        no_price_data=no_price_data,
+                        is_fallback=ev.is_fallback,
+                    ))
+                    continue
+
                 entry_date, entry_price, used_close_fallback = entry_result
-                if used_close_fallback:
-                    log.warning("%s %s: Open missing, using Close as entry price", ticker, entry_date)
-                # ADV-01: floor decided at the event date (info available BEFORE
-                # entry), NOT at entry_date — the entry bar's price must never
-                # gate inclusion (would condition on the post-event open).
-                fs = _floor_status(df, event_et_date)
 
-        if entry_result is None:
-            # Cannot resolve entry — record as excluded (counted, not dropped).
-            if not no_price_data:
-                events_below_floor += 1
-            outcomes.append(EventOutcome(
-                ticker=ticker,
-                event_ts=event_ts,
-                entry_date=date.min,
-                entry_price=float("nan"),
-                payload=ev.payload,
-                split="out_of_range",
-                fwd_return_pct={h: None for h in config.horizons},
-                fwd_excess_pct={h: None for h in config.horizons},
-                floor_status=fs,
-                universe_n={h: 0 for h in config.horizons},
-                no_price_data=no_price_data,
-                is_fallback=ev.is_fallback,
-            ))
-            continue
-
-        entry_date, entry_price, used_close_fallback = entry_result
-
-        if fs != _FLOOR_OK:
-            events_below_floor += 1
-        else:
-            events_entered += 1
-
-        # PY-03: split is a clean two-way partition on entry_date.
-        split = "explore" if entry_date <= config.explore_cutoff else "confirm"
-
-        # F350: Tag event with regime state at entry_date (ET, ADV-01 point-in-time).
-        # None when regime_states.json missing or entry_date outside its date range.
-        regime_state: Optional[str] = None
-        if regime_states is not None:
-            regime_state = _regime_state_for_as_of(entry_date, regime_states)
-
-        # Forward returns (Open-anchored, Fork A) with ADV-03 terminal-exit.
-        if fs == _FLOOR_OK and df is not None:
-            fwd_return_pct = {}
-            for h in config.horizons:
-                r, was_terminal = _forward_return_terminal(
-                    df, entry_date, entry_price, h, direction="long",
-                )
-                fwd_return_pct[h] = r
-                if was_terminal and r is not None:
-                    pick_terminal_by_h[h] += 1
-            # Apply cost_fn if provided
-            if config.cost_fn is not None:
-                cost = config.cost_fn(ev, entry_price)
-                fwd_return_pct = {
-                    h: (v - cost if v is not None else None)
-                    for h, v in fwd_return_pct.items()
-                }
-        else:
-            fwd_return_pct = {h: None for h in config.horizons}
-
-        # Universe median excess
-        fwd_excess_pct: dict[int, Optional[float]] = {}
-        universe_n: dict[int, int] = {}
-
-        if universe_tickers is not None and fs == _FLOOR_OK:
-            for h in config.horizons:
-                # F351: _compute_universe_median now builds the shared return vector
-                # once per (entry_date, horizon) and caches it in _return_vector_cache.
-                # Subsequent calls for the same date with a different ticker drop one
-                # key from the vector and take the median — no extra pickle loads.
-                med, n_univ, term_peers = _compute_universe_median(
-                    entry_date, h, ticker, loader_fn, universe_tickers,
-                    _vector_cache=_return_vector_cache,
-                )
-                universe_n[h] = n_univ
-                universe_peer_terminal_by_h[h] += term_peers  # COR-04: separate accumulator
-                r = fwd_return_pct.get(h)
-                if r is not None and med is not None:
-                    fwd_excess_pct[h] = r - med
+                if fs != _FLOOR_OK:
+                    events_below_floor += 1
                 else:
-                    fwd_excess_pct[h] = None
-        else:
-            for h in config.horizons:
-                fwd_excess_pct[h] = None
-                universe_n[h] = 0
+                    events_entered += 1
 
-        # F349: Sector-peer benchmark — compute peer median via SIC fallback cascade.
-        # Only runs when universe_tickers supplied, event passed the floor, and SIC
-        # data was loaded.  Silently skips (all None) otherwise (backward-compatible).
-        fwd_peer_excess_pct: dict[int, Optional[float]] = {}
-        peer_n: dict[int, int] = {}
-        peer_sic: Optional[str] = ticker_to_sic.get(ticker) if ticker_to_sic else None
-        peer_sic_fallback_level: Optional[str] = None
+                # PY-03: split is a clean two-way partition on entry_date.
+                split = "explore" if entry_date <= config.explore_cutoff else "confirm"
 
-        if universe_tickers is not None and fs == _FLOOR_OK:
-            if ticker_to_sic:
-                peers, peer_sic, fallback = _get_peer_set_by_sic(
-                    ticker, universe_tickers, ticker_to_sic, config.min_peer_count
-                )
-                peer_sic_fallback_level = fallback
-            else:
-                # DI-08: universe.json absent → no SIC data → forced universe fallback.
-                # Still count it so sic_fallback_stats total == floor-ok events (probe A5).
-                peers = [t for t in universe_tickers if t != ticker]
-                fallback = "universe"
-                peer_sic_fallback_level = fallback
-            sic_fallback_counts[fallback] = sic_fallback_counts.get(fallback, 0) + 1
+                # F350: Tag event with regime state at entry_date (ET, ADV-01 point-in-time).
+                # None when regime_states.json missing or entry_date outside its date range.
+                regime_state: Optional[str] = None
+                if regime_states is not None:
+                    regime_state = _regime_state_for_as_of(entry_date, regime_states)
 
-            for h in config.horizons:
-                # F351: peer median pulls from the shared return vector (already built
-                # by _compute_universe_median above for this same (entry_date, h)).
-                # _peer_result_cache avoids recomputing for the same (event, horizon)
-                # if this loop ever iterates the same event twice (defensive).
-                peer_cache_key = (entry_date, h, "peers", ticker)
-                if peer_cache_key not in _peer_result_cache:
-                    _peer_result_cache[peer_cache_key] = _compute_peer_median(
-                        entry_date, h, ticker, peers, loader_fn,
-                        _vector_cache=_return_vector_cache,
-                    )
-                peer_med, n_peers, term_peers = _peer_result_cache[peer_cache_key]
-                peer_n[h] = n_peers
-                sic_peer_terminal_by_h[h] += term_peers  # COR-04: separate accumulator
-                r = fwd_return_pct.get(h)
-                if r is not None and peer_med is not None:
-                    fwd_peer_excess_pct[h] = r - peer_med
+                # Forward returns (Open-anchored, Fork A) with ADV-03 terminal-exit.
+                if fs == _FLOOR_OK and df is not None:
+                    fwd_return_pct = {}
+                    for h in config.horizons:
+                        r, was_terminal = _forward_return_terminal(
+                            df, entry_date, entry_price, h, direction="long",
+                        )
+                        fwd_return_pct[h] = r
+                        if was_terminal and r is not None:
+                            pick_terminal_by_h[h] += 1
+                    # Apply cost_fn if provided
+                    if config.cost_fn is not None:
+                        cost = config.cost_fn(ev, entry_price)
+                        fwd_return_pct = {
+                            h: (v - cost if v is not None else None)
+                            for h, v in fwd_return_pct.items()
+                        }
                 else:
-                    fwd_peer_excess_pct[h] = None
-        else:
-            for h in config.horizons:
-                fwd_peer_excess_pct[h] = None
-                peer_n[h] = 0
+                    fwd_return_pct = {h: None for h in config.horizons}
 
-        outcomes.append(EventOutcome(
-            ticker=ticker,
-            event_ts=event_ts,
-            entry_date=entry_date,
-            entry_price=entry_price,
-            payload=ev.payload,
-            split=split,
-            fwd_return_pct=fwd_return_pct,
-            fwd_excess_pct=fwd_excess_pct,
-            floor_status=fs,
-            universe_n=universe_n,
-            no_price_data=False,
-            is_fallback=ev.is_fallback,
-            peer_sic=peer_sic,
-            peer_sic_fallback_level=peer_sic_fallback_level,
-            fwd_peer_excess_pct=fwd_peer_excess_pct,
-            peer_n=peer_n,
-            regime_state=regime_state,
-        ))
+                # Universe median excess
+                fwd_excess_pct: dict[int, Optional[float]] = {}
+                universe_n: dict[int, int] = {}
+
+                if universe_tickers is not None and fs == _FLOOR_OK:
+                    for h in config.horizons:
+                        # F351: _compute_universe_median now builds the shared return vector
+                        # once per (entry_date, horizon) and caches it in _return_vector_cache.
+                        # Subsequent calls for the same date with a different ticker drop one
+                        # key from the vector and take the median — no extra pickle loads.
+                        #
+                        # Belt-and-suspenders matrix_key_misses counter (DI-05 fix):
+                        # when a matrix cache is active and the key is NOT yet present,
+                        # the live _build_return_vector path will be invoked.  Count those
+                        # misses so the orchestrator can confirm the strict validation above
+                        # caught all gaps (should be 0 in strict mode).
+                        _vec_key = (entry_date, h)
+                        if use_matrix and _return_vector_cache and _vec_key not in _return_vector_cache:
+                            _matrix_key_misses += 1
+                        med, n_univ, term_peers = _compute_universe_median(
+                            entry_date, h, ticker, loader_fn, universe_tickers,
+                            _vector_cache=_return_vector_cache,
+                        )
+                        universe_n[h] = n_univ
+                        universe_peer_terminal_by_h[h] += term_peers  # COR-04: separate accumulator
+                        r = fwd_return_pct.get(h)
+                        if r is not None and med is not None:
+                            fwd_excess_pct[h] = r - med
+                        else:
+                            fwd_excess_pct[h] = None
+                else:
+                    for h in config.horizons:
+                        fwd_excess_pct[h] = None
+                        universe_n[h] = 0
+
+                # F349: Sector-peer benchmark — compute peer median via SIC fallback cascade.
+                # Only runs when universe_tickers supplied, event passed the floor, and SIC
+                # data was loaded.  Silently skips (all None) otherwise (backward-compatible).
+                fwd_peer_excess_pct: dict[int, Optional[float]] = {}
+                peer_n: dict[int, int] = {}
+                peer_sic: Optional[str] = ticker_to_sic.get(ticker) if ticker_to_sic else None
+                peer_sic_fallback_level: Optional[str] = None
+
+                if universe_tickers is not None and fs == _FLOOR_OK:
+                    if ticker_to_sic:
+                        peers, peer_sic, fallback = _get_peer_set_by_sic(
+                            ticker, universe_tickers, ticker_to_sic, config.min_peer_count
+                        )
+                        peer_sic_fallback_level = fallback
+                    else:
+                        # DI-08: universe.json absent → no SIC data → forced universe fallback.
+                        # Still count it so sic_fallback_stats total == floor-ok events (probe A5).
+                        peers = [t for t in universe_tickers if t != ticker]
+                        fallback = "universe"
+                        peer_sic_fallback_level = fallback
+                    sic_fallback_counts[fallback] = sic_fallback_counts.get(fallback, 0) + 1
+
+                    for h in config.horizons:
+                        # F351: peer median pulls from the shared return vector (already built
+                        # by _compute_universe_median above for this same (entry_date, h)).
+                        # _peer_result_cache avoids recomputing for the same (event, horizon)
+                        # if this loop ever iterates the same event twice (defensive).
+                        peer_cache_key = (entry_date, h, "peers", ticker)
+                        if peer_cache_key not in _peer_result_cache:
+                            _peer_result_cache[peer_cache_key] = _compute_peer_median(
+                                entry_date, h, ticker, peers, loader_fn,
+                                _vector_cache=_return_vector_cache,
+                            )
+                        peer_med, n_peers, term_peers = _peer_result_cache[peer_cache_key]
+                        peer_n[h] = n_peers
+                        sic_peer_terminal_by_h[h] += term_peers  # COR-04: separate accumulator
+                        r = fwd_return_pct.get(h)
+                        if r is not None and peer_med is not None:
+                            fwd_peer_excess_pct[h] = r - peer_med
+                        else:
+                            fwd_peer_excess_pct[h] = None
+                else:
+                    for h in config.horizons:
+                        fwd_peer_excess_pct[h] = None
+                        peer_n[h] = 0
+
+                outcomes.append(EventOutcome(
+                    ticker=ticker,
+                    event_ts=event_ts,
+                    entry_date=entry_date,
+                    entry_price=entry_price,
+                    payload=ev.payload,
+                    split=split,
+                    fwd_return_pct=fwd_return_pct,
+                    fwd_excess_pct=fwd_excess_pct,
+                    floor_status=fs,
+                    universe_n=universe_n,
+                    no_price_data=False,
+                    is_fallback=ev.is_fallback,
+                    peer_sic=peer_sic,
+                    peer_sic_fallback_level=peer_sic_fallback_level,
+                    fwd_peer_excess_pct=fwd_peer_excess_pct,
+                    peer_n=peer_n,
+                    regime_state=regime_state,
+                ))
+        finally:
+            # F365 Part 1: always reset the strict flag (even if the loop raises).
+            _MATRIX_STRICT = False
 
     # Compute statistics (on explore slice; excess must be populated)
     stats = compute_study_stats(outcomes, config, rng=rng)
@@ -1871,6 +2348,9 @@ def run_event_study(
         "era_consistency": stats.get("era_consistency", {}),
         "confirm_era_breakdown": stats.get("confirm_era_breakdown", {}),
         "study_config_hash": study_config_hash,
+        # DI-05 / PY-02 belt-and-suspenders: count live _build_return_vector calls
+        # that happened while a matrix cache was active.  Should be 0 in strict mode.
+        "matrix_key_misses": _matrix_key_misses,
     }
     if "non_overlapping" in stats:
         meta["non_overlapping"] = stats["non_overlapping"]

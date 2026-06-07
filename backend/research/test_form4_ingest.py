@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from unittest.mock import patch
 
 # ---------------------------------------------------------------------------
 # Path setup — run from repo root or from backend/
@@ -946,3 +947,127 @@ class TestCachePoisonRejection:
         result = _fetch_older_page(name, cache_dir)
         assert result is not None
         assert result["accessionNumber"] == ["ACC-001"]
+
+
+# ---------------------------------------------------------------------------
+# Test: workers=2 equals workers=1 on a small synthetic fixture (F366)
+# ---------------------------------------------------------------------------
+
+class TestWorkersEquivalence:
+    """F366: workers=2 must produce identical output to workers=1 (serial)."""
+
+    def _build_dataset(self, dataset_dir: Path, subs_dir: Path) -> None:
+        """Build two minimal quarter ZIPs (q1, q2) + submissions files."""
+        sub_cols = ["ACCESSION_NUMBER", "FILING_DATE", "DOCUMENT_TYPE",
+                    "ISSUERCIK", "ISSUERTRADINGSYMBOL", "REMARKS",
+                    "PERIOD_OF_REPORT", "DATE_OF_ORIG_SUB", "NO_SECURITIES_OWNED",
+                    "NOT_SUBJECT_SEC16", "FORM3_HOLDINGS_REPORTED",
+                    "FORM4_TRANS_REPORTED", "ISSUERNAME"]
+        nd_cols = ["ACCESSION_NUMBER", "NONDERIV_TRANS_SK", "SECURITY_TITLE",
+                   "SECURITY_TITLE_FN", "TRANS_DATE", "TRANS_DATE_FN",
+                   "DEEMED_EXECUTION_DATE", "DEEMED_EXECUTION_DATE_FN",
+                   "TRANS_FORM_TYPE", "TRANS_CODE", "EQUITY_SWAP_INVOLVED",
+                   "EQUITY_SWAP_TRANS_CD_FN", "TRANS_TIMELINESS",
+                   "TRANS_TIMELINESS_FN", "TRANS_SHARES", "TRANS_SHARES_FN",
+                   "TRANS_PRICEPERSHARE", "TRANS_PRICEPERSHARE_FN",
+                   "TRANS_ACQUIRED_DISP_CD", "TRANS_ACQUIRED_DISP_CD_FN",
+                   "SHRS_OWND_FOLWNG_TRANS", "SHRS_OWND_FOLWNG_TRANS_FN",
+                   "VALU_OWND_FOLWNG_TRANS", "VALU_OWND_FOLWNG_TRANS_FN",
+                   "DIRECT_INDIRECT_OWNERSHIP", "DIRECT_INDIRECT_OWNERSHIP_FN",
+                   "NATURE_OF_OWNERSHIP", "NATURE_OF_OWNERSHIP_FN"]
+        owner_cols = ["ACCESSION_NUMBER", "RPTOWNERCIK", "RPTOWNERNAME",
+                      "RPTOWNER_RELATIONSHIP", "RPTOWNER_TITLE", "RPTOWNER_TXT",
+                      "RPTOWNER_STREET1", "RPTOWNER_STREET2", "RPTOWNER_CITY",
+                      "RPTOWNER_STATE", "RPTOWNER_ZIPCODE", "RPTOWNER_STATE_DESC",
+                      "FILE_NUMBER"]
+        fn_cols = ["ACCESSION_NUMBER", "FOOTNOTE_ID", "FOOTNOTE_TXT"]
+
+        for i, (qname, acc, adt) in enumerate([
+            ("2020q1", "0000001234-20-000001", "2020-01-15T20:00:00.000Z"),
+            ("2020q2", "0000001234-20-000002", "2020-04-15T20:00:00.000Z"),
+        ]):
+            sub_rows = [{
+                "ACCESSION_NUMBER": acc,
+                "FILING_DATE": "15-JAN-2020" if i == 0 else "15-APR-2020",
+                "DOCUMENT_TYPE": "4",
+                "ISSUERCIK": "0000036270",
+                "ISSUERTRADINGSYMBOL": "MTB",
+                "REMARKS": "",
+            }]
+            nd_rows = [{
+                "ACCESSION_NUMBER": acc,
+                "TRANS_CODE": "P",
+                "TRANS_ACQUIRED_DISP_CD": "A",
+                "TRANS_SHARES": str(100 * (i + 1)),
+                "TRANS_PRICEPERSHARE": "50.00",
+            }]
+            owner_rows = [{"ACCESSION_NUMBER": acc, "RPTOWNERCIK": "0001111111"}]
+
+            tables = {
+                "SUBMISSION.tsv": _make_tsv(sub_rows, sub_cols),
+                "NONDERIV_TRANS.tsv": _make_tsv(nd_rows, nd_cols),
+                "REPORTINGOWNER.tsv": _make_tsv(owner_rows, owner_cols),
+                "FOOTNOTES.tsv": _make_tsv([], fn_cols),
+            }
+            (dataset_dir / f"{qname}_form345.zip").write_bytes(_make_zip(tables))
+
+            padded_cik = "0000036270"
+            subs_data = {
+                "filings": {
+                    "recent": {
+                        "accessionNumber": [acc],
+                        "acceptanceDateTime": [adt],
+                    },
+                    "files": [],
+                }
+            }
+            (subs_dir / f"{padded_cik}.json").write_text(json.dumps(subs_data))
+
+    def test_workers2_equals_workers1(self, tmp_path):
+        """workers=2 on a 2-quarter synthetic fixture must equal workers=1."""
+        dataset_dir = tmp_path / "datasets"
+        subs_dir = tmp_path / "submissions"
+        dataset_dir.mkdir()
+        subs_dir.mkdir()
+        self._build_dataset(dataset_dir, subs_dir)
+
+        # Universe with just MTB
+        cik_to_ticker_patch = {36270: "MTB"}
+
+        with (
+            patch("research.form4_ingest._load_liquid_universe",
+                  return_value=cik_to_ticker_patch),
+        ):
+            events_1, meta_1 = build_form4_dataset_events(
+                quarters=["2020q1", "2020q2"],
+                dataset_dir=dataset_dir,
+                submissions_dir=subs_dir,
+                fetch_missing=False,
+                dedup_amendments=True,
+                workers=1,
+            )
+
+        with (
+            patch("research.form4_ingest._load_liquid_universe",
+                  return_value=cik_to_ticker_patch),
+        ):
+            events_2, meta_2 = build_form4_dataset_events(
+                quarters=["2020q1", "2020q2"],
+                dataset_dir=dataset_dir,
+                submissions_dir=subs_dir,
+                fetch_missing=False,
+                dedup_amendments=True,
+                workers=2,
+            )
+
+        assert len(events_1) == len(events_2), (
+            f"Event count mismatch: workers=1 got {len(events_1)}, workers=2 got {len(events_2)}"
+        )
+        for i, (e1, e2) in enumerate(zip(events_1, events_2)):
+            assert e1.ticker == e2.ticker, f"event[{i}] ticker mismatch"
+            assert e1.event_ts == e2.event_ts, f"event[{i}] event_ts mismatch"
+            assert e1.payload.get("accession") == e2.payload.get("accession"), (
+                f"event[{i}] accession mismatch"
+            )
+        assert meta_1["events_returned"] == meta_2["events_returned"]
+        assert meta_1["submissions_scanned"] == meta_2["submissions_scanned"]

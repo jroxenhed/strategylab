@@ -51,6 +51,7 @@ All constants frozen per the R-1 charter. Do NOT tune post-hoc.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import os
@@ -721,6 +722,7 @@ def _process_quarter(
         payload = {
             "form_type": doc_type,
             "accession": accession,
+            "issuer_cik": padded_cik,
             "filing_date": filing_date_iso,
             "period_of_report": period_of_report,
             "acceptance_fallback": is_fallback,
@@ -769,6 +771,35 @@ def _process_quarter(
         "n_midnight_utc_adt": n_midnight_utc_adt,
     }
     return events, qstats
+
+
+def _process_quarter_worker(
+    args: tuple,
+) -> tuple[str, list[EventRecord], dict]:
+    """Module-level worker for ProcessPoolExecutor dispatch.
+
+    Unpacks (zip_path, quarter, cik_to_ticker, subs_dir, fetch_missing,
+    fetch_pace_secs) from args.  Per-process subs_cache initialised fresh
+    (no cross-process sharing).  Returns (quarter, events, qstats) so the
+    parent can merge in sorted order.
+
+    The fetch_pace_secs parameter overrides _FETCH_PACE_SECS for this process
+    so that the aggregate SEC rate across N workers stays ≤ ~7 req/s.
+    """
+    global _FETCH_PACE_SECS  # override per-process for rate-capping
+    zip_path_str, quarter, cik_to_ticker, subs_dir_str, fetch_missing, fetch_pace_secs = args
+    zip_path = Path(zip_path_str)
+    subs_dir = Path(subs_dir_str)
+    _FETCH_PACE_SECS = fetch_pace_secs
+
+    subs_cache: dict = {}
+    events, qstats = _process_quarter(
+        zip_path, quarter, cik_to_ticker,
+        subs_dir=subs_dir,
+        subs_cache=subs_cache,
+        fetch_missing=fetch_missing,
+    )
+    return quarter, events, qstats
 
 
 def _empty_qstats() -> dict:
@@ -895,6 +926,7 @@ def build_form4_dataset_events(
     submissions_dir: Path = _DEFAULT_SUBMISSIONS_DIR,
     fetch_missing: bool = True,
     dedup_amendments: bool = True,
+    workers: int = 1,
 ) -> tuple[list[EventRecord], dict]:
     """Parse SEC Insider Transactions Data Set quarterly tables into event records.
 
@@ -917,6 +949,13 @@ def build_form4_dataset_events(
         a '4/A', keep only the one with the latest acceptanceDateTime.
         Toggle to False for comparability with the XML path (which does not
         dedup). Controlled at the F354 gate.
+    workers : int
+        Number of worker processes for the per-quarter parsing stage.
+        1 (default) = exact legacy serial path, zero behavior change.
+        >1 = ProcessPoolExecutor; quarters parsed in parallel and merged in
+        sorted order so output is deterministic regardless of completion order.
+        The per-process SEC fetch pace is scaled to _FETCH_PACE_SECS * workers
+        so the aggregate network rate stays ≤ ~7 req/s regardless of worker count.
 
     Returns
     -------
@@ -933,20 +972,75 @@ def build_form4_dataset_events(
     if quarters is None:
         quarters = _discover_quarters(dataset_dir)
 
-    log.info("build_form4_dataset_events: processing %d quarters, fetch_missing=%s",
-             len(quarters), fetch_missing)
+    log.info(
+        "build_form4_dataset_events: processing %d quarters, fetch_missing=%s, workers=%d",
+        len(quarters), fetch_missing, workers,
+    )
 
-    # Load universe once
+    # Load universe once in parent process
     cik_to_ticker = _load_liquid_universe()
     log.info("Universe loaded: %d CIKs", len(cik_to_ticker))
 
-    # Shared submissions cache (padded_cik → parsed JSON or {})
-    subs_cache: dict = {}
+    # Collect (quarter, zip_path) pairs that actually exist
+    valid_quarters: list[tuple[str, Path]] = []
+    for quarter in quarters:
+        zip_path = dataset_dir / f"{quarter}_form345.zip"
+        if not zip_path.exists():
+            log.warning("build_form4_dataset_events: ZIP not found: %s", zip_path)
+        else:
+            valid_quarters.append((quarter, zip_path))
 
+    # ---------------------------------------------------------------------------
+    # Per-quarter results: collected as {quarter: (events, qstats)} then merged
+    # in sorted(valid_quarters) order to guarantee determinism.
+    # ---------------------------------------------------------------------------
+    results_by_quarter: dict[str, tuple[list[EventRecord], dict]] = {}
+
+    if workers <= 1:
+        # ── Serial path (exact legacy behaviour) ──────────────────────────────
+        subs_cache: dict = {}
+        for quarter, zip_path in valid_quarters:
+            log.info("Processing %s ...", quarter)
+            events_q, qstats = _process_quarter(
+                zip_path, quarter, cik_to_ticker,
+                subs_dir=submissions_dir,
+                subs_cache=subs_cache,
+                fetch_missing=fetch_missing,
+            )
+            results_by_quarter[quarter] = (events_q, qstats)
+            log.info(
+                "  %s: sub_scanned=%d, univ_pass=%d, txns_pa=%d, 10b51_excl=%d, events=%d",
+                quarter, qstats["submissions_scanned"], qstats["submissions_universe_pass"],
+                qstats["qualifying_txns_raw"], qstats["form4_10b51_excluded_txns"],
+                qstats["events_qualifying"],
+            )
+    else:
+        # ── Parallel path ─────────────────────────────────────────────────────
+        # Per-process fetch pace scaled so aggregate rate ≤ ~7 req/s.
+        effective_pace = _FETCH_PACE_SECS * workers
+        worker_args = [
+            (str(zip_path), quarter, cik_to_ticker, str(submissions_dir),
+             fetch_missing, effective_pace)
+            for quarter, zip_path in valid_quarters
+        ]
+        with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(_process_quarter_worker, arg): arg[1]
+                for arg in worker_args
+            }
+            for fut in concurrent.futures.as_completed(futures):
+                quarter_ret, events_q, qstats = fut.result()
+                results_by_quarter[quarter_ret] = (events_q, qstats)
+                log.info(
+                    "  %s: sub_scanned=%d, univ_pass=%d, txns_pa=%d, 10b51_excl=%d, events=%d",
+                    quarter_ret, qstats["submissions_scanned"], qstats["submissions_universe_pass"],
+                    qstats["qualifying_txns_raw"], qstats["form4_10b51_excluded_txns"],
+                    qstats["events_qualifying"],
+                )
+
+    # Merge in sorted quarter order (determinism guarantee)
     all_events: list[EventRecord] = []
     per_quarter: dict[str, dict] = {}
-
-    # Aggregate meta counters
     total_submissions_scanned = 0
     total_universe_pass = 0
     total_universe_fail = 0
@@ -960,20 +1054,12 @@ def build_form4_dataset_events(
     total_ticker_fallback = 0
     total_no_timestamp_dropped = 0
     total_midnight_utc_adt = 0
+    total_multi_owner_forms = 0
 
-    for quarter in quarters:
-        zip_path = dataset_dir / f"{quarter}_form345.zip"
-        if not zip_path.exists():
-            log.warning("build_form4_dataset_events: ZIP not found: %s", zip_path)
+    for quarter, _ in valid_quarters:
+        if quarter not in results_by_quarter:
             continue
-
-        log.info("Processing %s ...", quarter)
-        events_q, qstats = _process_quarter(
-            zip_path, quarter, cik_to_ticker,
-            subs_dir=submissions_dir,
-            subs_cache=subs_cache,
-            fetch_missing=fetch_missing,
-        )
+        events_q, qstats = results_by_quarter[quarter]
         all_events.extend(events_q)
         per_quarter[quarter] = qstats
 
@@ -990,13 +1076,7 @@ def build_form4_dataset_events(
         total_ticker_fallback += qstats["n_ticker_fallback"]
         total_no_timestamp_dropped += qstats["n_no_timestamp_dropped"]
         total_midnight_utc_adt += qstats["n_midnight_utc_adt"]
-
-        log.info(
-            "  %s: sub_scanned=%d, univ_pass=%d, txns_pa=%d, 10b51_excl=%d, events=%d",
-            quarter, qstats["submissions_scanned"], qstats["submissions_universe_pass"],
-            qstats["qualifying_txns_raw"], qstats["form4_10b51_excluded_txns"],
-            qstats["events_qualifying"],
-        )
+        total_multi_owner_forms += qstats.get("n_multi_owner_forms", 0)
 
     # Global amendment dedup (cross-quarter pairs require post-collection pass)
     n_superseded_dropped = 0
@@ -1028,6 +1108,10 @@ def build_form4_dataset_events(
         "n_ticker_fallback": total_ticker_fallback,
         "n_no_timestamp_dropped": total_no_timestamp_dropped,
         "n_midnight_utc_adt": total_midnight_utc_adt,
+        # DI-03 (R-1b fix 5b): total multi-owner forms across all quarters.
+        # Quantifies the population where R-1b (union-all-owners) and R-1 (first-owner)
+        # produce different k values — see r1_dose._aggregate_dose_window_ingest comment.
+        "n_multi_owner_forms": total_multi_owner_forms,
         "per_quarter": per_quarter,
     }
 

@@ -878,3 +878,412 @@ def build_r1_events(
         len(events),
     )
     return events, meta
+
+
+# ---------------------------------------------------------------------------
+# R-1b dose builder — sources events from form4_ingest instead of XML
+# ---------------------------------------------------------------------------
+
+def _aggregate_dose_window_ingest(
+    ticker: str,
+    event_date: date,
+    W: int,
+    ticker_to_filing_events: dict,
+) -> tuple[float, int, int, int, int]:
+    """Aggregate D and k over the trailing W-bday window from ingest EventRecords.
+
+    Mirrors _aggregate_dose_window semantics EXACTLY, but reads from the
+    pre-parsed ingest EventRecord payloads instead of XML files.
+
+    Each ingest EventRecord already carries:
+        payload["D"]            — purchase dollars for that filing (10b5-1 excl.)
+        payload["k"]            — distinct owner CIK count for that filing
+        payload["owner_ciks"]   — list of owner CIK strings for that filing
+        payload["n_10b51_excluded"] — 10b5-1 excluded count for that filing
+        payload["missing_price_txns"] — missing-price count for that filing
+        event_ts                — UTC datetime (for ET-date window membership)
+        is_fallback             — True when acceptanceDateTime was absent
+
+    Window membership: each ingest event's ET acceptance date must fall in
+    [window_start, event_date] (inclusive), same as _aggregate_dose_window's
+    COR-04 keying on acceptanceDateTime ET date.
+
+    Returns:
+        D                   — total qualifying purchase dollars in window
+        k                   — distinct non-10b5-1 owner CIKs in window
+        n_filings_window    — count of qualifying filings in window
+        n_10b51_excluded    — sum of 10b5-1-excluded txns in window
+        missing_price_txns  — sum of missing-price txns in window
+    """
+    window_start = _busday_window_start(event_date, W)
+    ticker_upper = ticker.upper()
+
+    # -----------------------------------------------------------------------
+    # R-1b owner-union semantics (charter §2b, PY-03 / DI-04 rationale):
+    # k = distinct reporting-owner CIKs that contributed ≥1 qualifying (non-
+    # 10b5-1) P purchase in the window.  At TSV granularity, each NONDERIV_TRANS
+    # row belongs to the accession (form) as a whole; there is no per-row owner
+    # SK available to attribute individual transactions to individual owners.
+    # Because we cannot decompose which owner contributed which transaction, we
+    # count ALL owners on ANY form that has ≥1 qualifying non-10b5-1 P purchase.
+    # This is the faithful reading of charter §2b when TSV data is the source.
+    #
+    # R-1 divergence: the original R-1 XML path extracted only the FIRST
+    # reportingOwner CIK from each XML file (single-owner assumption), so R-1's k
+    # undercounts on multi-owner joint filings.  R-1b's union-over-qualifying-forms
+    # is the correct reading; R-1's first-owner-only was an approximation.
+    # The count of forms where this distinction matters is surfaced in the dose
+    # meta as n_multi_owner_forms (from form4_ingest) so the magnitude of the
+    # divergence is quantifiable.
+    #
+    # Note: ingest upstream already excluded forms where ALL transactions are
+    # 10b5-1-flagged (such forms never appear in ticker_to_filing_events).
+    # So every filing that reaches this loop has ≥1 qualifying P purchase,
+    # and unioning its owner CIKs into owner_cik_set is correct — we are NOT
+    # counting owners of 10b5-1-only forms (those were dropped by ingest).
+    # -----------------------------------------------------------------------
+    D: float = 0.0
+    owner_cik_set: set[str] = set()
+    n_filings_window: int = 0
+    n_10b51_excluded: int = 0
+    missing_price_txns: int = 0
+
+    for filing_ev in ticker_to_filing_events.get(ticker_upper, []):
+        # Resolve ET date of this filing's acceptance (same as COR-04)
+        ev_ts = filing_ev.event_ts
+        if ev_ts.tzinfo is None:
+            from datetime import timezone as _tz
+            ev_ts = ev_ts.replace(tzinfo=_tz.utc)
+        filing_et_date = _to_et(ev_ts).date()
+
+        if not (window_start <= filing_et_date <= event_date):
+            continue
+
+        payload = filing_ev.payload
+        # D contribution from this filing (already 10b5-1-excluded by ingest)
+        D += payload.get("D", 0.0) or 0.0
+        # k: union of distinct owner CIKs with non-10b5-1 P-purchases.
+        # See comment block above for the charter §2b / TSV-granularity rationale.
+        for cik_str in payload.get("owner_ciks", []):
+            if cik_str:
+                owner_cik_set.add(str(cik_str))
+        # n_filings_window is incremented unconditionally (no gate needed):
+        # form4_ingest upstream drops all forms with zero non-10b5-1 P+A txns
+        # (see form4_ingest._process_quarter: `if not non_10b51_txns: continue`),
+        # so every filing that reaches ticker_to_filing_events already qualifies.
+        n_filings_window += 1
+        n_10b51_excluded += payload.get("n_10b51_excluded", 0) or 0
+        missing_price_txns += payload.get("missing_price_txns", 0) or 0
+
+    k = len(owner_cik_set)
+    return D, k, n_filings_window, n_10b51_excluded, missing_price_txns
+
+
+def _compute_score_perturb_ingest(
+    ticker: str,
+    event_date: date,
+    ticker_to_filing_events: dict,
+    MC: float,
+    *,
+    primary_D: Optional[float] = None,
+    primary_k: Optional[int] = None,
+) -> dict[str, Optional[float]]:
+    """Compute all 9 perturbation scores per §3b using ingest EventRecords.
+
+    Mirrors _compute_score_perturb but delegates window aggregation to
+    _aggregate_dose_window_ingest.  Reuses primary (D, k) for W=21 when provided.
+    """
+    if MC <= 0:
+        return {v: None for v in _PERTURB_KEY_MAP.values()}
+
+    w_results: dict[int, tuple[float, int]] = {}
+    for W in _PERTURB_WINDOWS:
+        if W == _W_PRIMARY and primary_D is not None and primary_k is not None:
+            w_results[W] = (primary_D, primary_k)
+        else:
+            D_w, k_w, _, _, _ = _aggregate_dose_window_ingest(
+                ticker, event_date, W, ticker_to_filing_events
+            )
+            w_results[W] = (D_w, k_w)
+
+    perturb: dict[str, Optional[float]] = {}
+    for (W, F), key in _PERTURB_KEY_MAP.items():
+        D, k = w_results[W]
+        D_eff = 0.0 if (F > 0 and D < F) else D
+        perturb[key] = _compute_score(D_eff, k, MC)
+
+    return perturb
+
+
+def build_r1b_events(
+    start: date,
+    end: date,
+    *,
+    loader_fn: Callable[[str], Optional[pd.DataFrame]],
+    shares_fn: Optional[Callable[[str, date], Optional[float]]] = None,
+    quarters: Optional[list] = None,
+    dataset_dir: Optional[Path] = None,
+    submissions_dir: Optional[Path] = None,
+    fetch_missing: bool = True,
+) -> tuple[list[EventRecord], dict]:
+    """Build R-1b EventRecord list with dose payload, sourcing events from
+    form4_ingest.build_form4_dataset_events.
+
+    Charter: docs/plans/2026-06-07-R1b-insider-cluster-charter-DRAFT.md §2/§2a/§2b/§3b.
+    SEED=20260606, dedup_amendments=True (pinned per charter §2 binding property (b)).
+
+    Parameters
+    ----------
+    start, end
+        Inclusive date range filter on acceptanceDateTime ET date.
+    loader_fn
+        ticker → Optional[pd.DataFrame]; price-frame loader for MC calculation.
+    shares_fn
+        (cik: str, as_of: date) → Optional[float]; defaults to
+        _shares_outstanding_disk_only (disk-only, offline-safe).
+    quarters
+        Quarter codes for form4_ingest; None = all available.
+    dataset_dir
+        Override for form4_ingest dataset directory.
+    submissions_dir
+        Override for form4_ingest submissions directory.
+    fetch_missing
+        Passed through to form4_ingest (default True).
+
+    Returns
+    -------
+    events : list[EventRecord]
+        One EventRecord per (ticker, ET acceptance date) with ≥1 qualifying P
+        filing. event_ts = latest qualifying acceptance ts that day.
+        Payload keys (charter §2b — IDENTICAL contract to build_r1_events PLUS
+        provenance fields from ingest):
+          form_type, accession, filing_date, acceptance_fallback,
+          score, score_undefined, D, k, MC, n_filings_window,
+          n_10b51_excluded, missing_price_txns, score_perturb (9 keys),
+          acceptance_dt_source, adt_midnight_utc
+    meta : dict
+        Same keys as build_r1_events meta plus ingest stats:
+        filings_scanned  — ingest's total submissions_scanned (raw Form 4/4A rows
+                           seen across all quarters, before any quality gate).
+                           Distinct from filings_qualifying: the gap measures
+                           the total pre-qualification drop.
+        filings_qualifying — ingest's events_qualifying (filings that passed all
+                           gates: universe match, P+A transactions, 10b5-1 filter,
+                           timestamp resolution, cross-quarter amendment dedup).
+        events_pre_date_filter — len(raw_ingest_events) total ingest events
+                           BEFORE the start/end date-range filter is applied.
+                           filings_qualifying - events_pre_date_filter gives the
+                           date-range drop count (events outside 2015-2020).
+        acceptance_fallbacks, n_10b51_excluded_total, missing_price_txns_total,
+        score_undefined_total, events_raw, events_returned,
+        n_midnight_utc_adt, n_superseded_dropped, n_dup4_collisions,
+        n_ticker_fallback  (from ingest meta).
+    """
+    from research.form4_ingest import build_form4_dataset_events  # local import
+
+    if shares_fn is None:
+        shares_fn = _shares_outstanding_disk_only
+
+    # Build ingest kwargs — only pass non-None overrides
+    ingest_kwargs: dict = {
+        "dedup_amendments": True,  # pinned per charter §2 binding property (b)
+        "fetch_missing": fetch_missing,
+    }
+    if quarters is not None:
+        ingest_kwargs["quarters"] = quarters
+    if dataset_dir is not None:
+        ingest_kwargs["dataset_dir"] = Path(dataset_dir)
+    if submissions_dir is not None:
+        ingest_kwargs["submissions_dir"] = Path(submissions_dir)
+
+    log.info(
+        "build_r1b_events: calling build_form4_dataset_events "
+        "(dedup_amendments=True, fetch_missing=%s, quarters=%s) ...",
+        fetch_missing, quarters,
+    )
+    raw_ingest_events, ingest_meta = build_form4_dataset_events(**ingest_kwargs)
+    log.info(
+        "build_r1b_events: ingest returned %d events "
+        "(superseded_dropped=%d, dup4_collisions=%d, midnight_utc=%d)",
+        len(raw_ingest_events),
+        ingest_meta.get("n_superseded_dropped", 0),
+        ingest_meta.get("n_dup4_collisions", 0),
+        ingest_meta.get("n_midnight_utc_adt", 0),
+    )
+
+    # Build inverted ticker→filings index for O(1) window lookups
+    # Each filing event carries its D, owner_ciks, n_10b51_excluded, etc.
+    ticker_to_filing_events: dict[str, list[EventRecord]] = {}
+    for ev in raw_ingest_events:
+        ticker_upper = ev.ticker.upper()
+        ticker_to_filing_events.setdefault(ticker_upper, []).append(ev)
+
+    # PERF-05: price frame cache
+    frame_cache: dict = {}
+
+    # Meta counters
+    acceptance_fallbacks = 0
+    n_10b51_excluded_total = 0
+    missing_price_txns_total = 0
+    score_undefined_total = 0
+    cik_missing_total = 0
+
+    # Group ingest events by (ticker, ET date) to get one event per day
+    # (same collapse logic as build_r1_events: one EventRecord per (ticker, ET date),
+    # event_ts = latest qualifying acceptance ts that day)
+    from collections import defaultdict as _defaultdict
+    day_candidates: dict[tuple, list] = _defaultdict(list)
+
+    for ingest_ev in raw_ingest_events:
+        ev_ts = ingest_ev.event_ts
+        if ev_ts.tzinfo is None:
+            from datetime import timezone as _tz
+            ev_ts = ev_ts.replace(tzinfo=_tz.utc)
+        et_date = _to_et(ev_ts).date()
+
+        # Date range filter
+        if et_date < start or et_date > end:
+            continue
+
+        if ingest_ev.is_fallback:
+            acceptance_fallbacks += 1
+
+        ticker_upper = ingest_ev.ticker.upper()
+        payload = ingest_ev.payload
+
+        day_candidates[(ticker_upper, et_date)].append((
+            ev_ts,
+            payload.get("accession", ""),
+            payload.get("filing_date", ""),
+            ingest_ev.is_fallback,
+            payload.get("issuer_cik", ""),
+            payload.get("acceptance_dt_source", ""),
+            payload.get("adt_midnight_utc", False),
+        ))
+
+    # Build one EventRecord per (ticker, et_date)
+    events: list[EventRecord] = []
+
+    for (ticker, et_date), candidates in day_candidates.items():
+        # event_ts = latest qualifying acceptance ts that day
+        candidates_sorted = sorted(candidates, key=lambda x: x[0])
+        latest = candidates_sorted[-1]
+        event_ts, accession, filing_date, is_fallback, issuer_cik, adt_source, adt_midnight = latest
+
+        # Aggregate dose window (primary: W=21) from ingest events
+        D, k, n_filings_window, n_10b51_exc, missing_price = _aggregate_dose_window_ingest(
+            ticker, et_date, _W_PRIMARY, ticker_to_filing_events,
+        )
+        n_10b51_excluded_total += n_10b51_exc
+        missing_price_txns_total += missing_price
+
+        # Market cap calculation. Empty issuer_cik (payload missing/blank) must
+        # never crash the shares lookup — treat as shares-unknown and count it,
+        # same honesty contract as score_undefined (found on first real-data
+        # calibrate run 2026-06-07: fixtures fabricated issuer_cik, real ingest
+        # payloads lacked it until form4_ingest gained the field).
+        if issuer_cik:
+            shares_outstanding = shares_fn(issuer_cik, et_date)
+        else:
+            shares_outstanding = None
+            cik_missing_total += 1
+        cached_close = _get_cached_close(ticker, et_date, loader_fn, frame_cache=frame_cache)
+
+        if shares_outstanding is None or cached_close is None:
+            score = None
+            MC = None
+            score_undefined = True
+            score_undefined_total += 1
+        else:
+            MC = shares_outstanding * cached_close
+            if MC <= 0:
+                score = None
+                score_undefined = True
+                score_undefined_total += 1
+            else:
+                score = _compute_score(D, k, MC)
+                score_undefined = False
+
+        # 9 perturbation scores — reuse primary (D, k)
+        score_perturb = _compute_score_perturb_ingest(
+            ticker, et_date, ticker_to_filing_events,
+            MC if MC is not None else 0.0,
+            primary_D=D,
+            primary_k=k,
+        )
+        if score_undefined:
+            score_perturb = {v: None for v in _PERTURB_KEY_MAP.values()}
+
+        # Sanity: W21_F0 must equal primary score (same code path)
+        assert score_perturb.get("W21_F0") == score or (
+            score is None and score_perturb.get("W21_F0") is None
+        ), f"W21_F0 mismatch: {score_perturb.get('W21_F0')} vs {score}"
+
+        payload = {
+            # R-1 contract keys (charter §2b — identical)
+            "form_type": "4",  # generic; event may aggregate 4/4A filings
+            "accession": accession,
+            "filing_date": filing_date,
+            "acceptance_fallback": is_fallback,
+            "score": score,
+            "score_undefined": score_undefined,
+            "D": D,
+            "k": k,
+            "MC": MC,
+            "n_filings_window": n_filings_window,
+            "n_10b51_excluded": n_10b51_exc,
+            "missing_price_txns": missing_price,
+            "score_perturb": score_perturb,
+            # R-1b provenance (carried from ingest, charter §2a)
+            "acceptance_dt_source": adt_source,
+            "adt_midnight_utc": adt_midnight,
+        }
+
+        ev = EventRecord(
+            ticker=ticker,
+            event_ts=event_ts,
+            payload=payload,
+            is_fallback=is_fallback,
+        )
+        events.append(ev)
+
+    meta = {
+        # R-1 contract keys — DI-01 / COR-05 fix: distinct scanned vs qualifying.
+        # filings_scanned = total Form 4/4A rows seen by ingest (before any gate).
+        # filings_qualifying = events that passed all ingest gates (universe,
+        #   P+A txns, 10b5-1 filter, timestamp, amendment dedup).
+        # The gap (scanned - qualifying) is the true raw exclusion rate.
+        "filings_scanned": ingest_meta.get("submissions_scanned", 0),
+        "filings_qualifying": ingest_meta.get("events_qualifying", 0),
+        # DI-06 fix: pre-date-filter ingest event count.
+        # filings_qualifying - events_pre_date_filter = date-range drop count.
+        "events_pre_date_filter": len(raw_ingest_events),
+        "acceptance_fallbacks": acceptance_fallbacks,
+        "n_10b51_excluded_total": n_10b51_excluded_total,
+        "missing_price_txns_total": missing_price_txns_total,
+        "score_undefined_total": score_undefined_total,
+        "cik_missing_total": cik_missing_total,
+        "events_raw": len(day_candidates),
+        "events_returned": len(events),
+        # R-1b provenance (from ingest meta)
+        "n_midnight_utc_adt": ingest_meta.get("n_midnight_utc_adt", 0),
+        "n_superseded_dropped": ingest_meta.get("n_superseded_dropped", 0),
+        "n_dup4_collisions": ingest_meta.get("n_dup4_collisions", 0),
+        "n_ticker_fallback": ingest_meta.get("n_ticker_fallback", 0),
+        # PY-03 / DI-03 (fix 5b): forms with >1 reporting owner.  Quantifies where
+        # R-1b (union-all-owners) and R-1 (first-owner-only) diverge on k.
+        "n_multi_owner_forms": ingest_meta.get("n_multi_owner_forms", 0),
+        # Full ingest meta (for driver logging)
+        "_ingest_meta": ingest_meta,
+    }
+    log.info(
+        "build_r1b_events: date_range=%s..%s fallbacks=%d 10b51_excl=%d "
+        "missing_price=%d score_undefined=%d events=%d",
+        start, end,
+        acceptance_fallbacks,
+        n_10b51_excluded_total,
+        missing_price_txns_total,
+        score_undefined_total,
+        len(events),
+    )
+    return events, meta

@@ -1948,3 +1948,296 @@ class TestReturnVectorCacheF351:
                     f"harness={o.fwd_peer_excess_pct[21]:.6f} "
                     f"expected={expected_peer_excess:.6f}"
                 )
+
+
+# -------------------------------------------------------------------------
+# F365 Part 1 — strict point-of-use enforcement
+# -------------------------------------------------------------------------
+
+class TestMatrixStrictPointOfUse:
+    """F365 Part 1: verify that _MATRIX_STRICT raises at point-of-use on cold key."""
+
+    def _loader(self, frames):
+        return lambda t: frames.get(t)
+
+    def test_strict_raises_on_cold_key(self, tmp_path):
+        """When matrix_strict=True and a matrix with INCOMPLETE coverage is injected,
+        _compute_universe_median must raise RuntimeError naming the cold cache key
+        rather than silently building a live vector.
+
+        Fixture: inject a pre-populated vector cache that covers only date A.
+        Event B lands on date B (not in cache) → strict enforcement must fire.
+        """
+        import research.event_study as _es_mod
+
+        frames = {
+            "AAPL": _make_price_df(date(2016, 1, 1), date(2022, 12, 31), 0.2),
+            "MSFT": _make_price_df(date(2016, 1, 1), date(2022, 12, 31), 0.1),
+            "GOOG": _make_price_df(date(2016, 1, 1), date(2022, 12, 31), 0.05),
+        }
+        loader = self._loader(frames)
+
+        # Event on 2018-06-15 after-hours → entry 2018-06-18 (Mon).
+        events = [
+            EventRecord("AAPL", datetime(2018, 6, 15, 22, 0, 0, tzinfo=timezone.utc), {}),
+        ]
+        config = EventStudyConfig(
+            study_name="strict_test",
+            horizons=(21,),
+            output_dir=tmp_path / "strict_test",
+        )
+
+        # Monkey-patch: replace _return_vector_cache with a DELIBERATELY EMPTY cache.
+        # run_event_study will see use_matrix=True, matrix_strict=True, and a
+        # zero-key cache → must raise RuntimeError.
+        original_load = _es_mod._load_universe_matrix
+
+        def _mock_load(*args, **kwargs):
+            # Return empty cache to trigger zero-key check.
+            return {}
+
+        _es_mod._load_universe_matrix = _mock_load
+        try:
+            with pytest.raises(RuntimeError, match="zero keys"):
+                run_event_study(
+                    events=events,
+                    config=config,
+                    loader_fn=loader,
+                    universe_tickers=["AAPL", "MSFT", "GOOG"],
+                    rng=np.random.default_rng(42),
+                    use_matrix=True,
+                    matrix_strict=True,
+                )
+        finally:
+            _es_mod._load_universe_matrix = original_load
+
+    def test_strict_raises_on_cold_key_point_of_use(self, tmp_path):
+        """When matrix_strict=True and a cache with a partial set of keys is supplied
+        (covers some dates but NOT the event's entry date), _compute_universe_median
+        must raise RuntimeError at the point of use.
+
+        This validates the F365 replacement of the pre-validation block: the raise
+        fires when the cold key is accessed, not in a pre-scan using calendar arithmetic.
+        """
+        import research.event_study as _es_mod
+
+        frames = {
+            "AAPL": _make_price_df(date(2016, 1, 1), date(2022, 12, 31), 0.2),
+            "MSFT": _make_price_df(date(2016, 1, 1), date(2022, 12, 31), 0.1),
+            "GOOG": _make_price_df(date(2016, 1, 1), date(2022, 12, 31), 0.05),
+        }
+        loader = self._loader(frames)
+
+        events = [
+            EventRecord("AAPL", datetime(2018, 6, 15, 22, 0, 0, tzinfo=timezone.utc), {}),
+        ]
+        config = EventStudyConfig(
+            study_name="strict_cold_key",
+            horizons=(21,),
+            output_dir=tmp_path / "strict_cold_key",
+        )
+
+        original_load = _es_mod._load_universe_matrix
+
+        def _mock_load_partial(*args, **kwargs):
+            # Non-empty cache but missing the date the event will land on.
+            # Some other random date to pass the zero-key check.
+            return {(date(2015, 1, 1), 21): {"FAKE": (1.0, False)}}
+
+        _es_mod._load_universe_matrix = _mock_load_partial
+        try:
+            with pytest.raises(RuntimeError, match="cold cache key"):
+                run_event_study(
+                    events=events,
+                    config=config,
+                    loader_fn=loader,
+                    universe_tickers=["AAPL", "MSFT", "GOOG"],
+                    rng=np.random.default_rng(42),
+                    use_matrix=True,
+                    matrix_strict=True,
+                )
+        finally:
+            _es_mod._load_universe_matrix = original_load
+
+    def test_strict_flag_reset_after_run(self, tmp_path):
+        """_MATRIX_STRICT must be False after run_event_study completes, even if
+        matrix loading raises (i.e., the finally block fires on exceptions too)."""
+        import research.event_study as _es_mod
+
+        frames = {
+            "AAPL": _make_price_df(date(2016, 1, 1), date(2022, 12, 31), 0.2),
+        }
+        loader = self._loader(frames)
+        events = [
+            EventRecord("AAPL", datetime(2018, 6, 15, 22, 0, 0, tzinfo=timezone.utc), {}),
+        ]
+        config = EventStudyConfig(
+            study_name="strict_reset",
+            horizons=(21,),
+            output_dir=tmp_path / "strict_reset",
+        )
+
+        original_load = _es_mod._load_universe_matrix
+
+        def _mock_raise(*args, **kwargs):
+            return {}  # zero-key → will raise RuntimeError in strict mode
+
+        _es_mod._load_universe_matrix = _mock_raise
+        try:
+            with pytest.raises(RuntimeError):
+                run_event_study(
+                    events=events,
+                    config=config,
+                    loader_fn=loader,
+                    universe_tickers=["AAPL"],
+                    rng=np.random.default_rng(42),
+                    use_matrix=True,
+                    matrix_strict=True,
+                )
+            # After the exception, _MATRIX_STRICT must be reset.
+            assert _es_mod._MATRIX_STRICT is False, (
+                "_MATRIX_STRICT must be False after run_event_study raises"
+            )
+        finally:
+            _es_mod._load_universe_matrix = original_load
+
+
+# -------------------------------------------------------------------------
+# F365 Part 2 — parallel path validation
+# -------------------------------------------------------------------------
+
+# Module-level loader factory for parallel tests (must be at module level for pickle).
+def _make_test_loader(frames_pkl_path: str) -> "Callable":
+    """Disk-only test loader factory for F365 parallel tests.
+
+    Deserializes a pre-pickled {ticker: DataFrame} dict and returns a loader.
+    Used as the loader_factory target for workers in tests.
+    """
+    import pickle
+    with open(frames_pkl_path, "rb") as fh:
+        frames = pickle.load(fh)
+    return lambda ticker: frames.get(ticker)
+
+
+class TestParallelPath:
+    """F365 Part 2: validate parallel per-event loop (workers > 1)."""
+
+    def _loader(self, frames):
+        return lambda t: frames.get(t)
+
+    def test_workers_gt1_without_factory_raises(self, tmp_path):
+        """workers > 1 without loader_factory must raise ValueError immediately."""
+        frames = {
+            "AAPL": _make_price_df(date(2016, 1, 1), date(2022, 12, 31), 0.2),
+        }
+        events = [
+            EventRecord("AAPL", datetime(2018, 6, 15, 22, 0, 0, tzinfo=timezone.utc), {}),
+        ]
+        config = EventStudyConfig(
+            study_name="no_factory",
+            horizons=(21,),
+            output_dir=tmp_path / "no_factory",
+        )
+        with pytest.raises(ValueError, match="loader_factory"):
+            run_event_study(
+                events=events,
+                config=config,
+                loader_fn=self._loader(frames),
+                workers=2,
+                loader_factory=None,  # missing!
+            )
+
+    def test_workers_2_equals_workers_1_synthetic(self, tmp_path):
+        """workers=2 output must be bit-identical to workers=1 on synthetic fixture.
+
+        Floats compared with ==, not isclose.  This is the binding contract.
+        """
+        import pickle
+
+        frames = {
+            "AAPL": _make_price_df(date(2014, 1, 1), date(2022, 12, 31), 0.2),
+            "MSFT": _make_price_df(date(2014, 1, 1), date(2022, 12, 31), 0.15),
+            "GOOG": _make_price_df(date(2014, 1, 1), date(2022, 12, 31), 0.1),
+            "AMZN": _make_price_df(date(2014, 1, 1), date(2022, 12, 31), 0.25),
+            "META": _make_price_df(date(2014, 1, 1), date(2022, 12, 31), 0.05),
+        }
+        events = [
+            EventRecord("AAPL", datetime(2018, 3, 14, 22, 0, 0, tzinfo=timezone.utc), {"x": 1}),
+            EventRecord("MSFT", datetime(2018, 6, 15, 22, 0, 0, tzinfo=timezone.utc), {"x": 2}),
+            EventRecord("GOOG", datetime(2019, 1, 10, 22, 0, 0, tzinfo=timezone.utc), {"x": 3}),
+            EventRecord("AMZN", datetime(2019, 9, 20, 22, 0, 0, tzinfo=timezone.utc), {"x": 4}),
+            EventRecord("META", datetime(2020, 3, 5, 22, 0, 0, tzinfo=timezone.utc), {"x": 5}),
+        ]
+        universe = list(frames.keys())
+
+        # Pickle frames for worker loader factory.
+        frames_pkl = tmp_path / "test_frames.pkl"
+        with open(frames_pkl, "wb") as fh:
+            pickle.dump(frames, fh)
+
+        loader_factory = (
+            "tests.test_event_study:_make_test_loader",
+            {"frames_pkl_path": str(frames_pkl)},
+        )
+
+        cfg_serial = EventStudyConfig(
+            study_name="par_serial",
+            horizons=(21,),
+            output_dir=tmp_path / "serial",
+            dedup_same_ticker=False,
+        )
+        cfg_parallel = EventStudyConfig(
+            study_name="par_parallel",
+            horizons=(21,),
+            output_dir=tmp_path / "parallel",
+            dedup_same_ticker=False,
+        )
+
+        loader_fn = self._loader(frames)
+
+        outcomes_serial, meta_serial = run_event_study(
+            events=list(events),
+            config=cfg_serial,
+            loader_fn=loader_fn,
+            universe_tickers=universe,
+            rng=np.random.default_rng(42),
+            workers=1,
+        )
+        outcomes_parallel, meta_parallel = run_event_study(
+            events=list(events),
+            config=cfg_parallel,
+            loader_fn=loader_fn,
+            universe_tickers=universe,
+            rng=np.random.default_rng(42),
+            workers=2,
+            loader_factory=loader_factory,
+        )
+
+        # (a) Same outcome count.
+        assert len(outcomes_serial) == len(outcomes_parallel), (
+            f"Outcome count mismatch: serial={len(outcomes_serial)} "
+            f"parallel={len(outcomes_parallel)}"
+        )
+
+        # (b) Each outcome field must be identical (floats with ==).
+        for i, (a, b) in enumerate(zip(outcomes_serial, outcomes_parallel)):
+            assert a.ticker == b.ticker, f"[{i}] ticker mismatch"
+            assert a.entry_date == b.entry_date, f"[{i}] entry_date mismatch"
+            assert a.entry_price == b.entry_price, f"[{i}] entry_price mismatch"
+            assert a.split == b.split, f"[{i}] split mismatch"
+            assert a.floor_status == b.floor_status, f"[{i}] floor_status mismatch"
+            assert a.fwd_return_pct == b.fwd_return_pct, f"[{i}] fwd_return_pct mismatch"
+            assert a.fwd_excess_pct == b.fwd_excess_pct, f"[{i}] fwd_excess_pct mismatch"
+            assert a.universe_n == b.universe_n, f"[{i}] universe_n mismatch"
+            assert a.fwd_peer_excess_pct == b.fwd_peer_excess_pct, (
+                f"[{i}] fwd_peer_excess_pct mismatch"
+            )
+
+        # (c) Survivorship counts in meta must match.
+        surv_s = meta_serial.get("survivorship", {})
+        surv_p = meta_parallel.get("survivorship", {})
+        assert surv_s["events_entered"] == surv_p["events_entered"], (
+            f"events_entered mismatch: serial={surv_s['events_entered']} "
+            f"parallel={surv_p['events_entered']}"
+        )
+        assert surv_s["events_no_price_data"] == surv_p["events_no_price_data"]
