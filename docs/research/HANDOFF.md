@@ -18,7 +18,8 @@ Both F354-rerun prerequisites moved this session. **F356 (Form 4 dataset ingest)
 2. **F359** — midnight-UTC ADT investigation (~20-sample check vs EDGAR web) BEFORE any R-1 rerun interpretation; events are flagged `adt_midnight_utc` so exclusion needs no re-ingest.
 3. **F354 [gated: F357 build + John's gate decision]** — R-1 rerun gate. John decides §10 source amendment vs clean R-1b charter. The four measured divergences (PROGRAM.md "F356 ingest shipped" bullet) are the decision inputs: 2dp price rounding (≤0.2% on D), amendment supersession (toggleable), kept dup-4 collisions, filed-symbol ticker resolution.
 4. **R-2 explore** (distress recovery, charter `2f0cf24c…`) still needs NO Form 4 data — can proceed independently any session; its confirm window is 2025+.
-5. **F352** (ledger file lock) and **F358** (universe-loader consolidation, 3 copies) remain open hardening.
+5. **Playwright-mcp shakedown (first move of the next session — installed this session, tools only visible to fresh sessions).** App must be up (`./start.sh`; frontend 5173, backend 8000). The measured comparison, same 4 steps on both MCPs against the chart view (the page whose a11y tree blew chrome-devtools' token cap at ~117k chars, F217): (1) navigate to `http://localhost:5173`, (2) snapshot — record payload size, (3) ONE batched evaluate call returning small JSON (e.g. `{charts: document.querySelectorAll('.tv-lightweight-charts').length, errors: console-count}`), (4) screenshot. Compare per-call latency + snapshot size vs `chrome-devtools` equivalents; write the verdict into live-browser-verification.md "Which MCP" (replace the provisional defaults with measured ones). Known-traps re-check is NOT required for the shakedown — only flag if the `focus()`/`mouseleave` traps demonstrably differ under playwright.
+6. **F352** (ledger file lock) and **F358** (universe-loader consolidation, 3 copies) remain open hardening.
 
 ## Operational notes for the next session
 
