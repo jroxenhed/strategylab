@@ -425,6 +425,7 @@ def _build_universe_returns_matrix_inner(
     all_rows: list[tuple] = []
     no_frame_tickers: list[str] = []
     no_row_tickers: list[str] = []
+    failed_chunk_tickers: list[str] = []  # COV-1: failed chunks' tickers must not count as covered
     t0 = time.monotonic()
     completed = 0
     errors = 0
@@ -456,6 +457,11 @@ def _build_universe_returns_matrix_inner(
             except Exception as exc:
                 errors += 1
                 chunk_tickers = chunks[idx]
+                # COV-1 (review-wave 2026-06-07, confirmed P1): attribute the
+                # failed chunk's tickers to their own bucket — without this the
+                # coverage formula counts them as "produced rows" and a partial
+                # build reports e.g. 4678/4678 while whole chunks never ran.
+                failed_chunk_tickers.extend(chunk_tickers)
                 log.error(
                     "Worker chunk %d failed (tickers %s..%s): %s",
                     idx,
@@ -474,9 +480,10 @@ def _build_universe_returns_matrix_inner(
     # be visible, never silently absent.
     log.info(
         "Ticker coverage: %d/%d produced rows, %d no-frame (loader None/empty), "
-        "%d loaded-but-no-rows",
-        n_tickers - len(no_frame_tickers) - len(no_row_tickers), n_tickers,
-        len(no_frame_tickers), len(no_row_tickers),
+        "%d loaded-but-no-rows, %d in failed chunks (coverage unknown)",
+        n_tickers - len(no_frame_tickers) - len(no_row_tickers) - len(failed_chunk_tickers),
+        n_tickers,
+        len(no_frame_tickers), len(no_row_tickers), len(failed_chunk_tickers),
     )
     if no_frame_tickers:
         log.warning(
@@ -544,6 +551,7 @@ def _build_universe_returns_matrix_inner(
         last_full_coverage=last_full_coverage,
         no_frame_tickers=no_frame_tickers,
         no_row_tickers=no_row_tickers,
+        failed_chunk_tickers=failed_chunk_tickers,
     )
     _write_parquet_and_meta_atomic(df, out_path, meta)
 
@@ -599,6 +607,7 @@ def _build_metadata(
     last_full_coverage: dict[str, str],
     no_frame_tickers: Optional[list[str]] = None,
     no_row_tickers: Optional[list[str]] = None,
+    failed_chunk_tickers: Optional[list[str]] = None,
 ) -> dict:
     """Build metadata dict (no I/O — caller writes it)."""
     now_utc = datetime.now(tz=timezone.utc)
@@ -637,11 +646,15 @@ def _build_metadata(
                 len(universe_tickers)
                 - len(no_frame_tickers or [])
                 - len(no_row_tickers or [])
+                - len(failed_chunk_tickers or [])
             ),
             "no_frame_count": len(no_frame_tickers or []),
             "no_frame_symbols": sorted(no_frame_tickers or []),
             "no_rows_count": len(no_row_tickers or []),
             "no_rows_symbols": sorted(no_row_tickers or []),
+            # COV-1: tickers in chunks that FAILED — coverage unknown, not "with rows"
+            "failed_chunk_count": len(failed_chunk_tickers or []),
+            "failed_chunk_symbols": sorted(failed_chunk_tickers or []),
         },
         "horizons_trading_days": list(horizons),
         "last_full_coverage_date": last_full_coverage,

@@ -28,6 +28,12 @@ frontend/dist/
 backend/data/*.json
 backend/data/*.bak*
 backend/data/turnaround/
+# F357 matrix artifact + worker progress files (96MB, rebuilt in ~5 min — never commit)
+backend/data/*.parquet/
+backend/data/*.progress/
+
+# Browser-MCP output (playwright auto-saves snapshots/console logs here)
+.playwright-mcp/
 
 # Misc
 .env

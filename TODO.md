@@ -11,18 +11,17 @@ _(none open)_
 ## Up Next
 
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
-- [F357](#f357) — [next] Universe returns matrix [hard]
 
-## Open Work — 31 items
+## Open Work — 32 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
 | [Architecture](#architecture) | 8 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F348](#f348) |
-| [Hardening](#hardening) | 10 | [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F337](#f337), [F352](#f352), [F355](#f355), [F358](#f358)–[F359](#f359) |
+| [Hardening](#hardening) | 12 | [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F337](#f337), [F352](#f352), [F355](#f355), [F358](#f358)–[F359](#f359), [F362](#f362)–[F363](#f363) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 6 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329), [F360](#f360) |
-| [Infra](#infra) | 5 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F357](#f357) |
+| [Infra](#infra) | 4 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309) |
 
 ## Features
 
@@ -61,6 +60,10 @@ _(none open)_
 
 - [ ] <a id="f358"></a> **F358** Consolidate the universe-loader copies — `run_r1_explore._build_universe_tickers`, `run_smoke_study._build_universe_tickers`, `returns_matrix._get_universe_tickers` (price-cache-span + SIC construction, ~40 lines × 3) plus `form4_ingest._load_liquid_universe` (structural map, deliberately broader — keep separate but co-document) into one shared helper with an explicit span-end parameter. PY-03 from the F357 review; a 4th copy is one lazy session away. [easy] [hardening]
 
+- [ ] <a id="f363"></a> **F363** NaN guard in matrix worker — review-wave P2 (NAN-SILENT): a NaN Close at the exit bar produces `r = NaN` which passes the `r is not None` gate and lands in the artifact as a valid float64 (pandas stats silently skip it). Measured: 0 NaN rows in the accepted 8.9M-row build, so unrealized — but add `math.isnan(r)` rejection (counted, not silent) in `_worker_build_chunk` before the row append. [easy] [hardening]
+
+- [ ] <a id="f362"></a> **F362** review-wave workflow ↔ run-state integration — the new `.claude/workflows/review-wave.js` (piloted 2026-06-07) returns a wave-level `tokens_spent` but run-state.py expects per-agent rows (`add-agent --tokens`). Decide: record the wave as one synthetic agent row, or extend the workflow to return per-persona usage from the engine's accounting. Also fold the playbook's review-tier section into referencing the workflow as the default Tier-B/C mechanism once the pilot verdict is in. [easy] [infra]
+
 - [ ] <a id="f359"></a> **F359** Investigate midnight-UTC acceptanceDateTimes before any R-1 rerun interpretation — ~0.6% of ADTs are T00:00:00Z (2,972 of 507K sampled); `_to_et` maps them to 19:00 the PRIOR ET day, a potential 1-day look-ahead if they're data artifacts rather than genuine midnight acceptances. Events carry `adt_midnight_utc: true` payload flags (F356) so they're excludable without re-ingest; sample ~20 against EDGAR web acceptance stamps and decide keep/exclude/clamp. ADV-04 from the F356 review. [easy] [hardening]
 
 - [ ] <a id="f355"></a> **F355** r1_analysis bounded-perf cleanups deferred from the R-1 review wave — PERF-06 (9× per-variant quintile re-derivation in the perturbation band; restructure to share the per-year sort) and PERF-07 (Python-loop bootstrap with per-iteration np.concatenate ×999 draws in both MBB helpers; vectorize with pregenerated index arrays). Bounded at current scale (~215 events) but will matter at F353 scale (thousands of events × 9 variants). Findings detail: .run/R1-explore/review-performance.json. [easy] [hardening]
@@ -98,8 +101,6 @@ _(none open)_
 - [ ] <a id="f302"></a> **F302** Per-reviewer effort cap in dispatch prompts — F-BATCH-0604C's correctness reviewer ran 5m47s / 60k tokens / 55 tool-uses vs siblings' ~2m / ~13-29, and with no agent-messaging tool the orchestrator could only poll (~15 min of wall-clock went to waits). Add a standard cap clause to review dispatch prompts (e.g. "≤25 tool calls / ~3 min; if hit, return partial findings + status token") and record cap-hits in run-state so chronic offenders surface in the report. [easy] [infra]
 - [ ] <a id="f306"></a> **F306** [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) — replaces the collapse/expand substitute from F-BATCH-0604C. [easy] [infra]
 - [ ] <a id="f309"></a> **F309** Promote the A8 zoom→auto-switch verification recipe to a scripted render-probe check (F298 rule): seed Alpaca 5m multi-year settings, drive `window.__chartDebug.setVisibleLogicalRange(0, N)`, assert lastSetDataPoints drops ≥10x + 'Auto (…)' badge, then narrow range and assert full-resolution restore. Needs DEV-build probe target or exposing the hook in preview builds behind a flag. [easy] [infra]
-
-- [ ] <a id="f357"></a> **F357** [next] Universe returns matrix — REMAINING: full-scale build on strategylab-worker (rsync price cache, run `bin/build-returns-matrix-remote.sh` after VERIFY-marked assumptions checked, pull artifact, then full-scale equivalence-diff one real study). Code SHIPPED 2026-06-07: builder/loader/CLI (`returns_matrix.py`, float64, completeness sidecar, loader refuses partials), matrix-backed median path in event_study.py, calib equivalence byte-identical, spawn-smoke green. Original spec: one-pass precompute of forward returns for all ~4,700 liquid-universe tickers × all trading days 2015–2020 × horizons (21/63/126td) into a parquet artifact, replacing per-(date,horizon) on-demand vector builds (which would be ~47h serial at full-scale event counts). Parallelize ticker-chunk-wise on the wfa_pool.py pattern (ProcessPool, worker-owns-chunk, seconds-of-work granularity per F166); target host: strategylab-worker (14900k — rsync price cache + code, build there, pull artifact back). The matrix is PROGRAM INFRASTRUCTURE: reusable by R-1 rerun, R-2, the explore mill, every future event study. event_study.py grows a matrix-backed median path beside the live loader path (equivalence-diff one study against the loader path before trusting — F351 precedent). Hard guard: matrix build must respect the 2025+ price seal (build through 2024-12-31 only until a charter unlocks confirm). [hard] [arch]
 
 ## Deferred (gated)
 
