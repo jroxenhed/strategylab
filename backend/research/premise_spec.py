@@ -61,9 +61,16 @@ class UniverseFloors(BaseModel):
     fields of EventStudyConfig — the run service (F389) applies them via
     universe_floors.passes_floors(df, as_of) when building the universe.
     CompileResult.floors carries them to the run service.
+
+    max_market_cap (F395): if set, events with MC > max_market_cap are excluded
+    by the dose builder. Applied inside build_s1_events() (and future builders)
+    where MC is already computed. floor_status()/passes_floors() are NOT modified
+    — they can't compute MC without a CIK lookup (see brief §1.5 / D2).
+    None = no ceiling (default, r1 specs unaffected).
     """
     min_price: float = 5.0          # last close >= 5.0 (universe_floors.MIN_PRICE)
     min_avg_volume: int = 500_000   # trailing 63-td mean share volume (MIN_AVG_VOLUME)
+    max_market_cap: Optional[float] = None  # None = no ceiling; e.g. 10_000_000_000 for $10B
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +105,7 @@ _NON_STRUCTURAL_FIELDS = frozenset({
 # Registered dose formula ids — single source of truth shared with premise_compile.
 # premise_compile.py imports _VALID_DOSES and asserts _VALID_DOSES ⊆ _COST_FN_BY_DOSE
 # at module load so adding a dose here without a cost_fn immediately fails loud.
-_VALID_DOSES: frozenset[str] = frozenset({"r1_score"})
+_VALID_DOSES: frozenset[str] = frozenset({"r1_score", "s1_score"})
 
 
 # ---------------------------------------------------------------------------

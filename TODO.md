@@ -13,13 +13,13 @@ _(none open)_
 - [F364](#f364) — [next] Review-contract rule: findings citing population statistics must state the population measured [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 25 items
+## Open Work — 26 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
 | [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372) |
-| [Hardening](#hardening) | 6 | [F362](#f362), [F364](#f364), [F383](#f383), [F391](#f391)–[F392](#f392), [F394](#f394) |
+| [Hardening](#hardening) | 7 | [F362](#f362), [F364](#f364), [F383](#f383), [F391](#f391)–[F392](#f392), [F394](#f394), [F396](#f396) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F360](#f360) |
 | [Infra](#infra) | 5 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F385](#f385) |
@@ -53,6 +53,7 @@ _(none open)_
 
 ## Hardening
 
+- [ ] <a id="f396"></a> **F396** Power/testability census for the discretionary-insider-SELL premise before believing any s1_score result — the F395 probe surfaced ~562 planned (10b5-1) sales vs only ~11 discretionary triggering events in 2019 full-year on the stratified cache, i.e. discretionary insider sales (the actual signal) are ~50× rarer than planned ones. Strong thin-population/underpowered risk (same family as R-2/F372). Before any s1 verdict is interpreted, run a premise_power_census-style pass on the small/mid-cap discretionary-sell universe (n_valid events, dispersion, one-sample + dose-gap MDE) to size whether the "dip→recover in 4-6 weeks" effect is even detectable. John's interpretation gate. [testing] [hardening]
 - [ ] <a id="f394"></a> **F394** F389 run-service hardening — power_audit cache TOCTOU (concurrent callers both recompute; harmless but wasteful), `_job_locks`/`_jobs` dicts grow unboundedly (add cleanup on terminal job state), and `poll_explore_status` is a synchronous SSH-blocking call inside an async endpoint (wrap in `asyncio.to_thread`). Also (from F390 review AN-5/COR-5): a server restart loses the in-memory job dict, so a premise stuck in `exploring` returns run-status `unknown` with no recovery — add a "reset stuck run" path (exploring→spec_ready) and reconcile job state on startup. All P2/P3 from the F389/F390 review waves; low impact, deferred to keep the phase commits focused. [hardening]
 - [ ] <a id="f391"></a> **F391** Per-key event_filter VALUE-type validation in stream vocabularies — F388 validates that `event_filter`/`dose_params` KEYS are in-vocabulary but not that their VALUES are well-typed (a wrong-typed value passes spec validation and would only fail when filters are applied). Extend the stream vocabulary from a key set to typed value schemas so a malformed value is rejected at spec validation, preserving the "bounded = always a real test" guarantee. Pairs with F389 (which actually applies the filters). Surfaced by F388 review (KP-6). [hardening] [testing]
 - [ ] <a id="f392"></a> **F392** F388 reviewer polish — document that `PremiseSpec.model_construct()` bypasses validators (public-API footgun), add the missing type annotation on the `Stream.stream_id` Protocol property, and type the `cost_fn` event parameter in premise_compile (currently `type: ignore`/untyped). Minor clarity items deferred from the F388 review (C7 / KP-8 / KP-9). [polish]

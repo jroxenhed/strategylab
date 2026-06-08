@@ -24,18 +24,18 @@ they are never spec-driven (anti-p-hacking: the cutoff is a program-level
 invariant, not a per-premise choice).
 
 cost_fn selection:
-  dose="r1_score" → lambda ev, price: 0.04
-  (R-1 charter §7: 2 bps/leg × 2 legs; vocabulary decision, not a free param)
+  dose="r1_score" → lambda ev, price: 0.04  (R-1 charter §7: 2 bps/leg × 2 legs)
+  dose="s1_score" → lambda ev, price: 0.04  (S-1 mirrors R-1 charter §7)
 
 floors (min_price, min_avg_volume) are NOT EventStudyConfig fields.  They are
 returned in CompileResult.floors so the F389 run service can apply them via
 universe_floors.passes_floors(df, as_of) when building the universe.
 
 dose_builder:
-  CompileResult.dose_builder = "r1_score" signals to the F389 run service
-  that build_r1_events (from r1_dose.py) should be used for dose computation.
-  F389 TODO: the F389 run service reads this field and wires build_r1_events
-  with the XML cache paths that are not available at compile time.
+  CompileResult.dose_builder is the dose string (e.g. "r1_score", "s1_score").
+  The F389 run service reads this field and dispatches to the matching builder
+  (build_r1_events from r1_dose.py, or build_s1_events from s1_dose.py) via
+  _DOSE_BUILDERS in _run_preview_sync.
 """
 from __future__ import annotations
 
@@ -66,12 +66,12 @@ class CompileResult:
 
     config       : ready-to-use EventStudyConfig (pure, no I/O)
     floors       : UniverseFloors for the run service to apply per ticker
-    dose_builder : "r1_score" → F389 wires build_r1_events (XML cache)
+    dose_builder : dose string ("r1_score" or "s1_score") — F389 dispatches to matching builder
     stream_id    : registered stream id (e.g. "form4")
     """
     config: EventStudyConfig
     floors: UniverseFloors
-    dose_builder: str   # "r1_score" — F389 TODO: wire build_r1_events
+    dose_builder: str   # "r1_score" | "s1_score" — F389 dispatches to matching builder
     stream_id: str      # registered stream to use
 
 
@@ -84,8 +84,14 @@ def _cost_fn_r1_score(event, price: float) -> float:  # type: ignore[type-arg]
     return 0.04
 
 
+def _cost_fn_s1_score(event, price: float) -> float:  # type: ignore[type-arg]
+    """S-1: 2 bps/leg × 2 legs = 0.04 (mirror r1 charter §7)."""
+    return 0.04
+
+
 _COST_FN_BY_DOSE = {
     "r1_score": _cost_fn_r1_score,
+    "s1_score": _cost_fn_s1_score,
 }
 
 # Single-source-of-truth guard: every dose that premise_spec allows MUST have a
@@ -138,8 +144,8 @@ def compile_spec(
     return CompileResult(
         config=config,
         floors=spec.floors,
-        # F389 TODO: F389 run service reads dose_builder="r1_score" and wires
-        # build_r1_events (r1_dose.py) with the XML cache paths.
+        # F389: run service reads dose_builder and dispatches to the matching
+        # builder (build_r1_events or build_s1_events) via _DOSE_BUILDERS.
         dose_builder=spec.dose,
         stream_id=spec.stream,
     )

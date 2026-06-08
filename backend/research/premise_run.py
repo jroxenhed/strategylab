@@ -208,10 +208,16 @@ def _run_preview_sync(premise_id: str) -> dict:
     from research.premise_spec import PremiseSpec
     from research.premise_store import PremiseStore
     from research.r1_dose import build_r1_events
+    from research.s1_dose import build_s1_events
     from research.r1_analysis import run_r1_analysis
     from research.event_study import run_event_study
     from turnaround_validation import _make_memoized_loader
     import numpy as np
+
+    _DOSE_BUILDERS = {
+        "r1_score": build_r1_events,
+        "s1_score": build_s1_events,
+    }
 
     _check_required_caches()
 
@@ -247,8 +253,11 @@ def _run_preview_sync(premise_id: str) -> dict:
         data_source=_DATA_SOURCE,
     )
 
-    # Build events (preview window only)
-    events_raw, dose_meta = build_r1_events(
+    # Build events (preview window only) — dispatch by dose_builder
+    dose_builder_fn = _DOSE_BUILDERS.get(cr.dose_builder)
+    if dose_builder_fn is None:
+        raise ValueError(f"Unknown dose_builder: {cr.dose_builder!r}")
+    _builder_kwargs: dict = dict(
         start=_PREVIEW_START,
         end=_PREVIEW_END,
         index_path=_INDEX_PATH,
@@ -256,6 +265,10 @@ def _run_preview_sync(premise_id: str) -> dict:
         subs_dir=_SUBS_DIR,
         loader_fn=loader,
     )
+    # Pass max_market_cap for s1 (and future builders that support it)
+    if cr.floors.max_market_cap is not None:
+        _builder_kwargs["max_market_cap"] = cr.floors.max_market_cap
+    events_raw, dose_meta = dose_builder_fn(**_builder_kwargs)
     log.info(
         "Preview dose builder: events_raw=%d (2019-2020 window)", len(events_raw)
     )

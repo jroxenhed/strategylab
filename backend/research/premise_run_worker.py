@@ -110,10 +110,16 @@ def run_full_explore_sync(premise_id: str, outdir: Path) -> dict:
     from research.premise_spec import PremiseSpec
     from research.premise_store import PremiseStore
     from research.r1_dose import build_r1_events
+    from research.s1_dose import build_s1_events
     from research.r1_analysis import run_r1_analysis
     from research.universe_loader import build_liquid_universe
     from research.event_study import run_event_study
     from turnaround_validation import _make_memoized_loader
+
+    _DOSE_BUILDERS = {
+        "r1_score": build_r1_events,
+        "s1_score": build_s1_events,
+    }
 
     _check_required_caches()
 
@@ -146,10 +152,13 @@ def run_full_explore_sync(premise_id: str, outdir: Path) -> dict:
     )
     log.info("Memoized loader built (%.1fs)", time.monotonic() - t0)
 
-    # Build events
+    # Build events — dispatch by dose_builder
     explore_start = date(2015, 1, 1)
     explore_end = date(2020, 12, 31)
-    events_raw, dose_meta = build_r1_events(
+    dose_builder_fn = _DOSE_BUILDERS.get(cr.dose_builder)
+    if dose_builder_fn is None:
+        raise ValueError(f"Unknown dose_builder: {cr.dose_builder!r}")
+    _builder_kwargs: dict = dict(
         start=explore_start,
         end=explore_end,
         index_path=_INDEX_PATH,
@@ -157,6 +166,10 @@ def run_full_explore_sync(premise_id: str, outdir: Path) -> dict:
         subs_dir=_SUBS_DIR,
         loader_fn=loader,
     )
+    # Pass max_market_cap for s1 (and future builders that support it)
+    if cr.floors.max_market_cap is not None:
+        _builder_kwargs["max_market_cap"] = cr.floors.max_market_cap
+    events_raw, dose_meta = dose_builder_fn(**_builder_kwargs)
     log.info(
         "Dose builder: events_raw=%d scanned=%d qualifying=%d",
         len(events_raw),
