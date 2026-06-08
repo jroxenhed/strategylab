@@ -10,15 +10,16 @@ _(none open)_
 
 ## Up Next
 
+- [F388](#f388) — [next] Desk Premise Workbench [hard]
 - [F364](#f364) — [next] Review-contract rule: findings citing population statistics must state the population measured [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 22 items
+## Open Work — 25 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
-| [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372) |
+| [Architecture](#architecture) | 10 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372), [F388](#f388)–[F390](#f390) |
 | [Hardening](#hardening) | 3 | [F362](#f362), [F364](#f364), [F383](#f383) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F360](#f360) |
@@ -33,6 +34,10 @@ _(none open)_
   - FX conversion cost
 
 ## Architecture
+
+- [ ] <a id="f388"></a> **F388** [next] Desk Premise Workbench — Phase 1: PremiseSpec data model + stream registry (backend). Bounded `PremiseSpec` (Pydantic, vocab-validated, content-hashed), `Stream` protocol + registry with `form4` first, `spec → EventStudyConfig` compiler, JSON premise store with queue-shaped state machine. No UI, no runs yet. Plan: docs/plans/2026-06-08-desk-premise-workbench-plan.md; spec: docs/superpowers/specs/2026-06-08-desk-premise-workbench-design.md. [arch] [hard]
+- [ ] <a id="f389"></a> **F389** Desk Premise Workbench — Phase 2: run service + explore/confirm gate (backend). Fast-preview (local) + full-explore (worker-dispatch via F387 probe), `≤2020` hard guard, the discipline gate (explore unlogged; confirm = freeze+hash+power_audit+single sealed run+FDR append, idempotent by hash), agent-native endpoints + operator runbook. Depends on F388 (do not start until F388 ships). [arch] [hard]
+- [ ] <a id="f390"></a> **F390** Desk Premise Workbench — Phase 3: Desk tab + Premises workbench UI (frontend). New Desk tab (Premises active; Inbox/Playbooks/Tracking stubbed), master-detail plain-English loop (free-text + guided input → readback → run → plain verdict → graduate gate), technical spec behind a fold. Depends on F389 (do not start until F389 ships). [arch] [hard]
 
 - [ ] <a id="f372"></a> **F372** R-2 execution gate — F369 census predicts UNTESTABLE (447 D2 events, MDE 4.63pp, same wall as R-1b). Before executing the approved R-2 charter, decide: structurally bigger net (longer period / relaxed floors with stated caveats) or shelve. John's call, not assumed. [arch]
 - [ ] <a id="a8"></a> **A8** Chart performance — large dataset optimizations (100K+ 5-min bars): [arch]
