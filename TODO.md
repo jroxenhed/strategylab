@@ -11,6 +11,7 @@ _(none open)_
 ## Up Next
 
 - [F364](#f364) — [next] Review-contract rule: findings citing population statistics must state the population measured [easy]
+- [F385](#f385) — [next] Stage research data artifacts on mfcore01 on-demand
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
 ## Open Work — 27 items
@@ -84,7 +85,7 @@ _(none open)_
 
 ## Infra
 
-- [ ] <a id="f385"></a> **F385** Stage research data artifacts on mfcore01 on-demand — the compute env is ready but the price cache / EDGAR companyfacts+derived / Form-4 datasets aren't staged (re-fetchable from source; no home access needed). Document/automate the re-fetch recipe so `WORKER_REQUIRE` pre-flight passes for a given study. [infra]
+- [ ] <a id="f385"></a> **F385** [next] Stage research data artifacts on mfcore01 on-demand — the compute env is ready but the price cache / EDGAR companyfacts+derived / Form-4 datasets aren't staged (re-fetchable from source; no home access needed). Document/automate the re-fetch recipe so `WORKER_REQUIRE` pre-flight passes for a given study. **Now the concrete prereq for the Desk workbench (F388-397): a full premise explore runs on the worker, and John's first sell premise (`p-1569aa97`) came back UNTESTABLE on the small local cache — the real event count needs the full staged universe.** [infra]
 
 - [ ] <a id="f97"></a> **F97** [medium] Provision `backend/venv/` in routine builder container — overnight builds 21/22/23 all hit the same gap: §3.5 backend smoke test originally specified `cd backend && venv/bin/uvicorn …` but the routine container ships without a venv. Spec now codifies AST + import-time check as the substitute. Real fix: the container image includes `backend/venv/` with pinned deps (Pydantic, FastAPI, pytest). Once landed, restore the full uvicorn smoke test path. Container/infra change, not application code. (from build 23 process review) [infra]
 
