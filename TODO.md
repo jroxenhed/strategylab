@@ -10,19 +10,20 @@ _(none open)_
 
 ## Up Next
 
+- [F370](#f370) — [next] PEAD/earnings-surprise charter
 - [F364](#f364) — [next] Review-contract rule: findings citing population statistics must state the population measured [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 29 items
+## Open Work — 32 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
-| [Architecture](#architecture) | 10 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F348](#f348), [F370](#f370), [F372](#f372) |
-| [Hardening](#hardening) | 5 | [F314](#f314), [F322](#f322)–[F323](#f323), [F362](#f362), [F364](#f364) |
-| [Polish](#polish) | 1 | [F310](#f310) |
-| [Testing](#testing) | 6 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329), [F360](#f360) |
-| [Infra](#infra) | 6 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F373](#f373), [F375](#f375) |
+| [Architecture](#architecture) | 9 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F370](#f370), [F372](#f372) |
+| [Hardening](#hardening) | 6 | [F314](#f314), [F322](#f322)–[F323](#f323), [F362](#f362), [F364](#f364), [F377](#f377) |
+| [Polish](#polish) | 2 | [F310](#f310), [F378](#f378) |
+| [Testing](#testing) | 7 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329), [F360](#f360), [F379](#f379) |
+| [Infra](#infra) | 7 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F373](#f373), [F375](#f375)–[F376](#f376) |
 
 ## Features
 
@@ -34,7 +35,7 @@ _(none open)_
 
 ## Architecture
 
-- [ ] <a id="f370"></a> **F370** PEAD/earnings-surprise charter — design the next premise on the 8-K item 2.02 / 10-Q stream where the F369 census found real power (binary MDE 0.56–0.58pp at ~24pp dispersion, ~3× R-1b's events). Add a dose score (estimate-free fundamental surprise) to the binary filing event; builds on F348 payload layer. The census says this is where the engine can actually resolve a tradeable edge. [arch]
+- [ ] <a id="f370"></a> **F370** [next] PEAD/earnings-surprise charter — design the next premise on the 8-K item 2.02 / 10-Q stream where the F369 census found real power (binary MDE 0.56–0.58pp at ~24pp dispersion, ~3× R-1b's events). Add a dose score (estimate-free fundamental surprise) to the binary filing event; builds on F348 payload layer (SHIPPED 2026-06-08 — `fundamental_surprise.py`, 8 PIT deltas, F338 5/5). The census says this is where the engine can actually resolve a tradeable edge. [arch]
 - [ ] <a id="f372"></a> **F372** R-2 execution gate — F369 census predicts UNTESTABLE (447 D2 events, MDE 4.63pp, same wall as R-1b). Before executing the approved R-2 charter, decide: structurally bigger net (longer period / relaxed floors with stated caveats) or shelve. John's call, not assumed. [arch]
 - [ ] <a id="a8"></a> **A8** Chart performance — large dataset optimizations (100K+ 5-min bars): [arch]
   - [x] Equity curve detail mode downsample: root cause was missing `toDisplayTime()` shift on equity timestamps — raw UTC timestamps didn't match the main chart's ET-shifted timestamps, breaking crosshair sync and bucket alignment. Fixed by adding `toDisplayTime` to `shared/utils/time.ts` (mirrors Chart.tsx `toET`) and applying it to equity/baseline/trade-tick timestamps in Results.tsx before downsampling. `downsampleEquity()` itself was always correct.
@@ -52,8 +53,6 @@ _(none open)_
 
 - [ ] <a id="f320"></a> **F320** Derived compact fundamentals cache + in-process LRU — every edgar.py parsed accessor (revenue/NI/GP/OCF/shares) independently re-reads and re-parses the full ~1.8MB companyfacts JSON: ~5 parses per (cik, as_of) × 36 as-of dates ≈ 180 redundant MB-scale parses per surviving ticker per validation run. Fix: parse once → persist compact per-CIK derived JSON (~KB: the five quarterly series + shares), accessors read derived only; small lru_cache (~64 entries) for within-run loops; raw companyfacts becomes prunable (largely solves F314). Found while watching the first full-universe run, 2026-06-05. [medium] [arch] (added 2026-06-05)
 
-- [ ] <a id="f348"></a> **F348** Fundamental-surprise event payloads (John's gap-spot #2, 2026-06-06) — feature-builder on F320's derived cache: for any filing event (10-Q/10-K/8-K 2.02), compute point-in-time deltas vs the company's OWN history as the event's payload — revenue acceleration vs prior 4 quarters, margin inflection, share-count change (dilution — documented negative signal, sitting unused in cache). Estimate-free surprise (no paid consensus data needed). Unlocks PEAD-family charters + the F347 heterogeneity test's conditioning variables. Fundamentals' third role: veto (covered), picker (tested-null on the blind clock), payload (never tested). [medium] [arch] [gated: F342 shipped] (added 2026-06-06)
-
 - [ ] <a id="f272"></a> **F272** Inspector panel for node params — when a node has >3 params or long values (e.g. multi-line code blocks for Code nodes), inline editing gets cramped. Right-side panel shows selected-node form; selection ring already in place (F265). Defer until F269+F271 expose nodes that actually need it. (added 2026-05-25, from F268 plan §6). [medium] [arch]
 
 ## Hardening
@@ -61,6 +60,8 @@ _(none open)_
 - [ ] <a id="f362"></a> **F362** review-wave workflow ↔ run-state integration — the new `.claude/workflows/review-wave.js` returns a wave-level `tokens_spent` but run-state.py expects per-agent rows (`add-agent --tokens`). Decide: record the wave as one synthetic agent row, or extend the workflow to return per-persona usage from the engine's accounting. **(Partial 2026-06-08, F-BATCH-0608: playbook review section now documents review-wave as the DEFAULT mechanism + the exact `{taskId,files,intent,personas}` structured-args contract — the `review-wave` skill's "Invoke:" hint echoes prose into `args`, which the workflow `JSON.parse`s and dies on; remaining sub-task: fix the SKILL to emit structured args, and the per-persona token telemetry.)** [easy] [infra]
 
 - [ ] <a id="f364"></a> **F364** [next] Review-contract rule: findings citing population statistics must state the population measured — ADV-04's 0.6% (whole submissions cache, all forms/years) vs the study population's 0.0016% mis-sized F359 by three orders of magnitude; one scope sentence would have sized it correctly. Add the rule to the review-wave persona prompts (`.claude/workflows/review-wave.js`) and the playbook review section. [easy] [hardening]
+
+- [ ] <a id="f377"></a> **F377** `NUMERIC_KEYS` (the F348 surprise-delta key list) is defined in 4 places across 3 files (fundamental_surprise.py, smoke_probe_f348.py, test) — review K4. Consolidate to one exported constant in `fundamental_surprise.py` and import it everywhere (import-don't-duplicate). Low risk; drift-prevention only. [easy] [hardening]
 
 _(none open)_
 
@@ -73,7 +74,11 @@ _(none open)_
 ## Polish
 
 - [ ] <a id="f310"></a> **F310** One-frame crosshair/pane misalignment possible during render-interval swap — main-pane and SubPane setData run in separate effects on the same commit; lw-charts may emit a range event between them and sync a logical range onto a sub-pane still holding the old bar count (try/catch prevents errors; visual blip only). Structural fix needs shared dep-chain plumbing. (RACE-04, A8-render-resample review, rated acceptable-as-is.) [medium] [polish]
+
+- [ ] <a id="f378"></a> **F378** `build_pead_surprise_events` scans the submissions dir twice (review-wave K6) — one pass to enumerate, one to read. Restructure to a single pass. Perf only; deferred from the F348 fix wave as not a ≤3-line change. [polish]
 ## Testing
+
+- [ ] <a id="f379"></a> **F379** Strengthen weak F348 test assertions (review-wave T1/T2/DI-06) — `test_qoq_within_tolerance` asserts is-not-None only; `test_revenue_accel_positive` asserts `>0` not the exact accelerating value; `test_build_pead_events_meta` checks `coverage_population` key exists but not its value. Tighten to exact-value assertions so a regression in the formula (not just None-ness) is caught. [easy] [testing]
 
 - [ ] <a id="f329"></a> **F329** Record a real Form 4 P-code (purchase) fixture for edgar positive controls — the real AAPL Form 4 fixture only contains S/G transaction codes, so the P-code accumulation path in get_form4_net_buys is exercised only by synthetic XML (TST-03c, F-RERUN-0605 review). Record a live insider-buy Form 4 (any ticker) and pin net-buys > 0. [easy] [testing]
 
@@ -88,6 +93,8 @@ _(none open)_
 ## Infra
 
 - [ ] <a id="f375"></a> **F375** Matrix NaN-rejection per-symbol traceability (deferred from F-BATCH-0608 review REL-07/DI-10) — the F363 `nan_rejected` count is a per-chunk global; a symbol with mixed NaN/non-NaN rows shows in the produced-rows bucket with invisible coverage holes. Add per-symbol attribution to the sidecar + assert the `nan_rejected` key is present in worker returns. No wrong-answer risk; coverage-audit completeness only. [hardening]
+- [ ] <a id="f376"></a> **F376** `worker-dispatch.sh` syncs `backend/research/*.py` but research modules import backend-root modules (`backend/fileutil.py`, `backend/edgar.py`) that go stale on the worker — the F348 probe first crashed on a missing `file_lock` (added to fileutil.py in F352) until rescued with `WORKER_SYNC`. Make the dispatcher sync the backend-root modules its research code imports by default (parse imports, or a maintained allowlist), so a fresh research script can't crash on a stale transitive dep. [infra]
+
 - [ ] <a id="f373"></a> **F373** premise_power_census polish (deferred F369 review items) — emit the orchestrator synthesis section from the script so re-runs don't lose it; document the COR-05 quintile-n (593 vs 596, within tolerance) and COR-08 R-2 intra-week dedup approximations in the report; warn instead of silently resetting on corrupt census.json (PY-05). [polish]
 - [ ] <a id="f97"></a> **F97** [medium] Provision `backend/venv/` in routine builder container — overnight builds 21/22/23 all hit the same gap: §3.5 backend smoke test originally specified `cd backend && venv/bin/uvicorn …` but the routine container ships without a venv. Spec now codifies AST + import-time check as the substitute. Real fix: the container image includes `backend/venv/` with pinned deps (Pydantic, FastAPI, pytest). Once landed, restore the full uvicorn smoke test path. Container/infra change, not application code. (from build 23 process review) [infra]
 
