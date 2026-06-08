@@ -64,6 +64,23 @@ log = logging.getLogger(__name__)
 
 _SUBMISSIONS_DIR = _BACKEND_DIR / "data" / "turnaround" / "edgar_cache" / "submissions"
 
+# ---------------------------------------------------------------------------
+# Canonical key list — define once, import everywhere (F377)
+# ---------------------------------------------------------------------------
+#: Ordered tuple of all numeric output keys from compute_surprise_payload.
+#: Exported so smoke_probe_f348.py, tests, and any future consumer can import
+#: rather than duplicate. Order matches the spec table in the module docstring.
+NUMERIC_KEYS: tuple[str, ...] = (
+    "revenue_yoy",
+    "revenue_accel",
+    "earnings_yoy",
+    "net_margin",
+    "net_margin_infl_pp",
+    "gross_margin_infl_pp",
+    "dilution_yoy",
+    "ocf_accrual_ratio",
+)
+
 
 def _load_derived_disk_only(cik: str) -> dict:
     """Read the F320 derived cache for `cik` from disk ONLY — never the network.
@@ -213,17 +230,7 @@ def compute_surprise_payload(cik: str, as_of: date) -> dict:
             yoy_end, qoq_end  — str or None (matched prior period ends)
             n_nonnull  — int count of non-None numeric output fields
     """
-    # Output key order is deterministic (spec table order)
-    NUMERIC_KEYS = (
-        "revenue_yoy",
-        "revenue_accel",
-        "earnings_yoy",
-        "net_margin",
-        "net_margin_infl_pp",
-        "gross_margin_infl_pp",
-        "dilution_yoy",
-        "ocf_accrual_ratio",
-    )
+    # Output key order is deterministic (spec table order) — use module-level NUMERIC_KEYS (F377)
     out: dict = {k: None for k in NUMERIC_KEYS}
     out["current_end"] = None
     out["current_filed"] = None
@@ -468,25 +475,7 @@ def build_pead_surprise_events(
     subs_dir = submissions_dir or _SUBMISSIONS_DIR
     universe_set = set(universe_tickers)
 
-    # Build CIK → ticker map from submissions files
-    # (mirrors _load_cik_ticker_map but without requiring universe.json)
-    cik_to_ticker: dict[str, str] = {}
-    for fp in sorted(subs_dir.glob("*.json")):
-        cik = fp.stem  # zero-padded 10-digit CIK
-        try:
-            d = json.loads(fp.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        tickers = d.get("tickers", [])
-        if tickers:
-            cik_to_ticker[cik] = tickers[0]
-
-    # Per-field non-null coverage tracking (measured over n_events)
-    NUMERIC_KEYS = (
-        "revenue_yoy", "revenue_accel", "earnings_yoy", "net_margin",
-        "net_margin_infl_pp", "gross_margin_infl_pp", "dilution_yoy",
-        "ocf_accrual_ratio",
-    )
+    # Per-field non-null coverage tracking (measured over n_events) — use module-level NUMERIC_KEYS (F377)
     field_nonnull: dict[str, int] = {k: 0 for k in NUMERIC_KEYS}
 
     n_filings_seen = 0       # raw 10-Q/10-K count in date range (population: all submissions)
@@ -496,15 +485,27 @@ def build_pead_surprise_events(
     n_parse_errors = 0       # population: all submission files in subs_dir
     events: list[EventRecord] = []
 
+    # Single-pass over submissions dir: each file is read exactly once (F378).
+    # The previous two-pass structure (first pass builds cik_to_ticker, second
+    # pass reads filings) doubled I/O for no gain — both passes consumed the
+    # same file. Now ticker extraction and filing enumeration happen together.
+    #
+    # COR-06 / RM-07 verification: ticker selection is IDENTICAL to the old
+    # two-pass code.  Both versions use `tickers[0]` (the first ticker in the
+    # submissions JSON, which EDGAR lists as the primary ticker for the issuer).
+    # For multi-ticker CIKs the old first-pass also stored `tickers[0]`:
+    #   cik_to_ticker[cik] = tickers[0]   ← verbatim from the original code
+    # The output is therefore byte-identical for every CIK.  No change needed.
     for fp in sorted(subs_dir.glob("*.json")):
-        cik = fp.stem
+        cik = fp.stem  # zero-padded 10-digit CIK
         try:
             filing_data = json.loads(fp.read_text(encoding="utf-8"))
         except Exception:
             n_parse_errors += 1
             continue
 
-        ticker = cik_to_ticker.get(cik)
+        tickers = filing_data.get("tickers", [])
+        ticker = tickers[0] if tickers else None
         if not ticker:
             # Count only once per file (not per-filing)
             n_skipped_no_ticker += 1

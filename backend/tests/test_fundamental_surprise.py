@@ -67,6 +67,7 @@ from research.fundamental_surprise import (
     _filter_pit,
     _find_prior_entry,
     _latest_entry,
+    NUMERIC_KEYS,
 )
 
 
@@ -427,7 +428,13 @@ def test_yoy_outside_tolerance():
 
 
 def test_qoq_within_tolerance():
-    """QoQ prior within ±30d matches (for revenue_accel computation)."""
+    """QoQ prior within ±30d matches (for revenue_accel computation).
+
+    Exact expected values (F379 — formula regression guard, not just None-ness):
+      revenue_yoy  = (120 - 90) / 90  = 1/3  ≈ 0.3333...
+      prior_yoy    = (100 - 80) / 80  = 1/4  = 0.25
+      revenue_accel = 1/3 - 1/4 = 1/12 ≈ 0.08333...
+    """
     # Current: 2020-09-30 (Q3 2020)
     # QoQ prior should be near 2020-09-30 - 91d = 2020-07-01, we use 2020-06-30 (1 day off)
     # YoY priors needed for accel: 2019-09-30 and 2019-06-30
@@ -445,6 +452,9 @@ def test_qoq_within_tolerance():
     # Both YoY and QoQ should be found → revenue_accel should be computable
     assert result["qoq_end"] == "2020-06-30"
     assert result["revenue_accel"] is not None
+    # Exact value — catches formula regressions beyond mere None-ness (F379)
+    assert result["revenue_yoy"] == pytest.approx(1 / 3)
+    assert result["revenue_accel"] == pytest.approx(1 / 3 - 1 / 4)  # 1/12 ≈ 0.08333
 
 
 # ---------------------------------------------------------------------------
@@ -493,9 +503,9 @@ def test_empty_derived():
 def test_revenue_accel_positive():
     """Revenue is accelerating: YoY(t) > YoY(t-1q).
 
-    YoY(t):     (120 - 90) / 90  ≈ 0.333  (current vs year-ago)
-    YoY(t-1q):  (100 - 80) / 80  = 0.250   (prior quarter vs its year-ago)
-    accel ≈ 0.333 - 0.250 = +0.083 (accelerating)
+    YoY(t):     (120 - 90) / 90  = 1/3  ≈ 0.3333  (current vs year-ago)
+    YoY(t-1q):  (100 - 80) / 80  = 1/4  = 0.2500  (prior quarter vs its year-ago)
+    accel = 1/3 - 1/4 = 1/12 ≈ 0.0833  (accelerating — exact, F379)
     """
     derived = _make_derived(
         revenue=[
@@ -509,7 +519,8 @@ def test_revenue_accel_positive():
     with _mock_derived(derived):
         result = compute_surprise_payload("0000320193", as_of)
     assert result["revenue_accel"] is not None
-    assert result["revenue_accel"] > 0  # accelerating
+    # Exact value — catches formula regressions beyond sign-only checks (F379)
+    assert result["revenue_accel"] == pytest.approx(1 / 3 - 1 / 4)  # 1/12 ≈ 0.0833
 
 
 def test_revenue_accel_missing_qoq():
@@ -546,12 +557,7 @@ def test_n_nonnull_count():
     with _mock_derived(derived):
         result = compute_surprise_payload("0000320193", as_of)
 
-    # Manually count non-None numeric keys
-    NUMERIC_KEYS = (
-        "revenue_yoy", "revenue_accel", "earnings_yoy", "net_margin",
-        "net_margin_infl_pp", "gross_margin_infl_pp", "dilution_yoy",
-        "ocf_accrual_ratio",
-    )
+    # Manually count non-None numeric keys — uses imported module-level NUMERIC_KEYS (F377)
     expected_nonnull = sum(1 for k in NUMERIC_KEYS if result[k] is not None)
     assert result["n_nonnull"] == expected_nonnull
     assert result["n_nonnull"] > 0  # we should have at least revenue_yoy, earnings_yoy, margins
@@ -635,11 +641,15 @@ def test_build_pead_events_meta(tmp_path):
     tickers_seen = {e.ticker for e in events}
     assert tickers_seen == {"AAPL", "MSFT"}
 
-    # Required meta keys
+    # Required meta keys present and coverage_population is the exact in-universe count (F379)
     for key in ("n_filings_seen", "n_in_universe", "n_events", "n_no_derived",
                 "n_skipped_no_ticker", "coverage_population", "field_nonnull",
                 "field_coverage_frac"):
         assert key in meta, f"missing meta key: {key}"
+    # coverage_population must equal n_in_universe (2) — not just be present (F379)
+    assert meta["coverage_population"] == 2, (
+        f"coverage_population={meta['coverage_population']} expected 2 (== n_in_universe)"
+    )
 
 
 def test_build_pead_events_skip_out_of_universe(tmp_path):
