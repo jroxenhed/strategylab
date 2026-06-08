@@ -13,6 +13,14 @@ export type PremiseStatus =
   | 'awaiting_confirm'
   | 'confirmed'
 
+// F397: user disposition type
+export type Disposition =
+  | 'active'
+  | 'parked_needs_data'
+  | 'parked_sharpen'
+  | 'rejected'
+  | 'promising'
+
 // ---------------------------------------------------------------------------
 // Verdict payload (H2) — matches _extract_verdict in premise_run.py
 // ---------------------------------------------------------------------------
@@ -100,6 +108,10 @@ export interface PremiseListItem {
   premise_text_excerpt: string
   last_updated: string | null
   created_at: string | null
+  // F397: new fields
+  disposition: Disposition
+  derived_from: string | null
+  machine_outcome: string
 }
 
 export interface CreatePremiseResponse {
@@ -133,6 +145,10 @@ export interface PremiseFull {
   // H4: spec versioning fields returned by GET /{id}
   spec_version?: number | null
   spec_history?: Array<{ version: number; spec: PremiseSpec; at: string }> | null
+  // F397: disposition fields
+  disposition?: Disposition | null
+  disposition_note?: string | null
+  derived_from?: string | null
 }
 
 export interface SaveSpecResponse {
@@ -147,8 +163,8 @@ export interface SubmitPremiseResponse {
 
 export interface TriggerRunResponse {
   premise_id: string
-  // H5: backend returns req.mode ('preview'|'explore'), not literal 'running'
-  status: 'preview' | 'explore'
+  // H4: backend always returns 'running' (see routes/premises.py trigger_run)
+  status: 'running'
   run_type: 'preview' | 'explore'
 }
 
@@ -189,14 +205,33 @@ export interface DeletePremiseResponse {
   note: string
 }
 
+// F397: disposition endpoints
+export interface SetDispositionRequest {
+  disposition: Disposition
+  note?: string
+}
+
+export interface SetDispositionResponse {
+  premise_id: string
+  disposition: Disposition
+}
+
+export interface DuplicatePremiseResponse {
+  premise_id: string
+  derived_from: string
+}
+
 // ---------------------------------------------------------------------------
 // API functions
 // ---------------------------------------------------------------------------
 
-export async function listPremises(status?: PremiseStatus): Promise<PremiseListItem[]> {
+export async function listPremises(status?: PremiseStatus, disposition?: Disposition): Promise<PremiseListItem[]> {
   // H6: optional status filter — lets agent poll its queue (e.g. 'awaiting_formalization')
-  const params = status ? { status } : undefined
-  const res = await api.get('/api/premises', { params })
+  // F397: optional disposition filter
+  const params: Record<string, string> = {}
+  if (status) params.status = status
+  if (disposition) params.disposition = disposition
+  const res = await api.get('/api/premises', { params: Object.keys(params).length ? params : undefined })
   return res.data
 }
 
@@ -242,5 +277,16 @@ export async function graduateToConfirm(id: string): Promise<GraduateResponse> {
 
 export async function deletePremise(id: string): Promise<DeletePremiseResponse> {
   const res = await api.delete(`/api/premises/${id}`)
+  return res.data
+}
+
+// F397: disposition + duplicate
+export async function setDisposition(id: string, req: SetDispositionRequest): Promise<SetDispositionResponse> {
+  const res = await api.put(`/api/premises/${id}/disposition`, req)
+  return res.data
+}
+
+export async function duplicatePremise(id: string): Promise<DuplicatePremiseResponse> {
+  const res = await api.post(`/api/premises/${id}/duplicate`)
   return res.data
 }

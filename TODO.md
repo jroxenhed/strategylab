@@ -13,14 +13,14 @@ _(none open)_
 - [F364](#f364) — [next] Review-contract rule: findings citing population statistics must state the population measured [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 26 items
+## Open Work — 27 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
 | [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372) |
 | [Hardening](#hardening) | 7 | [F362](#f362), [F364](#f364), [F383](#f383), [F391](#f391)–[F392](#f392), [F394](#f394), [F396](#f396) |
-| [Polish](#polish) | 1 | [F310](#f310) |
+| [Polish](#polish) | 2 | [F310](#f310), [F398](#f398) |
 | [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F360](#f360) |
 | [Infra](#infra) | 5 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F385](#f385) |
 
@@ -67,6 +67,8 @@ _(none open)_
 _(none open)_
 
 ## Polish
+
+- [ ] <a id="f398"></a> **F398** F397 idea-history polish (deferred from review) — make `DispositionRequest.disposition` a `Literal` of the valid set (currently plain str, store validates); simplify the live-refresh ref approach; add a test asserting the lazy-default migration preserves pre-existing non-F397 premise fields; harden the test DATA_PATH monkeypatch against parallelism. All P3 from the F397 review wave; cosmetic/robustness, iterate-later per "try it and change it later." [polish] [testing]
 
 - [ ] <a id="f310"></a> **F310** One-frame crosshair/pane misalignment possible during render-interval swap — main-pane and SubPane setData run in separate effects on the same commit; lw-charts may emit a range event between them and sync a logical range onto a sub-pane still holding the old bar count (try/catch prevents errors; visual blip only). Structural fix needs shared dep-chain plumbing. (RACE-04, A8-render-resample review, rated acceptable-as-is.) [medium] [polish]
 

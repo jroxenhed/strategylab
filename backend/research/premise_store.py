@@ -71,6 +71,17 @@ DATA_PATH = str(Path(_BACKEND_DIR) / "data" / "premises.json")
 # Schema version this code understands
 _SUPPORTED_VERSION = 1
 
+# ---------------------------------------------------------------------------
+# Disposition set (F397)
+# ---------------------------------------------------------------------------
+_VALID_DISPOSITIONS: frozenset[str] = frozenset({
+    "active",
+    "parked_needs_data",
+    "parked_sharpen",
+    "rejected",
+    "promising",
+})
+
 
 # ---------------------------------------------------------------------------
 # State machine
@@ -176,6 +187,10 @@ class PremiseStore:
                     status,
                 )
                 continue
+            # F397: lazy-default new disposition fields for existing premises
+            p.setdefault("disposition", "active")
+            p.setdefault("disposition_note", "")
+            p.setdefault("derived_from", None)
             self.premises[pid] = p
 
     # -----------------------------------------------------------------------
@@ -196,6 +211,10 @@ class PremiseStore:
             "spec_history": [],
             "run_history": [],
             "error_note": None,
+            # F397: disposition metadata
+            "disposition": "active",
+            "disposition_note": "",
+            "derived_from": None,
         }
         # F11: snapshot-before-mutate pattern
         prior = copy.deepcopy(self.premises)
@@ -329,6 +348,72 @@ class PremiseStore:
             self.premises = prior
             raise
 
+    def set_disposition(self, premise_id: str, disposition: str, note: str = "") -> None:
+        """Set disposition + optional note on a premise (F397).
+
+        Allowed in any state (disposition is metadata, not a run state).
+        Raises ValueError if disposition not in _VALID_DISPOSITIONS.
+        Caps note at 2000 chars.
+        """
+        if disposition not in _VALID_DISPOSITIONS:
+            raise ValueError(
+                f"Unknown disposition {disposition!r}. "
+                f"Valid values: {sorted(_VALID_DISPOSITIONS)}."
+            )
+        note = note[:2000]
+        p = self._get(premise_id)
+        # F11: snapshot-before-mutate
+        prior = copy.deepcopy(self.premises)
+        p["disposition"] = disposition
+        p["disposition_note"] = note
+        p["updated_at"] = _now_utc()
+        try:
+            self.save()
+        except Exception:
+            self.premises = prior
+            raise
+
+    def duplicate_premise(self, premise_id: str) -> str:
+        """Clone premise_text + spec into a new draft, setting derived_from (F397).
+
+        The original premise is NOT modified.
+        Returns the new premise_id.
+        """
+        original = self._get(premise_id)
+        new_pid = f"p-{uuid.uuid4().hex[:8]}"
+        now = _now_utc()
+        new_entry = {
+            "premise_id": new_pid,
+            "created_at": now,
+            "updated_at": now,
+            "status": "draft",
+            "premise_text": original.get("premise_text", ""),
+            "spec": copy.deepcopy(original.get("spec")),
+            "spec_history": [],
+            "run_history": [],
+            "error_note": None,
+            # F397
+            "disposition": "active",
+            "disposition_note": "",
+            "derived_from": premise_id,
+        }
+        # H2: reset spec_version to 0 on the clone — the copied spec is its
+        # starting point, not the product of a prior versioning cycle.  Carrying
+        # the original's spec_version forward would cause the first add_spec on
+        # the clone to archive the copied spec as a phantom "version N+1" entry
+        # even though no actual editing has happened on the clone.
+        if original.get("spec") is not None:
+            new_entry["spec_version"] = 0
+        # F11: snapshot-before-mutate
+        prior = copy.deepcopy(self.premises)
+        self.premises[new_pid] = new_entry
+        try:
+            self.save()
+        except Exception:
+            self.premises = prior
+            raise
+        return new_pid
+
     # -----------------------------------------------------------------------
     # Internal helpers
     # -----------------------------------------------------------------------
@@ -338,3 +423,73 @@ class PremiseStore:
         if premise_id not in self.premises:
             raise KeyError(f"Premise not found: {premise_id!r}")
         return self.premises[premise_id]
+
+
+# ---------------------------------------------------------------------------
+# Module-level helper: derive machine outcome from run_history (F397)
+# ---------------------------------------------------------------------------
+
+def derive_machine_outcome(premise_dict: dict) -> str:
+    """Derive a one-line machine outcome string from a premise dict.
+
+    Based on the latest run_history entry. Defensive against missing keys.
+
+    Returns:
+      "—"                              — no runs yet
+      "failed: <error_note>"           — run failed or had an error_note
+      "UNTESTABLE — N events"          — verdict present, UNTESTABLE decision
+      "<explore_decision> · <stat>"   — explored with a verdict
+    """
+    run_history = premise_dict.get("run_history") or []
+    # Filter to actual run entries (have run_type + verdict key)
+    run_entries = [
+        r for r in run_history
+        if isinstance(r, dict) and "run_type" in r and "verdict" in r
+    ]
+    if not run_entries:
+        return "—"
+
+    latest = run_entries[-1]
+    verdict = latest.get("verdict")
+    error_note = latest.get("error")
+
+    # Run-level failure
+    if latest.get("status") in ("failed", "error") or error_note:
+        msg = error_note or "unknown error"
+        # Truncate to keep the one-liner manageable
+        return f"failed: {str(msg)[:80]}"
+
+    # No verdict dict
+    if not isinstance(verdict, dict):
+        if verdict is None and error_note is None:
+            return "—"
+        return "—"
+
+    explore_decision = verdict.get("explore_decision") or ""
+    n_valid = verdict.get("n_valid_events")
+
+    # UNTESTABLE path
+    if explore_decision and "UNTESTABLE" in str(explore_decision).upper():
+        n_str = str(n_valid) if n_valid is not None else "?"
+        return f"UNTESTABLE — {n_str} events"
+
+    # Failed verdict (no explore_decision but error-like note in verdict)
+    verdict_note = verdict.get("note") or ""
+    if not explore_decision and verdict_note:
+        return f"failed: {str(verdict_note)[:80]}"
+
+    if not explore_decision:
+        return "—"
+
+    # Explored with a verdict — add a short stat
+    mde = verdict.get("mde_q5q1_pp")
+    if isinstance(mde, (int, float)):
+        stat = f"MDE {mde:.2f}pp"
+    elif n_valid is not None:
+        stat = f"{n_valid} events"
+    else:
+        stat = ""
+
+    if stat:
+        return f"{explore_decision} · {stat}"
+    return explore_decision

@@ -20,7 +20,7 @@ import logging
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Path, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,12 @@ class RunRequest(BaseModel):
     mode: Literal["preview", "explore"]
 
 
+class DispositionRequest(BaseModel):
+    """F397: set user disposition on a premise."""
+    disposition: str
+    note: str = Field("", max_length=2000)
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -51,6 +57,9 @@ _VALID_STATUSES = {
     "draft", "awaiting_formalization", "spec_ready",
     "exploring", "explored", "awaiting_confirm", "confirmed",
 }
+
+# F397: import at module level so it's available in endpoint bodies
+from research.premise_store import _VALID_DISPOSITIONS  # noqa: E402
 
 
 @router.get("/api/premises")
@@ -62,13 +71,21 @@ async def list_premises(
             "agent-operator poll its own queue. 422 on unknown status."
         ),
     ),
+    disposition: Optional[str] = Query(
+        None,
+        description=(
+            "F397: Optional disposition filter. 422 on unknown disposition."
+        ),
+    ),
 ):
     """List all premises (id, status, premise_text excerpt, last_updated).
 
     Optional ?status= query param: filters returned list to premises with that
     exact status. Raises 422 if the status value is not a known PremiseStatus.
+
+    Optional ?disposition= query param (F397): filters by user disposition.
     """
-    from research.premise_store import PremiseStore
+    from research.premise_store import PremiseStore, derive_machine_outcome
 
     # H6: validate status param before touching store
     if status is not None and status not in _VALID_STATUSES:
@@ -76,13 +93,23 @@ async def list_premises(
             422,
             f"Unknown status {status!r}. Valid values: {sorted(_VALID_STATUSES)}",
         )
+    # F397: validate disposition param
+    if disposition is not None and disposition not in _VALID_DISPOSITIONS:
+        raise HTTPException(
+            422,
+            f"Unknown disposition {disposition!r}. Valid values: {sorted(_VALID_DISPOSITIONS)}",
+        )
 
     store = PremiseStore()
     result = []
     for pid, p in store.premises.items():
         p_status = p.get("status")
-        # H6: apply filter when provided
+        p_disposition = p.get("disposition", "active")
+        # H6: apply status filter when provided
         if status is not None and p_status != status:
+            continue
+        # F397: apply disposition filter when provided
+        if disposition is not None and p_disposition != disposition:
             continue
         text = p.get("premise_text", "")
         excerpt = (text[:120] + "…") if len(text) > 120 else text
@@ -92,7 +119,13 @@ async def list_premises(
             "premise_text_excerpt": excerpt,
             "last_updated": p.get("updated_at"),
             "created_at": p.get("created_at"),
+            # F397: new fields
+            "disposition": p_disposition,
+            "derived_from": p.get("derived_from"),
+            "machine_outcome": derive_machine_outcome(p),
         })
+    # F397: sort most-recently-updated first
+    result.sort(key=lambda x: x.get("last_updated") or "", reverse=True)
     return result
 
 
@@ -412,3 +445,53 @@ async def delete_premise(
         raise HTTPException(500, f"Failed to delete premise: {exc}")
 
     return {"premise_id": premise_id, "status": "draft", "note": "Soft-deleted."}
+
+
+@router.put("/api/premises/{premise_id}/disposition")
+async def set_disposition(
+    premise_id: str = Path(..., pattern=_PREMISE_ID_PATTERN),
+    req: DispositionRequest = ...,
+):
+    """Set user disposition + optional note on a premise (F397).
+
+    Allowed in any state (disposition is metadata, not a run state).
+    422 if disposition not in the valid set.
+    Returns {premise_id, disposition}.
+    """
+    from research.premise_store import PremiseStore
+
+    store = PremiseStore()
+    try:
+        store._get(premise_id)
+    except KeyError:
+        raise HTTPException(404, f"Premise not found: {premise_id!r}")
+
+    try:
+        store.set_disposition(premise_id, req.disposition, req.note)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+    # H1: echo the saved note so callers can confirm what was stored
+    p_after = store._get(premise_id)
+    return {"premise_id": premise_id, "disposition": req.disposition, "note": p_after.get("disposition_note", "")}
+
+
+@router.post("/api/premises/{premise_id}/duplicate", status_code=201)
+async def duplicate_premise(
+    premise_id: str = Path(..., pattern=_PREMISE_ID_PATTERN),
+):
+    """Clone premise_text + spec into a new draft, setting derived_from (F397).
+
+    Original premise is untouched.
+    Returns {premise_id: <new>, derived_from: <original>}.
+    """
+    from research.premise_store import PremiseStore
+
+    store = PremiseStore()
+    try:
+        store._get(premise_id)
+    except KeyError:
+        raise HTTPException(404, f"Premise not found: {premise_id!r}")
+
+    new_pid = store.duplicate_premise(premise_id)
+    return {"premise_id": new_pid, "derived_from": premise_id}

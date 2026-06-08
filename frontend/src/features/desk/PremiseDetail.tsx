@@ -5,6 +5,7 @@ import type {
   RunStatusResponse,
   VerdictResponse,
   VerdictPayload,
+  Disposition,
 } from '../../api/premises'
 import {
   getPremise,
@@ -15,12 +16,23 @@ import {
   getVerdict,
   graduateToConfirm,
   deletePremise,
+  setDisposition,
+  duplicatePremise,
 } from '../../api/premises'
 
 interface PremiseDetailProps {
   premiseId: string
   onDeleted: () => void
   onStatusChange: () => void
+  onSelectId?: (id: string) => void
+}
+
+// H6: narrow e.target.value / loadPremise casts against the known set
+const _KNOWN_DISPOSITIONS: readonly Disposition[] = [
+  'active', 'parked_needs_data', 'parked_sharpen', 'rejected', 'promising',
+]
+function isDisposition(x: unknown): x is Disposition {
+  return _KNOWN_DISPOSITIONS.includes(x as Disposition)
 }
 
 // H2: render verdict dict's display-safe scalar fields (not raw object)
@@ -107,7 +119,7 @@ function formatTs(ts: string | null | undefined): string {
   }
 }
 
-export default function PremiseDetail({ premiseId, onDeleted, onStatusChange }: PremiseDetailProps) {
+export default function PremiseDetail({ premiseId, onDeleted, onStatusChange, onSelectId }: PremiseDetailProps) {
   const [premise, setPremise] = useState<PremiseFull | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -143,11 +155,25 @@ export default function PremiseDetail({ premiseId, onDeleted, onStatusChange }: 
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
+  // F397: disposition block
+  const [dispositionValue, setDispositionValue] = useState<Disposition>('active')
+  const [dispositionNote, setDispositionNote] = useState('')
+  const [dispositionSaving, setDispositionSaving] = useState(false)
+  const [dispositionError, setDispositionError] = useState<string | null>(null)
+  const [dispositionSaved, setDispositionSaved] = useState(false)
+
+  // F397: duplicate
+  const [duplicating, setDuplicating] = useState(false)
+  const [duplicateError, setDuplicateError] = useState<string | null>(null)
+
   const loadPremise = useCallback(async () => {
     try {
       const p = await getPremise(premiseId)
       setPremise(p)
       setError(null)
+      // F397: sync disposition state from premise (H6: narrow via guard)
+      setDispositionValue(isDisposition(p.disposition) ? p.disposition : 'active')
+      setDispositionNote(p.disposition_note ?? '')
     } catch (e: unknown) {
       const msg = (e as { response?: { data?: { detail?: string } }; message?: string })
         ?.response?.data?.detail ?? (e as { message?: string })?.message ?? 'Failed to load premise'
@@ -168,6 +194,10 @@ export default function PremiseDetail({ premiseId, onDeleted, onStatusChange }: 
     setGraduateConfirmPending(false)
     setDeleteConfirmPending(false)
     setRunError(null)
+    // F397: reset disposition state on id change
+    setDispositionSaved(false)
+    setDispositionError(null)
+    setDuplicateError(null)
     loadPremise()
   }, [premiseId, loadPremise])
 
@@ -314,6 +344,44 @@ export default function PremiseDetail({ premiseId, onDeleted, onStatusChange }: 
     }
   }
 
+  // F397: disposition save
+  const handleSaveDisposition = async () => {
+    setDispositionSaving(true)
+    setDispositionError(null)
+    setDispositionSaved(false)
+    try {
+      await setDisposition(premiseId, { disposition: dispositionValue, note: dispositionNote })
+      setDispositionSaved(true)
+      await loadPremise()
+      onStatusChange()
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        ?? 'Failed to save disposition'
+      setDispositionError(msg)
+    } finally {
+      setDispositionSaving(false)
+    }
+  }
+
+  // F397: duplicate premise
+  const handleDuplicate = async () => {
+    setDuplicating(true)
+    setDuplicateError(null)
+    try {
+      const resp = await duplicatePremise(premiseId)
+      onStatusChange()
+      if (onSelectId) {
+        onSelectId(resp.premise_id)
+      }
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        ?? 'Failed to duplicate premise'
+      setDuplicateError(msg)
+    } finally {
+      setDuplicating(false)
+    }
+  }
+
   // --------------------------------------------------
   // Render helpers
   // --------------------------------------------------
@@ -367,6 +435,19 @@ export default function PremiseDetail({ premiseId, onDeleted, onStatusChange }: 
 
       {/* Section 1 — Header */}
       <div style={styles.section}>
+        {/* F397: derived_from backlink */}
+        {premise.derived_from && (
+          <div style={styles.derivedFromBanner}>
+            ↳ sharper version of{' '}
+            <button
+              style={{ ...styles.derivedFromLink, ...(onSelectId ? {} : { opacity: 0.4, cursor: 'default' }) }}
+              disabled={!onSelectId}
+              onClick={() => onSelectId && onSelectId(premise.derived_from!)}
+            >
+              {premise.derived_from}
+            </button>
+          </div>
+        )}
         <div style={styles.headerRow}>
           <span
             style={{
@@ -557,9 +638,9 @@ export default function PremiseDetail({ premiseId, onDeleted, onStatusChange }: 
           <div style={styles.mutedNote}>
             Explore result — hypothesis only, not confirmed. Re-run with updated spec to iterate.
           </div>
-          {(premise.run_history?.filter(r => 'run_type' in r).length ?? 0) > 1 && (
+          {((premise.run_history ?? []).filter(r => 'run_type' in r).length) > 1 && (
             <div style={styles.mutedNote}>
-              {premise.run_history.filter(r => 'run_type' in r).length} total runs in history.
+              {(premise.run_history ?? []).filter(r => 'run_type' in r).length} total runs in history.
             </div>
           )}
         </div>
@@ -610,7 +691,59 @@ export default function PremiseDetail({ premiseId, onDeleted, onStatusChange }: 
         </div>
       )}
 
-      {/* Section 8 — Delete */}
+      {/* Section 8 — Disposition (F397) */}
+      <div style={styles.section}>
+        <div style={styles.sectionTitle}>Disposition</div>
+        <div style={styles.dispositionRow}>
+          <select
+            value={dispositionValue}
+            onChange={e => { if (isDisposition(e.target.value)) { setDispositionValue(e.target.value); setDispositionSaved(false) } }}
+            style={styles.dispositionSelect}
+          >
+            <option value="active">Active</option>
+            <option value="parked_needs_data">Parked — needs data</option>
+            <option value="parked_sharpen">Parked — sharpen</option>
+            <option value="rejected">Rejected</option>
+            <option value="promising">Promising</option>
+          </select>
+        </div>
+        <textarea
+          style={styles.dispositionTextarea}
+          placeholder="Optional note (why parked, what to try next, …)"
+          value={dispositionNote}
+          onChange={e => { setDispositionNote(e.target.value); setDispositionSaved(false) }}
+          rows={3}
+        />
+        {dispositionError && <div style={styles.inlineError}>{dispositionError}</div>}
+        <div style={styles.dispositionActions}>
+          <button
+            onClick={handleSaveDisposition}
+            disabled={dispositionSaving}
+            style={styles.primaryBtn}
+          >
+            {dispositionSaving ? 'Saving…' : 'Save disposition'}
+          </button>
+          {dispositionSaved && <span style={styles.savedNote}>Saved</span>}
+        </div>
+      </div>
+
+      {/* Section 9 — Duplicate (F397) */}
+      <div style={styles.section}>
+        <div style={styles.sectionTitle}>Duplicate</div>
+        <div style={styles.mutedNote}>
+          Creates a new draft copying this premise text and spec. Use to sharpen the idea with a new test.
+        </div>
+        {duplicateError && <div style={styles.inlineError}>{duplicateError}</div>}
+        <button
+          onClick={handleDuplicate}
+          disabled={duplicating}
+          style={styles.secondaryBtn}
+        >
+          {duplicating ? 'Duplicating…' : 'Duplicate as new premise'}
+        </button>
+      </div>
+
+      {/* Section 10 — Delete */}
       {canDelete && (
         <div style={styles.section}>
           {deleteError && <div style={styles.inlineError}>{deleteError}</div>}
@@ -968,5 +1101,57 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#8b949e',
     border: '1px solid #30363d',
     cursor: 'pointer',
+  },
+  // F397: disposition block styles
+  derivedFromBanner: {
+    fontSize: 11,
+    color: '#8b949e',
+    marginBottom: 8,
+  },
+  derivedFromLink: {
+    background: 'none',
+    border: 'none',
+    color: '#58a6ff',
+    fontSize: 11,
+    cursor: 'pointer',
+    padding: 0,
+    fontFamily: 'monospace',
+    textDecoration: 'underline',
+  },
+  dispositionRow: {
+    marginBottom: 8,
+  },
+  dispositionSelect: {
+    background: '#161b22',
+    border: '1px solid #30363d',
+    borderRadius: 6,
+    color: '#e6edf3',
+    fontSize: 12,
+    padding: '5px 10px',
+    cursor: 'pointer',
+    width: '100%',
+  },
+  dispositionTextarea: {
+    width: '100%',
+    background: '#161b22',
+    border: '1px solid #30363d',
+    borderRadius: 6,
+    color: '#e6edf3',
+    fontSize: 12,
+    padding: '8px 10px',
+    lineHeight: 1.5,
+    resize: 'vertical' as const,
+    boxSizing: 'border-box' as const,
+    fontFamily: 'inherit',
+    marginBottom: 8,
+  },
+  dispositionActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+  },
+  savedNote: {
+    fontSize: 11,
+    color: '#3fb950',
   },
 }
