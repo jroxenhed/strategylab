@@ -10,17 +10,16 @@ _(none open)_
 
 ## Up Next
 
-- [F388](#f388) — [next] Desk Premise Workbench [hard]
 - [F364](#f364) — [next] Review-contract rule: findings citing population statistics must state the population measured [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 25 items
+## Open Work — 26 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
-| [Architecture](#architecture) | 10 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372), [F388](#f388)–[F390](#f390) |
-| [Hardening](#hardening) | 3 | [F362](#f362), [F364](#f364), [F383](#f383) |
+| [Architecture](#architecture) | 9 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372), [F389](#f389)–[F390](#f390) |
+| [Hardening](#hardening) | 5 | [F362](#f362), [F364](#f364), [F383](#f383), [F391](#f391)–[F392](#f392) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F360](#f360) |
 | [Infra](#infra) | 5 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F385](#f385) |
@@ -35,7 +34,6 @@ _(none open)_
 
 ## Architecture
 
-- [ ] <a id="f388"></a> **F388** [next] Desk Premise Workbench — Phase 1: PremiseSpec data model + stream registry (backend). Bounded `PremiseSpec` (Pydantic, vocab-validated, content-hashed), `Stream` protocol + registry with `form4` first, `spec → EventStudyConfig` compiler, JSON premise store with queue-shaped state machine. No UI, no runs yet. Plan: docs/plans/2026-06-08-desk-premise-workbench-plan.md; spec: docs/superpowers/specs/2026-06-08-desk-premise-workbench-design.md. [arch] [hard]
 - [ ] <a id="f389"></a> **F389** Desk Premise Workbench — Phase 2: run service + explore/confirm gate (backend). Fast-preview (local) + full-explore (worker-dispatch via F387 probe), `≤2020` hard guard, the discipline gate (explore unlogged; confirm = freeze+hash+power_audit+single sealed run+FDR append, idempotent by hash), agent-native endpoints + operator runbook. Depends on F388 (do not start until F388 ships). [arch] [hard]
 - [ ] <a id="f390"></a> **F390** Desk Premise Workbench — Phase 3: Desk tab + Premises workbench UI (frontend). New Desk tab (Premises active; Inbox/Playbooks/Tracking stubbed), master-detail plain-English loop (free-text + guided input → readback → run → plain verdict → graduate gate), technical spec behind a fold. Depends on F389 (do not start until F389 ships). [arch] [hard]
 
@@ -57,6 +55,9 @@ _(none open)_
 - [ ] <a id="f272"></a> **F272** Inspector panel for node params — when a node has >3 params or long values (e.g. multi-line code blocks for Code nodes), inline editing gets cramped. Right-side panel shows selected-node form; selection ring already in place (F265). Defer until F269+F271 expose nodes that actually need it. (added 2026-05-25, from F268 plan §6). [medium] [arch]
 
 ## Hardening
+
+- [ ] <a id="f391"></a> **F391** Per-key event_filter VALUE-type validation in stream vocabularies — F388 validates that `event_filter`/`dose_params` KEYS are in-vocabulary but not that their VALUES are well-typed (a wrong-typed value passes spec validation and would only fail when filters are applied). Extend the stream vocabulary from a key set to typed value schemas so a malformed value is rejected at spec validation, preserving the "bounded = always a real test" guarantee. Pairs with F389 (which actually applies the filters). Surfaced by F388 review (KP-6). [hardening] [testing]
+- [ ] <a id="f392"></a> **F392** F388 reviewer polish — document that `PremiseSpec.model_construct()` bypasses validators (public-API footgun), add the missing type annotation on the `Stream.stream_id` Protocol property, and type the `cost_fn` event parameter in premise_compile (currently `type: ignore`/untyped). Minor clarity items deferred from the F388 review (C7 / KP-8 / KP-9). [polish]
 
 - [ ] <a id="f383"></a> **F383** Consume the new `shares_source` flag (F322) in valuation — derived shares now carry a source tag (instantaneous/dei/wa/wa_fy) but `compute_valuation` ignores it; mark P/S as approximate / lower-confidence when WA-sourced (weighted-average period shares, not point-in-time). Surfaced by the F322 review wave (DI-01/COR-03/RM-02). [hardening]
 
