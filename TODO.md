@@ -77,8 +77,6 @@ _(none open)_
 
 ## Infra
 
-- [x] <a id="f386"></a> **F386** Robust worker completion detection — `worker-run.sh` writes a `.<logname>.done` sentinel with the job's exit code; new `bin/worker-status.sh <outdir> <logname> [--wait]` reads it (`STATUS=DONE exit=0`/`FAILED exit=N`/`RUNNING`), replacing fragile `pgrep` polling that raced and matched the poller itself. Validated dogfood on mfcore01. [infra]
-
 - [ ] <a id="f385"></a> **F385** Stage research data artifacts on mfcore01 on-demand — the compute env is ready but the price cache / EDGAR companyfacts+derived / Form-4 datasets aren't staged (re-fetchable from source; no home access needed). Document/automate the re-fetch recipe so `WORKER_REQUIRE` pre-flight passes for a given study. [infra]
 
 - [ ] <a id="f97"></a> **F97** [medium] Provision `backend/venv/` in routine builder container — overnight builds 21/22/23 all hit the same gap: §3.5 backend smoke test originally specified `cd backend && venv/bin/uvicorn …` but the routine container ships without a venv. Spec now codifies AST + import-time check as the substitute. Real fix: the container image includes `backend/venv/` with pinned deps (Pydantic, FastAPI, pytest). Once landed, restore the full uvicorn smoke test path. Container/infra change, not application code. (from build 23 process review) [infra]
