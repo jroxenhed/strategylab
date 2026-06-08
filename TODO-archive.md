@@ -313,3 +313,5 @@ grouped by close month. Never reorder or rewrite previously archived sections.
 
 - [x] <a id="f388"></a> **F388** [next] Desk Premise Workbench — Phase 1: PremiseSpec data model + stream registry (backend). Bounded `PremiseSpec` (Pydantic, vocab-validated, content-hashed), `Stream` protocol + registry with `form4` first, `spec → EventStudyConfig` compiler, JSON premise store with queue-shaped state machine. No UI, no runs yet. Plan: docs/plans/2026-06-08-desk-premise-workbench-plan.md; spec: docs/superpowers/specs/2026-06-08-desk-premise-workbench-design.md. [arch] [hard]
 
+- [x] <a id="f389"></a> **F389** Desk Premise Workbench — Phase 2: run service + explore/confirm gate (backend). Fast-preview (local) + full-explore (worker-dispatch via F387 probe), `≤2020` hard guard, the discipline gate (explore unlogged; confirm = freeze+hash+power_audit+single sealed run+FDR append, idempotent by hash), agent-native endpoints + operator runbook. Depends on F388 (do not start until F388 ships). [arch] [hard]
+

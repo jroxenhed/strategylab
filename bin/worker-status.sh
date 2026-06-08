@@ -39,7 +39,8 @@ LOG_REL="$OUTDIR/$LOGNAME"
 # bracketed by markers so the LOCAL side interprets — keeps the remote command
 # trivial (echo/cat/tail), no remote command-substitution to re-quote.
 _remote_probe() {
-  local inner="echo ===EXIT===; cat ~/strategylab/$DONE_REL 2>/dev/null; echo ===TAIL===; tail -4 ~/strategylab/$LOG_REL 2>/dev/null"
+  # G6: quote path vars inside the remote command to prevent word-splitting/injection
+  local inner="echo ===EXIT===; cat ~/strategylab/\"$DONE_REL\" 2>/dev/null; echo ===TAIL===; tail -4 ~/strategylab/\"$LOG_REL\" 2>/dev/null"
   ssh -o ConnectTimeout=15 -o BatchMode=yes "$WORKER_HOST" "$(rwrap "$inner")" 2>&1 | ssh_clean
 }
 

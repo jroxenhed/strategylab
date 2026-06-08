@@ -260,7 +260,8 @@ dispatch_worker() {
   echo "DISPATCHED target=worker pid=$PID log=$OUTDIR/$LOGNAME done=$OUTDIR/.${LOGNAME}.done"
   echo "Status: WORKER_HOST=$WORKER_HOST WORKER_SHELL=$WORKER_SHELL bin/worker-status.sh $OUTDIR $LOGNAME [--wait]"
   local poll_inner
-  poll_inner="$(rwrap "tail -f ~/strategylab/$OUTDIR/$LOGNAME")"
+  # G6: quote path vars in the informational poll-hint string
+  poll_inner="$(rwrap "tail -f ~/strategylab/\"${OUTDIR}\"/\"${LOGNAME}\"")"
   echo "Poll: ssh $WORKER_HOST '$poll_inner'"
 }
 

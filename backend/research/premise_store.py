@@ -17,11 +17,22 @@ Failure modes on load():
 State machine (7 states):
     draft
       → awaiting_formalization   (user saves raw idea; AI ready to formalize)
+    awaiting_formalization
       → spec_ready               (AI wrote validated PremiseSpec + plain_summary)
+    spec_ready / explored
       → exploring                (run triggered, job in flight)
+    exploring
       → explored                 (run complete; verdict available)
+      → spec_ready               (on failure — revert)
+    explored
       → awaiting_confirm         (user decides to graduate; power_audit check — F389)
-      → confirmed                (spec frozen, FDR ledger appended; terminal)
+      → spec_ready               (revert if needed)
+    awaiting_confirm
+      → confirmed                (spec frozen, FDR ledger appended; terminal — F393)
+      → explored                 (revert if power_audit fails)
+
+    NOTE: draft → spec_ready is NOT a valid direct transition.
+    The path is: draft → awaiting_formalization → spec_ready.
 
 Illegal transitions raise ValueError("Cannot transition {current!r} → {target!r}").
 

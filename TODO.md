@@ -18,8 +18,8 @@ _(none open)_
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
-| [Architecture](#architecture) | 9 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372), [F389](#f389)–[F390](#f390) |
-| [Hardening](#hardening) | 5 | [F362](#f362), [F364](#f364), [F383](#f383), [F391](#f391)–[F392](#f392) |
+| [Architecture](#architecture) | 8 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372), [F390](#f390) |
+| [Hardening](#hardening) | 6 | [F362](#f362), [F364](#f364), [F383](#f383), [F391](#f391)–[F392](#f392), [F394](#f394) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F360](#f360) |
 | [Infra](#infra) | 5 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F385](#f385) |
@@ -34,7 +34,6 @@ _(none open)_
 
 ## Architecture
 
-- [ ] <a id="f389"></a> **F389** Desk Premise Workbench — Phase 2: run service + explore/confirm gate (backend). Fast-preview (local) + full-explore (worker-dispatch via F387 probe), `≤2020` hard guard, the discipline gate (explore unlogged; confirm = freeze+hash+power_audit+single sealed run+FDR append, idempotent by hash), agent-native endpoints + operator runbook. Depends on F388 (do not start until F388 ships). [arch] [hard]
 - [ ] <a id="f390"></a> **F390** Desk Premise Workbench — Phase 3: Desk tab + Premises workbench UI (frontend). New Desk tab (Premises active; Inbox/Playbooks/Tracking stubbed), master-detail plain-English loop (free-text + guided input → readback → run → plain verdict → graduate gate), technical spec behind a fold. Depends on F389 (do not start until F389 ships). [arch] [hard]
 
 - [ ] <a id="f372"></a> **F372** R-2 execution gate — F369 census predicts UNTESTABLE (447 D2 events, MDE 4.63pp, same wall as R-1b). Before executing the approved R-2 charter, decide: structurally bigger net (longer period / relaxed floors with stated caveats) or shelve. John's call, not assumed. [arch]
@@ -56,6 +55,7 @@ _(none open)_
 
 ## Hardening
 
+- [ ] <a id="f394"></a> **F394** F389 run-service hardening — power_audit cache TOCTOU (concurrent callers both recompute; harmless but wasteful), `_job_locks`/`_jobs` dicts grow unboundedly (add cleanup on terminal job state), and `poll_explore_status` is a synchronous SSH-blocking call inside an async endpoint (wrap in `asyncio.to_thread`). All P2/P3 from the F389 review wave; low impact, deferred to keep the F389 commit focused. [hardening]
 - [ ] <a id="f391"></a> **F391** Per-key event_filter VALUE-type validation in stream vocabularies — F388 validates that `event_filter`/`dose_params` KEYS are in-vocabulary but not that their VALUES are well-typed (a wrong-typed value passes spec validation and would only fail when filters are applied). Extend the stream vocabulary from a key set to typed value schemas so a malformed value is rejected at spec validation, preserving the "bounded = always a real test" guarantee. Pairs with F389 (which actually applies the filters). Surfaced by F388 review (KP-6). [hardening] [testing]
 - [ ] <a id="f392"></a> **F392** F388 reviewer polish — document that `PremiseSpec.model_construct()` bypasses validators (public-API footgun), add the missing type annotation on the `Stream.stream_id` Protocol property, and type the `cost_fn` event parameter in premise_compile (currently `type: ignore`/untyped). Minor clarity items deferred from the F388 review (C7 / KP-8 / KP-9). [polish]
 
@@ -92,6 +92,8 @@ _(none open)_
 - [ ] <a id="f309"></a> **F309** Promote the A8 zoom→auto-switch verification recipe to a scripted render-probe check (F298 rule): seed Alpaca 5m multi-year settings, drive `window.__chartDebug.setVisibleLogicalRange(0, N)`, assert lastSetDataPoints drops ≥10x + 'Auto (…)' badge, then narrow range and assert full-resolution restore. Needs DEV-build probe target or exposing the hook in preview builds behind a flag. [easy] [infra]
 
 ## Deferred (gated)
+
+- [ ] <a id="f393"></a> **F393** Real OOS confirm run + FDR-ledger append for the premise workbench — F389 built the confirm gate STRUCTURE (freeze spec_hash, power_audit pre-check, store-wide idempotency, transition explored→awaiting_confirm, record the future-run command) but deliberately does NOT run a backtest or write the real `fdr_ledger.json`, because the correct out-of-sample confirm semantics are a research-methodology decision: which window (2021–2024?), how the 2025+ reserve is handled, era breakdown, and whether/how multiplicity is paid. Wire `awaiting_confirm → confirmed` via a deliberate worker OOS run that appends the real ledger ONCE per spec_hash. Also folds the premise_run↔premise_run_worker duplicated-constants refactor (F389 review KP-08, since both files change here). [arch] [hard] [gated: John signs off on the confirm-window methodology]
 
 - [ ] <a id="f382"></a> **F382** Cross-dose bootstrap seed correlation (PEAD explore) — all 3 doses share one `_SEED`, so block-bootstrap resamples are correlated across doses. Pre-existing; F380 preserved it to keep byte-identical determinism. Decide: independent per-dose seeds (changes all bootstrap CIs + needs a fresh determinism anchor) vs keep correlated (document as intentional). Folds the XOR seed-aliasing note (`seed_base ^ task_index` aliases near powers of 2; low-risk at our scale, hashed-seed option available). John's methodology call. [arch] [gated: John approves the seeding change]
 
