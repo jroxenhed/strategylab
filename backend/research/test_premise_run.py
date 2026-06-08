@@ -1574,3 +1574,227 @@ def test_preview_run_real_data(tmp_path):
         assert mtime_after == mtime_before, "Real FDR ledger must NOT be touched by preview"
     elif real_ledger.exists():
         pytest.fail("Real FDR ledger appeared during preview run — invariant violated")
+
+
+# ===========================================================================
+# F390 — B1/B2 route-level tests (submit + save_spec auto-advance)
+# Uses the FastAPI test client to exercise the full route logic.
+# ===========================================================================
+
+class TestSubmitEndpoint:
+    """B1: POST /api/premises/{id}/submit — draft → awaiting_formalization."""
+
+    @pytest.fixture(autouse=True)
+    def isolate_store(self, tmp_path):
+        _ps_module.DATA_PATH = str(tmp_path / "premises.json")
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        import sys
+        _BACKEND_DIR_STR = str(_BACKEND_DIR)
+        if _BACKEND_DIR_STR not in sys.path:
+            sys.path.insert(0, _BACKEND_DIR_STR)
+        from main import app
+        return TestClient(app)
+
+    def test_submit_draft_transitions_to_awaiting_formalization(self):
+        """POST /submit on a draft premise must transition to awaiting_formalization."""
+        client = self._client()
+
+        # Create a premise
+        create_resp = client.post("/api/premises", json={"premise_text": "Test submit premise"})
+        assert create_resp.status_code == 201
+        pid = create_resp.json()["premise_id"]
+        assert create_resp.json()["status"] == "draft"
+
+        # Submit
+        submit_resp = client.post(f"/api/premises/{pid}/submit")
+        assert submit_resp.status_code == 200, submit_resp.text
+        body = submit_resp.json()
+        assert body["premise_id"] == pid
+        assert body["status"] == "awaiting_formalization"
+
+        # Verify stored status
+        get_resp = client.get(f"/api/premises/{pid}")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["status"] == "awaiting_formalization"
+
+    def test_submit_non_draft_returns_409(self):
+        """POST /submit on a non-draft premise must return 409."""
+        client = self._client()
+
+        # Create + submit to move to awaiting_formalization
+        create_resp = client.post("/api/premises", json={"premise_text": "Test 409 premise"})
+        assert create_resp.status_code == 201
+        pid = create_resp.json()["premise_id"]
+
+        # First submit — OK
+        r1 = client.post(f"/api/premises/{pid}/submit")
+        assert r1.status_code == 200
+
+        # Second submit on awaiting_formalization — must 409
+        r2 = client.post(f"/api/premises/{pid}/submit")
+        assert r2.status_code == 409
+
+    def test_submit_unknown_id_returns_404(self):
+        """POST /submit on an unknown premise_id must return 404."""
+        client = self._client()
+        r = client.post("/api/premises/p-00000000/submit")
+        assert r.status_code == 404
+
+
+class TestSaveSpecAutoAdvance:
+    """B2: PUT /spec auto-advances through legal edges to reach spec_ready."""
+
+    @pytest.fixture(autouse=True)
+    def isolate_store(self, tmp_path):
+        _ps_module.DATA_PATH = str(tmp_path / "premises.json")
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        import sys
+        _BACKEND_DIR_STR = str(_BACKEND_DIR)
+        if _BACKEND_DIR_STR not in sys.path:
+            sys.path.insert(0, _BACKEND_DIR_STR)
+        from main import app
+        return TestClient(app)
+
+    def _minimal_spec_dict(self, text: str = "Test spec premise") -> dict:
+        return {
+            "premise_text": text,
+            "stream": "form4",
+            "event_filter": {"transaction_codes": ["P"]},
+            "dose": "r1_score",
+            "dose_params": {},
+            "horizons": [21, 63, 126],
+            "entry_lag_days": 1,
+            "dedup_same_ticker": True,
+            "dedup_window_days": 30,
+            "direction": "long",
+            "floors": {"min_price": 5.0, "min_avg_volume": 500000},
+            "min_peer_count": 8,
+            "fdr_q": 0.10,
+            "n_boot": 99,
+        }
+
+    def test_save_spec_from_draft_reaches_spec_ready(self):
+        """PUT /spec on a draft premise must auto-advance to spec_ready."""
+        client = self._client()
+
+        create_resp = client.post("/api/premises", json={"premise_text": "Draft spec test"})
+        assert create_resp.status_code == 201
+        pid = create_resp.json()["premise_id"]
+        assert create_resp.json()["status"] == "draft"
+
+        spec = self._minimal_spec_dict("Draft spec test")
+        put_resp = client.put(f"/api/premises/{pid}/spec", json=spec)
+        assert put_resp.status_code == 200, put_resp.text
+        assert put_resp.json()["status"] == "spec_ready"
+
+        # Verify stored status
+        get_resp = client.get(f"/api/premises/{pid}")
+        assert get_resp.json()["status"] == "spec_ready"
+
+    def test_save_spec_from_explored_reaches_spec_ready(self):
+        """PUT /spec on an explored premise must auto-advance to spec_ready."""
+        client = self._client()
+
+        # Create + manually force to explored
+        create_resp = client.post("/api/premises", json={"premise_text": "Explored spec test"})
+        pid = create_resp.json()["premise_id"]
+
+        # Force explored state directly in store
+        store = PremiseStore()
+        store.premises[pid]["status"] = "explored"
+        store.save()
+
+        spec = self._minimal_spec_dict("Explored spec test")
+        put_resp = client.put(f"/api/premises/{pid}/spec", json=spec)
+        assert put_resp.status_code == 200, put_resp.text
+        assert put_resp.json()["status"] == "spec_ready"
+
+        get_resp = client.get(f"/api/premises/{pid}")
+        assert get_resp.json()["status"] == "spec_ready"
+
+    def test_save_spec_from_awaiting_formalization_reaches_spec_ready(self):
+        """PUT /spec from awaiting_formalization must reach spec_ready in one hop."""
+        client = self._client()
+
+        create_resp = client.post("/api/premises", json={"premise_text": "AF spec test"})
+        pid = create_resp.json()["premise_id"]
+
+        # Submit to move to awaiting_formalization
+        client.post(f"/api/premises/{pid}/submit")
+
+        get_resp = client.get(f"/api/premises/{pid}")
+        assert get_resp.json()["status"] == "awaiting_formalization"
+
+        spec = self._minimal_spec_dict("AF spec test")
+        put_resp = client.put(f"/api/premises/{pid}/spec", json=spec)
+        assert put_resp.status_code == 200, put_resp.text
+        assert put_resp.json()["status"] == "spec_ready"
+
+
+class TestListStatusFilter:
+    """H6: GET /api/premises?status= filters list to matching status; 422 on unknown."""
+
+    @pytest.fixture(autouse=True)
+    def isolate_store(self, tmp_path):
+        _ps_module.DATA_PATH = str(tmp_path / "premises.json")
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        import sys
+        _BACKEND_DIR_STR = str(_BACKEND_DIR)
+        if _BACKEND_DIR_STR not in sys.path:
+            sys.path.insert(0, _BACKEND_DIR_STR)
+        from main import app
+        return TestClient(app)
+
+    def test_filter_returns_only_matching_status(self):
+        """?status=awaiting_formalization must return only premises with that status."""
+        client = self._client()
+
+        # Create two premises
+        r1 = client.post("/api/premises", json={"premise_text": "premise one"})
+        pid1 = r1.json()["premise_id"]
+
+        r2 = client.post("/api/premises", json={"premise_text": "premise two"})
+        pid2 = r2.json()["premise_id"]
+
+        # Submit pid1 → awaiting_formalization; leave pid2 as draft
+        client.post(f"/api/premises/{pid1}/submit")
+
+        # Without filter: both show up
+        all_resp = client.get("/api/premises")
+        assert all_resp.status_code == 200
+        all_ids = {p["premise_id"] for p in all_resp.json()}
+        assert pid1 in all_ids
+        assert pid2 in all_ids
+
+        # With status=awaiting_formalization: only pid1
+        af_resp = client.get("/api/premises?status=awaiting_formalization")
+        assert af_resp.status_code == 200
+        af_ids = {p["premise_id"] for p in af_resp.json()}
+        assert pid1 in af_ids
+        assert pid2 not in af_ids
+
+        # With status=draft: only pid2
+        draft_resp = client.get("/api/premises?status=draft")
+        assert draft_resp.status_code == 200
+        draft_ids = {p["premise_id"] for p in draft_resp.json()}
+        assert pid2 in draft_ids
+        assert pid1 not in draft_ids
+
+    def test_filter_unknown_status_returns_422(self):
+        """?status=<unknown> must return 422."""
+        client = self._client()
+        resp = client.get("/api/premises?status=not_a_real_status")
+        assert resp.status_code == 422, resp.text
+
+    def test_filter_empty_store_returns_empty_list(self):
+        """?status=explored on an empty store returns []."""
+        client = self._client()
+        resp = client.get("/api/premises?status=explored")
+        assert resp.status_code == 200
+        assert resp.json() == []

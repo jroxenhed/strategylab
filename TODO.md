@@ -13,12 +13,12 @@ _(none open)_
 - [F364](#f364) — [next] Review-contract rule: findings citing population statistics must state the population measured [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 26 items
+## Open Work — 25 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
-| [Architecture](#architecture) | 8 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372), [F390](#f390) |
+| [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372) |
 | [Hardening](#hardening) | 6 | [F362](#f362), [F364](#f364), [F383](#f383), [F391](#f391)–[F392](#f392), [F394](#f394) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F360](#f360) |
@@ -33,8 +33,6 @@ _(none open)_
   - FX conversion cost
 
 ## Architecture
-
-- [ ] <a id="f390"></a> **F390** Desk Premise Workbench — Phase 3: Desk tab + Premises workbench UI (frontend). New Desk tab (Premises active; Inbox/Playbooks/Tracking stubbed), master-detail plain-English loop (free-text + guided input → readback → run → plain verdict → graduate gate), technical spec behind a fold. Depends on F389 (do not start until F389 ships). [arch] [hard]
 
 - [ ] <a id="f372"></a> **F372** R-2 execution gate — F369 census predicts UNTESTABLE (447 D2 events, MDE 4.63pp, same wall as R-1b). Before executing the approved R-2 charter, decide: structurally bigger net (longer period / relaxed floors with stated caveats) or shelve. John's call, not assumed. [arch]
 - [ ] <a id="a8"></a> **A8** Chart performance — large dataset optimizations (100K+ 5-min bars): [arch]
@@ -55,7 +53,7 @@ _(none open)_
 
 ## Hardening
 
-- [ ] <a id="f394"></a> **F394** F389 run-service hardening — power_audit cache TOCTOU (concurrent callers both recompute; harmless but wasteful), `_job_locks`/`_jobs` dicts grow unboundedly (add cleanup on terminal job state), and `poll_explore_status` is a synchronous SSH-blocking call inside an async endpoint (wrap in `asyncio.to_thread`). All P2/P3 from the F389 review wave; low impact, deferred to keep the F389 commit focused. [hardening]
+- [ ] <a id="f394"></a> **F394** F389 run-service hardening — power_audit cache TOCTOU (concurrent callers both recompute; harmless but wasteful), `_job_locks`/`_jobs` dicts grow unboundedly (add cleanup on terminal job state), and `poll_explore_status` is a synchronous SSH-blocking call inside an async endpoint (wrap in `asyncio.to_thread`). Also (from F390 review AN-5/COR-5): a server restart loses the in-memory job dict, so a premise stuck in `exploring` returns run-status `unknown` with no recovery — add a "reset stuck run" path (exploring→spec_ready) and reconcile job state on startup. All P2/P3 from the F389/F390 review waves; low impact, deferred to keep the phase commits focused. [hardening]
 - [ ] <a id="f391"></a> **F391** Per-key event_filter VALUE-type validation in stream vocabularies — F388 validates that `event_filter`/`dose_params` KEYS are in-vocabulary but not that their VALUES are well-typed (a wrong-typed value passes spec validation and would only fail when filters are applied). Extend the stream vocabulary from a key set to typed value schemas so a malformed value is rejected at spec validation, preserving the "bounded = always a real test" guarantee. Pairs with F389 (which actually applies the filters). Surfaced by F388 review (KP-6). [hardening] [testing]
 - [ ] <a id="f392"></a> **F392** F388 reviewer polish — document that `PremiseSpec.model_construct()` bypasses validators (public-API footgun), add the missing type annotation on the `Stream.stream_id` Protocol property, and type the `cost_fn` event parameter in premise_compile (currently `type: ignore`/untyped). Minor clarity items deferred from the F388 review (C7 / KP-8 / KP-9). [polish]
 

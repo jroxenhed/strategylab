@@ -17,9 +17,9 @@ Research imports happen lazily inside sync workers (turnaround.py pattern).
 from __future__ import annotations
 
 import logging
-from typing import Literal
+from typing import Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, HTTPException, Path, Query
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -47,19 +47,48 @@ class RunRequest(BaseModel):
 # Endpoints
 # ---------------------------------------------------------------------------
 
+_VALID_STATUSES = {
+    "draft", "awaiting_formalization", "spec_ready",
+    "exploring", "explored", "awaiting_confirm", "confirmed",
+}
+
+
 @router.get("/api/premises")
-async def list_premises():
-    """List all premises (id, status, premise_text excerpt, last_updated)."""
+async def list_premises(
+    status: Optional[str] = Query(
+        None,
+        description=(
+            "H6: Optional status filter — e.g. 'awaiting_formalization' lets the "
+            "agent-operator poll its own queue. 422 on unknown status."
+        ),
+    ),
+):
+    """List all premises (id, status, premise_text excerpt, last_updated).
+
+    Optional ?status= query param: filters returned list to premises with that
+    exact status. Raises 422 if the status value is not a known PremiseStatus.
+    """
     from research.premise_store import PremiseStore
+
+    # H6: validate status param before touching store
+    if status is not None and status not in _VALID_STATUSES:
+        raise HTTPException(
+            422,
+            f"Unknown status {status!r}. Valid values: {sorted(_VALID_STATUSES)}",
+        )
 
     store = PremiseStore()
     result = []
     for pid, p in store.premises.items():
+        p_status = p.get("status")
+        # H6: apply filter when provided
+        if status is not None and p_status != status:
+            continue
         text = p.get("premise_text", "")
         excerpt = (text[:120] + "…") if len(text) > 120 else text
         result.append({
             "premise_id": pid,
-            "status": p.get("status"),
+            "status": p_status,
             "premise_text_excerpt": excerpt,
             "last_updated": p.get("updated_at"),
             "created_at": p.get("created_at"),
@@ -93,6 +122,40 @@ async def get_premise(
     except KeyError:
         raise HTTPException(404, f"Premise not found: {premise_id!r}")
     return dict(p)
+
+
+@router.post("/api/premises/{premise_id}/submit")
+async def submit_premise(
+    premise_id: str = Path(..., pattern=_PREMISE_ID_PATTERN),
+):
+    """Submit a draft premise for formalization (draft → awaiting_formalization).
+
+    Called when the user sends their idea to the agent-operator queue.
+    409 if status is not 'draft'.
+    Returns {premise_id, status}.
+    """
+    from research.premise_store import PremiseStore
+
+    store = PremiseStore()
+    try:
+        p = store._get(premise_id)
+    except KeyError:
+        raise HTTPException(404, f"Premise not found: {premise_id!r}")
+
+    current_status = p.get("status")
+    if current_status != "draft":
+        raise HTTPException(
+            409,
+            f"Cannot submit premise {premise_id!r}: status is {current_status!r}, "
+            f"expected 'draft'."
+        )
+
+    try:
+        store.transition(premise_id, "awaiting_formalization")
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+
+    return {"premise_id": premise_id, "status": "awaiting_formalization"}
 
 
 @router.put("/api/premises/{premise_id}/spec")
@@ -139,12 +202,26 @@ async def save_spec(
         # G2: do NOT swallow — propagate store errors as 409
         raise HTTPException(409, str(exc))
 
-    # G2: transition to spec_ready only from states that allow it; return actual status
+    # B2: auto-advance through LEGAL intermediate edges to reach spec_ready.
+    # State machine does NOT have a direct draft→spec_ready edge; must hop via
+    # awaiting_formalization. Each hop uses a legal transition() call so the
+    # machine invariant is preserved.
+    #
+    # Allowed start states and their paths:
+    #   draft                → awaiting_formalization → spec_ready  (2 hops)
+    #   awaiting_formalization → spec_ready                          (1 hop)
+    #   spec_ready           → (already there, no-op)
+    #   explored             → spec_ready                           (1 hop)
+    # G2: block is still in effect above for exploring/awaiting_confirm/confirmed.
     p2 = store._get(premise_id)
     current2 = p2.get("status")
     _SPEC_READY_SOURCES = {"draft", "awaiting_formalization", "spec_ready", "explored"}
     if current2 in _SPEC_READY_SOURCES and current2 != "spec_ready":
         try:
+            # If starting from draft, must hop via awaiting_formalization first
+            if current2 == "draft":
+                store.transition(premise_id, "awaiting_formalization")
+            # Now advance to spec_ready (works from awaiting_formalization or explored)
             store.transition(premise_id, "spec_ready")
         except ValueError as exc:
             # Log the failure but do NOT silently swallow — G2: return actual status

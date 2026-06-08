@@ -14,13 +14,14 @@ import Results, { type ResultsTab } from './features/strategy/Results'
 import StrategyComparison from './features/strategy/StrategyComparison'
 import PaperTrading from './features/trading/PaperTrading'
 import Discovery from './features/discovery/Discovery'
+import Desk from './features/desk/Desk'
 import WatchlistPanel from './features/watchlist/WatchlistPanel'
 import { useTimezone, tzLabel } from './shared/utils/time'
 import { seedFromLocalStorageIfAny } from './shared/utils/seedFromLocalStorage'
 import NodeBuilder from './features/nodebuilder/NodeBuilder'
 import AutoRenderToggle from './features/nodebuilder/AutoRenderToggle'
 
-type AppTab = 'chart' | 'trading' | 'discovery'
+type AppTab = 'chart' | 'trading' | 'discovery' | 'desk'
 
 
 const STORAGE_KEY = 'strategylab-settings'
@@ -115,7 +116,7 @@ export default function App() {
   const [compareMode, setCompareMode] = useState(false)
   const [activeTab, setActiveTab] = useState<AppTab>(() => {
     const s = localStorage.getItem('activeTab')
-    return s === 'chart' || s === 'trading' || s === 'discovery' ? s : 'chart'
+    return s === 'chart' || s === 'trading' || s === 'discovery' || s === 'desk' ? s : 'chart'
   })
   const [mainChart, setMainChart] = useState<IChartApi | null>(null)
   // F227 — ref into StrategyBuilder for Apply-from-Optimizer/WFA
@@ -220,13 +221,13 @@ export default function App() {
       <header style={styles.header}>
         <span style={styles.logo}>StrategyLab</span>
         <div style={styles.tabs}>
-          {(['chart', 'trading', 'discovery'] as const).map(tab => (
+          {(['chart', 'trading', 'discovery', 'desk'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => { setActiveTab(tab); localStorage.setItem('activeTab', tab) }}
               style={{ ...styles.tab, ...(activeTab === tab ? styles.tabActive : {}) }}
             >
-              {tab === 'chart' ? 'Chart' : tab === 'trading' ? 'Live Trading' : 'Discovery'}
+              {tab === 'chart' ? 'Chart' : tab === 'trading' ? 'Live Trading' : tab === 'discovery' ? 'Discovery' : 'The Desk'}
             </button>
           ))}
         </div>
@@ -539,6 +540,9 @@ export default function App() {
             setActiveTab('trading')
             localStorage.setItem('activeTab', 'trading')
           }} />
+        </div>
+        <div style={{ height: '100%', display: activeTab === 'desk' ? 'block' : 'none' }}>
+          <Desk />
         </div>
       </div>
     </div>

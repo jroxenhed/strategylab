@@ -315,3 +315,5 @@ grouped by close month. Never reorder or rewrite previously archived sections.
 
 - [x] <a id="f389"></a> **F389** Desk Premise Workbench — Phase 2: run service + explore/confirm gate (backend). Fast-preview (local) + full-explore (worker-dispatch via F387 probe), `≤2020` hard guard, the discipline gate (explore unlogged; confirm = freeze+hash+power_audit+single sealed run+FDR append, idempotent by hash), agent-native endpoints + operator runbook. Depends on F388 (do not start until F388 ships). [arch] [hard]
 
+- [x] <a id="f390"></a> **F390** Desk Premise Workbench — Phase 3: Desk tab + Premises workbench UI (frontend). New Desk tab (Premises active; Inbox/Playbooks/Tracking stubbed), master-detail plain-English loop (free-text + guided input → readback → run → plain verdict → graduate gate), technical spec behind a fold. Depends on F389 (do not start until F389 ships). [arch] [hard]
+
