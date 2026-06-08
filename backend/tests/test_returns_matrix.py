@@ -384,6 +384,45 @@ class TestMetadataFields:
         for h in horizons:
             assert str(h) in meta["last_full_coverage_date"]
 
+        # F375: nan_rejected_by_sym must be present in metadata (empty dict when zero)
+        assert "nan_rejected_by_sym" in meta, "Missing metadata field: nan_rejected_by_sym (F375)"
+        assert meta["nan_rejected_by_sym"] == {}, (
+            "nan_rejected_by_sym should be {} when no NaN rejections"
+        )
+
+    def test_metadata_nan_rejected_by_sym(self, tmp_path):
+        """F375: nan_rejected_by_sym is written to sidecar and reflects per-symbol counts."""
+        from research.returns_matrix import _build_metadata, _compute_last_full_coverage
+
+        entry_dates = [date(2020, 1, 2)]
+        horizons = (21,)
+        tickers = ["AAPL", "MSFT"]
+        out_path = tmp_path / "matrix.parquet"
+
+        last_full_coverage = _compute_last_full_coverage(entry_dates, horizons)
+
+        meta = _build_metadata(
+            parquet_path=out_path,
+            entry_dates=entry_dates,
+            horizons=horizons,
+            universe_tickers=tickers,
+            n_rows=5,
+            n_chunks_expected=1,
+            n_chunks_failed=0,
+            price_cache_dir=tmp_path,
+            data_source="yahoo",
+            elapsed_total=1.0,
+            status="complete",
+            last_full_coverage=last_full_coverage,
+            nan_rejected_count=3,
+            nan_rejected_by_sym={"AAPL": 2, "MSFT": 1},
+        )
+
+        assert meta["nan_rejected_count"] == 3
+        assert meta["nan_rejected_by_sym"] == {"AAPL": 2, "MSFT": 1}, (
+            "nan_rejected_by_sym must be written to sidecar verbatim (F375)"
+        )
+
     def test_last_full_coverage_trading_day_arithmetic(self):
         """COR-01 + COR-04: last_full_coverage anchored to actual entry_dates."""
         from research.returns_matrix import _compute_last_full_coverage
@@ -1231,4 +1270,9 @@ class TestNaNGuard:
             )
             assert coverage["nan_rejected"] == 0, (
                 f"Expected nan_rejected=0 for empty-frame ticker, got {coverage['nan_rejected']}"
+            )
+            # F375: nan_rejected_by_sym key must NOT be present when count is zero
+            # (zero-overhead contract for the common case).
+            assert "nan_rejected_by_sym" not in coverage, (
+                "nan_rejected_by_sym should only be present when nan_rejected > 0 (F375)"
             )

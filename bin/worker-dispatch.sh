@@ -119,6 +119,36 @@ dispatch_worker() {
     sync_paths+=("backend/research/$f")
   done < <(find "$REPO_ROOT/backend/research" -maxdepth 1 -name '*.py' -exec basename {} \;)
 
+  # Always sync backend-root modules that research code imports transitively.
+  # Without this, adding a symbol to (e.g.) fileutil.py leaves the worker on
+  # a stale copy until the caller remembers to pass WORKER_SYNC — the F348
+  # probe crashed exactly this way (missing file_lock in fileutil.py).
+  #
+  # MAINT-02 — ALLOWLIST DRIFT COST:
+  # Adding a new backend-root module that research code imports transitively
+  # will cause a silent ModuleNotFoundError on the worker until that file is
+  # added here.  To audit: run
+  #   grep -rh "^import\|^from" backend/research/*.py | grep -v "research\." \
+  #     | awk '{print $2}' | cut -d. -f1 | sort -u
+  # and cross-check against this list.  Review whenever a new top-level module
+  # is added to backend/ that research code imports.  WORKER_SYNC is the
+  # escape hatch for one-off extras (no allowlist edit needed for short-lived
+  # scripts).
+  #
+  # Allowlist is the known set; WORKER_SYNC remains the escape hatch for extras.
+  local backend_root_deps=(
+    "backend/edgar.py"
+    "backend/fileutil.py"
+    "backend/shared.py"
+    "backend/turnaround.py"
+    "backend/turnaround_validation.py"
+  )
+  for dep in "${backend_root_deps[@]}"; do
+    if [[ -f "$REPO_ROOT/$dep" ]]; then
+      sync_paths+=("$dep")
+    fi
+  done
+
   # Extra paths from WORKER_SYNC env — validate each entry
   if [[ -n "${WORKER_SYNC:-}" ]]; then
     IFS=',' read -ra extra <<< "$WORKER_SYNC"
