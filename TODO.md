@@ -13,7 +13,7 @@ _(none open)_
 - [F364](#f364) — [next] Review-contract rule: findings citing population statistics must state the population measured [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 21 items
+## Open Work — 22 items
 
 | Section | Open | IDs |
 |---|---|---|
@@ -22,7 +22,7 @@ _(none open)_
 | [Hardening](#hardening) | 3 | [F362](#f362), [F364](#f364), [F383](#f383) |
 | [Polish](#polish) | 1 | [F310](#f310) |
 | [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F360](#f360) |
-| [Infra](#infra) | 4 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309) |
+| [Infra](#infra) | 5 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F385](#f385) |
 
 ## Features
 
@@ -76,6 +76,8 @@ _(none open)_
 - [ ] <a id="f360"></a> **F360** Re-measure both browser MCPs' snapshot size at the F217 blowup condition (chart view WITH populated backtest results, not the default empty state) — the 2026-06-07 shakedown measured playwright 18.5KB vs chrome-devtools 16.3KB at default state and could NOT reproduce the ~117k cdt blowup, so the "comparable" verdict in live-browser-verification.md is only validated for unpopulated pages. Run a backtest via `curl POST /api/backtest` + seeded state, re-snapshot both, update the doc. [easy] [testing] (added 2026-06-07)
 
 ## Infra
+
+- [ ] <a id="f385"></a> **F385** Stage research data artifacts on mfcore01 on-demand — the compute env is ready but the price cache / EDGAR companyfacts+derived / Form-4 datasets aren't staged (re-fetchable from source; no home access needed). Document/automate the re-fetch recipe so `WORKER_REQUIRE` pre-flight passes for a given study. [infra]
 
 - [ ] <a id="f97"></a> **F97** [medium] Provision `backend/venv/` in routine builder container — overnight builds 21/22/23 all hit the same gap: §3.5 backend smoke test originally specified `cd backend && venv/bin/uvicorn …` but the routine container ships without a venv. Spec now codifies AST + import-time check as the substitute. Real fix: the container image includes `backend/venv/` with pinned deps (Pydantic, FastAPI, pytest). Once landed, restore the full uvicorn smoke test path. Container/infra change, not application code. (from build 23 process review) [infra]
 
