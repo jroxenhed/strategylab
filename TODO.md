@@ -14,16 +14,16 @@ _(none open)_
 - [F385](#f385) — [next] Stage research data artifacts on mfcore01 on-demand
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 27 items
+## Open Work — 32 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
-| [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372) |
+| [Architecture](#architecture) | 8 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372), [F399](#f399) |
 | [Hardening](#hardening) | 7 | [F362](#f362), [F364](#f364), [F383](#f383), [F391](#f391)–[F392](#f392), [F394](#f394), [F396](#f396) |
 | [Polish](#polish) | 2 | [F310](#f310), [F398](#f398) |
 | [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F360](#f360) |
-| [Infra](#infra) | 5 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F385](#f385) |
+| [Infra](#infra) | 9 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F385](#f385), [F400](#f400)–[F403](#f403) |
 
 ## Features
 
@@ -35,6 +35,7 @@ _(none open)_
 
 ## Architecture
 
+- [ ] <a id="f399"></a> **F399** Phase 0 — free-data foundation for Desk discovery mode (parent) — widen the data panel beyond the UNIVERSE_V2 carve so Phase 1 (F404) can scan where signal lives (F369: small-caps). Free-data only; Sharadar rejected 2026-06-09 (delete-on-cancel license, incompatible with reproducible research). Spec: `docs/plans/2026-06-09-phase0-free-data-foundation-spec.md`. Components F400–F403; each F338-probed on real data; survivorship stamped permanent. [arch]
 - [ ] <a id="f372"></a> **F372** R-2 execution gate — F369 census predicts UNTESTABLE (447 D2 events, MDE 4.63pp, same wall as R-1b). Before executing the approved R-2 charter, decide: structurally bigger net (longer period / relaxed floors with stated caveats) or shelve. John's call, not assumed. [arch]
 - [ ] <a id="a8"></a> **A8** Chart performance — large dataset optimizations (100K+ 5-min bars): [arch]
   - [x] Equity curve detail mode downsample: root cause was missing `toDisplayTime()` shift on equity timestamps — raw UTC timestamps didn't match the main chart's ET-shifted timestamps, breaking crosshair sync and bucket alignment. Fixed by adding `toDisplayTime` to `shared/utils/time.ts` (mirrors Chart.tsx `toET`) and applying it to equity/baseline/trade-tick timestamps in Results.tsx before downsampling. `downsampleEquity()` itself was always correct.
@@ -85,6 +86,10 @@ _(none open)_
 
 ## Infra
 
+- [ ] <a id="f400"></a> **F400** Widen the price universe (Phase 0 / F399) — build the master currently-listed US-equity universe from the free NASDAQ Trader symbol directory (`nasdaqtraded.txt`, NASDAQ+NYSE+AMEX + ETFs), fetch daily OHLCV 2015→2024 into the price cache. UNIVERSE_V2 floor + SEC-filer become per-date *labels* (scan knobs), not membership gates. Output: `universe_manifest.parquet` + floor-status sidecar. F338 anchors in the spec; full fetch → worker (mfcore01), background. Also advances F385 (creates the broad worker cache). [infra]
+- [ ] <a id="f401"></a> **F401** Analyst up/downgrades ingest (Phase 0 / F399) — per-ticker yfinance `.upgrades_downgrades` → tidy event panel `(ticker,date,firm,action,grade_delta)` + per-(ticker,date) aggregations, joinable to the returns matrix. PIT = action date; `fetch_vintage` recorded. F338 anchors: AAPL coverage, known up/downgrade window probe, <5% unknown-action bucket. [infra]
+- [ ] <a id="f402"></a> **F402** News volume + tone ingest (Phase 0 / F399) — GDELT per-company daily news_volume + avg_tone, timestamped, ticker→entity mapped (entity false-match is the dominant risk → dedicated anchor). Rate-limited; backoff + cache. F338 anchors: known news-spike window probe, tone-sign sanity, entity-mapping precision. Aggregate volume/tone only, NOT content. [infra]
+- [ ] <a id="f403"></a> **F403** Short interest ingest (Phase 0 / F399) — FINRA biweekly files (free, ~2018+) → `(ticker,settlement_date,dissemination_date,short_interest,adv,days_to_cover)`. PIT = dissemination_date (~8–10 bday lag after settlement). Daily forward-fill + staleness flag. F338 anchor: GME ≈61.8M shares on 2021-01-15 reproduces; shorter panel (2018+) documented. [infra]
 - [ ] <a id="f385"></a> **F385** [next] Stage research data artifacts on mfcore01 on-demand — the compute env is ready but the price cache / EDGAR companyfacts+derived / Form-4 datasets aren't staged (re-fetchable from source; no home access needed). Document/automate the re-fetch recipe so `WORKER_REQUIRE` pre-flight passes for a given study. **Now the concrete prereq for the Desk workbench (F388-397): a full premise explore runs on the worker, and John's first sell premise (`p-1569aa97`) came back UNTESTABLE on the small local cache — the real event count needs the full staged universe.** [infra]
 
 - [ ] <a id="f97"></a> **F97** [medium] Provision `backend/venv/` in routine builder container — overnight builds 21/22/23 all hit the same gap: §3.5 backend smoke test originally specified `cd backend && venv/bin/uvicorn …` but the routine container ships without a venv. Spec now codifies AST + import-time check as the substitute. Real fix: the container image includes `backend/venv/` with pinned deps (Pydantic, FastAPI, pytest). Once landed, restore the full uvicorn smoke test path. Container/infra change, not application code. (from build 23 process review) [infra]
@@ -95,6 +100,7 @@ _(none open)_
 
 ## Deferred (gated)
 
+- [ ] <a id="f404"></a> **F404** Phase 1 — Desk discovery mode (lead-lag scan) — second workbench mode: scan the Phase-0 data panel for data points that LEAD the forward return, auto-mint survivors as premise cards into the F397 flow. Design locked (companion note: `docs/plans/2026-06-09-phase1-discovery-scan-companion-note.md`): (X,k) candidates, composite screen (IC + rank IC + hit-rate + sub-period stability, pre-stated weights), top-survivor backtest, deflated-Sharpe attempt tax, two-window discovery/confirm, liquidity-as-knob, survivorship stamped. Known landmine: the +1.5pp size/survivorship baseline (F369/F371) → dose-response headline, not mean-vs-zero. [arch] [hard] [gated: Phase 0 F399–F403 complete + probe green]
 - [ ] <a id="f393"></a> **F393** Real OOS confirm run + FDR-ledger append for the premise workbench — F389 built the confirm gate STRUCTURE (freeze spec_hash, power_audit pre-check, store-wide idempotency, transition explored→awaiting_confirm, record the future-run command) but deliberately does NOT run a backtest or write the real `fdr_ledger.json`, because the correct out-of-sample confirm semantics are a research-methodology decision: which window (2021–2024?), how the 2025+ reserve is handled, era breakdown, and whether/how multiplicity is paid. Wire `awaiting_confirm → confirmed` via a deliberate worker OOS run that appends the real ledger ONCE per spec_hash. Also folds the premise_run↔premise_run_worker duplicated-constants refactor (F389 review KP-08, since both files change here). [arch] [hard] [gated: John signs off on the confirm-window methodology]
 
 - [ ] <a id="f382"></a> **F382** Cross-dose bootstrap seed correlation (PEAD explore) — all 3 doses share one `_SEED`, so block-bootstrap resamples are correlated across doses. Pre-existing; F380 preserved it to keep byte-identical determinism. Decide: independent per-dose seeds (changes all bootstrap CIs + needs a fresh determinism anchor) vs keep correlated (document as intentional). Folds the XOR seed-aliasing note (`seed_base ^ task_index` aliases near powers of 2; low-risk at our scale, hashed-seed option available). John's methodology call. [arch] [gated: John approves the seeding change]
