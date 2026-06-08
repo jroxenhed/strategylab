@@ -10,20 +10,19 @@ _(none open)_
 
 ## Up Next
 
-- [F370](#f370) — [next] PEAD/earnings-surprise charter
 - [F364](#f364) — [next] Review-contract rule: findings citing population statistics must state the population measured [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 32 items
+## Open Work — 33 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
-| [Architecture](#architecture) | 9 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F370](#f370), [F372](#f372) |
+| [Architecture](#architecture) | 8 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F372](#f372) |
 | [Hardening](#hardening) | 6 | [F314](#f314), [F322](#f322)–[F323](#f323), [F362](#f362), [F364](#f364), [F377](#f377) |
-| [Polish](#polish) | 2 | [F310](#f310), [F378](#f378) |
+| [Polish](#polish) | 3 | [F310](#f310), [F378](#f378), [F381](#f381) |
 | [Testing](#testing) | 7 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329), [F360](#f360), [F379](#f379) |
-| [Infra](#infra) | 7 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F373](#f373), [F375](#f375)–[F376](#f376) |
+| [Infra](#infra) | 8 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F373](#f373), [F375](#f375)–[F376](#f376), [F380](#f380) |
 
 ## Features
 
@@ -35,7 +34,6 @@ _(none open)_
 
 ## Architecture
 
-- [ ] <a id="f370"></a> **F370** [next] PEAD/earnings-surprise charter — design the next premise on the 8-K item 2.02 / 10-Q stream where the F369 census found real power (binary MDE 0.56–0.58pp at ~24pp dispersion, ~3× R-1b's events). Add a dose score (estimate-free fundamental surprise) to the binary filing event; builds on F348 payload layer (SHIPPED 2026-06-08 — `fundamental_surprise.py`, 8 PIT deltas, F338 5/5). The census says this is where the engine can actually resolve a tradeable edge. [arch]
 - [ ] <a id="f372"></a> **F372** R-2 execution gate — F369 census predicts UNTESTABLE (447 D2 events, MDE 4.63pp, same wall as R-1b). Before executing the approved R-2 charter, decide: structurally bigger net (longer period / relaxed floors with stated caveats) or shelve. John's call, not assumed. [arch]
 - [ ] <a id="a8"></a> **A8** Chart performance — large dataset optimizations (100K+ 5-min bars): [arch]
   - [x] Equity curve detail mode downsample: root cause was missing `toDisplayTime()` shift on equity timestamps — raw UTC timestamps didn't match the main chart's ET-shifted timestamps, breaking crosshair sync and bucket alignment. Fixed by adding `toDisplayTime` to `shared/utils/time.ts` (mirrors Chart.tsx `toET`) and applying it to equity/baseline/trade-tick timestamps in Results.tsx before downsampling. `downsampleEquity()` itself was always correct.
@@ -75,6 +73,8 @@ _(none open)_
 
 - [ ] <a id="f310"></a> **F310** One-frame crosshair/pane misalignment possible during render-interval swap — main-pane and SubPane setData run in separate effects on the same commit; lw-charts may emit a range event between them and sync a logical range onto a sub-pane still holding the old bar count (try/catch prevents errors; visual blip only). Structural fix needs shared dep-chain plumbing. (RACE-04, A8-render-resample review, rated acceptable-as-is.) [medium] [polish]
 
+- [ ] <a id="f381"></a> **F381** F370 explore-0 deferred review cleanup (review-wave lower-severity batch + DI-F370-04) — `power_audit.run_audit` uses a generic simulation population, not the actual PEAD event structure, so its MDE isn't the design MDE (we rely on per-dose empirical `_compute_mde_q5q1`); either feed it the real design or drop it from the summary. Plus the polish cluster: C370-04 loop-var-capture fragility, C370-05 probe naive-datetime parse, per-horizon n reporting (K4/DI-F370-05), comment accuracy (K5), hardcoded universe-count log (K8), gap-lens index/time-match unit test. [polish]
+
 - [ ] <a id="f378"></a> **F378** `build_pead_surprise_events` scans the submissions dir twice (review-wave K6) — one pass to enumerate, one to read. Restructure to a single pass. Perf only; deferred from the F348 fix wave as not a ≤3-line change. [polish]
 ## Testing
 
@@ -93,6 +93,8 @@ _(none open)_
 ## Infra
 
 - [ ] <a id="f375"></a> **F375** Matrix NaN-rejection per-symbol traceability (deferred from F-BATCH-0608 review REL-07/DI-10) — the F363 `nan_rejected` count is a per-chunk global; a symbol with mixed NaN/non-NaN rows shows in the produced-rows bucket with invisible coverage holes. Add per-symbol attribution to the sidecar + assert the `nan_rejected` key is present in worker returns. No wrong-answer risk; coverage-audit completeness only. [hardening]
+- [ ] <a id="f380"></a> **F380** Maximize core utilization across ALL research-compute steps, not just the harness (John, 2026-06-08, watching the worker CPU graph: all-core spike then a long single-core tail). Amdahl: as core count grows (esp. the incoming 4× EPYC 9454P = 192c/384t render farm), the serial tail dominates wall-clock. Audit + parallelize where independent. Known phases today (F370/event_study profile): **(parallel already)** harness `run_event_study` ProcessPool over event chunks. **(serial tail — targets)** (a) per-dose block-bootstrap in `r1_analysis` — vectorized (F355) but main-process; the 999 resamples and the 3-doses×3-horizons grid are independent → ProcessPool or joblib; (b) the gap-lens loop in `run_f370_explore` (per-event `return_between_dates`, ~16k disk reads) — embarrassingly parallel over events; (c) `power_audit` Monte Carlo — partially threaded, could pool the design×E grid; (d) artifact/JSON serialization — minor. **(throttled by design)** `_prefetch_price_frames` runs 6 workers (I/O-bound; revisit on NVMe/EPYC where more may help). Approach: a shared parallel-map helper (ProcessPool with picklable disk-only closures, mirroring the harness loader_factory pattern) reused across phases; measure per-phase wall-clock first (instrument), parallelize the biggest serial chunk, re-measure. Also: make `--workers` flow to every phase, not just the harness. NOT today — design + measure in a dedicated session. [infra]
+
 - [ ] <a id="f376"></a> **F376** `worker-dispatch.sh` syncs `backend/research/*.py` but research modules import backend-root modules (`backend/fileutil.py`, `backend/edgar.py`) that go stale on the worker — the F348 probe first crashed on a missing `file_lock` (added to fileutil.py in F352) until rescued with `WORKER_SYNC`. Make the dispatcher sync the backend-root modules its research code imports by default (parse imports, or a maintained allowlist), so a fresh research script can't crash on a stale transitive dep. [infra]
 
 - [ ] <a id="f373"></a> **F373** premise_power_census polish (deferred F369 review items) — emit the orchestrator synthesis section from the script so re-runs don't lose it; document the COR-05 quintile-n (593 vs 596, within tolerance) and COR-08 R-2 intra-week dedup approximations in the report; warn instead of silently resetting on corrupt census.json (PY-05). [polish]
