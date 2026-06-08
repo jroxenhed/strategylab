@@ -283,6 +283,259 @@ def test_get_shares_outstanding_missing_data(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# F322 — Dual-class filer shares fallback (dei + weighted-average)
+# ---------------------------------------------------------------------------
+
+
+def test_f322_dei_shares_fallback(monkeypatch, tmp_path):
+    """F322: get_shares_outstanding returns value from dei:EntityCommonStockSharesOutstanding
+    when us-gaap:CommonStockSharesOutstanding is absent.
+
+    Models NKE pattern: dei namespace has total aggregate shares (no per-class split).
+    """
+    import edgar
+
+    monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
+    edgar._load_derived_cache_clear()
+
+    dei_entries = [
+        {"end": "2023-05-31", "val": 1_220_000_000, "filed": "2023-06-15", "form": "10-K"},
+        {"end": "2023-08-31", "val": 1_210_000_000, "filed": "2023-10-01", "form": "10-Q"},
+    ]
+    fake_facts = {
+        "facts": {
+            "us-gaap": {},   # no CommonStockSharesOutstanding
+            "dei": {
+                "EntityCommonStockSharesOutstanding": {"units": {"shares": dei_entries}}
+            },
+        }
+    }
+
+    monkeypatch.setattr(edgar, "_get", lambda url, params=None: _make_fake_response(fake_facts))
+
+    # as_of = 2023-12-31 → both filed; most recent filed=2023-10-01 → 1210M
+    result = edgar.get_shares_outstanding("0000123456", date(2023, 12, 31))
+    assert result == 1_210_000_000.0, f"Expected dei fallback 1210M, got {result}"
+
+    # as_of = 2023-07-01 → only first entry qualifies (filed 2023-06-15)
+    result_early = edgar.get_shares_outstanding("0000123456", date(2023, 7, 1))
+    assert result_early == 1_220_000_000.0, f"Expected 1220M at 2023-07-01, got {result_early}"
+
+
+def test_f322_wa_shares_fallback(monkeypatch, tmp_path):
+    """F322: get_shares_outstanding returns value from WeightedAverageNumberOfSharesOutstandingBasic
+    when both primary and dei tags are absent (PTON/EL pattern).
+
+    PIT guard: wa entries with end > as_of are excluded even if filed <= as_of.
+    """
+    import edgar
+
+    monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
+    edgar._load_derived_cache_clear()
+
+    wa_entries = [
+        # Q3: filed 2023-11-01, period Jul-Sep 2023
+        {"start": "2023-07-01", "end": "2023-09-30", "val": 413_000_000, "filed": "2023-11-01", "form": "10-Q"},
+        # Q2 YTD: filed 2024-02-01, period Oct-Dec 2023
+        {"start": "2023-10-01", "end": "2023-12-31", "val": 421_000_000, "filed": "2024-02-01", "form": "10-Q"},
+    ]
+    fake_facts = {
+        "facts": {
+            "us-gaap": {
+                "WeightedAverageNumberOfSharesOutstandingBasic": {"units": {"shares": wa_entries}}
+            },
+            "dei": {},
+        }
+    }
+
+    monkeypatch.setattr(edgar, "_get", lambda url, params=None: _make_fake_response(fake_facts))
+
+    # as_of = 2023-12-31 → Q4 filing (2024-02-01) not yet filed; only Q3 qualifies → 413M
+    result = edgar.get_shares_outstanding("0000123456", date(2023, 12, 31))
+    assert result == 413_000_000.0, f"Expected 413M (PIT: Q4 filing not yet filed), got {result}"
+
+    # as_of = 2024-03-01 → Q4 filing available; end=2023-12-31 <= 2024-03-01 → 421M
+    result_after = edgar.get_shares_outstanding("0000123456", date(2024, 3, 1))
+    assert result_after == 421_000_000.0, f"Expected 421M after Q4 filing, got {result_after}"
+
+
+def test_f322_primary_unchanged_when_present(monkeypatch, tmp_path):
+    """F322: primary us-gaap tag still wins when present; fallbacks are not consulted."""
+    import edgar
+
+    monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
+    edgar._load_derived_cache_clear()
+
+    primary_entries = [
+        {"end": "2023-12-31", "val": 15_000_000_000, "filed": "2024-02-01", "form": "10-K"},
+    ]
+    # Both fallbacks also present — they must NOT influence the result
+    fake_facts = {
+        "facts": {
+            "us-gaap": {
+                "CommonStockSharesOutstanding": {"units": {"shares": primary_entries}},
+                "WeightedAverageNumberOfSharesOutstandingBasic": {
+                    "units": {"shares": [
+                        {"start": "2023-10-01", "end": "2023-12-31", "val": 99_000_000,
+                         "filed": "2024-02-01", "form": "10-K"}
+                    ]}
+                },
+            },
+            "dei": {
+                "EntityCommonStockSharesOutstanding": {
+                    "units": {"shares": [
+                        {"end": "2023-12-31", "val": 88_000_000, "filed": "2024-02-01", "form": "10-K"}
+                    ]}
+                }
+            },
+        }
+    }
+
+    monkeypatch.setattr(edgar, "_get", lambda url, params=None: _make_fake_response(fake_facts))
+
+    result = edgar.get_shares_outstanding("0000123456", date(2024, 6, 1))
+    assert result == 15_000_000_000.0, (
+        f"Primary tag must win when present; fallbacks must not override. Got {result}"
+    )
+
+
+def test_f322_fail_closed_when_all_tags_absent(monkeypatch, tmp_path):
+    """F322: returns None when no share tags are present (fail-closed preserved)."""
+    import edgar
+
+    monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
+    edgar._load_derived_cache_clear()
+
+    fake_facts = {"facts": {"us-gaap": {}, "dei": {}}}
+
+    monkeypatch.setattr(edgar, "_get", lambda url, params=None: _make_fake_response(fake_facts))
+
+    result = edgar.get_shares_outstanding("0000123456", date(2024, 6, 1))
+    assert result is None, f"Expected None (no share tags), got {result}"
+
+
+# ---------------------------------------------------------------------------
+# F314 — Raw-facts cache pruning
+# ---------------------------------------------------------------------------
+
+
+def test_f314_prune_age_based(tmp_path):
+    """F314: prune_edgar_raw_cache deletes files older than max_age_days."""
+    import edgar
+    import time
+
+    monkeypatch_dir = tmp_path / "facts"
+    monkeypatch_dir.mkdir(parents=True)
+
+    old_file = monkeypatch_dir / "0000111111.json"
+    old_file.write_text("{}", encoding="utf-8")
+    # Set mtime to 35 days ago
+    old_mtime = time.time() - 35 * 86400
+    import os
+    os.utime(old_file, (old_mtime, old_mtime))
+
+    new_file = monkeypatch_dir / "0000222222.json"
+    new_file.write_text("{}", encoding="utf-8")
+    # recent file: default mtime = now
+
+    orig_cache_dir = edgar.CACHE_DIR
+    edgar.CACHE_DIR = tmp_path
+    try:
+        result = edgar.prune_edgar_raw_cache(max_age_days=30, size_cap_bytes=10 * 1024 ** 3)
+    finally:
+        edgar.CACHE_DIR = orig_cache_dir
+
+    assert result["deleted_age"] == 1, f"Expected 1 age-eviction, got {result}"
+    assert not old_file.exists(), "Old file should be deleted"
+    assert new_file.exists(), "New file must be preserved"
+
+
+def test_f314_prune_size_cap(tmp_path):
+    """F314: prune_edgar_raw_cache evicts oldest files when total size exceeds cap."""
+    import edgar
+    import time
+    import os
+
+    monkeypatch_dir = tmp_path / "facts"
+    monkeypatch_dir.mkdir(parents=True)
+
+    now = time.time()
+    files = []
+    # Create 5 files, 100 bytes each; oldest first
+    for i in range(5):
+        p = monkeypatch_dir / f"000000000{i}.json"
+        p.write_text("x" * 100, encoding="utf-8")
+        mtime = now - (5 - i) * 3600  # oldest = 5h ago, newest = 1h ago
+        os.utime(p, (mtime, mtime))
+        files.append(p)
+
+    orig_cache_dir = edgar.CACHE_DIR
+    edgar.CACHE_DIR = tmp_path
+    try:
+        # Cap = 300 bytes; 5×100=500 bytes total → must evict 2 oldest to get ≤300
+        result = edgar.prune_edgar_raw_cache(max_age_days=9999, size_cap_bytes=300, min_keep=1)
+    finally:
+        edgar.CACHE_DIR = orig_cache_dir
+
+    assert result["deleted_size"] == 2, f"Expected 2 size-evictions, got {result}"
+    assert not files[0].exists(), "Oldest file should be evicted"
+    assert not files[1].exists(), "Second oldest should be evicted"
+    assert files[2].exists(), "Third file should survive"
+
+
+def test_f314_prune_dry_run(tmp_path):
+    """F314: dry_run=True reports deletions without modifying disk."""
+    import edgar
+    import time
+    import os
+
+    monkeypatch_dir = tmp_path / "facts"
+    monkeypatch_dir.mkdir(parents=True)
+
+    old_file = monkeypatch_dir / "0000333333.json"
+    old_file.write_text("{}", encoding="utf-8")
+    old_mtime = time.time() - 40 * 86400
+    os.utime(old_file, (old_mtime, old_mtime))
+
+    orig_cache_dir = edgar.CACHE_DIR
+    edgar.CACHE_DIR = tmp_path
+    try:
+        result = edgar.prune_edgar_raw_cache(max_age_days=30, dry_run=True)
+    finally:
+        edgar.CACHE_DIR = orig_cache_dir
+
+    assert result["dry_run"] is True
+    assert result["deleted_age"] == 1, f"dry_run should report 1 deletion, got {result}"
+    assert old_file.exists(), "dry_run must not delete files"
+
+
+def test_f314_prune_never_evicts_derived(tmp_path):
+    """F314: derived cache files are never touched by prune_edgar_raw_cache."""
+    import edgar
+    import time
+    import os
+
+    (tmp_path / "facts").mkdir(parents=True)
+    derived_dir = tmp_path / "derived" / "v1"
+    derived_dir.mkdir(parents=True)
+
+    derived_file = derived_dir / "0000444444.json"
+    derived_file.write_text("{}", encoding="utf-8")
+    # Make it very old
+    old_mtime = time.time() - 365 * 86400
+    os.utime(derived_file, (old_mtime, old_mtime))
+
+    orig_cache_dir = edgar.CACHE_DIR
+    edgar.CACHE_DIR = tmp_path
+    try:
+        edgar.prune_edgar_raw_cache(max_age_days=1, size_cap_bytes=0)
+    finally:
+        edgar.CACHE_DIR = orig_cache_dir
+
+    assert derived_file.exists(), "Derived cache must never be evicted by prune_edgar_raw_cache"
+
+
+# ---------------------------------------------------------------------------
 # test_get_form4_net_buys_counts_correctly
 # ---------------------------------------------------------------------------
 
@@ -1365,6 +1618,72 @@ def test_f321_get_form4_net_buys_aapl_fixture(monkeypatch, tmp_path):
     assert result != 0.0, (
         f"get_form4_net_buys returned 0 for AAPL — parser is silently empty. "
         f"Check that transactionCode/shares/price are being extracted."
+    )
+
+
+# ---------------------------------------------------------------------------
+# F329 — Real Form 4 P-code (purchase) fixture
+# ---------------------------------------------------------------------------
+
+
+def test_f329_form4_parse_buy_p_code_real_xml():
+    """F329: _parse_form4_transactions correctly parses a real P-code (purchase) Form 4.
+
+    Fixture: MCY (Mercury General) insider buy by director Joshua Little, 2023-03-13.
+    Accession 0001209191-23-018396, filed 2023-03-14.
+    Source: recorded from EDGAR cache 2026-06-08.
+    Expected: 1 transaction, code=P, 250 shares at $29.8541.
+    """
+    import edgar
+
+    xml_content = (_FIXTURES_DIR / "mcy_form4_buy_p_code.xml").read_text(encoding="utf-8")
+    txns = edgar._parse_form4_transactions(xml_content)
+
+    # Must parse exactly 1 transaction
+    assert len(txns) == 1, f"Expected 1 transaction, got {len(txns)}: {txns}"
+    t = txns[0]
+    assert t["transactionCode"] == "P", f"Expected transactionCode 'P', got {t['transactionCode']!r}"
+    assert t["shares"] == 250.0, f"Expected 250 shares, got {t['shares']}"
+    assert t["price"] == pytest.approx(29.8541, rel=1e-4), f"Expected price ~29.8541, got {t['price']}"
+
+
+def test_f329_get_form4_net_buys_p_code_fixture(monkeypatch, tmp_path):
+    """F329 positive control: get_form4_net_buys returns net_buys > 0 for a P-only Form 4.
+
+    Uses a real MCY Form 4 (director purchase) fixture and a minimal inline submissions stub.
+    Fixture: 250 shares × $29.8541 = $7463.52 net buy.
+    """
+    import edgar
+
+    monkeypatch.setattr(edgar, "CACHE_DIR", tmp_path)
+
+    xml_content = (_FIXTURES_DIR / "mcy_form4_buy_p_code.xml").read_text(encoding="utf-8")
+
+    # Minimal submissions stub: one Form 4 within the 6-month window
+    subs_stub = {
+        "filings": {
+            "recent": {
+                "form": ["4"],
+                "accessionNumber": ["0001209191-23-018396"],
+                "filingDate": ["2023-03-14"],
+            }
+        }
+    }
+
+    def fake_get(url, params=None):
+        if "submissions" in url:
+            return _make_fake_response(subs_stub)
+        raise AssertionError(f"Unexpected _get call: {url}")
+
+    monkeypatch.setattr(edgar, "_get", fake_get)
+    monkeypatch.setattr(edgar, "fetch_form4_xml", lambda cik_arg, acc: xml_content)
+
+    result = edgar.get_form4_net_buys("0000064996", months_back=6, as_of=date(2023, 6, 14))
+
+    expected_net = 250.0 * 29.8541  # = 7463.525
+    assert result > 0, f"Expected net_buys > 0 (pure P-code filing), got {result}"
+    assert result == pytest.approx(expected_net, rel=1e-4), (
+        f"Expected net_buys ≈ {expected_net:.2f} (250×29.8541), got {result}"
     )
 
 

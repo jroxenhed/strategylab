@@ -131,6 +131,14 @@ def _run_scan_sync(params: FilterParams, max_universe: int) -> list[dict]:
     from turnaround import build_universe, run_filter
     import dataclasses as dc
 
+    # DI-04: prune is intentionally placed AFTER the scan.  Running it before would
+    # allow the size-cap phase to evict raw-facts files that are 8–29 days old (within
+    # the scan's active population).  _load_derived() then re-fetches those CIKs from
+    # the SEC network mid-scan, adding latency and data_gap risk on rate-limit.
+    # Age-based eviction (files ≥ 30d old) is safe to run pre-scan because those files
+    # are outside the 7-day refresh TTL, but for simplicity we defer the whole prune
+    # until after the scan results are written.
+
     raw_universe = edgar.fetch_universe()
     universe = build_universe(raw_universe, params)
     # Apply max_universe cap in deterministic alphabetical order (already sorted by build_universe)
@@ -139,7 +147,16 @@ def _run_scan_sync(params: FilterParams, max_universe: int) -> list[dict]:
 
     as_of = datetime.now(timezone.utc).date()
     candidates = run_filter(universe, as_of=as_of, params=params)
-    return [dc.asdict(c) for c in candidates]
+    results = [dc.asdict(c) for c in candidates]
+
+    # F314: prune raw-facts cache AFTER scan completes (DI-04: avoids mid-scan re-fetches).
+    # Runs quickly (os.stat loop only) and never touches the derived cache.
+    try:
+        edgar.prune_edgar_raw_cache()
+    except Exception as _prune_exc:
+        logger.warning("edgar: prune_edgar_raw_cache failed (non-fatal): %s", _prune_exc)
+
+    return results
 
 
 async def _run_scan_background(params: FilterParams, max_universe: int) -> None:

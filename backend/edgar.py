@@ -450,6 +450,9 @@ _NET_INCOME_TAGS = ["NetIncomeLoss"]
 _GROSS_PROFIT_TAGS = ["GrossProfit"]
 _OCF_TAGS = ["NetCashProvidedByUsedInOperatingActivities"]
 _SHARES_TAG = "CommonStockSharesOutstanding"
+# F322: fallbacks for dual-class filers that omit CommonStockSharesOutstanding
+_DEI_SHARES_TAG = "EntityCommonStockSharesOutstanding"   # dei namespace; aggregate total
+_SHARES_WA_TAG = "WeightedAverageNumberOfSharesOutstandingBasic"  # period-based; last resort
 
 _DERIVED_SCHEMA_VERSION = 1
 
@@ -465,7 +468,7 @@ def parse_companyfacts_to_derived(cik: str) -> dict:
       "net_income":  [{end, val, filed}, ...],
       "gross_profit":[{end, val, filed}, ...],
       "ocf":         [{end, val, filed}, ...],
-      "shares":      [{end, val, filed, form}, ...],  # all eligible entries
+      "shares":      [{end, val, filed, form, src, start, fp}, ...],  # deduped, all levels
     }
 
     All five series preserve the point-in-time `filed` field so callers can
@@ -473,6 +476,16 @@ def parse_companyfacts_to_derived(cik: str) -> dict:
     Revenue uses the same tag-fallback chain as the old path.
     Each quarterly series merges direct quarterly entries with Q4-derived entries
     (identical logic to the old _get_quarterly_series_for_tag_list path).
+
+    Shares fallback chain (F322):
+      1. us-gaap:CommonStockSharesOutstanding  (instantaneous; src='primary')
+      2. dei:EntityCommonStockSharesOutstanding (instantaneous aggregate; src='dei';
+         values summed across share-class contexts in the same filing — COR-01)
+      3. us-gaap:WeightedAverageNumberOfSharesOutstandingBasic (period-based last resort;
+         src='wa' for quarterly entries, src='wa_fy' for annual-only — DI-07)
+    Each fallback only activates when the previous level returns no entries.
+    DI-01: 'wa' and 'wa_fy' are period averages, not point-in-time counts.
+    Use get_shares_outstanding_detail() to retrieve (val, src) for the chosen entry.
     """
     padded = _pad_cik(cik)
     facts = fetch_companyfacts(padded)
@@ -491,25 +504,134 @@ def parse_companyfacts_to_derived(cik: str) -> dict:
                 return series
         return []
 
+    def _raw_shares_for(namespace: str, tag: str) -> list:
+        try:
+            return (
+                facts.get("facts", {})
+                .get(namespace, {})
+                .get(tag, {})
+                .get("units", {})
+                .get("shares", [])
+            )
+        except (AttributeError, KeyError):
+            return []
+
     # Shares: all entries (not just quarterly) — keep same fields as raw path
+    # Fallback chain: primary → dei aggregate → weighted-average basic (F322)
     shares_entries: list[dict] = []
-    try:
-        raw_shares = (
-            facts.get("facts", {})
-            .get("us-gaap", {})
-            .get(_SHARES_TAG, {})
-            .get("units", {})
-            .get("shares", [])
-        )
-    except (AttributeError, KeyError):
-        raw_shares = []
-    for e in raw_shares:
-        filed = e.get("filed", "")
-        val = e.get("val", None)
+
+    primary = _raw_shares_for("us-gaap", _SHARES_TAG)
+    dei_agg = _raw_shares_for("dei", _DEI_SHARES_TAG)
+    wa_basic = _raw_shares_for("us-gaap", _SHARES_WA_TAG)
+
+    def _ingest_shares(raw: list, src: str) -> list[dict]:
+        out = []
+        for e in raw:
+            filed = e.get("filed", "")
+            val = e.get("val", None)
+            end = e.get("end", "")
+            form = e.get("form", "")
+            if filed and val is not None:
+                out.append({"end": end, "val": float(val), "filed": filed, "form": form, "src": src,
+                            "start": e.get("start", ""), "fp": e.get("fp", "")})
+        return out
+
+    def _span_days(e: dict) -> int:
+        """Return the period length in days for a share entry; large sentinel if no start."""
+        start = e.get("start", "")
         end = e.get("end", "")
-        form = e.get("form", "")
-        if filed and val is not None:
-            shares_entries.append({"end": end, "val": float(val), "filed": filed, "form": form})
+        if not start or not end:
+            return 9999
+        try:
+            from datetime import datetime as _dt
+            return (_dt.strptime(end, "%Y-%m-%d") - _dt.strptime(start, "%Y-%m-%d")).days
+        except ValueError:
+            return 9999
+
+    def _dedup_wa_entries(entries: list[dict]) -> list[dict]:
+        """Deduplicate WA entries: for each end date pick the best single entry.
+
+        Selection criterion (COR-02): prefer shortest span (quarterly over YTD/annual),
+        tiebreak by latest filed date, then latest end date.  This is deterministic
+        w.r.t. EDGAR list ordering.
+
+        DI-07: when quarterly (fp != 'FY') entries exist for an end date, exclude FY
+        entries at that end date (12-month average is a worse proxy than 3-month).
+        If only FY entries exist for a given end date, keep the best one tagged 'wa_fy'
+        so downstream callers know it is an annual average.
+        """
+        from collections import defaultdict as _dd
+        by_end: dict[str, list[dict]] = _dd(list)
+        for e in entries:
+            by_end[e["end"]].append(e)
+
+        result = []
+        for end, group in by_end.items():
+            non_fy = [e for e in group if e.get("fp", "") != "FY"]
+            fy_only = not non_fy
+            candidates = group if fy_only else non_fy
+            # Sort: shortest span first, then latest filed, then latest end
+            best = min(
+                candidates,
+                key=lambda e: (_span_days(e), e.get("filed", "2000-01-01"), e.get("end", "")),
+            )
+            # Deterministic tiebreak: if multiple share shortest span AND same filed, pick max end
+            shortest_span = _span_days(best)
+            tied = [e for e in candidates if _span_days(e) == shortest_span and e.get("filed", "") == best.get("filed", "")]
+            if len(tied) > 1:
+                best = max(tied, key=lambda e: e.get("end", ""))
+            entry = dict(best)
+            if fy_only:
+                entry["src"] = "wa_fy"  # DI-07: tag annual-average fallback
+            else:
+                entry["src"] = "wa"
+            result.append(entry)
+
+        return sorted(result, key=lambda x: x["end"])
+
+    primary_entries = _ingest_shares(primary, "primary")
+    if primary_entries:
+        shares_entries = primary_entries
+    else:
+        dei_raw = _ingest_shares(dei_agg, "dei")
+        wa_raw = _ingest_shares(wa_basic, "wa")
+
+        # COR-01: DEI — sum across distinct share-class contexts that share the same (end, filed)
+        # date.  Multiple entries with identical end+filed come from the same filing and represent
+        # separate share classes (e.g. Class A + Class B filed together); sum their values.
+        # Entries with the same end but different filed dates are amendments — keep latest-filed only.
+        if dei_raw:
+            from collections import defaultdict as _dd2
+            # Step 1: within each (end, filed) pair, sum vals (handles per-class DEI entries)
+            per_ef: dict[tuple, dict] = {}
+            for e in dei_raw:
+                key = (e["end"], e["filed"])
+                if key not in per_ef:
+                    per_ef[key] = dict(e)
+                else:
+                    per_ef[key]["val"] += e["val"]  # sum share classes
+            # Step 2: for each end date, keep the latest-filed entry (amendment preference)
+            by_end_dei: dict[str, dict] = {}
+            for (end, filed), e in per_ef.items():
+                if end not in by_end_dei or filed > by_end_dei[end]["filed"]:
+                    by_end_dei[end] = e
+            dei_entries = sorted(by_end_dei.values(), key=lambda x: x["end"])
+        else:
+            dei_entries = []
+
+        # COR-02 / DI-07: WA — deterministic dedup preferring shortest span, excluding FY
+        # when quarterly entries exist for the same end date.
+        wa_entries = _dedup_wa_entries(wa_raw) if wa_raw else []
+
+        if dei_entries or wa_entries:
+            # Merge: dei first (instantaneous), then wa/wa_fy to fill gaps; deduplicate by end.
+            # Prefer dei (instantaneous) over wa (period-based) when both cover the same end date.
+            merged: dict[str, dict] = {}
+            for e in wa_entries:
+                merged[e["end"]] = e
+            for e in dei_entries:
+                merged[e["end"]] = e  # dei overwrites wa for same end
+            shares_entries = sorted(merged.values(), key=lambda x: x["end"])
 
     return {
         "cik": padded,
@@ -819,28 +941,82 @@ def get_quarterly_ocf(cik: str) -> list[dict]:
 
 
 def get_shares_outstanding(cik: str, as_of: date) -> float | None:
-    """Most-recent CommonStockSharesOutstanding filed on or before as_of.
+    """Most-recent shares outstanding filed on or before as_of.
 
     Returns None if unavailable.
     Point-in-time: only considers entries with filed <= as_of.
+    For weighted-average or annual-WA (period-based) fallback entries, also requires
+    end <= as_of to avoid using a future-period average as a proxy for a past date.
     Reads from derived compact cache (F320); rebuilds from raw on miss/stale.
+
+    Fallback chain (F322): primary (CommonStockSharesOutstanding) →
+    dei:EntityCommonStockSharesOutstanding (instantaneous; summed across share classes
+    in the same filing — COR-01) → WeightedAverageNumberOfSharesOutstandingBasic
+    (quarterly preferred over annual; last resort — DI-01/DI-07).
+
+    DI-01 / COR-03: when the selected entry has src='wa' or src='wa_fy', the returned
+    value is a period-weighted average (not a point-in-time instantaneous count).
+    Callers computing P/S or market cap should note that 'wa' may differ from the
+    true instantaneous count by 2–5 % on stable firms and up to 10–30 % during rapid
+    dilution periods (e.g. PTON 2019–2021).  'wa_fy' (annual average) carries a larger
+    bias window (12 months) and should be treated as a rough proxy.
+    To inspect the source, call get_shares_outstanding_detail() which returns
+    (val, src) instead of just val.
+    """
+    detail = get_shares_outstanding_detail(cik, as_of)
+    if detail is None:
+        return None
+    return detail[0]
+
+
+def get_shares_outstanding_detail(cik: str, as_of: date) -> tuple[float, str] | None:
+    """Like get_shares_outstanding but returns (val, shares_source) tuple.
+
+    shares_source is one of:
+      'primary'  — us-gaap:CommonStockSharesOutstanding (instantaneous, most precise)
+      'dei'      — dei:EntityCommonStockSharesOutstanding (instantaneous aggregate;
+                   summed across share classes in the same filing)
+      'wa'       — WeightedAverageNumberOfSharesOutstandingBasic, quarterly period
+                   (~3-month average; last resort; may differ 2–5 % from true PIT count)
+      'wa_fy'    — WeightedAverageNumberOfSharesOutstandingBasic, annual period
+                   (~12-month average; only used when no quarterly WA entry exists;
+                   carries larger potential bias vs true PIT count)
     """
     entries = _load_derived(cik).get("shares", [])
     if not entries:
         return None
 
     as_of_str = as_of.isoformat()
-    # Filter to filed <= as_of
-    eligible = [
-        e for e in entries
-        if e.get("filed", "") <= as_of_str and e.get("val") is not None
-    ]
+    # Filter to filed <= as_of; for wa/wa_fy (period-based) also require end <= as_of
+    eligible = []
+    for e in entries:
+        if e.get("val") is None:
+            continue
+        if e.get("filed", "") > as_of_str:
+            continue
+        src = e.get("src", "primary")
+        if src in ("wa", "wa_fy") and e.get("end", "") > as_of_str:
+            continue
+        eligible.append(e)
+
     if not eligible:
         return None
 
-    # Most recent by filed date
-    best = max(eligible, key=lambda e: e["filed"])
-    return float(best["val"])
+    # Most recent by filed date.
+    # COR-06 / PTON 2021 fix: when multiple WA/wa_fy entries share the same filed date,
+    # tiebreak by latest end date so we prefer the current-period average over the
+    # prior-year comparative figure reported in the same 10-Q (e.g. PTON 2020-11-06
+    # filing had both end=2019-09-30 [38M pre-IPO] and end=2020-09-30 [288M], and the
+    # old max-by-filed returned whichever Python encountered first).
+    # For primary/dei entries the filed-only sort is preserved (instantaneous values are
+    # all correct; changing the tiebreaker would silently alter already-correct results).
+    wa_srcs = {"wa", "wa_fy"}
+    has_wa = any(e.get("src", "primary") in wa_srcs for e in eligible)
+    if has_wa:
+        best = max(eligible, key=lambda e: (e.get("filed", ""), e.get("end", "")))
+    else:
+        best = max(eligible, key=lambda e: e.get("filed", ""))
+    return float(best["val"]), best.get("src", "primary")
 
 
 def get_form4_net_buys(cik: str, months_back: int = 6, as_of: date | None = None) -> float:
@@ -919,3 +1095,138 @@ def has_buyback_authorization(cik: str, months_back: int = 12, as_of: date | Non
     except Exception as exc:
         logger.warning("edgar: has_buyback_authorization failed for %s: %s", cik, exc)
         return False
+
+
+# ---------------------------------------------------------------------------
+# F314 — raw-facts cache age/size pruning
+# ---------------------------------------------------------------------------
+
+# Age cap: raw companyfacts files older than this are eligible for eviction.
+# 30 days is safe: fetch_companyfacts TTL is 7 days, so any file the scanner
+# actually needs will have been refreshed within the last week.
+_RAW_FACTS_MAX_AGE_DAYS = 30
+
+# Soft size cap for the raw facts directory (in bytes).  When total size exceeds
+# this the oldest files are evicted until size drops below the cap OR only
+# _RAW_FACTS_MIN_KEEP files remain (safety floor — never delete everything).
+# Derived cache is untouched.  Default: 12 GB.
+_RAW_FACTS_SIZE_CAP_BYTES = 12 * 1024 ** 3
+_RAW_FACTS_MIN_KEEP = 50  # never evict below this many files
+
+
+def prune_edgar_raw_cache(
+    max_age_days: int = _RAW_FACTS_MAX_AGE_DAYS,
+    size_cap_bytes: int = _RAW_FACTS_SIZE_CAP_BYTES,
+    min_keep: int = _RAW_FACTS_MIN_KEEP,
+    dry_run: bool = False,
+) -> dict:
+    """Age-based prune + soft size cap on the raw companyfacts cache.
+
+    NOTE (DI-04): this function should be called AFTER a scan completes, not before.
+    If called before, the size-cap phase can evict files that are 8–29 days old
+    (within the scan's active population); those CIKs then re-fetch from the SEC
+    network mid-scan, adding latency and risk of data_gap on rate-limit.
+    The age-phase only removes files ≥ max_age_days old, which are safely outside
+    the 7-day refresh TTL, so pre-scan age eviction is safe.  Size-cap eviction is
+    the risky phase.
+
+    Never touches the derived cache.
+
+    Algorithm:
+      1. Collect all .json files in CACHE_DIR/facts/.
+      2. Delete files with mtime older than ``max_age_days``.
+      3. If total remaining size still exceeds ``size_cap_bytes``, evict oldest
+         files by mtime until size drops below cap OR only ``min_keep`` files remain.
+
+    Returns a summary dict: {deleted_age, deleted_size, bytes_freed, dry_run}.
+    The derived cache is deliberately excluded from all eviction.
+
+    Concurrent invocations are benign: double-delete OSError is caught but may
+    cause ``bytes_freed`` to be slightly overstated by the losing process.
+    """
+    facts_dir = CACHE_DIR / "facts"
+    if not facts_dir.exists():
+        return {"deleted_age": 0, "deleted_size": 0, "bytes_freed": 0, "dry_run": dry_run}
+
+    now = time.time()
+    cutoff_age = now - max_age_days * 86400
+
+    # Collect (path, mtime, size) for all raw facts files
+    entries: list[tuple[Path, float, int]] = []
+    for p in facts_dir.glob("*.json"):
+        try:
+            st = p.stat()
+            entries.append((p, st.st_mtime, st.st_size))
+        except OSError:
+            pass
+
+    deleted_age = 0
+    bytes_freed = 0
+
+    # Step 1: age-based eviction
+    survivors: list[tuple[Path, float, int]] = []
+    for path, mtime, size in entries:
+        if mtime < cutoff_age:
+            if not dry_run:
+                try:
+                    path.unlink()
+                    deleted_age += 1
+                    bytes_freed += size
+                    logger.debug("edgar: prune age-evict %s (%.0f days old)", path.name,
+                                 (now - mtime) / 86400)
+                except OSError as exc:
+                    logger.warning("edgar: prune age-evict failed for %s: %s", path.name, exc)
+            else:
+                deleted_age += 1
+                bytes_freed += size
+        else:
+            survivors.append((path, mtime, size))
+
+    # Step 2: size cap — evict oldest survivors until below cap
+    # DI-03 / COR-04: use a `remaining` counter that tracks actual deletions so the
+    # min_keep guard is never corrupted by OSError failures mid-loop.  Never evict
+    # below min_keep; warn when size-cap eviction fires (DI-04 indirect re-fetch risk).
+    total_size = sum(s for _, _, s in survivors)
+    deleted_size = 0
+    if total_size > size_cap_bytes:
+        remaining = len(survivors)
+        if remaining > min_keep:
+            logger.warning(
+                "edgar: prune size-cap eviction triggered (total=%.1fMB cap=%.1fMB "
+                "survivors=%d min_keep=%d); CIKs evicted may re-fetch from SEC during scan",
+                total_size / 1024 ** 2, size_cap_bytes / 1024 ** 2, remaining, min_keep,
+            )
+        # Sort oldest-first
+        survivors.sort(key=lambda x: x[1])
+        for path, mtime, size in survivors:
+            if total_size <= size_cap_bytes or remaining <= min_keep:
+                break
+            if not dry_run:
+                try:
+                    path.unlink()
+                    deleted_size += 1
+                    bytes_freed += size
+                    total_size -= size
+                    remaining -= 1  # only decrement on successful deletion (COR-04)
+                    logger.debug("edgar: prune size-evict %s", path.name)
+                except OSError as exc:
+                    logger.warning("edgar: prune size-evict failed for %s: %s", path.name, exc)
+                    # Do NOT decrement remaining — file was not actually deleted
+            else:
+                deleted_size += 1
+                bytes_freed += size
+                total_size -= size
+                remaining -= 1
+
+    if deleted_age or deleted_size:
+        logger.info(
+            "edgar: prune_raw_cache: deleted_age=%d deleted_size=%d bytes_freed=%.1fMB dry_run=%s",
+            deleted_age, deleted_size, bytes_freed / 1024 ** 2, dry_run,
+        )
+
+    return {
+        "deleted_age": deleted_age,
+        "deleted_size": deleted_size,
+        "bytes_freed": bytes_freed,
+        "dry_run": dry_run,
+    }
