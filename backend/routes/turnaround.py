@@ -18,6 +18,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import shutil
 import threading
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -41,12 +42,18 @@ class _DateEncoder(json.JSONEncoder):
         return super().default(o)
 
 # ---------------------------------------------------------------------------
-# Persistence paths
+# Persistence paths + schema versions
 # ---------------------------------------------------------------------------
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "turnaround"
 _WATCHLIST_PATH = _DATA_DIR / "watchlist.json"
 _VALIDATION_PATH = _DATA_DIR / "validation_result.json"
+
+# F315: monotonic schema version constants.  Stamp on every WRITE; readers must
+# tolerate absence (old files) by defaulting to version 0 / "unversioned".
+# Increment when the on-disk shape changes in a backward-incompatible way.
+_WATCHLIST_SCHEMA_VERSION = 1   # {schema_version, candidates: [...]}
+_VALIDATION_SCHEMA_VERSION = 2  # current highest version (see DI-01 / DI-05 backfill)
 
 
 def _ensure_data_dir() -> None:
@@ -146,7 +153,11 @@ async def _run_scan_background(params: FilterParams, max_universe: int) -> None:
         results = await asyncio.to_thread(_run_scan_sync, params, max_universe)
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
         _ensure_data_dir()
-        atomic_write_text(_WATCHLIST_PATH, json.dumps(results, cls=_DateEncoder))
+        # F315: wrap list in a versioned envelope so future shape changes are detectable.
+        watchlist_payload = {"schema_version": _WATCHLIST_SCHEMA_VERSION, "candidates": results}
+        # DI-11: backup_depth=3 matches validation_result protection level — two
+        # consecutive bad scans otherwise wipe the live file AND its only backup.
+        atomic_write_text(_WATCHLIST_PATH, json.dumps(watchlist_payload, cls=_DateEncoder), backup_depth=3)
         _scan_state.update({
             "status": "done",
             "duration_secs": elapsed,
@@ -230,6 +241,10 @@ async def _run_validate_background(req_dict: dict, config_name: Optional[str] = 
         )
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
         _ensure_data_dir()
+        # F315: ensure schema_version is stamped; the ValidationResult dataclass already
+        # sets it, but we enforce the route-level constant as a floor so old dataclass
+        # versions (that may omit it) still produce a versioned artifact.
+        result_dict.setdefault("schema_version", _VALIDATION_SCHEMA_VERSION)
         atomic_write_text(_VALIDATION_PATH, json.dumps(result_dict, cls=_DateEncoder), backup_depth=3)
         final_status = "timeout" if result_dict.get("timed_out") else "done"
         _validate_state.update({
@@ -374,9 +389,39 @@ def get_watchlist(include_null: bool = Query(default=False, alias="include_null"
     if not _WATCHLIST_PATH.exists():
         raise HTTPException(status_code=404, detail="No watchlist yet — run a scan first")
     try:
-        data: list[dict] = json.loads(_WATCHLIST_PATH.read_text())
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to read watchlist: {exc}")
+        raw = json.loads(_WATCHLIST_PATH.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        # DI-06: corrupt-JSON recovery guard.  NEVER overwrite the on-disk file
+        # unless a backup was successfully created first — if backup fails (e.g.
+        # disk full), user data would be permanently destroyed (prior wipe incident).
+        # Strategy: attempt backup via shutil.copy2; if backup succeeds, overwrite
+        # with empty payload so the next scan can persist cleanly; if backup fails,
+        # log ERROR and return empty list IN MEMORY, leaving the corrupt file on
+        # disk for manual recovery.
+        backup_path = Path(str(_WATCHLIST_PATH) + ".corrupt")
+        try:
+            shutil.copy2(_WATCHLIST_PATH, backup_path)
+            logger.warning(
+                "turnaround watchlist.json unparseable (%s); backed up to %s, "
+                "overwriting with empty state",
+                exc,
+                backup_path,
+            )
+            empty_payload = {"schema_version": _WATCHLIST_SCHEMA_VERSION, "candidates": []}
+            atomic_write_text(_WATCHLIST_PATH, json.dumps(empty_payload), backup_depth=3)
+        except OSError as backup_exc:
+            logger.error(
+                "turnaround watchlist.json unparseable (%s) AND backup failed (%s) — "
+                "returning empty list in memory, corrupt file preserved for manual recovery",
+                exc,
+                backup_exc,
+            )
+        return []
+    # F315: tolerate old format (bare list = schema_version 0) and new versioned envelope.
+    if isinstance(raw, list):
+        data: list[dict] = raw
+    else:
+        data = raw.get("candidates", [])
     if not include_null:
         data = [c for c in data if not c.get("is_null_candidate", False)]
     return data
@@ -493,7 +538,16 @@ async def cancel_validation() -> dict:
 
 
 @router.get("/api/turnaround/validate/result")
-def get_validation_result() -> dict:
+def get_validation_result(
+    summary: bool = Query(
+        default=False,
+        description=(
+            "F330: when true, omit the heavy per-event list from the response "
+            "(keep aggregates + metadata). Returns events_omitted=<count> instead. "
+            "Default false preserves the full payload for back-compat."
+        ),
+    ),
+) -> dict:
     """Read the last persisted validation result.
 
     Raises 404 if no validation has been run yet.
@@ -502,6 +556,9 @@ def get_validation_result() -> dict:
     (run-1 artifacts lacking the events/distribution fields) return a complete schema.
     schema_version=0 is the sentinel for "pre-events run" — consumers can gate on it.
     The on-disk artifact is NOT modified.
+
+    F330: ?summary=true drops the per-event list and reports events_omitted=<count>
+    instead, for callers that only need aggregates (avoids 1-10MB payload).
     """
     if not _VALIDATION_PATH.exists():
         raise HTTPException(status_code=404, detail="No validation result yet — run a validation first")
@@ -543,4 +600,10 @@ def get_validation_result() -> dict:
             if isinstance(_e, dict):
                 for _k, _v in _v2_event_defaults.items():
                     _e.setdefault(_k, _v)
+
+    # F330: summary mode — drop per-event list, report omitted count instead.
+    if summary:
+        events = data.pop("events", [])
+        data["events_omitted"] = len(events) if isinstance(events, list) else 0
+
     return data

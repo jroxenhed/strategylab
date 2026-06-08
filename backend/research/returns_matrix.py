@@ -143,11 +143,13 @@ def _worker_build_chunk(
     entry_dates_parsed: list[_date] = [_date.fromisoformat(d) for d in entry_dates]
 
     import logging as _logging
+    import math as _math
     _wlog = _logging.getLogger(__name__)
 
     rows: list[tuple] = []
     no_frame_syms: list[str] = []
     no_row_syms: list[str] = []
+    nan_rejected: int = 0  # F363: count of NaN forward-returns rejected before append
     for sym_i, sym in enumerate(ticker_chunk):
         if progress_path is not None:
             try:
@@ -235,6 +237,19 @@ def _worker_build_chunk(
                     _wlog.debug("skip %s %s h=%s fwd_ret: %s", sym, entry_date, h, _exc)
                     continue
                 if r is not None:
+                    # F363: reject NaN forward-returns before append.
+                    # A NaN Close at the exit bar produces r=float("nan") which
+                    # passes `is not None` and would land in the artifact as a
+                    # valid float64 cell.  pandas stats silently skip NaN, but
+                    # the cell is still there and invisible to callers.  Count
+                    # it explicitly rather than silently dropping it.
+                    if _math.isnan(r):
+                        nan_rejected += 1
+                        _wlog.debug(
+                            "nan_rejected: sym=%s entry=%s h=%s r=NaN (exit bar NaN Close)",
+                            sym, entry_date, h,
+                        )
+                        continue
                     rows.append((
                         entry_date.isoformat(),   # str for pickle safety
                         h,
@@ -257,7 +272,14 @@ def _worker_build_chunk(
         except OSError:
             pass
 
-    return rows, {"no_frame": no_frame_syms, "no_rows": no_row_syms}
+    # F363: nan_rejected is surfaced here so the parent can accumulate across chunks
+    # and log the total.  A nonzero total is informational (not a build failure) but
+    # means some (sym, date, horizon) cells had NaN exit prices — worth knowing.
+    return rows, {
+        "no_frame": no_frame_syms,
+        "no_rows": no_row_syms,
+        "nan_rejected": nan_rejected,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +397,13 @@ def _build_universe_returns_matrix_inner(
     if price_cache_dir is None:
         price_cache_dir = _BACKEND_DIR / "data" / "turnaround" / "price_cache"
     price_cache_dir = Path(price_cache_dir)
+    # C5/DI-08: Two paths, same universe truth (verified 2026-06-08).
+    # _get_universe_tickers (CLI auto-discover) passes price_cache/v1 to
+    # build_liquid_universe, which scans *.pkl files directly in that v1 subdir.
+    # Workers receive price_cache (WITHOUT /v1) and pass it to PriceFrameCache,
+    # which internally appends _PRICE_CACHE_VERSION ("v1") via _version_dir().
+    # Result: both paths resolve to the same physical price_cache/v1/ directory.
+    # No behavioral divergence; no fix needed.
 
     # Worker pool sizing
     if max_workers is None:
@@ -426,6 +455,7 @@ def _build_universe_returns_matrix_inner(
     no_frame_tickers: list[str] = []
     no_row_tickers: list[str] = []
     failed_chunk_tickers: list[str] = []  # COV-1: failed chunks' tickers must not count as covered
+    total_nan_rejected: int = 0  # F363: accumulate NaN-rejected cells across all chunks
     t0 = time.monotonic()
     completed = 0
     errors = 0
@@ -447,6 +477,7 @@ def _build_universe_returns_matrix_inner(
                 all_rows.extend(rows)
                 no_frame_tickers.extend(chunk_coverage["no_frame"])
                 no_row_tickers.extend(chunk_coverage["no_rows"])
+                total_nan_rejected += chunk_coverage.get("nan_rejected", 0)  # F363
                 completed += 1
                 if completed % 10 == 0 or completed == n_chunks:
                     elapsed = time.monotonic() - t0
@@ -475,6 +506,19 @@ def _build_universe_returns_matrix_inner(
         "All chunks done: %d/%d completed, %d errors, %d total rows in %.1fs",
         completed, n_chunks, errors, len(all_rows), elapsed_total,
     )
+    # F363: log NaN-rejected cell count after all chunks complete.
+    # Zero is expected for the accepted 8.9M-row build (measured zero live).
+    # Nonzero means some (sym, date, horizon) cells had NaN exit prices — they
+    # were rejected before append and are NOT in the artifact.
+    if total_nan_rejected > 0:
+        log.warning(
+            "F363 NaN guard: %d (sym, date, horizon) cells with NaN forward-return "
+            "REJECTED before append (NaN exit bar Close).  Not in artifact.",
+            total_nan_rejected,
+        )
+    else:
+        log.info("F363 NaN guard: 0 NaN forward-returns rejected (expected).")
+
     # Coverage accounting: no-frame tickers may be TRANSIENT fetch failures
     # (nondeterministic across runs — observed live 2026-06-07), so they must
     # be visible, never silently absent.
@@ -552,6 +596,7 @@ def _build_universe_returns_matrix_inner(
         no_frame_tickers=no_frame_tickers,
         no_row_tickers=no_row_tickers,
         failed_chunk_tickers=failed_chunk_tickers,
+        nan_rejected_count=total_nan_rejected,  # F363
     )
     _write_parquet_and_meta_atomic(df, out_path, meta)
 
@@ -608,6 +653,7 @@ def _build_metadata(
     no_frame_tickers: Optional[list[str]] = None,
     no_row_tickers: Optional[list[str]] = None,
     failed_chunk_tickers: Optional[list[str]] = None,
+    nan_rejected_count: int = 0,  # F363: cells with NaN forward-return rejected before append
 ) -> dict:
     """Build metadata dict (no I/O — caller writes it)."""
     now_utc = datetime.now(tz=timezone.utc)
@@ -656,6 +702,10 @@ def _build_metadata(
             "failed_chunk_count": len(failed_chunk_tickers or []),
             "failed_chunk_symbols": sorted(failed_chunk_tickers or []),
         },
+        # F363: cells with NaN forward-return rejected before append.
+        # Zero is expected (measured 0 in the accepted 8.9M-row build).
+        # Nonzero means some (sym, date, horizon) cells had NaN exit prices.
+        "nan_rejected_count": nan_rejected_count,
         "horizons_trading_days": list(horizons),
         "last_full_coverage_date": last_full_coverage,
         "price_cache_fingerprint": cache_fingerprint_note,
@@ -960,58 +1010,25 @@ def _parse_args():
 
 
 def _get_universe_tickers(universe_file: Optional[str] = None) -> list[str]:
-    """Load universe tickers: from file if given, else auto-discover from price cache."""
+    """Load universe tickers: from file if given, else auto-discover from price cache.
+
+    Auto-discover delegates to universe_loader.build_liquid_universe (F358
+    consolidation) — the canonical definition of the ~4,700-ticker liquid universe.
+    """
     if universe_file is not None:
         tickers = Path(universe_file).read_text().splitlines()
         return [t.strip() for t in tickers if t.strip()]
 
-    # Auto-discover: replicate _build_universe_tickers logic from run_r1_explore
+    # Auto-discover via the shared helper (F358: one definition, not three).
+    from research.universe_loader import build_liquid_universe
     price_cache_dir = _BACKEND_DIR / "data" / "turnaround" / "price_cache" / "v1"
     subs_dir = _BACKEND_DIR / "data" / "turnaround" / "edgar_cache" / "submissions"
-
-    if not price_cache_dir.exists():
-        raise FileNotFoundError(f"Price cache not found: {price_cache_dir}")
-    if not subs_dir.exists():
-        raise FileNotFoundError(f"Submissions dir not found: {subs_dir}")
-
-    _PRICE_SPAN_START = "20120101"
-    _PRICE_SPAN_END = "20211231"
-
-    covering: set[str] = set()
-    for f in price_cache_dir.iterdir():
-        if not f.name.endswith(".pkl"):
-            continue
-        parts = f.stem.split("_")
-        if len(parts) < 5:
-            continue
-        ticker = parts[0]
-        start = parts[3]
-        end = parts[4]
-        if start <= _PRICE_SPAN_START and end >= _PRICE_SPAN_END:
-            covering.add(ticker)
-
-    log.info("Price-cache covering set (2012-2021 span): %d tickers", len(covering))
-
-    universe: list[str] = []
-    for subs_file in sorted(subs_dir.iterdir()):
-        if not subs_file.name.endswith(".json"):
-            continue
-        try:
-            d = json.loads(subs_file.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        tickers = d.get("tickers", [])
-        if not tickers:
-            continue
-        ticker = tickers[0]
-        if ticker not in covering:
-            continue
-        sic = d.get("sic")
-        if sic and int(sic) != 0:
-            universe.append(ticker)
-
-    log.info("Universe tickers (SIC-bearing, 2012-2021 cache): %d", len(universe))
-    return universe
+    return build_liquid_universe(
+        price_cache_dir=price_cache_dir,
+        subs_dir=subs_dir,
+        # span_start / span_end use the shared defaults (20120101 / 20211231)
+        # which are the canonical R-1/R-1b values (accepted F357 matrix build).
+    )
 
 
 def _generate_trading_dates(start: date, end: date) -> list[date]:

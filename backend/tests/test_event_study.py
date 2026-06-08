@@ -47,6 +47,8 @@ import sys
 import os
 import tempfile
 import math
+import threading
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -1186,14 +1188,18 @@ class TestFDRLedgerPersistence:
         return lambda t: frames.get(t)
 
     def test_ledger_appends_across_runs(self, tmp_path, monkeypatch):
-        """Two runs must produce TWO ledger entries (not a reset-per-run file)."""
+        """Two runs must produce TWO ledger entries (not a reset-per-run file).
+
+        B1 (DI-01): fdr_ledger_path is passed explicitly in the config — callers
+        that want to write the ledger must do so explicitly; None means SKIP.
+        """
         ledger_path = tmp_path / "fdr_ledger.json"
-        monkeypatch.setattr(_es_mod, "_FDR_LEDGER_PATH", ledger_path)
         frames = {"AAPL": _make_price_df(date(2016, 1, 1), date(2022, 12, 31), 0.2)}
         events = [EventRecord("AAPL", datetime(2018, 6, 15, 22, 0, tzinfo=timezone.utc), {})]
         for name in ("run_a", "run_b"):
             config = EventStudyConfig(
                 study_name=name, horizons=(21,), output_dir=tmp_path / name,
+                fdr_ledger_path=ledger_path,  # explicit — required since B1 fix
             )
             run_event_study(events, config, self._loader(frames),
                             universe_tickers=["AAPL"])
@@ -1205,6 +1211,217 @@ class TestFDRLedgerPersistence:
         assert rows[0]["study_name"] == "run_a"
         assert rows[1]["study_name"] == "run_b"
         assert "study_config_hash" in rows[0]
+
+    def test_ledger_none_skips_with_warning(self, tmp_path, caplog):
+        """B1 (DI-01): fdr_ledger_path=None must SKIP the write and log a WARNING.
+
+        A run that leaves fdr_ledger_path=None should never touch the real
+        ledger — the standing methodology rule (108-entry pollution incident).
+        """
+        import logging
+        frames = {"AAPL": _make_price_df(date(2016, 1, 1), date(2022, 12, 31), 0.2)}
+        events = [EventRecord("AAPL", datetime(2018, 6, 15, 22, 0, tzinfo=timezone.utc), {})]
+        config = EventStudyConfig(
+            study_name="no_ledger_run", horizons=(21,), output_dir=tmp_path / "out",
+            fdr_ledger_path=None,  # explicit None — must skip
+        )
+        with caplog.at_level(logging.WARNING, logger="research.event_study"):
+            run_event_study(events, config, self._loader(frames),
+                            universe_tickers=["AAPL"])
+        # No ledger file should have been created anywhere in tmp_path
+        ledger_files = list(tmp_path.rglob("fdr_ledger*.json"))
+        assert ledger_files == [], (
+            f"No ledger file should be created when ledger_path=None, "
+            f"but found: {ledger_files}"
+        )
+        # A WARNING must have been logged
+        warning_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("ledger" in m.lower() and "none" in m.lower() for m in warning_msgs), (
+            f"Expected a warning about ledger_path=None, got: {warning_msgs}"
+        )
+
+    def test_ledger_corrupt_json_backs_up_and_warns(self, tmp_path, caplog):
+        """B2(c) (DI-04): corrupt ledger JSON must be backed up before reset, not silently discarded."""
+        import logging
+        ledger_path = tmp_path / "fdr_ledger.json"
+        # Write corrupt JSON to simulate a ledger that was partially written
+        ledger_path.write_text("{corrupt: not json}", encoding="utf-8")
+        frames = {"AAPL": _make_price_df(date(2016, 1, 1), date(2022, 12, 31), 0.2)}
+        events = [EventRecord("AAPL", datetime(2018, 6, 15, 22, 0, tzinfo=timezone.utc), {})]
+        config = EventStudyConfig(
+            study_name="corrupt_test", horizons=(21,), output_dir=tmp_path / "out",
+            fdr_ledger_path=ledger_path,
+        )
+        with caplog.at_level(logging.WARNING, logger="research.event_study"):
+            run_event_study(events, config, self._loader(frames),
+                            universe_tickers=["AAPL"])
+        # A backup file must exist (named *.corrupt_<timestamp>.json)
+        backups = list(tmp_path.glob("fdr_ledger.corrupt_*.json"))
+        assert backups, (
+            "A .corrupt_<timestamp>.json backup must be created when ledger JSON is corrupt"
+        )
+        # The backup must contain the original corrupt content
+        backup_content = backups[0].read_text(encoding="utf-8")
+        assert "corrupt" in backup_content, "Backup must preserve the original corrupt content"
+        # The new ledger file must contain exactly 1 entry (reset + current run)
+        rows = json.loads(ledger_path.read_text())
+        assert isinstance(rows, list) and len(rows) == 1, (
+            f"After corrupt reset, ledger must have 1 entry (current run), got {len(rows)}"
+        )
+        # A WARNING must have been logged
+        warning_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("corrupt" in m.lower() for m in warning_msgs), (
+            f"Expected a warning about corrupt JSON, got: {warning_msgs}"
+        )
+
+    def test_ledger_oserror_logs_error(self, tmp_path, caplog, monkeypatch):
+        """B2(b) (PY-03/REL-08): OSError from ledger write must log at ERROR with traceback.
+
+        The narrowed except (OSError, TimeoutError) must still surface a
+        failure loudly — not swallow it silently with log.warning.
+        """
+        import logging
+        ledger_path = tmp_path / "fdr_ledger.json"
+        frames = {"AAPL": _make_price_df(date(2016, 1, 1), date(2022, 12, 31), 0.2)}
+        events = [EventRecord("AAPL", datetime(2018, 6, 15, 22, 0, tzinfo=timezone.utc), {})]
+        config = EventStudyConfig(
+            study_name="oserror_test", horizons=(21,), output_dir=tmp_path / "out",
+            fdr_ledger_path=ledger_path,
+        )
+
+        # Simulate OSError by monkey-patching the atomic write inside _append_fdr_ledger
+        original_aw = _es_mod._fileutil_atomic_write_text
+
+        def _raise_oserror(path, content, **kw):
+            if "fdr_ledger" in str(path):
+                raise OSError("simulated disk full")
+            return original_aw(path, content, **kw)
+
+        monkeypatch.setattr(_es_mod, "_fileutil_atomic_write_text", _raise_oserror)
+        with caplog.at_level(logging.ERROR, logger="research.event_study"):
+            # run_event_study should NOT raise — the OSError is caught
+            run_event_study(events, config, self._loader(frames),
+                            universe_tickers=["AAPL"])
+        error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert error_records, "An ERROR-level log must be emitted when ledger write fails with OSError"
+        assert any("ledger" in r.message.lower() for r in error_records), (
+            f"ERROR message must mention 'ledger', got: {[r.message for r in error_records]}"
+        )
+
+
+# -------------------------------------------------------------------------
+# F352: FDR ledger file lock — inter-process RMW safety
+# -------------------------------------------------------------------------
+
+class TestFDRLedgerFileLock:
+    """F352: file_lock helper in fileutil guards the ledger RMW atomically.
+
+    Tests are hermetic (tmp_path only) and do not require network or real data.
+    """
+
+    def _import_file_lock(self):
+        """Import fileutil.file_lock; skip if unavailable."""
+        try:
+            import importlib
+            fileutil = importlib.import_module("fileutil")
+            return fileutil.file_lock
+        except (ImportError, AttributeError) as e:
+            pytest.skip(f"fileutil.file_lock not available: {e}")
+
+    def test_file_lock_creates_lock_file(self, tmp_path):
+        """Lock file (<path>.lock) is created when a lock is acquired."""
+        file_lock = self._import_file_lock()
+        target = tmp_path / "ledger.json"
+        lock_path = Path(str(target) + ".lock")
+        assert not lock_path.exists()
+        with file_lock(target):
+            assert lock_path.exists(), ".lock file must be created on acquisition"
+
+    def test_file_lock_sequential_appends_both_land(self, tmp_path):
+        """Two sequential locked appends produce exactly 2 ledger entries."""
+        file_lock = self._import_file_lock()
+        ledger = tmp_path / "seq_ledger.json"
+
+        def _append(name: str) -> None:
+            with file_lock(ledger):
+                rows: list = []
+                if ledger.exists():
+                    rows = json.loads(ledger.read_text())
+                rows.append({"study_name": name})
+                ledger.write_text(json.dumps(rows))
+
+        _append("first")
+        _append("second")
+
+        result = json.loads(ledger.read_text())
+        assert len(result) == 2, f"Expected 2 entries, got {len(result)}"
+        assert result[0]["study_name"] == "first"
+        assert result[1]["study_name"] == "second"
+
+    def test_file_lock_serializes_concurrent_threads(self, tmp_path):
+        """Concurrent threads using file_lock do not lose entries.
+
+        Spawns N threads each doing a locked read-append-write.  Without the
+        lock, interleaving reads would cause entries to be overwritten; with
+        the lock all N entries must appear in the final file.
+        """
+        file_lock = self._import_file_lock()
+        ledger = tmp_path / "concurrent_ledger.json"
+        n_threads = 8
+        errors: list[str] = []
+
+        def _append(name: str) -> None:
+            try:
+                with file_lock(ledger, timeout=10.0):
+                    rows: list = []
+                    if ledger.exists():
+                        rows = json.loads(ledger.read_text())
+                    # Small sleep to widen the race window for non-locked code
+                    time.sleep(0.005)
+                    rows.append({"study_name": name})
+                    ledger.write_text(json.dumps(rows))
+            except Exception as exc:
+                errors.append(str(exc))
+
+        threads = [
+            threading.Thread(target=_append, args=(f"thread_{i}",))
+            for i in range(n_threads)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"Thread errors: {errors}"
+        result = json.loads(ledger.read_text())
+        assert len(result) == n_threads, (
+            f"Expected {n_threads} entries (no lost writes), got {len(result)}"
+        )
+        names = {r["study_name"] for r in result}
+        assert names == {f"thread_{i}" for i in range(n_threads)}
+
+    def test_file_lock_timeout_raises(self, tmp_path):
+        """file_lock raises TimeoutError when lock cannot be obtained in time."""
+        file_lock = self._import_file_lock()
+        ledger = tmp_path / "timeout_ledger.json"
+        acquired = threading.Event()
+        release = threading.Event()
+
+        def _hold_lock():
+            with file_lock(ledger, timeout=5.0):
+                acquired.set()
+                release.wait(timeout=5.0)
+
+        holder = threading.Thread(target=_hold_lock, daemon=True)
+        holder.start()
+        acquired.wait(timeout=3.0)
+        try:
+            with pytest.raises(TimeoutError):
+                with file_lock(ledger, timeout=0.1):
+                    pass
+        finally:
+            release.set()
+            holder.join(timeout=3.0)
 
 
 # -------------------------------------------------------------------------

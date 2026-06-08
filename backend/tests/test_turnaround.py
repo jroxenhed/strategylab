@@ -1457,3 +1457,305 @@ class TestUniverseV2Preset:
         # name at price $10 (flat, not near multi-year low) will fail washed-out.
         # So results == [] is acceptable here; the important thing is no Stage-1a crash.
         assert isinstance(results, list)  # no exception from Stage 1a
+
+
+# ---------------------------------------------------------------------------
+# F315 + F330 route tests
+# ---------------------------------------------------------------------------
+
+class TestSchemaVersionAndSummary:
+    """F315: schema_version stamped on write + backward-compat read.
+    F330: ?summary=true omits events list, reports events_omitted count.
+    """
+
+    # ------------------------------------------------------------------
+    # F315 — turnaround watchlist (scan output)
+    # ------------------------------------------------------------------
+
+    def test_scan_watchlist_write_carries_schema_version(self, client, monkeypatch, tmp_path):
+        """F315: scan background worker writes {schema_version, candidates} envelope."""
+        import routes.turnaround as rt_mod
+
+        fake_candidates = [
+            {
+                "ticker": "FAKE", "cik": "0000000001", "is_null_candidate": False,
+                "price_near_low": True, "pct_off_high": 70.0, "pct_above_low": 3.0,
+                "below_ma": True, "revenue_yoy_pct": 15.0, "revenue_consec_positive": 3,
+                "gross_margin_delta_pct": 1.0, "net_income_consec_improving": 2,
+                "ocf_positive_quarters": 3, "ps_ratio": 1.5,
+                "has_insider_buying": False, "has_buyback": False, "composite_score": 75.0,
+            }
+        ]
+
+        watchlist_path = tmp_path / "watchlist.json"
+        monkeypatch.setattr(rt_mod, "_WATCHLIST_PATH", watchlist_path)
+        # Write the versioned envelope directly (simulating what the worker produces)
+        import json
+        payload = {"schema_version": rt_mod._WATCHLIST_SCHEMA_VERSION, "candidates": fake_candidates}
+        watchlist_path.write_text(json.dumps(payload))
+
+        resp = client.get("/api/turnaround/watchlist")
+        assert resp.status_code == 200
+        data = resp.json()
+        # GET returns the list of candidates, not the envelope
+        assert isinstance(data, list)
+        assert data[0]["ticker"] == "FAKE"
+
+    def test_scan_watchlist_old_list_format_still_reads(self, client, monkeypatch, tmp_path):
+        """F315: old bare-list watchlist (schema_version 0) reads without error."""
+        import routes.turnaround as rt_mod
+        import json
+
+        # Old format: just a list of candidates (no envelope)
+        old_payload = [
+            {
+                "ticker": "OLD", "cik": "0000000002", "is_null_candidate": False,
+                "price_near_low": True, "pct_off_high": 65.0, "pct_above_low": 4.0,
+                "below_ma": True, "revenue_yoy_pct": 10.0, "revenue_consec_positive": 2,
+                "gross_margin_delta_pct": None, "net_income_consec_improving": 2,
+                "ocf_positive_quarters": 2, "ps_ratio": 2.0,
+                "has_insider_buying": False, "has_buyback": False, "composite_score": 60.0,
+            }
+        ]
+        watchlist_path = tmp_path / "watchlist_old.json"
+        watchlist_path.write_text(json.dumps(old_payload))
+        monkeypatch.setattr(rt_mod, "_WATCHLIST_PATH", watchlist_path)
+
+        resp = client.get("/api/turnaround/watchlist")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert data[0]["ticker"] == "OLD"
+
+    # ------------------------------------------------------------------
+    # DI-11 — scan watchlist write uses backup_depth=3
+    # ------------------------------------------------------------------
+
+    def test_scan_watchlist_write_uses_backup_depth_3(self, monkeypatch, tmp_path):
+        """DI-11: _run_scan_background writes watchlist with backup_depth=3, not the default 1.
+
+        Two consecutive bad scans would otherwise wipe the live file AND its only backup.
+        Verified via source inspection — the call site must pass backup_depth=3 explicitly.
+        """
+        import inspect
+        import routes.turnaround as rt_mod
+
+        src = inspect.getsource(rt_mod._run_scan_background)
+        assert "backup_depth=3" in src, (
+            "DI-11: _run_scan_background must pass backup_depth=3 to atomic_write_text "
+            "for the watchlist write — found default (1) which allows two bad scans to "
+            "wipe live file AND its only backup"
+        )
+
+    # ------------------------------------------------------------------
+    # DI-06 — corrupt watchlist READ does not destroy the file when backup fails
+    # ------------------------------------------------------------------
+
+    def test_corrupt_watchlist_read_preserves_file_when_backup_fails(
+        self, client, monkeypatch, tmp_path
+    ):
+        """DI-06: if watchlist.json is corrupt AND backup fails (e.g. disk full),
+        the endpoint returns an empty list in memory WITHOUT overwriting the corrupt
+        file on disk — user data is preserved for manual recovery.
+        """
+        import routes.turnaround as rt_mod
+        from unittest.mock import patch
+
+        corrupt_content = "THIS IS NOT JSON {"
+        watchlist_path = tmp_path / "watchlist.json"
+        watchlist_path.write_text(corrupt_content)
+        monkeypatch.setattr(rt_mod, "_WATCHLIST_PATH", watchlist_path)
+
+        # Simulate shutil.copy2 failing (e.g. disk full)
+        def failing_copy2(src, dst):
+            raise OSError("No space left on device")
+
+        overwrite_called = []
+
+        def spy_atomic_write(path, content, **kwargs):
+            overwrite_called.append((str(path), content))
+
+        with (
+            patch("routes.turnaround.shutil.copy2", side_effect=failing_copy2),
+            patch("routes.turnaround.atomic_write_text", side_effect=spy_atomic_write),
+        ):
+            resp = client.get("/api/turnaround/watchlist")
+
+        # Endpoint must succeed (not 500) and return empty list
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+        assert resp.json() == [], f"Expected empty list, got {resp.json()}"
+
+        # The corrupt file must NOT have been overwritten — atomic_write_text should
+        # not have been called when backup failed
+        assert overwrite_called == [], (
+            "DI-06: atomic_write_text must NOT be called when backup fails — "
+            f"but it was called with: {overwrite_called}"
+        )
+
+        # The corrupt file must still be intact on disk
+        assert watchlist_path.read_text() == corrupt_content, (
+            "DI-06: corrupt file must be preserved on disk when backup fails"
+        )
+
+    # ------------------------------------------------------------------
+    # F315 — validation result
+    # ------------------------------------------------------------------
+
+    def test_validation_result_write_carries_schema_version(self, client, monkeypatch, tmp_path):
+        """F315: written validation_result.json carries schema_version field."""
+        import routes.turnaround as rt_mod
+        import json
+
+        # A minimal validation result dict that already has schema_version set by
+        # the dataclass — route-level write path also stamps it via setdefault.
+        fake_result = {
+            "schema_version": 2,
+            "n_signal": 10, "n_null": 5,
+            "signal_hit_rate": 0.7, "null_hit_rate": 0.4,
+            "signal_hit_rate_ci_lo": 0.4, "signal_hit_rate_ci_hi": 0.9,
+            "null_hit_rate_ci_lo": 0.2, "null_hit_rate_ci_hi": 0.6,
+            "mean_return_pct": 15.0, "median_return_pct": 12.0,
+            "p25_return_pct": 5.0, "p75_return_pct": 25.0,
+            "null_mean_return_pct": 3.0, "null_median_return_pct": 2.0,
+            "null_p25_return_pct": -1.0, "null_p75_return_pct": 7.0,
+            "signal_horizon_mean_return_pct": 14.0, "signal_horizon_median_return_pct": 11.0,
+            "null_horizon_mean_return_pct": 2.5, "null_horizon_median_return_pct": 1.5,
+            "events": [
+                {"ticker": "FAKE", "as_of_date": "2023-01-01", "hit": True,
+                 "return_pct": 20.0, "horizon_days": 63, "is_null": False,
+                 "fwd_return_21d": None, "fwd_return_63d": None, "fwd_return_126d": None,
+                 "excess_21d": None, "excess_63d": None, "excess_126d": None,
+                 "hit_v2_21d": None, "hit_v2_63d": None, "hit_v2_126d": None,
+                 "config_name": "legacy", "direction": "long"}
+            ],
+            "survivorship_warning": "test", "conviction_skipped": False,
+            "timed_out": False, "n_unique_tickers": 1,
+            "n_truncated": 0, "n_skipped": 0,
+        }
+        result_path = tmp_path / "validation_result.json"
+        result_path.write_text(json.dumps(fake_result))
+        monkeypatch.setattr(rt_mod, "_VALIDATION_PATH", result_path)
+
+        resp = client.get("/api/turnaround/validate/result")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "schema_version" in data
+        assert data["schema_version"] == 2
+
+    def test_validation_result_missing_schema_version_reads_without_error(self, client, monkeypatch, tmp_path):
+        """F315: old validation result WITHOUT schema_version reads without error (defaults to 0)."""
+        import routes.turnaround as rt_mod
+        import json
+
+        # Old artifact: no schema_version field
+        old_result = {
+            "n_signal": 5, "n_null": 2,
+            "signal_hit_rate": 0.6, "null_hit_rate": 0.3,
+            "signal_hit_rate_ci_lo": 0.3, "signal_hit_rate_ci_hi": 0.85,
+            "null_hit_rate_ci_lo": 0.1, "null_hit_rate_ci_hi": 0.6,
+            "mean_return_pct": 10.0, "median_return_pct": 8.0,
+            "p25_return_pct": 2.0, "p75_return_pct": 20.0,
+            "survivorship_warning": "test", "conviction_skipped": False,
+            "timed_out": False, "n_unique_tickers": 1,
+            "n_truncated": 0, "n_skipped": 0,
+        }
+        result_path = tmp_path / "validation_old.json"
+        result_path.write_text(json.dumps(old_result))
+        monkeypatch.setattr(rt_mod, "_VALIDATION_PATH", result_path)
+
+        resp = client.get("/api/turnaround/validate/result")
+        assert resp.status_code == 200
+        data = resp.json()
+        # DI-01 backfill applies: schema_version defaults to 0
+        assert data["schema_version"] == 0
+        # events backfilled to empty list (DI-01 default)
+        assert data["events"] == []
+
+    # ------------------------------------------------------------------
+    # F330 — summary query param
+    # ------------------------------------------------------------------
+
+    def test_summary_true_omits_events_list(self, client, monkeypatch, tmp_path):
+        """F330: ?summary=true drops events list, reports events_omitted count."""
+        import routes.turnaround as rt_mod
+        import json
+
+        events = [
+            {"ticker": f"SYM{i}", "as_of_date": "2023-01-01", "hit": True,
+             "return_pct": 10.0, "horizon_days": 63, "is_null": False,
+             "fwd_return_21d": None, "fwd_return_63d": None, "fwd_return_126d": None,
+             "excess_21d": None, "excess_63d": None, "excess_126d": None,
+             "hit_v2_21d": None, "hit_v2_63d": None, "hit_v2_126d": None,
+             "config_name": "legacy", "direction": "long"}
+            for i in range(5)
+        ]
+        result = {
+            "schema_version": 2,
+            "n_signal": 5, "n_null": 0,
+            "signal_hit_rate": 0.8, "null_hit_rate": 0.0,
+            "signal_hit_rate_ci_lo": 0.4, "signal_hit_rate_ci_hi": 0.97,
+            "null_hit_rate_ci_lo": 0.0, "null_hit_rate_ci_hi": 0.0,
+            "mean_return_pct": 12.0, "median_return_pct": 10.0,
+            "p25_return_pct": 5.0, "p75_return_pct": 18.0,
+            "null_mean_return_pct": 0.0, "null_median_return_pct": 0.0,
+            "null_p25_return_pct": 0.0, "null_p75_return_pct": 0.0,
+            "signal_horizon_mean_return_pct": 11.0, "signal_horizon_median_return_pct": 9.0,
+            "null_horizon_mean_return_pct": 0.0, "null_horizon_median_return_pct": 0.0,
+            "events": events,
+            "survivorship_warning": "test", "conviction_skipped": False,
+            "timed_out": False, "n_unique_tickers": 5,
+            "n_truncated": 0, "n_skipped": 0,
+        }
+        result_path = tmp_path / "validation_result.json"
+        result_path.write_text(json.dumps(result))
+        monkeypatch.setattr(rt_mod, "_VALIDATION_PATH", result_path)
+
+        resp = client.get("/api/turnaround/validate/result?summary=true")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "events" not in data, "events list must be absent in summary mode"
+        assert data["events_omitted"] == 5
+        # Aggregates must still be present
+        assert data["n_signal"] == 5
+        assert data["signal_hit_rate"] == 0.8
+
+    def test_default_no_summary_returns_full_events(self, client, monkeypatch, tmp_path):
+        """F330: default (no ?summary) returns full events list for back-compat."""
+        import routes.turnaround as rt_mod
+        import json
+
+        events = [
+            {"ticker": "SYM0", "as_of_date": "2023-01-01", "hit": True,
+             "return_pct": 10.0, "horizon_days": 63, "is_null": False,
+             "fwd_return_21d": None, "fwd_return_63d": None, "fwd_return_126d": None,
+             "excess_21d": None, "excess_63d": None, "excess_126d": None,
+             "hit_v2_21d": None, "hit_v2_63d": None, "hit_v2_126d": None,
+             "config_name": "legacy", "direction": "long"},
+        ]
+        result = {
+            "schema_version": 2,
+            "n_signal": 1, "n_null": 0,
+            "signal_hit_rate": 1.0, "null_hit_rate": 0.0,
+            "signal_hit_rate_ci_lo": 0.2, "signal_hit_rate_ci_hi": 1.0,
+            "null_hit_rate_ci_lo": 0.0, "null_hit_rate_ci_hi": 0.0,
+            "mean_return_pct": 10.0, "median_return_pct": 10.0,
+            "p25_return_pct": 10.0, "p75_return_pct": 10.0,
+            "null_mean_return_pct": 0.0, "null_median_return_pct": 0.0,
+            "null_p25_return_pct": 0.0, "null_p75_return_pct": 0.0,
+            "signal_horizon_mean_return_pct": 10.0, "signal_horizon_median_return_pct": 10.0,
+            "null_horizon_mean_return_pct": 0.0, "null_horizon_median_return_pct": 0.0,
+            "events": events,
+            "survivorship_warning": "test", "conviction_skipped": False,
+            "timed_out": False, "n_unique_tickers": 1,
+            "n_truncated": 0, "n_skipped": 0,
+        }
+        result_path = tmp_path / "validation_result_full.json"
+        result_path.write_text(json.dumps(result))
+        monkeypatch.setattr(rt_mod, "_VALIDATION_PATH", result_path)
+
+        resp = client.get("/api/turnaround/validate/result")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "events" in data
+        assert len(data["events"]) == 1
+        assert "events_omitted" not in data

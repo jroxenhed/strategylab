@@ -1,13 +1,72 @@
-"""File utilities — atomic writes and orphan .tmp cleanup."""
+"""File utilities — atomic writes, file locking, and orphan .tmp cleanup."""
 
+import contextlib
+import fcntl
 import logging
 import os
 import shutil
 import tempfile
 import time
 from pathlib import Path
+from typing import Generator
 
 logger = logging.getLogger(__name__)
+
+_LOCK_TIMEOUT_SECS = 30
+
+
+@contextlib.contextmanager
+def file_lock(path: "str | os.PathLike[str]", timeout: float = _LOCK_TIMEOUT_SECS) -> Generator[None, None, None]:
+    """Exclusive inter-process file lock using ``<path>.lock``.
+
+    Acquires an exclusive ``fcntl.flock`` on ``<path>.lock`` before yielding
+    and releases it on exit.  The lock file is created if absent.  Uses a
+    polling loop capped at *timeout* seconds; raises ``TimeoutError`` if the
+    lock cannot be obtained within that time.
+
+    Usage::
+
+        with file_lock(ledger_path):
+            data = json.loads(ledger_path.read_text())
+            data.append(entry)
+            atomic_write_text(ledger_path, json.dumps(data))
+
+    POSIX only (uses ``fcntl``).  Designed for macOS + Linux / WSL.
+    """
+    lock_path = str(path) + ".lock"
+    deadline = time.monotonic() + timeout
+    # Ensure the lock file and its parent directory exist.
+    os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+    # B3 (PY-04/REL-02): open in 'a' (append/create) rather than 'w' (truncate)
+    # so each acquisition does not clobber any content that might be written to
+    # the lock file for debugging purposes (e.g. a PID stamp).  The lock file
+    # sibling is intentionally left in place after release — unlinking inside the
+    # with-block is a POSIX race (another process may have already re-opened the
+    # inode); leaving it is correct.  The fd is held open for the duration of the
+    # lock so the OS keeps the inode alive even if the filename is later unlinked.
+    fd = open(lock_path, "a")  # noqa: WPS515 — kept open for duration of lock
+    try:
+        # Poll with exponential back-off until we get the lock or time out.
+        delay = 0.01
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break  # lock acquired
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"file_lock: could not acquire lock on {lock_path!r} "
+                        f"within {timeout}s"
+                    ) from None
+                time.sleep(min(delay, remaining))
+                delay = min(delay * 2, 0.5)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        fd.close()
 
 
 def _rotate_backups(path: str, depth: int) -> None:

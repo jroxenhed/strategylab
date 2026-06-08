@@ -13,16 +13,16 @@ _(none open)_
 - [F364](#f364) — [next] Review-contract rule: findings citing population statistics must state the population measured [easy]
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 35 items
+## Open Work — 29 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
 | [Architecture](#architecture) | 10 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F320](#f320), [F348](#f348), [F370](#f370), [F372](#f372) |
-| [Hardening](#hardening) | 11 | [F314](#f314)–[F315](#f315), [F322](#f322)–[F323](#f323), [F330](#f330), [F337](#f337), [F352](#f352), [F358](#f358), [F362](#f362)–[F364](#f364) |
+| [Hardening](#hardening) | 5 | [F314](#f314), [F322](#f322)–[F323](#f323), [F362](#f362), [F364](#f364) |
 | [Polish](#polish) | 1 | [F310](#f310) |
-| [Testing](#testing) | 7 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329), [F360](#f360), [F371](#f371) |
-| [Infra](#infra) | 5 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F373](#f373) |
+| [Testing](#testing) | 6 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F329](#f329), [F360](#f360) |
+| [Infra](#infra) | 6 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F373](#f373), [F375](#f375) |
 
 ## Features
 
@@ -58,24 +58,13 @@ _(none open)_
 
 ## Hardening
 
-- [ ] <a id="f330"></a> **F330** Events-table payload size guardrail — validation_result.json now carries the full per-event list (~3.2k events / ~1-2MB at run-1 scale); at max_universe~15k over 9y it could reach ~8-10MB through GET /validate/result in one pass (DI-04, F-RERUN-0605 review). Add a summary-only query param or gzip; revisit with F315 (watchlist schema_version still missing). [easy] [hardening]
-- [ ] <a id="f352"></a> **F352** FDR ledger read-modify-write has no file lock — concurrent study runs can silently drop ledger entries (DI-07, F349/F350 review; pre-existing, predates the lens work). The ledger is the program's multiplicity accounting — losing entries quietly understates how many hypotheses were tested. Reuse the house file-lock pattern or single-writer convention. [easy] [hardening] (added 2026-06-06)
-
-- [ ] <a id="f358"></a> **F358** Consolidate the universe-loader copies — `run_r1_explore._build_universe_tickers`, `run_smoke_study._build_universe_tickers`, `returns_matrix._get_universe_tickers` (price-cache-span + SIC construction, ~40 lines × 3) plus `form4_ingest._load_liquid_universe` (structural map, deliberately broader — keep separate but co-document) into one shared helper with an explicit span-end parameter. PY-03 from the F357 review; a 4th copy is one lazy session away. [easy] [hardening]
-
-- [ ] <a id="f363"></a> **F363** NaN guard in matrix worker — review-wave P2 (NAN-SILENT): a NaN Close at the exit bar produces `r = NaN` which passes the `r is not None` gate and lands in the artifact as a valid float64 (pandas stats silently skip it). Measured: 0 NaN rows in the accepted 8.9M-row build, so unrealized — but add `math.isnan(r)` rejection (counted, not silent) in `_worker_build_chunk` before the row append. [easy] [hardening]
-
-- [ ] <a id="f362"></a> **F362** review-wave workflow ↔ run-state integration — the new `.claude/workflows/review-wave.js` (piloted 2026-06-07) returns a wave-level `tokens_spent` but run-state.py expects per-agent rows (`add-agent --tokens`). Decide: record the wave as one synthetic agent row, or extend the workflow to return per-persona usage from the engine's accounting. Also fold the playbook's review-tier section into referencing the workflow as the default Tier-B/C mechanism once the pilot verdict is in. [easy] [infra]
+- [ ] <a id="f362"></a> **F362** review-wave workflow ↔ run-state integration — the new `.claude/workflows/review-wave.js` returns a wave-level `tokens_spent` but run-state.py expects per-agent rows (`add-agent --tokens`). Decide: record the wave as one synthetic agent row, or extend the workflow to return per-persona usage from the engine's accounting. **(Partial 2026-06-08, F-BATCH-0608: playbook review section now documents review-wave as the DEFAULT mechanism + the exact `{taskId,files,intent,personas}` structured-args contract — the `review-wave` skill's "Invoke:" hint echoes prose into `args`, which the workflow `JSON.parse`s and dies on; remaining sub-task: fix the SKILL to emit structured args, and the per-persona token telemetry.)** [easy] [infra]
 
 - [ ] <a id="f364"></a> **F364** [next] Review-contract rule: findings citing population statistics must state the population measured — ADV-04's 0.6% (whole submissions cache, all forms/years) vs the study population's 0.0016% mis-sized F359 by three orders of magnitude; one scope sentence would have sized it correctly. Add the rule to the review-wave persona prompts (`.claude/workflows/review-wave.js`) and the playbook review section. [easy] [hardening]
-
-- [ ] <a id="f337"></a> **F337** null_atlas.json backup rotation — atlas writes are atomic but have zero backup depth, unlike validation_result.json (backup_depth=3); a bad build silently destroys the previous good atlas (SIGNAL-P1 DI-06, deferred). Reuse the validation-result backup helper. [easy] [hardening]
 
 _(none open)_
 
 - [ ] <a id="f314"></a> **F314** EDGAR cache eviction/size cap — backend/data/turnaround/edgar_cache/ grows unboundedly (companyfacts are MB-scale; full-universe worst case GB-scale; expired files refreshed in place, never pruned) (DI-05/DI-10, F311 review). Measured 2026-06-05: 134MB at just 77 facts files (~1.8MB avg); full-run projection 2–5GB. Age-based prune on scan start + total-size cap. Largely superseded by F320 if that ships first (derived cache makes raw facts prunable). [easy] [hardening]
-
-- [ ] <a id="f315"></a> **F315** Schema version field on persisted turnaround payloads (watchlist.json, validation_result.json) so future field changes don't break GET readers of old files (DI-06, F311 review). [easy] [hardening]
 
 - [ ] <a id="f322"></a> **F322** get_shares_outstanding fails on dual-class filers — P/S = None (data gap, fail-closed) for PTON, NKE, EL (all class A/B structures); single-class AAPL/INTC/TGT/MRNA compute fine. Sum dei:EntityCommonStockSharesOutstanding across share-class contexts (or fall back to CommonStockSharesIssued per class) at the same as_of. 3 of 7 live-tested names hit this — material coverage gap for the valuation pillar. [medium] [hardening]
 
@@ -86,7 +75,6 @@ _(none open)_
 - [ ] <a id="f310"></a> **F310** One-frame crosshair/pane misalignment possible during render-interval swap — main-pane and SubPane setData run in separate effects on the same commit; lw-charts may emit a range event between them and sync a logical range onto a sub-pane still holding the old bar count (try/catch prevents errors; visual blip only). Structural fix needs shared dep-chain plumbing. (RACE-04, A8-render-resample review, rated acceptable-as-is.) [medium] [polish]
 ## Testing
 
-- [ ] <a id="f371"></a> **F371** F338 probe for the filing mean-excess baseline artifact — every F369 filing family shows a uniform ~+1.5pp mean excess (earnings, officer-changes, no-target 8-Ks alike); proven structural (look-ahead fix moved it <0.1pp), so it's size-weighting/survivorship in the matrix universe, not signal. Build a true point-in-time benchmark (e.g. size-matched or event-weighted control) and quantify the artifact before ANY filing-family directional claim is believed. Power numbers (n/std/MDE) are unaffected. [testing]
 - [ ] <a id="f329"></a> **F329** Record a real Form 4 P-code (purchase) fixture for edgar positive controls — the real AAPL Form 4 fixture only contains S/G transaction codes, so the P-code accumulation path in get_form4_net_buys is exercised only by synthetic XML (TST-03c, F-RERUN-0605 review). Record a live insider-buy Form 4 (any ticker) and pin net-buys > 0. [easy] [testing]
 
 - [ ] <a id="d24b"></a> **D24b** Regime bot visual verification — D24 not visually verified. Need to run a regime bot in paper trading to confirm flip sequence, pending_regime_flip retry, and BotCard regime status display. Manual QA item. [testing]
@@ -99,6 +87,7 @@ _(none open)_
 
 ## Infra
 
+- [ ] <a id="f375"></a> **F375** Matrix NaN-rejection per-symbol traceability (deferred from F-BATCH-0608 review REL-07/DI-10) — the F363 `nan_rejected` count is a per-chunk global; a symbol with mixed NaN/non-NaN rows shows in the produced-rows bucket with invisible coverage holes. Add per-symbol attribution to the sidecar + assert the `nan_rejected` key is present in worker returns. No wrong-answer risk; coverage-audit completeness only. [hardening]
 - [ ] <a id="f373"></a> **F373** premise_power_census polish (deferred F369 review items) — emit the orchestrator synthesis section from the script so re-runs don't lose it; document the COR-05 quintile-n (593 vs 596, within tolerance) and COR-08 R-2 intra-week dedup approximations in the report; warn instead of silently resetting on corrupt census.json (PY-05). [polish]
 - [ ] <a id="f97"></a> **F97** [medium] Provision `backend/venv/` in routine builder container — overnight builds 21/22/23 all hit the same gap: §3.5 backend smoke test originally specified `cd backend && venv/bin/uvicorn …` but the routine container ships without a venv. Spec now codifies AST + import-time check as the substitute. Real fix: the container image includes `backend/venv/` with pinned deps (Pydantic, FastAPI, pytest). Once landed, restore the full uvicorn smoke test path. Container/infra change, not application code. (from build 23 process review) [infra]
 

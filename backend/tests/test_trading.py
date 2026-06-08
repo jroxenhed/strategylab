@@ -163,6 +163,50 @@ def test_watchlist_seed_skips_when_populated(client, tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# F315 — watchlist schema_version stamped on write + tolerated on read
+# ---------------------------------------------------------------------------
+
+def test_watchlist_save_stamps_schema_version(client, tmp_path, monkeypatch):
+    """F315: POST /watchlist writes a file with schema_version field present."""
+    watchlist_file = tmp_path / "watchlist.json"
+    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", watchlist_file)
+
+    resp = client.post("/api/trading/watchlist", json=_WATCHLIST_PAYLOAD)
+    assert resp.status_code == 200
+
+    on_disk = json.loads(watchlist_file.read_text())
+    assert "schema_version" in on_disk, "schema_version must be stamped on write"
+    assert on_disk["schema_version"] == trading_mod._WATCHLIST_SCHEMA_VERSION
+
+
+def test_watchlist_seed_stamps_schema_version(client, tmp_path, monkeypatch):
+    """F315: POST /watchlist/seed writes a file with schema_version field present."""
+    watchlist_file = tmp_path / "watchlist_seed.json"
+    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", watchlist_file)
+
+    resp = client.post("/api/trading/watchlist/seed", json=_WATCHLIST_PAYLOAD)
+    assert resp.status_code == 200
+    assert resp.json()["seeded"] is True
+
+    on_disk = json.loads(watchlist_file.read_text())
+    assert "schema_version" in on_disk, "schema_version must be stamped on seed write"
+    assert on_disk["schema_version"] == trading_mod._WATCHLIST_SCHEMA_VERSION
+
+
+def test_watchlist_get_without_schema_version_reads_without_error(client, tmp_path, monkeypatch):
+    """F315: GET /watchlist on a file lacking schema_version (old format) reads without error."""
+    watchlist_file = tmp_path / "watchlist_no_ver.json"
+    monkeypatch.setattr(trading_mod, "WATCHLIST_PATH", watchlist_file)
+    # Old file: no schema_version field
+    watchlist_file.write_text(json.dumps({"groups": [], "ungrouped": ["AAPL"]}))
+
+    resp = client.get("/api/trading/watchlist")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ungrouped"] == ["AAPL"]
+
+
+# ---------------------------------------------------------------------------
 # Strategies tests
 # ---------------------------------------------------------------------------
 

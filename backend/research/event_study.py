@@ -34,6 +34,7 @@ No FastAPI dependency (consistent with backend/research/ README rule).
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib
 import json
@@ -95,16 +96,14 @@ from research.power_audit import (  # noqa: E402
 from research.outcome_table import minimum_detectable_effect  # noqa: E402
 from research.regime_validation import regime_state_for_as_of as _regime_state_for_as_of  # noqa: E402  # F350
 
-# DI-06: prefer house-standard atomic writer (fsync before replace) for durability.
-# Fall back to local _atomic_write if fileutil is unavailable (e.g. older installs).
-try:
-    _BACKEND_DIR_FOR_FU = Path(__file__).resolve().parent.parent
-    if str(_BACKEND_DIR_FOR_FU) not in sys.path:
-        sys.path.insert(0, str(_BACKEND_DIR_FOR_FU))
-    from fileutil import atomic_write_text as _fileutil_atomic_write_text  # type: ignore[import]
-    _HAS_FILEUTIL = True
-except ImportError:
-    _HAS_FILEUTIL = False
+# DI-06 / PY-08: fileutil ships in-repo (backend/fileutil.py) — import directly.
+# The old try/except ImportError + _noop_lock fallback was removed (B2a fix):
+# the lock must NEVER silently degrade to a no-op; a broken fileutil import
+# should surface immediately as an ImportError rather than silently disabling
+# the concurrency guard on the FDR ledger.
+from fileutil import atomic_write_text as _fileutil_atomic_write_text  # noqa: E402
+from fileutil import file_lock as _fileutil_file_lock  # noqa: E402
+
 
 log = logging.getLogger(__name__)
 
@@ -2416,8 +2415,23 @@ def _append_fdr_ledger(
     optional stopping or parameter shopping across reruns is auditable.
 
     Honors config.fdr_ledger_path when set (tests redirect to a tmp path).
+
+    B1 (DI-01): ledger_path=None means SKIP — do NOT fall back to writing the
+    real ledger.  Calibration / abbreviated runs that do not pass an explicit
+    path (e.g. --calibrate mode) must not pollute the multiplicity audit trail.
+    Real runs must pass the path explicitly; that discipline is enforced here
+    rather than relying on every caller being careful.
     """
-    ledger_path = config.fdr_ledger_path or _FDR_LEDGER_PATH
+    ledger_path = config.fdr_ledger_path
+    if ledger_path is None:
+        log.warning(
+            "FDR ledger skip: config.fdr_ledger_path is None — no ledger path "
+            "was passed explicitly.  The multiplicity audit entry for study %r "
+            "has NOT been recorded.  Pass fdr_ledger_path explicitly (e.g. "
+            "_REAL_FDR_LEDGER or a test tmp path) to enable ledger writes.",
+            config.study_name,
+        )
+        return
     try:
         entry = {
             "study_name": config.study_name,
@@ -2441,18 +2455,54 @@ def _append_fdr_ledger(
             },
         }
         ledger_path.parent.mkdir(parents=True, exist_ok=True)
-        ledger_rows: list[dict] = []
-        if ledger_path.exists():
-            try:
-                ledger_rows = json.loads(ledger_path.read_text(encoding="utf-8"))
-                if not isinstance(ledger_rows, list):
+        # F352: acquire an exclusive inter-process lock spanning the whole
+        # read-modify-write so concurrent study runs cannot interleave and
+        # silently drop entries (which would understate the multiple-comparisons
+        # correction — the entire purpose of this ledger).
+        # DI-09 crash-safety invariant: the with-block spans the entire
+        # os.replace inside atomic_write_text.  A crash after os.replace leaves
+        # the ledger consistent (rename is atomic on POSIX) and releases the
+        # lock via kernel fd-close cleanup — no manual recovery needed.
+        with _fileutil_file_lock(ledger_path):
+            ledger_rows: list[dict] = []
+            if ledger_path.exists():
+                try:
+                    ledger_rows = json.loads(ledger_path.read_text(encoding="utf-8"))
+                    if not isinstance(ledger_rows, list):
+                        ledger_rows = []
+                except Exception as parse_exc:
+                    # DI-04: back up corrupt JSON before resetting — never
+                    # silently discard prior multiplicity history.
+                    import shutil as _shutil
+                    import time as _time
+                    backup_path = ledger_path.with_suffix(
+                        f".corrupt_{int(_time.time())}.json"
+                    )
+                    try:
+                        _shutil.copy2(ledger_path, backup_path)
+                        log.warning(
+                            "FDR ledger JSON corrupt — backed up to %s, resetting "
+                            "to empty list.  Prior runs' entries are preserved in "
+                            "the backup.  Error: %s",
+                            backup_path,
+                            parse_exc,
+                        )
+                    except OSError as backup_exc:
+                        log.error(
+                            "FDR ledger JSON corrupt AND backup failed (%s) — "
+                            "resetting to empty list; prior entries may be lost. "
+                            "Corrupt content is still at %s.  Parse error: %s",
+                            backup_exc,
+                            ledger_path,
+                            parse_exc,
+                        )
                     ledger_rows = []
-            except Exception:
-                ledger_rows = []
-        ledger_rows.append(entry)
-        _atomic_write(ledger_path, json.dumps(ledger_rows, indent=2, default=str))
-    except Exception as exc:
-        log.warning("FDR ledger append failed: %s", exc)
+            ledger_rows.append(entry)
+            _atomic_write(ledger_path, json.dumps(ledger_rows, indent=2, default=str))
+    except (OSError, TimeoutError) as exc:
+        # B2(b) PY-03/REL-08: narrow to OS/lock errors; log at ERROR with
+        # traceback so a real ledger failure is loud, not swallowed.
+        log.error("FDR ledger append failed: %s", exc, exc_info=True)
 
 
 def _write_study_artifacts(
@@ -2498,24 +2548,10 @@ def _write_study_artifacts(
 def _atomic_write(path: Path, content: str) -> None:
     """Write content to path atomically (fsync + os.replace).
 
-    DI-06: delegates to fileutil.atomic_write_text (house standard, fsync before
-    replace) when available.  Falls back to local tmp+replace when import fails.
+    DI-06 / PY-08: delegates to fileutil.atomic_write_text (house standard,
+    fsync before replace).  fileutil ships in-repo so this is always available.
     """
-    if _HAS_FILEUTIL:
-        _fileutil_atomic_write_text(path, content)
-        return
-    # Local fallback (no fsync — acceptable for test/dev environments).
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    try:
-        tmp_path.write_text(content, encoding="utf-8")
-        os.replace(str(tmp_path), str(path))
-    except Exception as exc:
-        log.warning("atomic write failed for %s: %s", path, exc)
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-        raise
+    _fileutil_atomic_write_text(path, content)
 
 
 # ---------------------------------------------------------------------------

@@ -132,6 +132,12 @@ def _build_universe_tickers() -> list[str]:
     """Return first 200 tickers (alphabetical) with price cache 2012-2022 + SIC.
 
     All returned tickers have on-disk price data; no network fetches needed.
+
+    NOTE (C4/PY-12): This function is deliberately NOT delegating to
+    universe_loader.build_liquid_universe (F358 canonical definition).
+    It uses a different span-end ("20221231" vs "20211231") and caps at
+    50 tickers for fast wall-clock.  Apply any logic fixes here independently.
+    See universe_loader.py for the shared version.
     """
     price_cache_dir = _PRICE_CACHE_DIR / "v1"
     if not price_cache_dir.exists():
@@ -148,8 +154,8 @@ def _build_universe_tickers() -> list[str]:
         if len(parts) < 5:
             continue
         ticker = parts[0]
-        start = parts[3]
-        end = parts[4]
+        start = parts[-2]
+        end = parts[-1]
         if start <= "20120101" and end >= "20221231":
             covering.add(ticker)
 
@@ -169,8 +175,14 @@ def _build_universe_tickers() -> list[str]:
         if ticker not in covering:
             continue
         sic = d.get("sic")
-        if sic and int(sic) != 0:
-            universe.append(ticker)
+        if sic:
+            # C4/PY-06/PY-12: guard against non-numeric SIC (same fix as universe_loader.py)
+            try:
+                sic_int = int(sic)
+            except (ValueError, TypeError):
+                continue
+            if sic_int != 0:
+                universe.append(ticker)
 
     # F349 CRITICAL: event tickers MUST be in universe_tickers so that
     # _load_ticker_to_sic() returns their SIC codes.  _load_ticker_to_sic

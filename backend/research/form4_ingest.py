@@ -129,6 +129,14 @@ def _load_liquid_universe() -> dict[int, str]:
     is treated as the primary ticker (it consistently returns common stock first).
 
     Returns a dict keyed by int-normalised CIK (so TSV's '0000036270' → 36270).
+
+    NOTE (F358): this is deliberately SEPARATE from
+    research.universe_loader.build_liquid_universe.  That helper is the
+    price-cache-span + SIC scan used by run_r1_explore / run_r1b_explore /
+    returns_matrix to define the ~4,700-ticker benchmark pool.  This function
+    is the broader CIK→ticker ingest map needed for filing attribution — it
+    uses structural exclusions, not price coverage, and returns a dict not a
+    list.  Do NOT merge them.
     """
     from turnaround import build_universe  # noqa: E402
     from edgar import fetch_universe  # noqa: E402

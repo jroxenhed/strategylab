@@ -126,78 +126,20 @@ _CALIBRATE_N_EVENTS = 25
 def _build_universe_tickers(event_tickers: list[str] | None = None) -> list[str]:
     """Return ALL tickers with price-cache span 2012-2021 + non-zero SIC.
 
-    This is the generalized version of the smoke driver's _build_universe_tickers:
-    - No [:50] cap.  Scout measured 4,666 qualifying tickers.
-    - event_tickers must be included (F349 CRITICAL: absent event tickers force
-      100% peer fallback because _load_ticker_to_sic only processes universe_tickers).
+    Delegates to universe_loader.build_liquid_universe (F358 consolidation).
+    See that module for the full definition and F349 CRITICAL guard.
 
     Price-cache span gate: START <= 20120101 AND END >= 20211231.
     (Smoke driver uses 20221231; R-1 uses 20211231 — 126td past 2020-12-31 explores.)
     """
-    price_cache_dir = _PRICE_CACHE_DIR / "v1"
-    if not price_cache_dir.exists():
-        raise FileNotFoundError(f"Price cache not found: {price_cache_dir}")
-    if not _SUBS_DIR.exists():
-        raise FileNotFoundError(f"Submissions dir not found: {_SUBS_DIR}")
-
-    # Step 1: tickers with full price coverage 2012-2021
-    covering: set[str] = set()
-    for f in price_cache_dir.iterdir():
-        if not f.name.endswith(".pkl"):
-            continue
-        parts = f.stem.split("_")
-        if len(parts) < 5:
-            continue
-        ticker = parts[0]
-        start = parts[3]
-        end = parts[4]
-        if start <= _PRICE_SPAN_START and end >= _PRICE_SPAN_END:
-            covering.add(ticker)
-
-    log.info("Price-cache covering set (2012-2021 span): %d tickers", len(covering))
-
-    # Step 2: keep those with non-zero SIC in submissions (sorted for reproducibility)
-    universe: list[str] = []
-    for subs_file in sorted(_SUBS_DIR.iterdir()):
-        if not subs_file.name.endswith(".json"):
-            continue
-        try:
-            d = json.loads(subs_file.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        tickers = d.get("tickers", [])
-        if not tickers:
-            continue
-        ticker = tickers[0]
-        if ticker not in covering:
-            continue
-        sic = d.get("sic")
-        if sic and int(sic) != 0:
-            universe.append(ticker)
-
-    # F349 CRITICAL: event tickers MUST be in universe_tickers so that
-    # _load_ticker_to_sic() returns their SIC codes.  If an event ticker is absent,
-    # ticker_to_sic[event_ticker] = None → forced universe fallback for 100% of
-    # that ticker's events (documented in smoke driver and CLAUDE.md).
-    universe_set = set(universe)
-    n_added = 0
-    if event_tickers:
-        for et in event_tickers:
-            if et in covering and et not in universe_set:
-                universe.append(et)
-                universe_set.add(et)
-                n_added += 1
-
-    if n_added > 0:
-        log.info(
-            "Event tickers added to universe (not in SIC scan but price-covered): %d",
-            n_added,
-        )
-
-    log.info(
-        "Universe tickers (SIC-bearing, 2012-2021 cache): %d", len(universe)
+    from research.universe_loader import build_liquid_universe
+    return build_liquid_universe(
+        price_cache_dir=_PRICE_CACHE_DIR / "v1",
+        subs_dir=_SUBS_DIR,
+        span_start=_PRICE_SPAN_START,
+        span_end=_PRICE_SPAN_END,
+        extra_tickers=event_tickers,
     )
-    return universe
 
 
 # ---------------------------------------------------------------------------

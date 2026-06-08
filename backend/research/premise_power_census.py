@@ -27,7 +27,8 @@ import os
 import pickle
 import sys
 import time
-from datetime import date, datetime, timezone
+from collections import defaultdict
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -130,7 +131,6 @@ def _entry_date_for_filing(acceptance_dt: str, sorted_dates: list) -> Optional[s
         # If at or after 16:00 ET, advance calendar date by one day so entry
         # cannot coincide with the same-day price bar that closed before the filing
         if dt_et.hour >= 16:
-            from datetime import timedelta
             cal_date = cal_date + timedelta(days=1)
         date_str = cal_date.isoformat()
     except Exception:
@@ -213,6 +213,7 @@ def _compute_excess_from_matrix(
     medians: dict,
     horizon: int = 63,
     logger=None,
+    mat_lookup: Optional[dict] = None,
 ) -> tuple[list[float], int]:
     """Compute per-event excess return via matrix median join.
 
@@ -220,6 +221,11 @@ def _compute_excess_from_matrix(
         events: list of dicts with 'entry_date' and 'ticker'
         medians: {horizon: {entry_date_str: median_fwd_return_pct}}
         horizon: forward return horizon
+        mat_lookup: optional pre-built {(entry_date_str, symbol): fwd_return_pct}
+            dict for this horizon.  When provided the parquet is NOT re-read
+            (PY-02: avoids redundant IO inside run_calibration which already holds
+            the matrix in memory).  Callers that don't yet have a lookup may omit
+            this parameter; the function will load the parquet itself.
 
     Returns:
         (excess_list, n_no_frame) where excess_list is list of pp values
@@ -229,15 +235,15 @@ def _compute_excess_from_matrix(
             "Computing matrix-join excess for %d events at horizon %d ...",
             len(events), horizon,
         )
-    # Load matrix for this horizon
-    h_path = _MATRIX_DIR / f"horizon_days={horizon}"
-    df = pd.read_parquet(h_path)
-    # Normalize entry_date to str for consistent key lookups
-    df = df.copy()
-    df["entry_date"] = df["entry_date"].astype(str)
-    # Build lookup: (entry_date_str, symbol) -> fwd_return_pct
-    df_idx = df.set_index(["entry_date", "symbol"])["fwd_return_pct"]
-    lookup = df_idx.to_dict()
+    # PY-02: use caller-supplied lookup if available to avoid redundant parquet reads.
+    if mat_lookup is None:
+        h_path = _MATRIX_DIR / f"horizon_days={horizon}"
+        df = pd.read_parquet(h_path)
+        df = df.copy()
+        df["entry_date"] = df["entry_date"].astype(str)
+        lookup = df.set_index(["entry_date", "symbol"])["fwd_return_pct"].to_dict()
+    else:
+        lookup = mat_lookup
 
     med_map = medians[horizon]
     excess_list = []
@@ -257,6 +263,202 @@ def _compute_excess_from_matrix(
             len(excess_list), n_no_frame,
         )
     return excess_list, n_no_frame
+
+
+# ---------------------------------------------------------------------------
+# Placebo-control benchmark (F371)
+# ---------------------------------------------------------------------------
+_PLACEBO_SEED = 20260608
+_PLACEBO_K = 3  # control draws per event (capped at availability)
+
+
+def _compute_placebo_control(
+    events: list[dict],
+    mat_lookup: dict,
+    med_map: dict,
+    sorted_dates: list,
+    horizon: int = 63,
+    K: int = _PLACEBO_K,
+    seed: int = _PLACEBO_SEED,
+    logger=None,
+) -> dict:
+    """Compute a deterministic placebo-control benchmark for an event set.
+
+    For each family's valid event set, constructs a control set of NON-event
+    observations for the SAME tickers: for each event ticker, candidate control
+    dates are all trading days for that ticker in the universe matrix that are
+    at least `horizon` trading-day positions away from ANY real event date for
+    that ticker in this family.  Excess is computed identically to event excess
+    (fwd_return_pct − floor_median_per_date).
+
+    The control mean excess approximates the baseline/selection artifact.
+    event_mean − control_mean isolates the event-specific component.
+
+    Args:
+        events: list of dicts with 'entry_date' (str 'YYYY-MM-DD') and
+                'ticker' / 'symbol' keys.  Same set used for the family's
+                main excess computation.
+        mat_lookup: {(entry_date_str, symbol): fwd_return_pct} — the full
+                    matrix lookup for the relevant horizon.
+        med_map: {entry_date_str: median_fwd_return_pct} for that horizon.
+        sorted_dates: sorted list of all trading-day date strings in the matrix.
+        horizon: blackout radius in trading-day *positions* (not calendar days).
+                 A candidate date at position i is eligible if
+                 |i − event_pos| >= horizon for all event dates of that ticker.
+        K: maximum control samples per event (default 3); fewer drawn if
+           availability is less than K.
+        seed: RNG seed for deterministic sampling (default 20260608).
+
+    Returns:
+        dict with:
+            control_n            — total control observations
+            control_mean_excess  — mean excess of control observations
+            control_std_excess   — std of control excess (for reference)
+            event_n              — n valid events (passed through from caller)
+            event_mean_excess    — mean of event excess (recomputed here)
+            net_excess           — event_mean_excess − control_mean_excess
+            interpretation       — one-line string
+            control_K            — K value used
+            control_horizon_days — horizon value used
+    """
+    if not events:
+        return {
+            "control_n": 0,
+            "control_mean_excess": float("nan"),
+            "control_std_excess": float("nan"),
+            "event_n": 0,
+            "event_mean_excess": float("nan"),
+            "net_excess": float("nan"),
+            "interpretation": "no events — control not computed",
+            "control_K": K,
+            "control_horizon_days": horizon,
+        }
+
+    # Build date-position index for blackout arithmetic
+    # sorted_dates is already sorted; bisect gives O(log n) position lookup.
+    date_pos: dict[str, int] = {d: i for i, d in enumerate(sorted_dates)}
+
+    # --- Step 1: group event positions by ticker ---
+    # ticker -> sorted list of trading-day positions of events for that ticker
+    ticker_event_positions: dict[str, list[int]] = defaultdict(list)
+    event_excess_list: list[float] = []
+
+    for ev in events:
+        ed = ev.get("entry_date", "")
+        ticker = ev.get("ticker", "") or ev.get("symbol", "")
+        # Recompute event excess inline (same logic as _compute_excess_from_matrix)
+        fwd = mat_lookup.get((ed, ticker))
+        med = med_map.get(ed)
+        if fwd is not None and med is not None:
+            event_excess_list.append(fwd - med)
+        pos = date_pos.get(ed)
+        if pos is not None:
+            ticker_event_positions[ticker].append(pos)
+
+    # Sort event positions per ticker for fast range-exclusion checks
+    for t in ticker_event_positions:
+        ticker_event_positions[t].sort()
+
+    # --- Step 2: for each ticker, build eligible candidate (date, ticker) pool ---
+    # Candidate = any matrix row for that ticker whose date position is
+    # at least `horizon` positions from every event-date position for that ticker.
+    # We group all matrix rows by symbol first (one pass over mat_lookup keys).
+    # mat_lookup keys are (date_str, symbol) — iterate and group.
+    ticker_to_candidates: dict[str, list[str]] = defaultdict(list)
+    for (ed, sym) in mat_lookup.keys():
+        # Only tickers that have events contribute to the pool (controls are
+        # for the same tickers — matches the spec's "same-ticker control").
+        if sym not in ticker_event_positions:
+            continue
+        pos = date_pos.get(ed)
+        if pos is None:
+            continue
+        ev_positions = ticker_event_positions[sym]
+        # Binary-search: find nearest event position and check distance
+        idx = bisect.bisect_left(ev_positions, pos)
+        # Check left and right neighbors
+        left_ok = (idx == 0 or (pos - ev_positions[idx - 1]) >= horizon)
+        right_ok = (idx == len(ev_positions) or (ev_positions[idx] - pos) >= horizon)
+        if left_ok and right_ok:
+            ticker_to_candidates[sym].append(ed)
+
+    # COR-03: sort each ticker's candidate list so sampling is invariant to
+    # parquet row order (which can change on matrix rebuild).  Lexicographic
+    # date order is the canonical ordering; combined with the fixed seed this
+    # makes _compute_placebo_control fully deterministic across reruns.
+    for sym in ticker_to_candidates:
+        ticker_to_candidates[sym].sort()
+
+    if logger:
+        total_candidates = sum(len(v) for v in ticker_to_candidates.values())
+        logger.info(
+            "Placebo control: %d tickers with events, total candidate pool = %d rows",
+            len(ticker_event_positions), total_candidates,
+        )
+
+    # --- Step 3: sample K controls per event, deterministically ---
+    rng = np.random.default_rng(seed)
+    control_excess_list: list[float] = []
+    n_no_candidates = 0
+
+    for ev in events:
+        ed = ev.get("entry_date", "")
+        ticker = ev.get("ticker", "") or ev.get("symbol", "")
+        candidates = ticker_to_candidates.get(ticker, [])
+        if not candidates:
+            n_no_candidates += 1
+            continue
+        # Sample min(K, len(candidates)) WITHOUT replacement from candidates
+        k_draw = min(K, len(candidates))
+        chosen_indices = rng.choice(len(candidates), size=k_draw, replace=False)
+        for ci in chosen_indices:
+            ced = candidates[ci]
+            fwd = mat_lookup.get((ced, ticker))
+            med = med_map.get(ced)
+            if fwd is not None and med is not None:
+                control_excess_list.append(fwd - med)
+
+    if logger:
+        logger.info(
+            "Placebo control: %d control observations drawn (K=%d/event); "
+            "%d events had no eligible candidates",
+            len(control_excess_list), K, n_no_candidates,
+        )
+
+    control_n = len(control_excess_list)
+    if control_n == 0:
+        ctrl_mean = float("nan")
+        ctrl_std = float("nan")
+    else:
+        ctrl_arr = np.array(control_excess_list, dtype=float)
+        ctrl_mean = float(np.mean(ctrl_arr))
+        ctrl_std = float(np.std(ctrl_arr, ddof=1)) if control_n > 1 else float("nan")
+
+    event_n = len(event_excess_list)
+    event_mean = float(np.mean(event_excess_list)) if event_n > 0 else float("nan")
+    net = event_mean - ctrl_mean if (math.isfinite(event_mean) and math.isfinite(ctrl_mean)) else float("nan")
+
+    # One-line interpretation
+    if math.isfinite(ctrl_mean) and math.isfinite(net):
+        interp = (
+            f"artifact ≈ {ctrl_mean:+.2f}pp; "
+            f"event-specific ≈ {net:+.2f}pp"
+        )
+    else:
+        interp = "control not computable (no eligible candidates)"
+
+    return {
+        "control_n": control_n,
+        "control_mean_excess": round(ctrl_mean, 4) if math.isfinite(ctrl_mean) else float("nan"),
+        "control_std_excess": round(ctrl_std, 4) if math.isfinite(ctrl_std) else float("nan"),
+        "event_n": event_n,
+        "event_mean_excess": round(event_mean, 4) if math.isfinite(event_mean) else float("nan"),
+        "net_excess": round(net, 4) if math.isfinite(net) else float("nan"),
+        "interpretation": interp,
+        "control_K": K,
+        "control_horizon_days": horizon,
+        "n_events_no_candidates": n_no_candidates,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -466,9 +668,14 @@ def run_calibration(out_dir: Path, logger: logging.Logger) -> dict:
         )
         mde_gap = float("nan")
 
+    a3_gap_skipped = False
     if math.isnan(mde_gap):
-        # COR-04: null-score fallback path — skip A3_gap rather than hard-failing
-        a3_gap = True  # vacuously pass; logged as skipped above
+        # COR-06: null-score fallback path — skip A3_gap rather than hard-failing.
+        # a3_gap=True here means "not blocking" (same as pass for the sys.exit guard),
+        # but the census.json anchor entry records skipped=True so downstream consumers
+        # can distinguish "anchor validated" from "anchor skipped due to unavailable data".
+        a3_gap = True
+        a3_gap_skipped = True
         logger.info("A3 MDE_gap_63=NaN (skipped — null-score fallback, see warning above)")
     else:
         a3_gap = abs(mde_gap - 3.40) <= 0.10
@@ -493,10 +700,21 @@ def run_calibration(out_dir: Path, logger: logging.Logger) -> dict:
     logger.info("CALIBRATION PASS — all anchors A1/A2/A3 met.")
 
     # --- Matrix-join validation ---
+    # PY-02: Load the parquet ONCE here and reuse for validation + placebo below.
     logger.info("Validating matrix-join path ...")
     medians = _load_matrix_medians(horizons=(63,), logger=logger)
+    h_path_63 = _MATRIX_DIR / "horizon_days=63"
+    df_mat = pd.read_parquet(h_path_63)
+    df_mat = df_mat.copy()
+    df_mat["entry_date"] = df_mat["entry_date"].astype(str)
+    mat_lookup_cal = df_mat.set_index(["entry_date", "symbol"])["fwd_return_pct"].to_dict()
+    med_map = medians[63]
+
     matrix_events = [{"entry_date": ev["entry_date"], "ticker": ev.get("ticker", "")} for ev in events_floor_ok]
-    matrix_excess, n_no_frame = _compute_excess_from_matrix(matrix_events, medians, horizon=63, logger=logger)
+    # Pass pre-built mat_lookup to avoid a second parquet read (PY-02)
+    matrix_excess, n_no_frame = _compute_excess_from_matrix(
+        matrix_events, medians, horizon=63, logger=logger, mat_lookup=mat_lookup_cal,
+    )
 
     # Sentinel init so n_matched reference is always valid (PY-02/COR-09)
     stored_exc_arr: list = []
@@ -506,20 +724,12 @@ def run_calibration(out_dir: Path, logger: logging.Logger) -> dict:
         mat_arr = np.array(matrix_excess, dtype=float)
         mat_mean = float(np.mean(mat_arr))
         mat_std = float(np.std(mat_arr, ddof=1))
-        h_path = _MATRIX_DIR / "horizon_days=63"
-        df_mat = pd.read_parquet(h_path)
-        # Normalize entry_date to str
-        df_mat = df_mat.copy()
-        df_mat["entry_date"] = df_mat["entry_date"].astype(str)
-        df_idx = df_mat.set_index(["entry_date", "symbol"])["fwd_return_pct"]
-        mat_lookup = df_idx.to_dict()
-        med_map = medians[63]
 
         for ev in events_floor_ok:
             ed = ev["entry_date"]  # already string from ndjson
             ticker = ev.get("ticker", "")
             exc_stored = ev["fwd_excess_pct"]["63"]
-            fwd_mat = mat_lookup.get((ed, ticker))
+            fwd_mat = mat_lookup_cal.get((ed, ticker))
             med = med_map.get(ed)
             if fwd_mat is not None and med is not None:
                 stored_exc_arr.append(exc_stored)
@@ -543,6 +753,48 @@ def run_calibration(out_dir: Path, logger: logging.Logger) -> dict:
         else:
             logger.warning("No matched events for matrix-join vs stored comparison")
 
+    # --- Placebo-control benchmark (F371) ---
+    # PY-02: reuse df_mat / mat_lookup_cal already loaded above — no third parquet read.
+    logger.info("Computing placebo-control benchmark (F371) ...")
+    mat_lookup_placebo = mat_lookup_cal
+    med_map_placebo = med_map
+    # COR-05: build sorted_dates from the FULL matrix entry-date set, not just
+    # med_map keys (which only contains dates with at least one floor-passing row).
+    # Dates absent from med_map but present in the matrix still need to be in
+    # sorted_dates so their blackout windows are registered correctly.
+    sorted_dates_placebo = sorted(set(df_mat["entry_date"].tolist()))
+    cal_events_for_control = [
+        {"entry_date": ev["entry_date"], "ticker": ev.get("ticker", "")}
+        for ev in events_floor_ok
+    ]
+    placebo_cal = _compute_placebo_control(
+        cal_events_for_control,
+        mat_lookup_placebo,
+        med_map_placebo,
+        sorted_dates_placebo,
+        horizon=63,
+        logger=logger,
+    )
+    logger.info(
+        "Calibration placebo: control_n=%d control_mean=%.4fpp event_mean=%.4fpp net=%.4fpp | %s",
+        placebo_cal["control_n"],
+        placebo_cal["control_mean_excess"],
+        placebo_cal["event_mean_excess"],
+        placebo_cal["net_excess"],
+        placebo_cal["interpretation"],
+    )
+
+    # COR-06: A3_MDE_gap uses skipped=True (pass=null) when mde_gap is NaN so
+    # downstream consumers can distinguish "validated" from "unavailable data — skipped".
+    a3_gap_entry: dict = {
+        "value": round(mde_gap, 4) if not math.isnan(mde_gap) else None,
+        "target": 3.40,
+        "pass": (a3_gap if not a3_gap_skipped else None),
+    }
+    if a3_gap_skipped:
+        a3_gap_entry["skipped"] = True
+        a3_gap_entry["skip_reason"] = "null-score fallback — per-quintile variances unavailable"
+
     result = {
         "family": "calibration",
         "anchors": {
@@ -550,7 +802,7 @@ def run_calibration(out_dir: Path, logger: logging.Logger) -> dict:
             "A2_std": {"value": round(std_exc, 4), "target": 23.39, "pass": a2_std},
             "A2_mean": {"value": round(mean_exc, 4), "target": 2.31, "pass": a2_mean},
             "A3_MDE_1samp": {"value": round(mde_1samp, 4), "target": 1.006, "pass": a3_mde1},
-            "A3_MDE_gap": {"value": round(mde_gap, 4), "target": 3.40, "pass": a3_gap},
+            "A3_MDE_gap": a3_gap_entry,
         },
         "stats_stored_excess": {
             "n_valid": n_valid,
@@ -565,6 +817,7 @@ def run_calibration(out_dir: Path, logger: logging.Logger) -> dict:
             "matrix_mean_excess_63": round(mat_mean, 4) if len(matrix_excess) > 0 else None,
             "matrix_std_excess_63": round(mat_std, 4) if len(matrix_excess) > 0 else None,
         },
+        "placebo_control": placebo_cal,  # F371 — additive; does not affect anchor checks
         "all_pass": all_pass,
         # Note: medians dict is NOT stored in census.json (too large);
         # it's attached here and stripped before JSON write by write_census_json
@@ -780,6 +1033,7 @@ def run_pead(
     n_deduped = 0  # COR-06: count deduped events
     n_matched = 0
     seen: set = set()  # dedup: (ticker, entry_date) — one event per ticker per date
+    valid_events_for_control: list = []  # F371: (ticker, entry_date) tuples for placebo
 
     for (adt, ticker, form) in raw_events:
         ed = _entry_date_for_filing(adt, all_dates_sorted)
@@ -799,6 +1053,7 @@ def run_pead(
             continue
         excess_list.append(fwd - med)
         n_matched += 1
+        valid_events_for_control.append({"entry_date": ed, "ticker": ticker})
 
     if max_files:
         n_valid_est = int(n_matched * total_files / len(submission_files))
@@ -818,6 +1073,27 @@ def run_pead(
         stats.get("MDE_1samp", float("nan")),
     )
 
+    # --- Placebo-control benchmark (F371) ---
+    logger.info("Computing PEAD placebo-control benchmark (F371) ...")
+    placebo_pead = _compute_placebo_control(
+        valid_events_for_control,
+        mat_lookup,
+        med_map_63,
+        # RCHK-12/COR-05: full matrix dates (not med_map keys) so blackout windows
+        # register on all-floor-fail dates too — matches the calibration placebo.
+        sorted(set(df_mat["entry_date"].tolist())),
+        horizon=63,
+        logger=logger,
+    )
+    logger.info(
+        "PEAD placebo: control_n=%d control_mean=%.4fpp event_mean=%.4fpp net=%.4fpp | %s",
+        placebo_pead["control_n"],
+        placebo_pead["control_mean_excess"],
+        placebo_pead["event_mean_excess"],
+        placebo_pead["net_excess"],
+        placebo_pead["interpretation"],
+    )
+
     return {
         "family": "pead",
         "is_partial": bool(max_files),
@@ -829,6 +1105,7 @@ def run_pead(
         "n_parse_errors": n_parse_errors,
         "note_extractor_owed": "surprise definition (estimate-free YoY-accel / actual-vs-trailing) not built",
         "entry_date_rule": "next trading day in matrix on-or-after acceptanceDateTime (ET tz-aware, >=16:00 ET advances one day)",
+        "placebo_control": placebo_pead,  # F371
         **stats,
     }
 
@@ -970,6 +1247,7 @@ def run_eightk(
         n_no_frame = 0
         n_deduped = 0  # COR-06
         seen: set = set()
+        bucket_valid_events: list = []  # F371: valid events for this bucket's placebo
         for (adt, ticker) in evts:
             ed = _entry_date_for_filing(adt, all_dates_sorted)
             if ed is None:
@@ -986,6 +1264,7 @@ def run_eightk(
                 n_no_frame += 1
                 continue
             excess_list.append(fwd - med)
+            bucket_valid_events.append({"entry_date": ed, "ticker": ticker})
 
         stats = _compute_stats(excess_list)
         logger.info(
@@ -994,11 +1273,33 @@ def run_eightk(
             stats.get("std_excess", float("nan")),
             stats.get("MDE_1samp", float("nan")),
         )
+
+        # Placebo-control benchmark per bucket (F371)
+        placebo_bucket = _compute_placebo_control(
+            bucket_valid_events,
+            mat_lookup,
+            med_map_63,
+            # RCHK-12/COR-05: full matrix dates (not med_map keys), matches calibration.
+            sorted(set(df_mat["entry_date"].tolist())),
+            horizon=63,
+            logger=logger,
+        )
+        logger.info(
+            "  8-K/%s placebo: control_n=%d control_mean=%.4fpp event_mean=%.4fpp net=%.4fpp | %s",
+            bucket_name,
+            placebo_bucket["control_n"],
+            placebo_bucket["control_mean_excess"],
+            placebo_bucket["event_mean_excess"],
+            placebo_bucket["net_excess"],
+            placebo_bucket["interpretation"],
+        )
+
         bucket_results.append({
             "item_code": bucket_name,
             "n_raw": len(evts),
             "n_deduped": n_deduped,
             "n_no_frame": n_no_frame,
+            "placebo_control": placebo_bucket,  # F371
             **stats,
         })
 
@@ -1121,8 +1422,15 @@ def run_r2(
         idx = df.index
         if isinstance(idx, pd.DatetimeIndex):
             if idx.tz is not None:
+                # C2/COR-02: convert to UTC first, THEN strip timezone metadata.
+                # tz_localize(None) alone keeps UTC nanosecond values but removes the
+                # tz tag — for daily price frames (midnight-UTC or midnight-ET stored as
+                # UTC) this is an invariant-correctness fix: tz_convert ensures the naive
+                # index is always in UTC regardless of the stored timezone.
+                # For daily bars the behavioral impact is nil (UTC midnight == date),
+                # but this is the structurally correct form.
                 df = df.copy()
-                df.index = idx = idx.tz_localize(None)
+                df.index = idx = idx.tz_convert("UTC").tz_localize(None)
             mask = idx.normalize() <= pd.Timestamp(as_of_date)
         else:
             mask = pd.to_datetime(idx).normalize() <= pd.Timestamp(as_of_date)
@@ -1239,6 +1547,7 @@ def run_r2(
     n_no_price = 0
     n_deduped = 0  # COR-06
     seen: set = set()
+    r2_valid_events_for_control: list = []  # F371: valid events for placebo
 
     logger.info("Applying D2 predicate to %d events ...", len(filing_events))
     t0 = time.time()
@@ -1267,7 +1576,8 @@ def run_r2(
 
         ed = _entry_date_for_filing(adt, all_dates_sorted)
         if ed is None:
-            n_no_frame += 1
+            # COR-04/COR-10: no matrix entry date — distinct from no forward return
+            n_no_price += 1
             continue
 
         key = (ticker, ed)
@@ -1287,14 +1597,36 @@ def run_r2(
             n_no_frame += 1
             continue
         excess_list.append(fwd - med)
+        r2_valid_events_for_control.append({"entry_date": ed, "ticker": ticker})
 
     stats = _compute_stats(excess_list)
     logger.info(
-        "R2: n_raw_filings=%d n_deduped=%d n_d2_pass=%d n_valid=%d n_parse_errors=%d "
-        "std_63=%.4f MDE_1samp_63=%.4f",
-        n_raw_filings, n_deduped, n_d2_pass, stats["n_valid"], n_parse_errors,
+        "R2: n_raw_filings=%d n_deduped=%d n_no_price=%d n_d2_pass=%d n_valid=%d "
+        "n_no_frame=%d n_parse_errors=%d std_63=%.4f MDE_1samp_63=%.4f",
+        n_raw_filings, n_deduped, n_no_price, n_d2_pass, stats["n_valid"], n_no_frame,
+        n_parse_errors,
         stats.get("std_excess", float("nan")),
         stats.get("MDE_1samp", float("nan")),
+    )
+
+    # --- Placebo-control benchmark (F371) ---
+    logger.info("Computing R2 placebo-control benchmark (F371) ...")
+    placebo_r2 = _compute_placebo_control(
+        r2_valid_events_for_control,
+        mat_lookup,
+        med_map_63,
+        # RCHK-12/COR-05: full matrix dates (not med_map keys), matches calibration.
+        sorted(set(df_mat["entry_date"].tolist())),
+        horizon=63,
+        logger=logger,
+    )
+    logger.info(
+        "R2 placebo: control_n=%d control_mean=%.4fpp event_mean=%.4fpp net=%.4fpp | %s",
+        placebo_r2["control_n"],
+        placebo_r2["control_mean_excess"],
+        placebo_r2["event_mean_excess"],
+        placebo_r2["net_excess"],
+        placebo_r2["interpretation"],
     )
 
     return {
@@ -1304,11 +1636,16 @@ def run_r2(
         "total_files": total_files,
         "n_raw_filings": n_raw_filings,
         "n_deduped": n_deduped,
+        # COR-04/COR-10: split into two distinct counters.
+        # n_no_price: entry date not found in matrix (no trading-day match).
+        # n_no_frame: D2 passed but fwd_return or median missing in matrix.
+        "n_no_price": n_no_price,
         "n_no_frame": n_no_frame,
         "n_parse_errors": n_parse_errors,
         "n_d2_pass": n_d2_pass,
         "estimate_label": "D2 gates A+B+D applied from price cache (Gates A/B use 252-bar trailing close; revenue veto OFF)",
         "entry_date_rule": "next trading day in matrix on-or-after acceptanceDateTime (ET tz-aware, >=16:00 ET advances one day)",
+        "placebo_control": placebo_r2,  # F371
         **stats,
     }
 
@@ -1338,8 +1675,19 @@ def write_census_json(results: dict, out_dir: Path, logger: logging.Logger) -> N
         if isinstance(v, dict) else v
         for k, v in results.items()
     }
-    with open(census_path, "w") as f:
-        json.dump(serializable, f, indent=2, default=str)
+    payload = json.dumps(serializable, indent=2, default=str)
+    # PY-09: atomic write (tmp + os.replace) to prevent partial/corrupt census.json
+    # on power failure or Ctrl-C mid-write during a long worker run.
+    tmp_path = census_path.with_suffix(".json.tmp")
+    try:
+        tmp_path.write_text(payload, encoding="utf-8")
+        os.replace(tmp_path, census_path)
+    finally:
+        # Best-effort cleanup if os.replace was not reached
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
     logger.info("census.json written: %s", census_path)
 
 
@@ -1459,6 +1807,62 @@ def write_human_report(results: dict, out_dir: Path, logger: logging.Logger) -> 
                     f"| R-2 D2 distress{partial} | {n_raw} | {n_valid} | {_fmt(std)} | "
                     f"{_fmt(mde1, 3)} | — | {test1}/N/A | {n_need} | distress score TBD |"
                 )
+
+    # --- Placebo-control benchmark table (F371) ---
+    lines += [
+        "",
+        "---",
+        "",
+        "## Placebo-Control Benchmark (F371)",
+        "",
+        "> **What this is:** For each family's valid events, a random control set of "
+        "NON-event observations was drawn from the SAME tickers (K=3 per event, at least "
+        "63 trading days away from any real event for that ticker). The control's mean "
+        "excess approximates the baseline/selection artifact. "
+        "**net_excess = event_mean − control_mean** isolates the event-specific component. "
+        "Seed=20260608 (deterministic).",
+        "",
+        "| family / bucket | event_n | event_mean (pp) | control_n | control_mean (pp) | net_excess (pp) | interpretation |",
+        "|---|---|---|---|---|---|---|",
+    ]
+
+    def _placebo_row(label: str, placebo: Optional[dict]) -> str:
+        if not placebo:
+            return f"| {label} | — | — | — | — | — | not computed |"
+        en = placebo.get("event_n", "—")
+        em = placebo.get("event_mean_excess", float("nan"))
+        cn = placebo.get("control_n", "—")
+        cm = placebo.get("control_mean_excess", float("nan"))
+        net = placebo.get("net_excess", float("nan"))
+        interp = placebo.get("interpretation", "—")
+        return (
+            f"| {label} | {en} | {_fmt(em)} | {cn} | {_fmt(cm)} | {_fmt(net)} | {interp} |"
+        )
+
+    for fam_name in families_order:
+        fam = results.get(fam_name)
+        if fam is None:
+            lines.append(f"| {fam_name} | — | — | — | — | — | pending |")
+            continue
+
+        if fam_name == "calibration":
+            lines.append(_placebo_row("calibration (R-1b)", fam.get("placebo_control")))
+        elif fam_name == "r1b_subuniverse":
+            lines.append("| R-1b sub-universe | — | — | — | — | — | no per-bucket placebo (uses stored excess) |")
+        elif fam_name == "pead":
+            partial = " (PARTIAL)" if fam.get("is_partial") else ""
+            lines.append(_placebo_row(f"PEAD 10-Q/10-K{partial}", fam.get("placebo_control")))
+        elif fam_name == "eightk":
+            for bucket in fam.get("item_buckets", []):
+                item = bucket.get("item_code", "?")
+                partial = " (PARTIAL)" if fam.get("is_partial") else ""
+                lines.append(_placebo_row(f"8-K/{item}{partial}", bucket.get("placebo_control")))
+        elif fam_name == "r2":
+            if fam.get("status") == "blocked":
+                lines.append(f"| R-2 (D2 distress) | — | — | — | — | — | blocked |")
+            else:
+                partial = " (PARTIAL)" if fam.get("is_partial") else ""
+                lines.append(_placebo_row(f"R-2 D2 distress{partial}", fam.get("placebo_control")))
 
     lines += ["", "---", "", "## Plain-English Summary Per Family", ""]
 

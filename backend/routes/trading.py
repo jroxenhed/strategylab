@@ -23,6 +23,11 @@ from routes.backtest import run_backtest
 
 WATCHLIST_PATH = DATA_DIR / "watchlist.json"
 
+# F315: watchlist schema version — stamp on every WRITE; readers tolerate absence
+# (old files default to version 0 / "unversioned").  Increment when the on-disk
+# shape changes in a backward-incompatible way.
+_WATCHLIST_SCHEMA_VERSION = 1
+
 # DI-02/DI-05: serialise all watchlist read-modify-write operations.
 # Mirrors the _env_lock pattern in routes/providers.py.
 _watchlist_lock = threading.Lock()
@@ -602,7 +607,10 @@ def get_watchlist():
 def save_watchlist(req: WatchlistState):
     with _watchlist_lock:
         deduped = _dedup_watchlist(req)
-        content = json.dumps(deduped.model_dump(), indent=2)
+        # F315: stamp schema_version into the persisted dict (not in the Pydantic model
+        # to avoid breaking extra="forbid"; added at serialisation time only).
+        payload = {**deduped.model_dump(), "schema_version": _WATCHLIST_SCHEMA_VERSION}
+        content = json.dumps(payload, indent=2)
         atomic_write_text(WATCHLIST_PATH, content, backup_depth=2)
         return deduped.model_dump()
 
@@ -622,6 +630,8 @@ def seed_watchlist(req: WatchlistState):
         if has_data:
             return {"seeded": False, "reason": "already_populated"}
         deduped = _dedup_watchlist(req)
-        content = json.dumps(deduped.model_dump(), indent=2)
+        # F315: stamp schema_version into the persisted dict.
+        payload = {**deduped.model_dump(), "schema_version": _WATCHLIST_SCHEMA_VERSION}
+        content = json.dumps(payload, indent=2)
         atomic_write_text(WATCHLIST_PATH, content, backup_depth=2)
         return {"seeded": True}

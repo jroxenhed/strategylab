@@ -1,16 +1,28 @@
 # Premise Power Census — 2026-06-08
 
-> **Status:** read-only feasibility measurement. No FDR alpha drawn. Findings do not constitute hypothesis tests or research verdicts. Computed on the 14900k worker (`strategylab-worker`); results byte-identical to a local sanity run (cross-host determinism, cf. F357). Calibration anchors A1/A2/A3 PASS on the worker.
+> **Status:** read-only feasibility measurement. No FDR alpha drawn. Findings do not constitute hypothesis tests or research verdicts. Computed on the 14900k worker (`strategylab-worker`) via `bin/worker-dispatch.sh`; results determinism-checked byte-identical to local (cf. F357). Calibration anchors A1/A2/A3 PASS.
 
 ## Bottom line (orchestrator synthesis)
 
-**The power ceiling that sank R-1b is NOT universal — it is specific to rare-event premises.** The question the census answered: which premise families have enough clean events, at low enough return dispersion, that the engine could resolve a tradeable (1.0pp) edge?
+**Power ceiling is rare-event-specific, not universal.** Which premise families have enough clean events at low enough dispersion to resolve a tradeable (1.0pp) edge?
 
-1. **High-frequency public filings are 3× more testable than insider clusters.** Earnings 8-Ks (item 2.02), quarterly filings (10-Q/10-K), and officer-change 8-Ks (5.02) all clear the 1.0pp floor as a *binary* "beats-market" test (MDE 0.56–0.77pp) — same volatility as insider clusters (~24pp std) but 3× the events. **This is where the engine can actually resolve an edge; the next charter should come from here** (most likely a PEAD/earnings-surprise design that adds a dose score to the 8-K 2.02 / 10-Q stream).
-2. **R-2 distress recovery will be underpowered — do not spend the run blind.** Only 447 usable events (the D2 screen is brutally selective), MDE 4.63pp. Same wall R-1b hit. Reconsider before executing the approved R-2 charter; it needs a structurally bigger net or it returns UNTESTABLE.
-3. **R-1b's "calmer universe" escape hatch is dead.** The edge lives in small-caps (Q1 <$1.5B: +7.6pp) and vanishes exactly where volatility is low (Q4 >$11.8B: −0.18pp). You cannot have the calm and the signal together. Slicing only ever lowers power anyway — the full-set binary test (n=4,245, MDE 1.006pp) is already R-1b's most powerful view, and it was borderline-significant.
+1. **High-frequency public filings are ~3× more testable than insider clusters** — same ~24pp dispersion, ~3× the events → binary-test MDE 0.56–0.90pp, under the 1.0pp floor. PEAD (10-Q/10-K), 8-K 2.02 (earnings), 8-K 5.02 (officer change), 8-K 8.01. **The next charter should come from here** (add a dose score to the filing stream — F348/F370).
+2. **R-2 distress recovery will return UNTESTABLE** — only 447 D2 events, MDE 4.63pp. The census saved the blind run (F372).
+3. **R-1b's "calmer universe" fix is dead** — edge lives in small-caps (+7.6pp), gone in large-caps (−0.18pp); slicing only lowers power.
 
-**Honesty flag (do NOT over-read the mean-excess column).** Every filing family shows a near-uniform +1.2 to +1.7pp mean excess — earnings, officer changes, even no-target 8-Ks. That uniformity across unrelated event types is a baseline/selection artifact (size-weighting / survivorship in the matrix universe), **not signal**. Tested directly: fixing a real after-hours-filing look-ahead bug (COR-02) moved the means by <0.1pp, so look-ahead was *not* the cause — the artifact is structural. **The census's POWER numbers (n, std, MDE) are the trustworthy deliverable; the directional mean must not be believed until an F338 probe with a true point-in-time benchmark resolves it.** Any premise promoted from here re-tests on the real `event_study.py` harness (which handles entry timing correctly per F359), never on the census means.
+**The +1.5pp uniform "edge" is mostly a baseline artifact — now quantified (F371 placebo control).** For each family, a seeded control set of NON-event dates for the SAME tickers estimates the size/survivorship baseline; `net = event − control` is the event-specific component:
+
+| family | event mean | artifact (control) | net (event-specific) | binary MDE |
+|---|---|---|---|---|
+| R-1b insider | +2.38 | +0.93 | **+1.46** | 1.01 |
+| PEAD 10-Q/10-K | +1.50 | +0.94 | **+0.56** | 0.56 |
+| 8-K 8.01 | +1.49 | +0.43 | **+1.05** | 0.90 |
+| 8-K 5.02 officer | +1.70 | +0.75 | **+0.96** | 0.77 |
+| 8-K 2.02 earnings | +1.54 | +1.11 | **+0.43** | 0.58 |
+| 8-K no_target (control) | +1.05 | +1.08 | **−0.02** | — |
+| R-2 distress | +4.44 | +0.02 | **+4.42** | 4.63 |
+
+~0.9–1.1pp of the apparent filing edge is baseline artifact; the event-specific net is smaller (0.4–1.05pp) but mostly positive — and these families have the power to resolve it. **Negative-control sanity check:** the `no_target` 8-K bucket (filings with no recognized item) nets **−0.02pp** — a population with no real event content shows no event-specific effect, validating the placebo method. Still: the directional net is a *screening* read on a new instrument, not a verdict — any promoted premise re-tests on the real `event_study.py` harness (whose dose-response Q5−Q1 test cancels the common baseline automatically), never on these means.
 
 ---
 
@@ -36,13 +48,32 @@
 | R-1b/Q4 (>$11.8B) | 751 | 751 | 12.07 | 1.234 | — | NO/N/A | 1145 | score TBD |
 | R-1b/no-MC remainder | 1251 | 1251 | — | — | — | — | — | — |
 | PEAD 10-Q/10-K | 68875 | 13828 | 23.42 | 0.558 | — | YES/N/A | 4307 | surprise definition |
-| 8-K/1.01 | 19685 | 4068 | 30.96 | 1.360 | — | NO/N/A | 7524 | item score TBD |
+| 8-K/2.02 | 49939 | 13067 | 23.55 | 0.577 | — | YES/N/A | 4356 | item score TBD |
 | 8-K/5.02 | 27225 | 7298 | 23.38 | 0.767 | — | YES/N/A | 4294 | item score TBD |
 | 8-K/8.01 | 33903 | 7409 | 27.54 | 0.896 | — | YES/N/A | 5953 | item score TBD |
-| 8-K/2.02 | 49939 | 13067 | 23.55 | 0.577 | — | YES/N/A | 4356 | item score TBD |
+| 8-K/1.01 | 19685 | 4068 | 30.96 | 1.360 | — | NO/N/A | 7524 | item score TBD |
 | 8-K/multi_target | 15517 | 3782 | 24.26 | 1.105 | — | NO/N/A | 4621 | item score TBD |
 | 8-K/no_target | 44247 | 9329 | 23.69 | 0.687 | — | YES/N/A | 4405 | item score TBD |
 | R-2 D2 distress | 5033 | 447 | 34.90 | 4.626 | — | NO/N/A | 9565 | distress score TBD |
+
+---
+
+## Placebo-Control Benchmark (F371)
+
+> **What this is:** For each family's valid events, a random control set of NON-event observations was drawn from the SAME tickers (K=3 per event, at least 63 trading days away from any real event for that ticker). The control's mean excess approximates the baseline/selection artifact. **net_excess = event_mean − control_mean** isolates the event-specific component. Seed=20260608 (deterministic).
+
+| family / bucket | event_n | event_mean (pp) | control_n | control_mean (pp) | net_excess (pp) | interpretation |
+|---|---|---|---|---|---|---|
+| calibration (R-1b) | 3847 | 2.38 | 11490 | 0.93 | 1.46 | artifact ≈ +0.93pp; event-specific ≈ +1.46pp |
+| R-1b sub-universe | — | — | — | — | — | no per-bucket placebo (uses stored excess) |
+| PEAD 10-Q/10-K | 13828 | 1.50 | 41168 | 0.94 | 0.56 | artifact ≈ +0.94pp; event-specific ≈ +0.56pp |
+| 8-K/2.02 | 13067 | 1.54 | 38843 | 1.11 | 0.43 | artifact ≈ +1.11pp; event-specific ≈ +0.43pp |
+| 8-K/5.02 | 7298 | 1.70 | 21835 | 0.75 | 0.96 | artifact ≈ +0.75pp; event-specific ≈ +0.96pp |
+| 8-K/8.01 | 7409 | 1.49 | 22011 | 0.43 | 1.05 | artifact ≈ +0.43pp; event-specific ≈ +1.05pp |
+| 8-K/1.01 | 4068 | 1.61 | 12148 | 1.12 | 0.49 | artifact ≈ +1.12pp; event-specific ≈ +0.49pp |
+| 8-K/multi_target | 3782 | 1.72 | 11242 | 0.86 | 0.86 | artifact ≈ +0.86pp; event-specific ≈ +0.86pp |
+| 8-K/no_target | 9329 | 1.05 | 27838 | 1.08 | -0.02 | artifact ≈ +1.08pp; event-specific ≈ -0.02pp |
+| R-2 D2 distress | 447 | 4.44 | 1338 | 0.02 | 4.42 | artifact ≈ +0.02pp; event-specific ≈ +4.42pp |
 
 ---
 
@@ -70,4 +101,4 @@ Applied D2 price gates (Gate A ≥50% crash, Gate B ≤25% above 1yr low, Gate D
 
 ---
 
-*Generated 2026-06-07T23:02:39Z by premise_power_census.py (F369)*
+*Generated 2026-06-08T00:00:27Z by premise_power_census.py (F369)*
