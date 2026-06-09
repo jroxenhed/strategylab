@@ -136,10 +136,12 @@ dispatch_worker() {
   # Always sync bin/worker-run.sh and bin/worker-dispatch.sh
   sync_paths+=("bin/worker-run.sh" "bin/worker-dispatch.sh")
 
-  # Always sync backend/research/*.py
+  # Always sync backend/research/**/*.py — research grew subpackages (e.g.
+  # backend/research/streams/, F388); a -maxdepth 1 glob left them behind and
+  # the worker died on ModuleNotFoundError: research.streams (F409 dispatch).
   while IFS= read -r f; do
-    sync_paths+=("backend/research/$f")
-  done < <(find "$REPO_ROOT/backend/research" -maxdepth 1 -name '*.py' -exec basename {} \;)
+    sync_paths+=("$f")
+  done < <(cd "$REPO_ROOT" && find backend/research -name '*.py' -not -path '*/__pycache__/*')
 
   # Always sync backend-root modules that research code imports transitively.
   # Without this, adding a symbol to (e.g.) fileutil.py leaves the worker on
