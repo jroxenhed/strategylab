@@ -11,20 +11,19 @@ _(none open)_
 ## Up Next
 
 - [F364](#f364) — [next] Review-contract rule: findings citing population statistics must state the population measured [easy]
-- [F405](#f405) — [next] Full-universe news via GDELT GKG bulk files
 - [F385](#f385) — [next] Stage research data artifacts on mfcore01 on-demand
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 31 items
+## Open Work — 30 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
-| [Architecture](#architecture) | 8 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372), [F399](#f399) |
+| [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372) |
 | [Hardening](#hardening) | 7 | [F362](#f362), [F364](#f364), [F383](#f383), [F391](#f391)–[F392](#f392), [F394](#f394), [F396](#f396) |
 | [Polish](#polish) | 2 | [F310](#f310), [F398](#f398) |
 | [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F360](#f360) |
-| [Infra](#infra) | 8 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F385](#f385), [F402](#f402), [F405](#f405)–[F406](#f406) |
+| [Infra](#infra) | 8 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F385](#f385), [F406](#f406)–[F408](#f408) |
 
 ## Features
 
@@ -36,7 +35,6 @@ _(none open)_
 
 ## Architecture
 
-- [ ] <a id="f399"></a> **F399** Phase 0 — free-data foundation for Desk discovery mode (parent) — widen the data panel beyond the UNIVERSE_V2 carve so Phase 1 (F404) can scan where signal lives (F369: small-caps). Free-data only; Sharadar rejected 2026-06-09 (delete-on-cancel license, incompatible with reproducible research). Spec: `docs/plans/2026-06-09-phase0-free-data-foundation-spec.md`. Components F400–F403; each F338-probed on real data; survivorship stamped permanent. **STATUS 2026-06-09: substantially complete — 3 of 4 panels produced + verified on the worker (F400 universe prices 9,222 tickers, F401 ratings 411k events, F403 short interest 2.9M rows). F402 news module is built+probed but its full panel is NOT produced (per-ticker GDELT empirically non-viable → deferred to F405 GKG-bulk). Foundation is usable for Phase 1 (F404) on the 3 produced panels; news joins when F405 lands.** Kept open until news lands or F404 explicitly proceeds without it. [arch]
 - [ ] <a id="f372"></a> **F372** R-2 execution gate — F369 census predicts UNTESTABLE (447 D2 events, MDE 4.63pp, same wall as R-1b). Before executing the approved R-2 charter, decide: structurally bigger net (longer period / relaxed floors with stated caveats) or shelve. John's call, not assumed. [arch]
 - [ ] <a id="a8"></a> **A8** Chart performance — large dataset optimizations (100K+ 5-min bars): [arch]
   - [x] Equity curve detail mode downsample: root cause was missing `toDisplayTime()` shift on equity timestamps — raw UTC timestamps didn't match the main chart's ET-shifted timestamps, breaking crosshair sync and bucket alignment. Fixed by adding `toDisplayTime` to `shared/utils/time.ts` (mirrors Chart.tsx `toET`) and applying it to equity/baseline/trade-tick timestamps in Results.tsx before downsampling. `downsampleEquity()` itself was always correct.
@@ -87,9 +85,9 @@ _(none open)_
 
 ## Infra
 
-- [ ] <a id="f402"></a> **F402** News volume + tone ingest (Phase 0 / F399) — GDELT per-company daily news_volume + avg_tone, timestamped, ticker→entity mapped (entity false-match is the dominant risk → dedicated anchor). Rate-limited; backoff + cache. F338 anchors: known news-spike window probe, tone-sign sanity, entity-mapping precision. Aggregate volume/tone only, NOT content. **Module + probe SHIPPED & F338-verified (2026-06-09, `02e51e2`; SVB 34× spike, tone −2.87) — but the full-scale panel is NOT produced:** the per-ticker GDELT DOC API is empirically non-viable even at the bounded liquid universe (~44h, killed). Full-scale news production is deferred to F405 (GKG bulk migration). [infra]
-- [ ] <a id="f405"></a> **F405** [next] Full-universe news via GDELT GKG bulk files — the F402 per-ticker DOC API can't scale to 12k tickers (review PERF-01: 34–550h). Migrate full-universe news ingest to GDELT's GKG bulk master files (download the corpus, extract all entities in one pass) instead of per-ticker queries. Until then F402 is bounded to the liquid universe (`_MAX_TICKERS_PER_RUN=5000`). The per-ticker module stays useful for targeted/probe fetches. **EMPIRICALLY CONFIRMED non-viable even at the bounded subset (2026-06-09):** a full-scale run on the 4,204-name liquid universe managed ~38 tickers in the first hour under sustained GDELT throttling → ~44h projected; killed. News is the one Phase-0 panel NOT produced — GKG bulk is the only path. Now the real blocker for the F402 news panel. [infra] [arch]
 - [ ] <a id="f406"></a> **F406** `worker-probe.sh` should report load, not just reachability — the probe pings reachability only, so it recommended `mfcore01` (office) while that box was ~100% CPU-saturated as a Deadline/Mantra render node (John, 2026-06-09). Reachability ≠ availability: a saturated render node is SSH-reachable but useless for CPU-bound research compute (a premise explore / matrix build would crawl contending with Mantra). Add a load check (load-avg vs core count, or `uptime`) to the probe output so worker selection can avoid a saturated box; network-bound fetches can ignore load. [infra]
+- [ ] <a id="f407"></a> **F407** Alias-quality iteration + news-panel re-run — probe-discovered capture-gap classes in the F405 GKG panel: leading-'The' names produce dead core aliases ('The Boeing Company' → 'the boeing'; BA has ZERO rows), renamed companies miss pre-rename history (META alias never matches 2018 'facebook' orgs), and WAL-class name shapes GDELT NER never emits. Improve alias generation (strip leading articles, hyphen/ampersand variants, optional historical-name aliases per ticker), then re-run the ~338GB panel build. Quota check first (1TB/mo free; ~390GB spent June 2026); BigQuery sandbox tables expire after 60 days — module re-uploads aliases automatically. [hardening]
+- [ ] <a id="f408"></a> **F408** Incremental month-append for the GKG news panel — a full re-run is ~338GB but one month is ~3GB. Add an --append mode to news_gkg_ingest.py that builds only missing recent months, merges into the parquet, and updates the sidecar (coverage_end, gap days re-check). Keeps F404 news features fresh without re-spending quota. [infra]
 - [ ] <a id="f385"></a> **F385** [next] Stage research data artifacts on mfcore01 on-demand — the compute env is ready but the price cache / EDGAR companyfacts+derived / Form-4 datasets aren't staged (re-fetchable from source; no home access needed). Document/automate the re-fetch recipe so `WORKER_REQUIRE` pre-flight passes for a given study. **Now the concrete prereq for the Desk workbench (F388-397): a full premise explore runs on the worker, and John's first sell premise (`p-1569aa97`) came back UNTESTABLE on the small local cache — the real event count needs the full staged universe.** [infra]
 
 - [ ] <a id="f97"></a> **F97** [medium] Provision `backend/venv/` in routine builder container — overnight builds 21/22/23 all hit the same gap: §3.5 backend smoke test originally specified `cd backend && venv/bin/uvicorn …` but the routine container ships without a venv. Spec now codifies AST + import-time check as the substitute. Real fix: the container image includes `backend/venv/` with pinned deps (Pydantic, FastAPI, pytest). Once landed, restore the full uvicorn smoke test path. Container/infra change, not application code. (from build 23 process review) [infra]

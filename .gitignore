@@ -31,6 +31,8 @@ backend/data/turnaround/
 # F357 matrix artifact + worker progress files (96MB, rebuilt in ~5 min — never commit)
 backend/data/*.parquet/
 backend/data/*.progress/
+# F405 GDELT news panel (45MB parquet + logs, reproducible via BigQuery — never commit)
+backend/data/gdelt/
 
 # Browser-MCP output (playwright auto-saves snapshots/console logs here)
 .playwright-mcp/
