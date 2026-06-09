@@ -18,6 +18,15 @@ A second mode on the premise workbench: instead of John writing a premise, a sca
 - **Human-in-loop = auto-mint, John drives confirmation.** Every survivor becomes a pre-populated premise card (reuses F397 idea-history + dispositions wholesale). Fully-autonomous-through-confirmation = "middle + auto-confirm toggle," deferred.
 - **Survivorship is stamped on every discovered premise** (Phase-0 free data is survivors-only; not fixable without the rejected Sharadar spend).
 
+## Benchmarking: drift + sector co-movement (John, 2026-06-09)
+
+The forward return a candidate "predicts" is contaminated by two structural movers that have nothing to do with the candidate:
+
+1. **Markets move up and to the right.** The unconditional equity drift / risk premium means *any* long-biased predictor looks good vs zero. → the scan's target is **excess return over the market**, never raw return.
+2. **Sectors move together.** A "predictor" can just be riding sector beta (same-SIC co-movement). → also benchmark **peer-relative** (same-SIC siblings), reusing the program's existing peer-excess lens (F349). A candidate that only beats the market but not its sector herd is sector-carried, not signal.
+
+These compound the +1.5pp baseline landmine below — all three say the same thing: **the headline metric must be relative (market- and sector-adjusted, dose-response), never an absolute positive mean.**
+
 ## The one known landmine for discovery specifically
 
 F369/F371 found a uniform **~+1.5pp positive mean** across *unrelated* event families — a size/survivorship **baseline artifact, NOT signal** (proven structural). A naive "does X predict a positive return" scan will rediscover it thousands of times. So the screen's benchmark is **vs a proper point-in-time baseline**, and the headline test is **dose-response (Q5−Q1)** which cancels the uniform offset — never "positive mean vs zero." (This is also why John's "rate across multiple metrics" instinct helps: a real predictor must beat the baseline on *ordering*, not level.)
