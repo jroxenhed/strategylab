@@ -354,7 +354,7 @@ export default function App() {
               />
             </Panel>
 
-            <Separator className="resize-handle-v" />
+            <Separator className="resize-handle-v resize-left" />
 
             {/* CENTER COLUMN */}
             <Panel defaultSize="66%" minSize="30%">

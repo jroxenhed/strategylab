@@ -88,7 +88,7 @@
         {
           "type": "raf-idle",
           "operator": "lt",
-          "expected": 5,
+          "threshold": 5,
           "durationMs": 500,
           "description": "Idle rAF < 5 in 500ms (no F218 repaint loop after remount)"
         },

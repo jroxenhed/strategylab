@@ -1,0 +1,143 @@
+{
+  "description": "F249c+F301: Panel drag-resize verification — left sidebar separator drag left/right, width delta + canvas count. Targets .resize-left (App.tsx has TWO .resize-handle-v separators; the extra class pins the left one — react-resizable-panels does NOT forward data-testid, className is the only forwarded hook). Drag offsets: omitted axis defaults to element center; to.offset.x is relative to the element's LEFT edge (render-probe.mjs drag math).",
+  "views": [
+    {
+      "name": "Chart Initial",
+      "before": {
+        "settleMs": 1500
+      },
+      "assertions": [
+        {
+          "type": "selector",
+          "selector": "canvas",
+          "operator": "visible",
+          "timeout": 8000,
+          "description": "Canvas renders on initial load"
+        },
+        {
+          "type": "eval",
+          "expression": "[...document.querySelectorAll('.tv-lightweight-charts')].filter(e=>e.offsetParent!==null).length === 3",
+          "expected": true,
+          "description": "Three visible chart roots (main + MACD + RSI)"
+        },
+        {
+          "type": "selector",
+          "selector": ".resize-left",
+          "operator": "visible",
+          "timeout": 5000,
+          "description": "Left sidebar resize handle present and visible before drag views run"
+        },
+        {
+          "type": "eval",
+          "expression": "(window.__sbW_before = document.querySelector('.panel-fill')?.offsetWidth || 0, true)",
+          "expected": true,
+          "description": "Capture baseline panel width into __sbW_before (pure assignment, always passes)"
+        },
+        {
+          "type": "eval",
+          "expression": "window.__sbW_before >= 800",
+          "expected": true,
+          "description": "Chart panel width >= 800px with sidebar expanded (fails loudly if .panel-fill missing — baseline would be 0)"
+        },
+        {
+          "type": "console",
+          "level": "error",
+          "operator": "count",
+          "expected": 0,
+          "description": "No console errors at initial load"
+        }
+      ],
+      "screenshot": "panel-drag-expanded.png"
+    },
+    {
+      "name": "Drag Sidebar Handle Left (-89px)",
+      "trigger": {
+        "type": "drag",
+        "from": {
+          "selector": ".resize-left"
+        },
+        "to": {
+          "selector": ".resize-left",
+          "offset": { "x": -89 }
+        }
+      },
+      "before": {
+        "settleMs": 1000
+      },
+      "assertions": [
+        {
+          "type": "eval",
+          "expression": "(window.__sbW_after = document.querySelector('.panel-fill')?.offsetWidth || 0) > window.__sbW_before",
+          "expected": true,
+          "description": "Chart panel width increased after dragging sidebar handle left (sidebar narrowed, center gains space)"
+        },
+        {
+          "type": "eval",
+          "expression": "[...document.querySelectorAll('.tv-lightweight-charts')].filter(e=>e.offsetParent!==null).length === 3",
+          "expected": true,
+          "description": "Three visible chart roots still present — no unmount on drag resize"
+        },
+        {
+          "type": "console",
+          "level": "error",
+          "operator": "count",
+          "expected": 0,
+          "description": "No console errors during sidebar drag resize"
+        }
+      ],
+      "screenshot": "panel-drag-narrowed.png"
+    },
+    {
+      "name": "Drag Sidebar Handle Right (+89px, Restore)",
+      "trigger": {
+        "type": "drag",
+        "from": {
+          "selector": ".resize-left"
+        },
+        "to": {
+          "selector": ".resize-left",
+          "offset": { "x": 89 }
+        }
+      },
+      "before": {
+        "settleMs": 1000
+      },
+      "assertions": [
+        {
+          "type": "eval",
+          "expression": "Math.abs((document.querySelector('.panel-fill')?.offsetWidth || 0) - window.__sbW_before) <= 10",
+          "expected": true,
+          "description": "Panel width restored to original baseline within 10px in BOTH directions (catches over-narrow restores too)"
+        },
+        {
+          "type": "eval",
+          "expression": "[...document.querySelectorAll('.tv-lightweight-charts')].filter(e=>e.offsetParent!==null).length === 3",
+          "expected": true,
+          "description": "Three visible chart roots stable after restore drag"
+        },
+        {
+          "type": "canvas-mutation",
+          "operator": "max",
+          "expected": 0,
+          "durationMs": 500,
+          "description": "No spurious canvas mutations during idle after resize (F218)"
+        },
+        {
+          "type": "raf-idle",
+          "operator": "lt",
+          "threshold": 5,
+          "durationMs": 500,
+          "description": "Idle rAF < 5 in 500ms — no repaint loop after drag resize (F218). Field is 'threshold' (runner ignores 'expected' on raf-idle)"
+        },
+        {
+          "type": "console",
+          "level": "error",
+          "operator": "count",
+          "expected": 0,
+          "description": "No console errors after restore drag"
+        }
+      ],
+      "screenshot": "panel-drag-restored.png"
+    }
+  ]
+}
