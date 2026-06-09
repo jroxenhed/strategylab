@@ -147,10 +147,20 @@ def _grade_delta(from_grade: str, to_grade: str) -> Optional[int]:
 # Per-ticker fetch
 # ---------------------------------------------------------------------------
 
+class RatingsFetchError(Exception):
+    """Transient yfinance/network failure fetching ratings — caller should retry.
+
+    Distinct from a genuine *no coverage* result (empty), which returns None and
+    must NOT be retried: most small-caps have no analyst ratings, and retrying
+    their definitive 404s 3x was the dominant cost of a full-universe run.
+    """
+
+
 def fetch_ticker_ratings(symbol: str) -> Optional[pd.DataFrame]:
     """Fetch upgrades_downgrades for one ticker and return a tidy event frame.
 
-    Returns None if the ticker has no rating data.
+    Returns None if the ticker has genuinely no rating data (definitive — do NOT
+    retry). Raises RatingsFetchError on a transient fetch error (caller retries).
 
     Output columns:
         ticker, date, firm, action, from_grade, to_grade,
@@ -163,8 +173,10 @@ def fetch_ticker_ratings(symbol: str) -> Optional[pd.DataFrame]:
         t = yf.Ticker(symbol)
         ud = t.upgrades_downgrades
     except Exception as exc:
-        log.warning("fetch_ticker_ratings(%s): yfinance error: %s", symbol, exc)
-        return None
+        # Transient (network/throttle) — signal the caller to retry. Genuine
+        # "no coverage" does NOT raise here (yfinance returns an empty frame,
+        # logging a 404 internally) and is handled as definitive None below.
+        raise RatingsFetchError(f"{symbol}: {exc}") from exc
 
     if ud is None or ud.empty:
         log.debug("fetch_ticker_ratings(%s): no data", symbol)
@@ -375,36 +387,42 @@ def build_ratings_panels(
             if wait > 0:
                 time.sleep(wait)
 
-        # Bounded retry with exponential back-off
+        # Retry ONLY on a transient fetch error (RatingsFetchError); a definitive
+        # result — data OR genuine no-coverage (None) — never retries. Retrying
+        # the no-coverage 404s was the dominant cost of a full-universe run.
         df: Optional[pd.DataFrame] = None
+        errored = False
         for attempt in range(max_retries):
-            df = fetch_ticker_ratings(sym)
-            last_fetch_time = time.monotonic()
-            if df is not None and not df.empty:
-                break
-            if attempt < max_retries - 1:
-                backoff = 2 ** attempt  # 1s, 2s, 4s, ...
-                log.debug(
-                    "build_ratings_panels: %s empty/error (attempt %d/%d), retrying in %ds",
-                    sym, attempt + 1, max_retries, backoff,
-                )
-                time.sleep(backoff)
+            try:
+                df = fetch_ticker_ratings(sym)
+                errored = False
+                break  # definitive result (data or no-coverage) — done
+            except RatingsFetchError:
+                errored = True
+                if attempt < max_retries - 1:
+                    backoff = 2 ** attempt  # 1s, 2s, 4s, ...
+                    log.debug(
+                        "build_ratings_panels: %s transient error (attempt %d/%d), retrying in %ds",
+                        sym, attempt + 1, max_retries, backoff,
+                    )
+                    time.sleep(backoff)
+            finally:
+                last_fetch_time = time.monotonic()
 
         if df is not None and not df.empty:
             all_frames.append(df)
-        else:
-            # Distinguish: if we got None from fetch_ticker_ratings on all attempts
-            # that is a failed/throttled fetch; if we always got empty-but-not-None
-            # it is genuinely no ratings. Either way record in failed_tickers so the
-            # caller can distinguish from silently missing data.
+        elif errored:
+            # Transient failure that exhausted retries — re-fetchable later.
             n_failed += 1
             failed_tickers.append(sym)
+            log.debug("build_ratings_panels: %s FAILED after %d attempts", sym, max_retries)
+        else:
+            # Definitive: ticker has no analyst coverage. Not a failure.
             n_empty += 1
-            log.debug("build_ratings_panels: no data for %s after %d attempts", sym, max_retries)
 
     log.info(
-        "build_ratings_panels: %d/%d tickers had data (%d empty/failed, failed_tickers=%s)",
-        len(all_frames), len(tickers), n_empty, failed_tickers[:10],
+        "build_ratings_panels: %d/%d tickers had data (%d no-coverage, %d failed; failed_tickers=%s)",
+        len(all_frames), len(tickers), n_empty, n_failed, failed_tickers[:10],
     )
 
     if not all_frames:
@@ -435,6 +453,7 @@ def build_ratings_panels(
         "n_tickers":        n_tickers_with_data,
         "n_tickers_requested": len(tickers),
         "n_tickers_empty":  n_empty,
+        "n_tickers_failed": n_failed,
         "failed_tickers":   failed_tickers,
         "note":             (
             "yfinance serves only currently-listed tickers. "
