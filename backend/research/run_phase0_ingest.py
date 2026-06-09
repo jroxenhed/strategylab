@@ -53,7 +53,7 @@ def _manifest_tickers(stocks_only: bool, log: logging.Logger) -> list[str]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", required=True,
-                    choices=["universe", "ratings", "short_interest"])
+                    choices=["universe", "ratings", "short_interest", "news"])
     ap.add_argument("--out-root", default=str(_BACKEND / "data"))
     ap.add_argument("--log-file")
     a = ap.parse_args()
@@ -87,6 +87,25 @@ def main() -> None:
         from ratings_ingest import build_ratings_panels
         tickers = _manifest_tickers(stocks_only=True, log=log)  # ETFs have no ratings
         build_ratings_panels(tickers, output_dir=out / "ratings")
+
+    elif a.source == "news":
+        import pandas as pd
+        from news_ingest import build_news_panel
+        # Bounded to the liquid universe (in_liquid_universe_v1) — full 12k
+        # coverage needs the GKG-bulk migration (F405). GDELT-sourced, so this
+        # runs without contending with the yfinance jobs (universe/ratings).
+        man_path = out / "universe" / "universe_manifest.parquet"
+        if man_path.exists():
+            man = pd.read_parquet(man_path)
+            col = "ticker" if "ticker" in man.columns else man.columns[0]
+            sub = (man[man["in_liquid_universe_v1"] == True]  # noqa: E712
+                   if "in_liquid_universe_v1" in man.columns else man)
+            tickers = sorted(sub[col].dropna().astype(str).str.strip().unique().tolist())
+        else:
+            tickers = _manifest_tickers(stocks_only=True, log=log)
+        log.info("news: %d tickers (liquid-universe subset)", len(tickers))
+        build_news_panel(tickers, date(2015, 1, 1), date(2024, 12, 31),
+                         output_dir=out / "news")
 
     log.info("=== Phase0 ingest DONE source=%s ===", a.source)
 

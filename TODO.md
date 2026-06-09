@@ -14,7 +14,7 @@ _(none open)_
 - [F385](#f385) — [next] Stage research data artifacts on mfcore01 on-demand
 - [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
 
-## Open Work — 33 items
+## Open Work — 32 items
 
 | Section | Open | IDs |
 |---|---|---|
@@ -23,7 +23,7 @@ _(none open)_
 | [Hardening](#hardening) | 7 | [F362](#f362), [F364](#f364), [F383](#f383), [F391](#f391)–[F392](#f392), [F394](#f394), [F396](#f396) |
 | [Polish](#polish) | 2 | [F310](#f310), [F398](#f398) |
 | [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F360](#f360) |
-| [Infra](#infra) | 10 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F385](#f385), [F400](#f400)–[F402](#f402), [F405](#f405)–[F406](#f406) |
+| [Infra](#infra) | 9 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F385](#f385), [F401](#f401)–[F402](#f402), [F405](#f405)–[F406](#f406) |
 
 ## Features
 
@@ -86,7 +86,6 @@ _(none open)_
 
 ## Infra
 
-- [ ] <a id="f400"></a> **F400** Widen the price universe (Phase 0 / F399) — build the master currently-listed US-equity universe from the free NASDAQ Trader symbol directory (`nasdaqtraded.txt`, NASDAQ+NYSE+AMEX + ETFs), fetch daily OHLCV 2015→2024 into the price cache. UNIVERSE_V2 floor + SEC-filer become per-date *labels* (scan knobs), not membership gates. Output: `universe_manifest.parquet` + floor-status sidecar. F338 anchors in the spec; full fetch → worker (mfcore01), background. Also advances F385 (creates the broad worker cache). [infra]
 - [ ] <a id="f401"></a> **F401** Analyst up/downgrades ingest (Phase 0 / F399) — per-ticker yfinance `.upgrades_downgrades` → tidy event panel `(ticker,date,firm,action,grade_delta)` + per-(ticker,date) aggregations, joinable to the returns matrix. PIT = action date; `fetch_vintage` recorded. F338 anchors: AAPL coverage, known up/downgrade window probe, <5% unknown-action bucket. [infra]
 - [ ] <a id="f402"></a> **F402** News volume + tone ingest (Phase 0 / F399) — GDELT per-company daily news_volume + avg_tone, timestamped, ticker→entity mapped (entity false-match is the dominant risk → dedicated anchor). Rate-limited; backoff + cache. F338 anchors: known news-spike window probe, tone-sign sanity, entity-mapping precision. Aggregate volume/tone only, NOT content. [infra]
 - [ ] <a id="f405"></a> **F405** Full-universe news via GDELT GKG bulk files — the F402 per-ticker DOC API can't scale to 12k tickers (review PERF-01: 34–550h). Migrate full-universe news ingest to GDELT's GKG bulk master files (download the corpus, extract all entities in one pass) instead of per-ticker queries. Until then F402 is bounded to the liquid universe (`_MAX_TICKERS_PER_RUN=5000`). The per-ticker module stays useful for targeted/probe fetches. [infra] [arch]
