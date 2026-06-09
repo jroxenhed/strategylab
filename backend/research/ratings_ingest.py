@@ -219,6 +219,12 @@ def fetch_ticker_ratings(symbol: str) -> Optional[pd.DataFrame]:
 
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(df["date"])
+    # PIT guard: drop any future-dated action (yfinance data errors — 1 such row
+    # in a 411k full-universe pull: AMR 2026-10-05). A future-dated action cannot
+    # be known at time t and would be look-ahead in the discovery scan.
+    df = df[df["date"] <= pd.Timestamp.now().normalize()]
+    if df.empty:
+        return None
     df = df.sort_values(["ticker", "date"]).reset_index(drop=True)
     return df
 
