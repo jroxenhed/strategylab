@@ -138,16 +138,21 @@ def anchor4_name_shape_regimes(df: pd.DataFrame) -> None:
     aapl_core, aapl_full = _tot("AAPL", "core"), _tot("AAPL", "full")
     nflx_core, nflx_full = _tot("NFLX", "core"), _tot("NFLX", "full")
     ndaq_core, ndaq_full = _tot("NDAQ", "core"), _tot("NDAQ", "full")
+    ba_core = _tot("BA", "core")
+    jpm_alt = _tot("JPM", "alt")
 
     checks = [
         ("AAPL core==0", aapl_core == 0),
         ("AAPL full>0", aapl_full > 0),
         ("NFLX core>10×full", nflx_full > 0 and nflx_core > 10 * nflx_full),
         ("NDAQ core>50×full (pathology quarantined)", ndaq_full > 0 and ndaq_core > 50 * ndaq_full),
+        # alias v2 (F407) recovery checks, pre-stated before the full v2 panel:
+        ("BA core>1000 (leading-'The' fix)", ba_core > 1000),
+        ("JPM alt>1000 (fused-name curated alias)", jpm_alt > 1000),
     ]
     failed = [name for name, ok in checks if not ok]
     detail = (f"AAPL core/full={aapl_core}/{aapl_full}, NFLX={nflx_core}/{nflx_full}, "
-              f"NDAQ={ndaq_core}/{ndaq_full}")
+              f"NDAQ={ndaq_core}/{ndaq_full}, BA core={ba_core}, JPM alt={jpm_alt}")
     _record("A4", "PASS" if not failed else "FAIL",
             detail + (f" — failed: {', '.join(failed)}" if failed else ""))
 

@@ -19,12 +19,16 @@ bytes; build_panel() prints the dry-run total before executing anything.
 Entity matching (THE dominant risk — same as F402)
 --------------------------------------------------
 V2Organizations entries are "Name,charOffset;Name,charOffset;…". Names are
-normalized (lowercase, strip [.'’], collapse whitespace) and exact-matched against
-a per-ticker alias table built from the F400 universe manifest:
+normalized (lowercase, &/- → space, strip [.,'’], collapse whitespace, strip
+leading "the ") and exact-matched against a per-ticker alias table built from
+the F400 universe manifest:
   - "full" alias: cleaned company name ("apple inc")
-  - "core" alias: corporate suffix tokens stripped ("apple"), only when distinct
-    and ≥4 chars
-Aliases shared by >1 ticker are dropped (44 of 15,661).
+  - "core" aliases: every progressive corporate-suffix-strip stage ("goldman
+    sachs group" AND "goldman sachs"), ≥4 chars, plus "'s"-dropped variants
+    ("mcdonald")
+  - "alt" aliases: tiny curated colloquial/pre-rename list (_ALT_ALIASES:
+    facebook→META, google→GOOGL, disney→DIS) — separately excludable
+Aliases shared by >1 ticker are dropped at query time.
 
 Empirical corpus behavior (pilot, March 2023):
   - GDELT NER never emits bare "Apple"/"Tesla" as orgs (common-word ambiguity);
@@ -41,7 +45,7 @@ Consequences, stamped in metadata:
 
 Output schema
 -------------
-parquet columns: ticker (str), date (date), alias_type ("full"|"core"|"any"),
+parquet columns: ticker (str), date (date), alias_type ("full"|"core"|"alt"|"any"),
                  n_articles (int64), avg_tone (float64)
   - n_articles: COUNT(DISTINCT article) matching the ticker's alias(es) that day
   - avg_tone: mean document tone (V2Tone field 1) over matching rows; in the
@@ -96,6 +100,21 @@ _SUFFIX_TOKENS = {
     "lp", "llc",
 }
 
+# Curated colloquial / pre-rename aliases (alias_type='alt', F407). GDELT
+# empirics 2024-03-12: "facebook" 9,157/day vs "meta platforms inc" 61;
+# "google" 6,195/day vs "alphabet inc" 59; "disney" 4,071/day vs
+# "walt disney company" 78. Kept deliberately tiny and company-level (no
+# product brands). GOOGL only (not GOOG) — a shared alias would trip the
+# ambiguity guard and kill both. Precision-critical work can exclude 'alt'.
+_ALT_ALIASES: dict[str, list[str]] = {
+    "META": ["facebook"],
+    "GOOGL": ["google"],
+    "DIS": ["disney"],
+    # manifest writes "JP Morgan" (spaced); GDELT fuses it ("jpmorgan chase co"
+    # 730/day on 2024-03-12) — the spaced aliases can never match
+    "JPM": ["jpmorgan chase co", "jpmorgan chase", "jpmorgan"],
+}
+
 
 # ---------------------------------------------------------------------------
 # Alias table
@@ -103,39 +122,90 @@ _SUFFIX_TOKENS = {
 
 def _norm_name(s: str) -> str:
     """Normalize a name for exact matching — MUST mirror the SQL-side
-    normalization in _panel_sql() (lower, strip [.'’], collapse whitespace).
+    normalization in _panel_sql() exactly (any divergence silently drops all
+    matches for affected names). v2 (F407), grounded in GDELT raw-form
+    empirics: '&' and '-' become spaces ('procter & gamble' ↔ GDELT
+    'procter gamble', 'coca-cola' ↔ 'coca cola'), [.,'’] stripped, whitespace
+    collapsed, leading 'the ' stripped ('the boeing company' class).
     Commas never appear in GKG org names (they delimit the char offset)."""
     s = s.lower()
+    s = re.sub(r"[&\-]", " ", s)
     s = re.sub(r"[.,'’]", "", s)
     s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"^the ", "", s)
     return s
+
+
+def _strip_parentheticals(s: str) -> str:
+    """Remove trailing parentheticals from NASDAQ directory names.
+
+    'Goldman Sachs Group, Inc. (The)' → 'Goldman Sachs Group, Inc.' — the
+    '(The)' form otherwise survives into the alias and kills it (GDELT never
+    emits it). Applied before normalization."""
+    return re.sub(r"\s*\([^)]*\)\s*$", "", s).strip() or s
 
 
 def build_alias_frame(manifest_path: Path) -> pd.DataFrame:
     """Build the ticker → alias table from the F400 universe manifest.
 
-    Returns columns: ticker, alias, alias_type ("full"|"core"), n_tickers_for_alias.
-    Ambiguous aliases (n_tickers_for_alias > 1) are kept in the frame but
-    excluded at query time, so the upload is self-documenting.
+    Returns columns: ticker, alias, alias_type ("full"|"core"|"alt"),
+    n_tickers_for_alias. Ambiguous aliases (n_tickers_for_alias > 1) are kept
+    in the frame but excluded at query time, so the upload is self-documenting.
+
+    v2 (F407): every progressive suffix-strip stage becomes its own "core"
+    alias ('goldman sachs group inc' → 'goldman sachs group' → 'goldman
+    sachs' — GDELT emits all three forms); names containing "'s" also emit
+    the apostrophe-and-s-dropped variant (GDELT 'mcdonald' 1,782/day vs
+    'mcdonalds' 292); curated _ALT_ALIASES add colloquial/pre-rename names
+    as "alt". COUNT(DISTINCT GKGRECORDID) in the panel SQL dedups articles
+    matched by several aliases of the same channel.
     """
     df = pd.read_parquet(manifest_path, columns=["ticker", "name"])
     rows: list[tuple[str, str, str]] = []
     for r in df.itertuples():
         if not r.name or not str(r.name).strip():
             continue
-        full = _norm_name(_clean_name_for_gdelt(str(r.name)))
+        raw = _strip_parentheticals(_clean_name_for_gdelt(str(r.name)))
+        full = _norm_name(raw)
         if not full:
             continue
-        rows.append((r.ticker.upper(), full, "full"))
-        toks = full.split(" ")
-        while len(toks) > 1 and toks[-1] in _SUFFIX_TOKENS:
-            toks = toks[:-1]
-        core = " ".join(toks)
-        if core != full and len(core) >= 4:
-            rows.append((r.ticker.upper(), core, "core"))
+        t = r.ticker.upper()
+        rows.append((t, full, "full"))
+        # "'s" names: GDELT drops the possessive entirely ("McDonald's" →
+        # "mcdonald"); _norm_name alone yields "mcdonalds". Emit both shapes.
+        variants = [full]
+        if "'s" in raw.lower() or "’s" in raw.lower():
+            dropped = _norm_name(re.sub(r"['’]s\b", "", raw, flags=re.IGNORECASE))
+            if dropped and dropped != full:
+                rows.append((t, dropped, "core"))
+                variants.append(dropped)
+        # progressive suffix-strip stages for EVERY base variant, each stage
+        # its own core alias ("mcdonald corporation" must also yield "mcdonald")
+        for base in variants:
+            toks = base.split(" ")
+            while len(toks) > 1 and toks[-1] in _SUFFIX_TOKENS:
+                toks = toks[:-1]
+                stage = " ".join(toks)
+                if len(stage) >= 4:
+                    rows.append((t, stage, "core"))
+    for ticker, aliases in _ALT_ALIASES.items():
+        for alias in aliases:
+            rows.append((ticker.upper(), _norm_name(alias), "alt"))
     out = pd.DataFrame(rows, columns=["ticker", "alias", "alias_type"]).drop_duplicates()
+    # an alias appearing in several channels for the SAME ticker keeps only the
+    # most precise channel (full > core > alt) so channels stay disjoint per alias
+    rank = {"full": 0, "core": 1, "alt": 2}
+    out["_rank"] = out.alias_type.map(rank)
+    out = (out.sort_values("_rank").drop_duplicates(["ticker", "alias"], keep="first")
+              .drop(columns="_rank"))
     out["n_tickers_for_alias"] = out.groupby("alias")["ticker"].transform("nunique")
-    return out
+    # curated alt aliases must stay unambiguous — a future manifest addition
+    # colliding with one would silently kill BOTH at query time (review C7)
+    alt_amb = out[(out.alias_type == "alt") & (out.n_tickers_for_alias > 1)]
+    if not alt_amb.empty:
+        raise RuntimeError(
+            f"_ALT_ALIASES collide with manifest names: {alt_amb.alias.tolist()}")
+    return out.reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -205,12 +275,17 @@ WITH arts AS (
     CAST(SPLIT(V2Tone, ',')[OFFSET(0)] AS FLOAT64) AS tone,
     ARRAY(
       SELECT DISTINCT
+        -- normalization chain MUST mirror _norm_name() exactly (v2/F407):
+        -- lower → [&-]→space → strip [.,'’] (comma per review C1/DI-1; GDELT
+        -- encoding makes embedded commas impossible, but the normalizers must
+        -- stay structurally identical) → collapse whitespace → strip leading 'the '
         REGEXP_REPLACE(
-          -- char class mirrors _norm_name() incl. comma (review C1/DI-1):
-          -- GDELT's encoding makes embedded commas impossible, but the two
-          -- normalizers must stay structurally identical
-          REGEXP_REPLACE(LOWER(REGEXP_EXTRACT(p, r'^(.*),[0-9]+$')), r"[.,'’]", ''),
-          r'\\s+', ' ')
+          TRIM(REGEXP_REPLACE(
+            REGEXP_REPLACE(
+              REGEXP_REPLACE(LOWER(REGEXP_EXTRACT(p, r'^(.*),[0-9]+$')), r'[&\\-]', ' '),
+              r"[.,'’]", ''),
+            r'\\s+', ' ')),
+          r'^the ', '')
       FROM UNNEST(SPLIT(V2Organizations, ';')) AS p
       WHERE REGEXP_EXTRACT(p, r'^(.*),[0-9]+$') IS NOT NULL
     ) AS orgs
@@ -349,9 +424,12 @@ def build_panel(
         "n_rows": int(len(panel)),
         "n_tickers": int(panel.ticker.nunique()),
         "mapping_method": (
-            "exact normalized org-name match against universe-manifest aliases; "
-            "channels: full (cleaned name), core (corporate suffixes stripped), "
-            "any (article-deduped union); aliases shared by >1 ticker dropped"
+            "exact normalized org-name match against universe-manifest aliases "
+            "(v2/F407: &/- → space, leading-'The' and trailing-parenthetical "
+            "stripped, progressive suffix stages, 's-variants); channels: full "
+            "(cleaned name), core (suffix-strip stages), alt (curated "
+            "colloquial/pre-rename: facebook/google/disney), any "
+            "(article-deduped union); aliases shared by >1 ticker dropped"
         ),
         "honesty_note": (
             "Capture rate is name-shape dependent (GDELT NER never emits bare "
