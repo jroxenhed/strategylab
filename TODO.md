@@ -10,20 +10,18 @@ _(none open)_
 
 ## Up Next
 
-- [F364](#f364) — [next] Review-contract rule: findings citing population statistics must state the population measured [easy]
-- [F409](#f409) — [next] Re-run John's sell premise p-1569aa97 explore on mfcore01
-- [F306](#f306) — [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) [easy]
+_(none tagged)_
 
 ## Open Work — 29 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
-| [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372) |
-| [Hardening](#hardening) | 7 | [F362](#f362), [F364](#f364), [F383](#f383), [F391](#f391)–[F392](#f392), [F394](#f394), [F396](#f396) |
+| [Architecture](#architecture) | 8 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372), [F410](#f410) |
+| [Hardening](#hardening) | 6 | [F362](#f362), [F383](#f383), [F391](#f391)–[F392](#f392), [F394](#f394), [F396](#f396) |
 | [Polish](#polish) | 2 | [F310](#f310), [F398](#f398) |
-| [Testing](#testing) | 5 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F360](#f360) |
-| [Infra](#infra) | 7 | [F97](#f97), [F302](#f302), [F306](#f306), [F309](#f309), [F406](#f406), [F408](#f408)–[F409](#f409) |
+| [Testing](#testing) | 6 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F360](#f360), [F411](#f411) |
+| [Infra](#infra) | 6 | [F97](#f97), [F302](#f302), [F309](#f309), [F406](#f406), [F408](#f408), [F412](#f412) |
 
 ## Features
 
@@ -36,6 +34,7 @@ _(none open)_
 ## Architecture
 
 - [ ] <a id="f372"></a> **F372** R-2 execution gate — F369 census predicts UNTESTABLE (447 D2 events, MDE 4.63pp, same wall as R-1b). Before executing the approved R-2 charter, decide: structurally bigger net (longer period / relaxed floors with stated caveats) or shelve. John's call, not assumed. [arch]
+- [ ] <a id="f410"></a> **F410** r1_analysis primary-horizon mismatch makes premise verdicts structurally broken — `r1_analysis.py` hardcodes `PRIMARY_HORIZON=63` (trading days) and defines a valid event as having non-null 63td excess, but premise specs carry their own `horizons` (p-1569aa97 computes [10,21,30] per "recover in 4-6 weeks"); every event is null at 63td by construction, so ANY premise whose horizons exclude 63 auto-verdicts "UNTESTABLE — power not evaluable" regardless of data (proven on the F409 full-universe run: 20 entered events with FDR-surviving 21d/30d signal, verdict layer saw 0). Fix direction is a methodology decision — John's call: derive the primary horizon from the premise spec (max horizon? spec-designated?), or require premise studies to always compute 63td alongside. The FDR ledger + MDE gate semantics follow from that choice. Also: the worker path passes no `fdr_ledger_path`, so explore looks aren't recorded in the multiplicity ledger (two WARNINGs in the F409 run.log) — fold the ledger plumbing into the same fix. [arch]
 - [ ] <a id="a8"></a> **A8** Chart performance — large dataset optimizations (100K+ 5-min bars): [arch]
   - [x] Equity curve detail mode downsample: root cause was missing `toDisplayTime()` shift on equity timestamps — raw UTC timestamps didn't match the main chart's ET-shifted timestamps, breaking crosshair sync and bucket alignment. Fixed by adding `toDisplayTime` to `shared/utils/time.ts` (mirrors Chart.tsx `toET`) and applying it to equity/baseline/trade-tick timestamps in Results.tsx before downsampling. `downsampleEquity()` itself was always correct.
   - [x] Equity curve detail mode sync: pixel-perfect alignment with main chart via bar-count matching. Passed OHLCV timestamps (`mainTimestamps` prop) from App.tsx, built equity/baseline/tick data with same bar positions (whitespace entries for missing values), logical-range sync. Five sub-fixes: `timeVisible`, baseline bar-matching, tick snapping, deferred width sync, invisible left axis.
@@ -63,8 +62,6 @@ _(none open)_
 
 - [ ] <a id="f362"></a> **F362** review-wave workflow ↔ run-state integration — the new `.claude/workflows/review-wave.js` returns a wave-level `tokens_spent` but run-state.py expects per-agent rows (`add-agent --tokens`). Decide: record the wave as one synthetic agent row, or extend the workflow to return per-persona usage from the engine's accounting. **(Partial 2026-06-08, F-BATCH-0608: playbook review section now documents review-wave as the DEFAULT mechanism + the exact `{taskId,files,intent,personas}` structured-args contract — the `review-wave` skill's "Invoke:" hint echoes prose into `args`, which the workflow `JSON.parse`s and dies on; remaining sub-task: fix the SKILL to emit structured args, and the per-persona token telemetry.)** [easy] [infra]
 
-- [ ] <a id="f364"></a> **F364** [next] Review-contract rule: findings citing population statistics must state the population measured — ADV-04's 0.6% (whole submissions cache, all forms/years) vs the study population's 0.0016% mis-sized F359 by three orders of magnitude; one scope sentence would have sized it correctly. Add the rule to the review-wave persona prompts (`.claude/workflows/review-wave.js`) and the playbook review section. [easy] [hardening]
-
 _(none open)_
 
 ## Polish
@@ -81,18 +78,18 @@ _(none open)_
 
 - [ ] <a id="f211"></a> **F211** F206 audit found `close_all_positions` (line ~258) delegates to `provider.close_all_positions()` (a broker primitive) with no per-symbol direction probe. Verify the IBKR and Alpaca primitives actually buy-to-cover shorts correctly when called from this endpoint — particularly IBKR's `close_all` if it exists, since the SMART-routing trap previously hid this kind of bug. May require a paper-trading test (open one long + one short on the same broker, then hit the Close-All button, check both close cleanly + journal correctly). (from F206 audit follow-up 2026-05-15) [medium] [hardening]
 - [ ] <a id="f307"></a> **F307** test_tooling.py COR-06 open-work count test derives its expected count via a text-split heuristic that can diverge from the script's own grouping logic — assert against explicitly constructed fixture expectations instead (COR P3, F-BATCH-0604D review). [easy] [testing]
+- [ ] <a id="f411"></a> **F411** render-probe timing-flake hardening (REL-08, F306 review, deferred) — the `canvas-mutation max 0 in 500ms` assertion is timing-dependent and can flake on a slow CI box (a single late repaint fails the gate); consider a small allowance (≤2) or a settle-then-measure pattern. Population scope: both drag manifests (manifest-panel-drag-resize.json, manifest-sidebar-resize.json) use the pattern. [easy] [testing]
 - [ ] <a id="f360"></a> **F360** Re-measure both browser MCPs' snapshot size at the F217 blowup condition (chart view WITH populated backtest results, not the default empty state) — the 2026-06-07 shakedown measured playwright 18.5KB vs chrome-devtools 16.3KB at default state and could NOT reproduce the ~117k cdt blowup, so the "comparable" verdict in live-browser-verification.md is only validated for unpopulated pages. Run a backtest via `curl POST /api/backtest` + seeded state, re-snapshot both, update the doc. [easy] [testing] (added 2026-06-07)
 
 ## Infra
 
 - [ ] <a id="f406"></a> **F406** `worker-probe.sh` should report load, not just reachability — the probe pings reachability only, so it recommended `mfcore01` (office) while that box was ~100% CPU-saturated as a Deadline/Mantra render node (John, 2026-06-09). Reachability ≠ availability: a saturated render node is SSH-reachable but useless for CPU-bound research compute (a premise explore / matrix build would crawl contending with Mantra). Add a load check (load-avg vs core count, or `uptime`) to the probe output so worker selection can avoid a saturated box; network-bound fetches can ignore load. [infra]
 - [ ] <a id="f408"></a> **F408** Incremental month-append for the GKG news panel — a full re-run is ~338GB but one month is ~3GB. Add an --append mode to news_gkg_ingest.py that builds only missing recent months, merges into the parquet, and updates the sidecar (coverage_end, gap days re-check). Keeps F404 news features fresh without re-spending quota. [infra]
-- [ ] <a id="f409"></a> **F409** [next] Re-run John's sell premise p-1569aa97 explore on mfcore01 — F385 staged the full data (all WORKER_REQUIRE gates pass); the premise was UNTESTABLE on the small local cache and needs the real event count from the full staged universe. Explore only (confirm stays gated on F393 methodology sign-off). [arch]
 
 - [ ] <a id="f97"></a> **F97** [medium] Provision `backend/venv/` in routine builder container — overnight builds 21/22/23 all hit the same gap: §3.5 backend smoke test originally specified `cd backend && venv/bin/uvicorn …` but the routine container ships without a venv. Spec now codifies AST + import-time check as the substitute. Real fix: the container image includes `backend/venv/` with pinned deps (Pydantic, FastAPI, pytest). Once landed, restore the full uvicorn smoke test path. Container/infra change, not application code. (from build 23 process review) [infra]
 
 - [ ] <a id="f302"></a> **F302** Per-reviewer effort cap in dispatch prompts — F-BATCH-0604C's correctness reviewer ran 5m47s / 60k tokens / 55 tool-uses vs siblings' ~2m / ~13-29, and with no agent-messaging tool the orchestrator could only poll (~15 min of wall-clock went to waits). Add a standard cap clause to review dispatch prompts (e.g. "≤25 tool calls / ~3 min; if hit, return partial findings + status token") and record cap-hits in run-state so chronic offenders surface in the report. [easy] [infra]
-- [ ] <a id="f306"></a> **F306** [next] Author a render-probe manifest check for the original F249c panel-resize delta using the new drag trigger (F301) — replaces the collapse/expand substitute from F-BATCH-0604C. [easy] [infra]
+- [ ] <a id="f412"></a> **F412** worker-dispatch sync-glob hardening (REL-01/REL-02, F-BATCH-0610 review, deferred) — the new recursive research sync (shipped 2026-06-10 after the F409 ModuleNotFoundError) now also ships `test_*.py` files to the worker on every dispatch (harmless today, payload creep as the suite grows; measured population: backend/research tree at 2026-06-10) and filenames with special characters would bypass the tar path quoting. Add `-not -name 'test_*.py'` only if worker-side test execution is confirmed unused; harden the find→tar path against odd filenames. [easy] [infra]
 - [ ] <a id="f309"></a> **F309** Promote the A8 zoom→auto-switch verification recipe to a scripted render-probe check (F298 rule): seed Alpaca 5m multi-year settings, drive `window.__chartDebug.setVisibleLogicalRange(0, N)`, assert lastSetDataPoints drops ≥10x + 'Auto (…)' badge, then narrow range and assert full-resolution restore. Needs DEV-build probe target or exposing the hook in preview builds behind a flag. [easy] [infra]
 
 ## Deferred (gated)
