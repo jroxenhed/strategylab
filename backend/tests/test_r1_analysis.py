@@ -55,8 +55,14 @@ def _make_event_row(
     regime_state: str = "NEUTRAL",
     score_perturb: Optional[dict] = None,
     peer_sic_fallback_level: str = "3_digit",
+    extra_horizons: Optional[dict] = None,  # F410: {horizon_int: excess_float_or_None}
 ) -> dict:
-    """Build a synthetic event row matching the real events.ndjson schema."""
+    """Build a synthetic event row matching the real events.ndjson schema.
+
+    extra_horizons: optional dict of additional {horizon: excess} entries to populate
+    in fwd_excess_pct and fwd_return_pct (e.g. {10: 1.5, 30: 3.2} for premise specs).
+    Keeps backward compatibility — existing callers unaffected.
+    """
     payload: dict = {
         "form_type": "4",
         "accession": f"test-{ticker}-{entry_date}",
@@ -78,6 +84,32 @@ def _make_event_row(
         else:
             payload["score_perturb"] = {}
 
+    fwd_excess: dict = {
+        "21": excess_21,
+        "63": excess_63,
+        "126": excess_126,
+    }
+    fwd_return: dict = {
+        "21": (excess_21 or 0.0) + 1.0,
+        "63": (excess_63 or 0.0) + 2.0,
+        "126": (excess_126 or 0.0) + 3.0,
+    }
+    universe_n: dict = {"21": 50, "63": 50, "126": 50}
+    peer_n: dict = {"21": 10, "63": 10, "126": 10}
+    fwd_peer_excess: dict = {
+        "21": peer_excess_21,
+        "63": peer_excess_63,
+        "126": peer_excess_126,
+    }
+    # F410: populate additional horizons (e.g. 10, 30 for premise specs)
+    if extra_horizons:
+        for h, exc in extra_horizons.items():
+            fwd_excess[str(h)] = exc
+            fwd_return[str(h)] = (exc or 0.0) + 1.0
+            universe_n[str(h)] = 50
+            peer_n[str(h)] = 10
+            fwd_peer_excess[str(h)] = exc  # mirror for peer tests
+
     return {
         "ticker": ticker,
         "event_ts": f"{entry_date}T16:00:00+00:00",
@@ -85,24 +117,12 @@ def _make_event_row(
         "entry_price": 100.0,
         "payload": payload,
         "split": split,
-        "fwd_return_pct": {
-            "21": (excess_21 or 0.0) + 1.0,
-            "63": (excess_63 or 0.0) + 2.0,
-            "126": (excess_126 or 0.0) + 3.0,
-        },
-        "fwd_excess_pct": {
-            "21": excess_21,
-            "63": excess_63,
-            "126": excess_126,
-        },
+        "fwd_return_pct": fwd_return,
+        "fwd_excess_pct": fwd_excess,
         "floor_status": "ok",
-        "universe_n": {"21": 50, "63": 50, "126": 50},
-        "fwd_peer_excess_pct": {
-            "21": peer_excess_21,
-            "63": peer_excess_63,
-            "126": peer_excess_126,
-        },
-        "peer_n": {"21": 10, "63": 10, "126": 10},
+        "universe_n": universe_n,
+        "fwd_peer_excess_pct": fwd_peer_excess,
+        "peer_n": peer_n,
         "peer_sic": "3674",
         "peer_sic_fallback_level": peer_sic_fallback_level,
         "no_price_data": False,
@@ -659,9 +679,10 @@ class TestOutputStructure:
         result = run_r1_analysis(study_dir, seed=20260606)
         fdr = result["fdr_report"]
         assert len(fdr) == 3, f"Expected 3 FDR hypotheses, got {len(fdr)}"
-        assert "H1_Q5Q1_63d" in fdr
-        assert "H1b_spearman_63d" in fdr
-        assert "H2_Q5abs_63d" in fdr
+        # F410: keys are dynamic (f-string with primary horizon); default primary=63
+        assert f"H1_Q5Q1_{63}d" in fdr
+        assert f"H1b_spearman_{63}d" in fdr
+        assert f"H2_Q5abs_{63}d" in fdr
 
     def test_h3_has_all_horizons(self, tmp_path):
         rows = _make_monotone_rows(n_per_quintile=8)
@@ -1009,3 +1030,193 @@ class TestNanSanitizedJsonRoundTrip:
         assert "NaN" not in raw_text, "Constant-means verdict JSON must not contain NaN"
         parsed = json.loads(raw_text)
         assert parsed["H1b"]["rho_s"] is None  # must be null, not NaN
+
+
+# ---------------------------------------------------------------------------
+# F410: Premise-horizon-aware verdict tests
+# ---------------------------------------------------------------------------
+
+def _make_rows_for_horizons(
+    n_per_quintile: int = 8,
+    primary_h: int = 30,
+    secondary_h: tuple = (10, 21, 30),
+    include_63: bool = True,
+) -> list[dict]:
+    """Build monotone rows with excess populated for a non-standard spec horizon set.
+
+    primary_h: the primary horizon (e.g. 30). Rows have non-null excess for this horizon.
+    secondary_h: all spec horizons populated.
+    include_63: if True, also populate 63td excess (simulates harness having injected 63).
+    Returns rows with null for 126td and null for 21td (unless specified in secondary_h).
+    """
+    groups = [
+        (0.10, -5.0),
+        (0.50,  0.0),
+        (1.00,  5.0),
+        (2.00, 10.0),
+        (5.00, 15.0),
+    ]
+    rows = []
+    idx = 0
+    for q_grp, (score_val, excess_val) in enumerate(groups):
+        for j in range(n_per_quintile):
+            entry_dt = _day_from_idx(2018, idx)
+            idx += 1
+            ticker = f"PH{q_grp}{j:02d}"
+            extra: dict = {}
+            for h in secondary_h:
+                if h not in (21, 63, 126):  # already handled by positional args
+                    extra[h] = excess_val + np.random.default_rng(42 + idx + h).normal(0, 0.1)
+            # 63td secondary: use distinct value from primary for realism
+            excess_63_val = (excess_val * 0.9) if include_63 else None
+            rows.append(_make_event_row(
+                ticker=ticker,
+                entry_date=entry_dt.isoformat(),
+                score=score_val + j * 0.001,
+                excess_63=excess_63_val,
+                excess_21=excess_val * 0.5 if 21 in secondary_h else None,
+                excess_126=None,  # not in spec
+                peer_excess_63=excess_63_val,
+                peer_excess_21=excess_val * 0.25 if 21 in secondary_h else None,
+                peer_excess_126=None,
+                extra_horizons=extra,
+            ))
+    return rows
+
+
+class TestPremiseHorizonSupport:
+    """F410: premise-horizon-aware verdict — primary=max(spec.horizons), 63td secondary."""
+
+    def test_premise_spec_primary_horizon_used_as_primary(self, tmp_path):
+        """Spec with horizons=(10,21,30): primary=30, verdict judged at 30td, not 63td.
+
+        Fixture: rows have non-null 30td excess but null 63td excess.
+        Expected: n_valid_events > 0, fdr_report has H1_Q5Q1_30d, not H1_Q5Q1_63d.
+        """
+        rows = _make_rows_for_horizons(
+            n_per_quintile=8, primary_h=30, secondary_h=(10, 21, 30), include_63=False
+        )
+        study_dir = _write_study(tmp_path, rows, "ph_primary_study")
+        result = run_r1_analysis(study_dir, seed=20260606, primary_horizon=30, horizons=(10, 21, 30))
+
+        assert result["primary_horizon"] == 30
+        assert result["n_valid_events"] > 0, (
+            f"Expected >0 valid events at 30td primary, got 0 "
+            f"(check that _is_valid_event uses primary_horizon param)"
+        )
+        fdr = result["fdr_report"]
+        assert "H1_Q5Q1_30d" in fdr, f"FDR report missing H1_Q5Q1_30d; keys={list(fdr.keys())}"
+        assert "H1b_spearman_30d" in fdr
+        assert "H2_Q5abs_30d" in fdr
+        assert "H1_Q5Q1_63d" not in fdr, (
+            "FDR report must NOT have H1_Q5Q1_63d when primary=30 "
+            "(63td is secondary/reporting only)"
+        )
+
+    def test_63td_secondary_populated_when_spec_omits_63(self, tmp_path):
+        """When primary_horizon=30, H3_secondary_horizons must include key '63'.
+
+        Fixture: rows have 63td excess (harness adds it) plus 30td primary.
+        Expected: '63' in H3_secondary_horizons, is_primary=False for 63.
+        """
+        rows = _make_rows_for_horizons(
+            n_per_quintile=8, primary_h=30, secondary_h=(10, 21, 30), include_63=True
+        )
+        study_dir = _write_study(tmp_path, rows, "ph_secondary63_study")
+        result = run_r1_analysis(study_dir, seed=20260606, primary_horizon=30, horizons=(10, 21, 30))
+
+        h3 = result["H3_secondary_horizons"]
+        assert "63" in h3, f"63td secondary must always be in H3; keys={list(h3.keys())}"
+        assert h3["63"]["is_primary"] is False, "63td must NOT be marked is_primary when primary=30"
+        # Primary should be marked correctly
+        assert h3["30"]["is_primary"] is True, "30td must be marked is_primary when primary=30"
+
+    def test_r1_default_unchanged_bit_identical(self, tmp_path):
+        """R-1 charter default: two calls produce bit-identical numeric output.
+
+        run_r1_analysis(dir) and run_r1_analysis(dir, primary_horizon=63, horizons=(21,63,126))
+        must produce identical result dicts including config_hash.
+        """
+        rows = _make_monotone_rows(n_per_quintile=8)
+
+        # Run 1: default (no horizon kwargs)
+        study_dir1 = _write_study(tmp_path, rows, "ph_bitid_default")
+        r1 = run_r1_analysis(study_dir1, seed=20260606)
+
+        # Run 2: explicit default values
+        study_dir2 = _write_study(tmp_path, rows, "ph_bitid_explicit")
+        r2 = run_r1_analysis(study_dir2, seed=20260606, primary_horizon=63, horizons=(21, 63, 126))
+
+        # config_hash must be identical (hard constraint from F410 spec)
+        assert r1["config_hash"] == r2["config_hash"], (
+            f"config_hash differs! default={r1['config_hash']!r} vs "
+            f"explicit={r2['config_hash']!r} — hash inputs must be identical for defaults"
+        )
+        # primary_horizon must be 63 in both
+        assert r1["primary_horizon"] == 63
+        assert r2["primary_horizon"] == 63
+        # FDR keys must be 63d-suffixed in both
+        assert "H1_Q5Q1_63d" in r1["fdr_report"]
+        assert "H1_Q5Q1_63d" in r2["fdr_report"]
+        # Numeric results must be identical
+        assert r1["H1"]["p_boot"] == r2["H1"]["p_boot"]
+        assert r1["n_valid_events"] == r2["n_valid_events"]
+
+    def test_r1_default_config_hash_literal(self, tmp_path):
+        """Config hash for default (seed=20260606, primary=63, horizons=(21,63,126)) must
+        equal the pre-F410 literal value d1b9f7150f850e6a — bit-identity constraint (F410)."""
+        rows = _make_monotone_rows(n_per_quintile=8)
+        study_dir = _write_study(tmp_path, rows, "ph_hash_literal")
+        result = run_r1_analysis(study_dir, seed=20260606)
+        assert result["config_hash"] == "d1b9f7150f850e6a", (
+            f"Default config_hash changed! Got {result['config_hash']!r}. "
+            "Adding horizon params to hash when they equal the defaults is NOT allowed (F410)."
+        )
+
+    def test_no_second_pass_fail_bar_from_63td_secondary(self, tmp_path):
+        """63td secondary row must NOT gate the verdict.
+
+        Fixture: rows have good 30td excess (expect ADVANCE/WEAKENED) but null 63td excess.
+        Expected: explore_decision is decided by 30td primary, NOT UNTESTABLE from missing 63td.
+        """
+        rows = _make_rows_for_horizons(
+            n_per_quintile=8, primary_h=30, secondary_h=(10, 21, 30), include_63=False
+        )
+        study_dir = _write_study(tmp_path, rows, "ph_no_second_bar_study")
+        result = run_r1_analysis(study_dir, seed=20260606, primary_horizon=30, horizons=(10, 21, 30))
+
+        # Key requirement: n_valid_events > 0 (not blocked by missing 63td)
+        assert result["n_valid_events"] > 0, (
+            "n_valid_events must be >0 when 30td excess is present and primary=30 "
+            "(63td secondary must not gate valid-event filtering)"
+        )
+        # explore_decision must not be UNTESTABLE due to missing 63td
+        decision = result["explore_decision"]
+        assert decision != "UNTESTABLE — power not evaluable" or result["mde_not_evaluable"], (
+            "explore_decision is UNTESTABLE but mde_not_evaluable is False — "
+            "this suggests 63td secondary is incorrectly gating the decision"
+        )
+        # The FDR family must be 3 hypotheses at the 30td primary horizon
+        assert len(result["fdr_report"]) == 3
+        assert "H1_Q5Q1_30d" in result["fdr_report"]
+
+    def test_fdr_has_three_hypotheses_premise_horizon(self, tmp_path):
+        """FDR family must be exactly 3 hypotheses for premise-specific primary horizon.
+
+        DI-6: mirrors TestOutputStructure.test_fdr_has_three_hypotheses but for the
+        non-default path (primary_horizon=30, horizons=(10,21,30)).  Guards the
+        'no 4th bar' constraint (see R-1 charter) on the F410 premise-horizon code path.
+        """
+        rows = _make_rows_for_horizons(
+            n_per_quintile=8, primary_h=30, secondary_h=(10, 21, 30), include_63=True
+        )
+        study_dir = _write_study(tmp_path, rows, "fdr_premise_horizon_study")
+        result = run_r1_analysis(study_dir, seed=20260606, primary_horizon=30, horizons=(10, 21, 30))
+        fdr = result["fdr_report"]
+        assert len(fdr) == 3, (
+            f"Expected exactly 3 FDR hypotheses for premise-horizon path "
+            f"(primary=30), got {len(fdr)}: {list(fdr.keys())}"
+        )
+        assert f"H1_Q5Q1_30d" in fdr
+        assert f"H1b_spearman_30d" in fdr
+        assert f"H2_Q5abs_30d" in fdr

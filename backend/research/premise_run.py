@@ -63,6 +63,11 @@ if str(_BACKEND_DIR) not in sys.path:
 if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
+# F352 pattern (mirrored from event_study.py): the lock must NEVER silently
+# degrade — a broken fileutil import surfaces immediately as ImportError rather
+# than disabling the FDR ledger concurrency guard.
+from fileutil import file_lock as _fileutil_file_lock  # noqa: E402
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -647,6 +652,69 @@ def poll_explore_status(premise_id: str) -> dict:
                 "finished_at": _utcnow_str(),
                 "verdict": verdict,
             })
+            # F410: Deliberate local ledger append (John's rule: must be explicit, never default)
+            ledger_entry_path = Path(outdir) / "ledger_entry.json"
+            if ledger_entry_path.exists():
+                try:
+                    import json as _json
+                    import shutil as _shutil
+                    import time as _time
+                    from research.event_study import _atomic_write as _aw
+                    # DI-3: parse the sidecar first; separate error handling for
+                    # corrupt sidecar vs ledger write failure.
+                    try:
+                        with open(ledger_entry_path, encoding="utf-8") as _f:
+                            _entry = _json.load(_f)
+                    except (ValueError, _json.JSONDecodeError) as parse_exc:
+                        # DI-3: corrupt sidecar — back up and log at ERROR (mirrors
+                        # event_study.py DI-04 pattern at ~line 2476).
+                        _backup = ledger_entry_path.with_name(
+                            f"ledger_entry.corrupt_{int(_time.time())}.json"
+                        )
+                        try:
+                            _shutil.copy2(ledger_entry_path, _backup)
+                        except OSError:
+                            pass
+                        log.error(
+                            "Corrupt ledger_entry.json for %s — backed up to %s, "
+                            "FDR ledger NOT updated.  Parse error: %s",
+                            premise_id, _backup, parse_exc,
+                        )
+                        _entry = None
+                    if _entry is not None:
+                        # DI-2: acquire an exclusive inter-process lock spanning the
+                        # entire read-modify-write (F352 pattern from event_study.py).
+                        # Prevents concurrent DONE transitions from silently dropping
+                        # each other's entries from the alpha-accounting ledger.
+                        with _fileutil_file_lock(_REAL_FDR_LEDGER):
+                            _ledger_rows: list = []
+                            if _REAL_FDR_LEDGER.exists():
+                                try:
+                                    _ledger_rows = _json.loads(_REAL_FDR_LEDGER.read_text(encoding="utf-8"))
+                                    if not isinstance(_ledger_rows, list):
+                                        _ledger_rows = []
+                                except (ValueError, _json.JSONDecodeError):
+                                    _ledger_rows = []
+                            _ledger_rows.append(_entry)
+                            try:
+                                _aw(_REAL_FDR_LEDGER, _json.dumps(_ledger_rows, indent=2, default=str))
+                            except OSError as write_exc:
+                                # DI-3: ledger write failure — log at ERROR with traceback.
+                                log.error(
+                                    "FDR ledger write failed for %s: %s",
+                                    premise_id, write_exc, exc_info=True,
+                                )
+                                raise
+                        log.info(
+                            "FDR ledger entry appended from %s (total entries: %d)",
+                            ledger_entry_path, len(_ledger_rows),
+                        )
+                except Exception as exc:
+                    log.warning("Failed to append ledger entry for %s: %s", premise_id, exc)
+            else:
+                log.warning(
+                    "No ledger_entry.json found in %s — FDR ledger NOT updated", outdir,
+                )
             try:
                 from research.premise_store import PremiseStore
                 s = PremiseStore()

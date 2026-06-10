@@ -102,8 +102,11 @@ def run_full_explore_sync(premise_id: str, outdir: Path) -> dict:
     """Synchronous full-explore run — core logic.
 
     fdr_ledger_path=None ALWAYS in v1 (see module docstring).
+    F410: injects 63 into harness horizons for comparability; passes spec's primary/horizons
+    to run_r1_analysis; writes ledger_entry.json sidecar for deliberate local append.
     Returns the verdict dict from run_r1_analysis.
     """
+    from dataclasses import replace as _dc_replace
     from datetime import date
     import numpy as np
     from research.premise_compile import compile_spec
@@ -111,7 +114,7 @@ def run_full_explore_sync(premise_id: str, outdir: Path) -> dict:
     from research.premise_store import PremiseStore
     from research.r1_dose import build_r1_events
     from research.s1_dose import build_s1_events
-    from research.r1_analysis import run_r1_analysis
+    from research.r1_analysis import run_r1_analysis, _build_r1_ledger_entry, _atomic_write as _r1_aw
     from research.universe_loader import build_liquid_universe
     from research.event_study import run_event_study
     from turnaround_validation import _make_memoized_loader
@@ -190,13 +193,23 @@ def run_full_explore_sync(premise_id: str, outdir: Path) -> dict:
     )
     log.info("Universe: %d tickers (%.1fs)", len(universe_tickers), time.monotonic() - t_univ)
 
+    # F410: Always include 63 in harness horizons so 63td secondary comparability row
+    # is populated regardless of spec. Merge spec horizons with {63}; EventStudyConfig
+    # receives the union. r1_analysis primary_horizon is still max(spec.horizons).
+    harness_horizons = tuple(sorted(set(cr.config.horizons) | {63}))
+    config_with_63 = _dc_replace(cr.config, horizons=harness_horizons)
+    log.info(
+        "Harness horizons: spec=%s → with_63=%s (primary=%d)",
+        cr.config.horizons, harness_horizons, max(spec.horizons),
+    )
+
     # Run harness
     rng = np.random.default_rng(_SEED)
     log.info("Running event study harness (rng seed=%d)...", _SEED)
     t_harness = time.monotonic()
     outcomes, harness_meta = run_event_study(
         events=events_raw,
-        config=cr.config,
+        config=config_with_63,   # F410: was cr.config; now includes 63 always
         loader_fn=loader,
         universe_tickers=universe_tickers,
         rng=rng,
@@ -209,14 +222,39 @@ def run_full_explore_sync(premise_id: str, outdir: Path) -> dict:
         harness_meta.get("n_confirm", 0),
     )
 
-    # Analysis (ledger_path=None → no FDR append in v1)
-    log.info("Running r1_analysis on %s...", outdir)
+    # F410: primary = max(spec.horizons); r1_analysis adds 63 to H3 via _horizons_with_63
+    spec_primary = max(spec.horizons)
+    spec_horizons = tuple(sorted(spec.horizons))
+
+    # Analysis (ledger_path=None → no FDR append in v1; deliberate ledger handoff via sidecar)
+    log.info("Running r1_analysis on %s (primary_horizon=%d)...", outdir, spec_primary)
     analysis_result = run_r1_analysis(
         study_dir=outdir,
         seed=_SEED,
         ledger_path=None,
+        primary_horizon=spec_primary,    # F410: spec-designated primary
+        horizons=spec_horizons,          # F410: spec horizons; 63 added internally for H3
     )
     log.info("Analysis done. explore_decision=%s", analysis_result.get("explore_decision"))
+
+    # F410: Write ledger_entry.json for deliberate local append (never write real ledger from worker)
+    try:
+        entry = _build_r1_ledger_entry(
+            result=analysis_result,
+            study_name=study_name,
+            cfg_hash=analysis_result.get("config_hash", ""),
+            primary_horizon=spec_primary,
+            all_horizons=harness_horizons,   # DI-5: actual computed set (includes 63 always)
+            spec_horizons=spec_horizons,     # DI-5: declared spec intent; recorded separately
+        )
+        ledger_entry_path = outdir / "ledger_entry.json"
+        # DI-4: use atomic write-then-rename so a worker kill mid-write never
+        # leaves a corrupt sidecar (bare open+json.dump could produce a partial
+        # file, which poll_explore_status would silently skip).
+        _r1_aw(ledger_entry_path, json.dumps(entry, indent=2, default=str))
+        log.info("Ledger entry written to %s", ledger_entry_path)
+    except Exception as exc:
+        log.warning("Failed to write ledger_entry.json: %s", exc)
 
     # Write verdict JSON to outdir (polling route reads this)
     verdict_path = outdir / "r1_explore_verdict.json"

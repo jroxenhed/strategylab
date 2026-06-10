@@ -30,10 +30,10 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # § 3a: primary horizon for the dose-response gate and verdict
-PRIMARY_HORIZON: int = 63  # trading days
+PRIMARY_HORIZON: int = 63  # trading days  # Charter default; may be overridden per-call via primary_horizon param (F410)
 
 # § 4: All three horizons
-ALL_HORIZONS: tuple[int, ...] = (21, 63, 126)
+ALL_HORIZONS: tuple[int, ...] = (21, 63, 126)  # Charter default; may be overridden per-call via horizons param (F410)
 
 # § 3a: MDE abort threshold (smallest economically meaningful 63td Q5-Q1 gap)
 MDE_ABORT_PP: float = 1.0  # percentage points
@@ -101,17 +101,18 @@ def _load_events(study_dir: Path) -> tuple[list[dict], dict]:
     return rows, meta
 
 
-def _is_valid_event(row: dict) -> bool:
-    """Valid for primary analysis: explore split, non-null 63td universe excess, score not None.
+def _is_valid_event(row: dict, primary_horizon: int = PRIMARY_HORIZON) -> bool:
+    """Valid for primary analysis: explore split, non-null {primary_horizon}td universe excess, score not None.
 
-    Brief: 'Valid event: explore row, non-null 63td universe excess, score not None.'
+    Brief: 'Valid event: explore row, non-null primary-horizon universe excess, score not None.'
     Missing score is treated as score_undefined (brief §score_undefined note).
+    primary_horizon defaults to PRIMARY_HORIZON (63) for R-1 charter bit-identity (F410).
     """
     if row.get("split") != "explore":
         return False
-    # 63td universe excess must be non-null
+    # Primary-horizon universe excess must be non-null
     excess_map = row.get("fwd_excess_pct") or {}
-    if excess_map.get(str(PRIMARY_HORIZON)) is None and excess_map.get(PRIMARY_HORIZON) is None:
+    if excess_map.get(str(primary_horizon)) is None and excess_map.get(primary_horizon) is None:
         return False
     # score must not be None (and the payload might not have it — treat missing as undefined)
     payload = row.get("payload") or {}
@@ -866,15 +867,17 @@ def _peer_lens_summary(
     }
 
 
-def _config_hash(seed: int) -> str:
+def _config_hash(seed: int, primary_horizon: int = PRIMARY_HORIZON, all_horizons: tuple = ALL_HORIZONS) -> str:
     """Compute a short config hash covering frozen score constants + analysis params.
 
     Charter §5: 'config-hash incl. score constants, q, n_boot, per-test block sizes/p/n'
+    F410: primary_horizon and all_horizons are params (defaults = module constants) so R-1
+    charter runs produce bit-identical hashes while premise explores can override.
     """
     config_str = json.dumps({
         "W": 21, "beta": 0.5, "log_shape": "log1p", "mc_construction": "shares_outstanding_x_close",
         "q": FDR_Q, "n_boot": N_BOOT, "seed": seed,
-        "horizons": list(ALL_HORIZONS), "primary_horizon": PRIMARY_HORIZON,
+        "horizons": list(all_horizons), "primary_horizon": primary_horizon,
         "mde_abort_pp": MDE_ABORT_PP, "n_quintiles": N_QUINTILES,
         "perturb_keys": PERTURB_KEYS,
     }, sort_keys=True)
@@ -890,6 +893,8 @@ def run_r1_analysis(
     *,
     seed: int = SEED,
     ledger_path: Optional[Path] = None,
+    primary_horizon: Optional[int] = None,   # None → use PRIMARY_HORIZON (63) default
+    horizons: Optional[tuple[int, ...]] = None,  # None → use ALL_HORIZONS default
 ) -> dict:
     """R-1 explore analysis.
 
@@ -900,10 +905,21 @@ def run_r1_analysis(
     is given explicitly; ledger_path=None skips the append with a warning
     (guard against test suites polluting the real ledger — see _append_r1_ledger).
 
+    F410: primary_horizon and horizons default to None → module constants (63, (21,63,126)).
+    R-1 charter calls omitting these params produce bit-identical output including config_hash.
+    63td is always included in the H3 secondary horizons set for comparability.
+
     Returns the result dict (same as what was written to r1_explore_verdict.json).
     """
     study_dir = Path(study_dir)
     rng = np.random.default_rng(seed)  # § SEED: all RNG seeded from this
+
+    # F410: Resolve horizon params (None → module defaults, preserving R-1 bit-identical behavior)
+    _primary = primary_horizon if primary_horizon is not None else PRIMARY_HORIZON
+    _horizons = horizons if horizons is not None else ALL_HORIZONS
+    # 63td comparability: always include 63 in the horizons set for H3, even if spec omits it.
+    # Constraint (John 2026-06-10): 63td secondary is a reporting lens ONLY — not pass/fail.
+    _horizons_with_63 = tuple(sorted(set(_horizons) | {63}))
 
     # ------------------------------------------------------------------
     # 1. Load artifacts
@@ -914,7 +930,7 @@ def run_r1_analysis(
     # ------------------------------------------------------------------
     # 2. Filter valid events
     # ------------------------------------------------------------------
-    valid_rows = [r for r in all_rows if _is_valid_event(r)]
+    valid_rows = [r for r in all_rows if _is_valid_event(r, primary_horizon=_primary)]
     n_valid = len(valid_rows)
     n_score_undefined = sum(
         1 for r in all_rows
@@ -953,9 +969,9 @@ def run_r1_analysis(
     ]
 
     # ------------------------------------------------------------------
-    # 4. Per-quintile stats at primary horizon (63td)
+    # 4. Per-quintile stats at primary horizon
     # ------------------------------------------------------------------
-    pq_stats = _per_quintile_stats(valid_rows, quintiles, PRIMARY_HORIZON)
+    pq_stats = _per_quintile_stats(valid_rows, quintiles, _primary)
     q5_vals = pq_stats[5]["values"]
     q1_vals = pq_stats[1]["values"]
     q5_mean = pq_stats[5]["mean"]
@@ -993,8 +1009,8 @@ def run_r1_analysis(
         for row, q in zip(valid_rows, quintiles)
         if q == 1 and row.get("entry_date")
     ])
-    block_size_q5 = _block_size_for_horizon(PRIMARY_HORIZON, q5_dates)
-    block_size_q1 = _block_size_for_horizon(PRIMARY_HORIZON, q1_dates)
+    block_size_q5 = _block_size_for_horizon(_primary, q5_dates)
+    block_size_q1 = _block_size_for_horizon(_primary, q1_dates)
 
     # For H2 (Q5 absolute mean)
     block_size_h2 = block_size_q5
@@ -1059,7 +1075,7 @@ def run_r1_analysis(
         rho_s = None
 
     # Per-year Spearman
-    per_year_rho_info = _per_year_quintile_rho(valid_rows, quintiles, PRIMARY_HORIZON)
+    per_year_rho_info = _per_year_quintile_rho(valid_rows, quintiles, _primary)
 
     # ------------------------------------------------------------------
     # 9. H2: Q5 absolute mean (§ 4)
@@ -1081,30 +1097,35 @@ def run_r1_analysis(
     # ------------------------------------------------------------------
     from research.event_study import FDRLedger as _FDRLedger
 
+    # F410: FDR key names are dynamic, based on _primary horizon
+    h1_key = f"H1_Q5Q1_{_primary}d"
+    h1b_key = f"H1b_spearman_{_primary}d"
+    h2_key = f"H2_Q5abs_{_primary}d"
+
     fdr = _FDRLedger(q=FDR_Q)
-    fdr.add("H1_Q5Q1_63d", p_value=p_h1_boot,
-            description="Q5-Q1 63td mean universe excess (two-sample MBB bootstrap, one-sided)")
-    fdr.add("H1b_spearman_63d", p_value=p_h1b,
-            description="Spearman ρ_s quintile index vs mean 63td excess (exact permutation, one-sided)")
-    fdr.add("H2_Q5abs_63d", p_value=p_h2,
-            description="Q5 absolute 63td mean excess (MBB bootstrap, H0: mean=0, one-sided)")
+    fdr.add(h1_key, p_value=p_h1_boot,
+            description=f"Q5-Q1 {_primary}td mean universe excess (two-sample MBB bootstrap, one-sided)")
+    fdr.add(h1b_key, p_value=p_h1b,
+            description=f"Spearman ρ_s quintile index vs mean {_primary}td excess (exact permutation, one-sided)")
+    fdr.add(h2_key, p_value=p_h2,
+            description=f"Q5 absolute {_primary}td mean excess (MBB bootstrap, H0: mean=0, one-sided)")
     fdr_report = fdr.finalize()
 
     # COR-01: H1 rejection only valid when obs_gap > 0 (positive-side test)
-    h1_rejected = fdr_report["H1_Q5Q1_63d"]["rejected"] and (obs_gap is not None and obs_gap > 0)
+    h1_rejected = fdr_report[h1_key]["rejected"] and (obs_gap is not None and obs_gap > 0)
     # H1b BH rejection is already only from positive-side exact-permutation p
-    h1b_rejected = fdr_report["H1b_spearman_63d"]["rejected"]
+    h1b_rejected = fdr_report[h1b_key]["rejected"]
     # COR-02: H2 rejection only valid when q5_abs_mean > 0 (positive-side test)
-    h2_rejected = fdr_report["H2_Q5abs_63d"]["rejected"] and (q5_abs_mean is not None and q5_abs_mean > 0)
+    h2_rejected = fdr_report[h2_key]["rejected"] and (q5_abs_mean is not None and q5_abs_mean > 0)
 
     # Patch bh_rejected flags back into fdr_report for ledger/verdict consistency
-    fdr_report["H1_Q5Q1_63d"]["rejected"] = h1_rejected
-    fdr_report["H2_Q5abs_63d"]["rejected"] = h2_rejected
+    fdr_report[h1_key]["rejected"] = h1_rejected
+    fdr_report[h2_key]["rejected"] = h2_rejected
 
     # ------------------------------------------------------------------
     # 11. Perturbation band (§ 3b)
     # ------------------------------------------------------------------
-    band_result = _perturbation_band(valid_rows, quintiles, PRIMARY_HORIZON)
+    band_result = _perturbation_band(valid_rows, quintiles, _primary)
     band_sign_stable = band_result["band_sign_stable"]
 
     # ------------------------------------------------------------------
@@ -1122,12 +1143,12 @@ def run_r1_analysis(
     for year in sorted(year_groups_data.keys()):
         items = year_groups_data[year]
         q5_y = np.array([
-            _get_excess(r, PRIMARY_HORIZON)
-            for r, q in items if q == 5 and _get_excess(r, PRIMARY_HORIZON) is not None
+            _get_excess(r, _primary)
+            for r, q in items if q == 5 and _get_excess(r, _primary) is not None
         ], dtype=float)
         q1_y = np.array([
-            _get_excess(r, PRIMARY_HORIZON)
-            for r, q in items if q == 1 and _get_excess(r, PRIMARY_HORIZON) is not None
+            _get_excess(r, _primary)
+            for r, q in items if q == 1 and _get_excess(r, _primary) is not None
         ], dtype=float)
         gap_y = (float(np.mean(q5_y)) - float(np.mean(q1_y))) if (len(q5_y) > 0 and len(q1_y) > 0) else None
 
@@ -1135,8 +1156,8 @@ def run_r1_analysis(
         q_has_all = True
         for qv in range(1, N_QUINTILES + 1):
             vy = np.array([
-                _get_excess(r, PRIMARY_HORIZON)
-                for r, q in items if q == qv and _get_excess(r, PRIMARY_HORIZON) is not None
+                _get_excess(r, _primary)
+                for r, q in items if q == qv and _get_excess(r, _primary) is not None
             ], dtype=float)
             if len(vy) == 0:
                 q_has_all = False
@@ -1158,9 +1179,9 @@ def run_r1_analysis(
             "n_q1": int(len(q1_y)),
         }
 
-    # H3: secondary horizons (descriptive)
+    # H3: secondary horizons (descriptive) — iterates _horizons_with_63 so 63td is always present
     h3_data: dict[str, dict] = {}
-    for h in ALL_HORIZONS:
+    for h in _horizons_with_63:
         pq_h = _per_quintile_stats(valid_rows, quintiles, h)
         q5_m_h = pq_h[5]["mean"]
         q1_m_h = pq_h[1]["mean"]
@@ -1177,16 +1198,16 @@ def run_r1_analysis(
         h3_data[str(h)] = {
             "gap_q5q1": round(gap_h, 4) if gap_h is not None else None,
             "rho_s": round(rho_h, 4) if rho_h is not None else None,
-            "is_primary": (h == PRIMARY_HORIZON),
+            "is_primary": (h == _primary),
             "n_q5": int(pq_h[5]["n"]),
             "n_q1": int(pq_h[1]["n"]),
         }
 
     # Peer lens
-    peer_lens = _peer_lens_summary(valid_rows, quintiles, PRIMARY_HORIZON)
+    peer_lens = _peer_lens_summary(valid_rows, quintiles, _primary)
 
     # Regime lens
-    regime_lens = _regime_lens(valid_rows, quintiles, PRIMARY_HORIZON)
+    regime_lens = _regime_lens(valid_rows, quintiles, _primary)
 
     # ------------------------------------------------------------------
     # 13. Explore decision (§ 4 / § 9)
@@ -1211,12 +1232,18 @@ def run_r1_analysis(
     # ------------------------------------------------------------------
     # 14. Build result dict
     # ------------------------------------------------------------------
-    cfg_hash = _config_hash(seed)
+    # F410/C4 — intentional split between verdict identity and execution record:
+    #   verdict config_hash covers spec horizons (_horizons, NOT _horizons_with_63)
+    #   so the hash identifies the spec intent and is bit-identical to pre-F410 for defaults.
+    #   harness meta.json covers the 63-injected set (harness_horizons) — that is the
+    #   execution record.  An auditor wanting the full computed set should read meta.json;
+    #   the verdict hash is the spec identity, not the full execution fingerprint.
+    cfg_hash = _config_hash(seed, primary_horizon=_primary, all_horizons=_horizons)
 
     per_quintile_summary: dict[str, dict] = {}
     for q_label in range(1, N_QUINTILES + 1):
         per_quintile_summary[str(q_label)] = {
-            "mean_63d_excess": round(float(pq_stats[q_label]["mean"]), 4) if pq_stats[q_label]["mean"] is not None else None,
+            f"mean_{_primary}d_excess": round(float(pq_stats[q_label]["mean"]), 4) if pq_stats[q_label]["mean"] is not None else None,
             "n": pq_stats[q_label]["n"],
         }
 
@@ -1225,6 +1252,7 @@ def run_r1_analysis(
         "analysis_version": "r1_analysis_v1",
         "config_hash": cfg_hash,
         "seed": seed,
+        "primary_horizon": _primary,  # F410: spec-designated primary horizon
         "created_at": datetime.now(tz=timezone.utc).isoformat(),
         "n_valid_events": n_valid,
         "n_score_undefined": n_score_undefined,
@@ -1318,6 +1346,8 @@ def run_r1_analysis(
         study_name=study_name,
         cfg_hash=cfg_hash,
         ledger_path=ledger_path,
+        primary_horizon=_primary,
+        all_horizons=_horizons,
     )
 
     # ------------------------------------------------------------------
@@ -1332,16 +1362,98 @@ def run_r1_analysis(
 # Ledger append
 # ---------------------------------------------------------------------------
 
+def _build_r1_ledger_entry(
+    result: dict,
+    study_name: str,
+    cfg_hash: str,
+    primary_horizon: int = PRIMARY_HORIZON,
+    all_horizons: tuple = ALL_HORIZONS,
+    spec_horizons: tuple | None = None,
+) -> dict:
+    """Build a charter-family ledger entry dict from an analysis result.
+
+    F410: extracted from _append_r1_ledger so premise_run_worker.py can build
+    the entry for its ledger_entry.json sidecar without writing to the real ledger.
+    FDR per_test keys are dynamic, based on primary_horizon (e.g. "H1_Q5Q1_30d").
+
+    DI-5/DI-7: all_horizons should be the actual computed set (harness_horizons,
+    which always includes 63).  spec_horizons records the declared spec intent.
+    When spec_horizons is None (R-1 default path where spec==harness), it is
+    omitted from the entry so the field is only present when the two sets differ.
+    """
+    h1_key = f"H1_Q5Q1_{primary_horizon}d"
+    h1b_key = f"H1b_spearman_{primary_horizon}d"
+    h2_key = f"H2_Q5abs_{primary_horizon}d"
+
+    entry_study_name = study_name + "_r1_family"
+    entry: dict = {
+        "study_name": entry_study_name,
+        "created_at": result.get("created_at"),
+        "study_config_hash": cfg_hash,
+        "fdr_q": FDR_Q,
+        "n_boot": N_BOOT,
+        "horizons": list(all_horizons),
+        "primary_horizon": primary_horizon,
+    }
+    # DI-5/DI-7: record spec_horizons only when the harness injected extra horizons
+    # (e.g. 63td forced in for comparability).  Allows post-hoc audit to answer
+    # "was 63td computed?" without reading study artifacts directly.
+    if spec_horizons is not None and tuple(sorted(spec_horizons)) != tuple(sorted(all_horizons)):
+        entry["spec_horizons"] = list(spec_horizons)
+    entry.update({
+        "per_test": {
+            h1_key: {
+                "block_size_q5": result["H1"]["block_size_q5"],
+                "block_size_q1": result["H1"]["block_size_q1"],
+                "p_boot": result["H1"]["p_boot"],
+                "p_nw": result["H1"]["p_nw"],
+                "n_q5": result["H1"]["n_q5"],
+                "n_q1": result["H1"]["n_q1"],
+            },
+            h1b_key: {
+                "p_exact_onesided": result["H1b"]["p_exact_onesided"],
+                "rho_s": result["H1b"]["rho_s"],
+                "n_quintile_points": N_QUINTILES,
+            },
+            h2_key: {
+                "p_boot": result["H2"]["p_boot"],
+                "n_q5": result["H2"]["n_q5"],
+            },
+        },
+        "per_quintile_counts": {
+            q_label: result["per_quintile"][q_label]["n"]
+            for q_label in result["per_quintile"]
+        },
+        "perturbation_sign_table": {
+            k: {
+                "gap_sign": v["gap_sign"],
+                "rho_sign": v["rho_sign"],
+            }
+            for k, v in result["perturbation_band"]["band_table"].items()
+        },
+        "bh_rejection_set": {
+            k: v["rejected"]
+            for k, v in result["fdr_report"].items()
+        },
+        "explore_decision": result["explore_decision"],
+        "mde_q5q1_pp": result["mde_q5q1_pp"],
+    })
+    return entry
+
+
 def _append_r1_ledger(
     result: dict,
     study_name: str,
     cfg_hash: str,
     ledger_path: Optional[Path],
+    primary_horizon: int = PRIMARY_HORIZON,
+    all_horizons: tuple = ALL_HORIZONS,
 ) -> None:
     """Append one charter-family entry to the FDR ledger.
 
     Brief: 'entry study_name = meta study_name + "_r1_family"'
     Read-modify-write with _atomic_write. NEVER truncate existing entries.
+    F410: primary_horizon and all_horizons passed through to _build_r1_ledger_entry.
     """
     import sys
     from pathlib import Path as _Path
@@ -1364,54 +1476,13 @@ def _append_r1_ledger(
         return
     target_path = Path(ledger_path)
 
-    entry_study_name = study_name + "_r1_family"
-
-    # Charter §5: fields per charter
-    entry = {
-        "study_name": entry_study_name,
-        "created_at": result.get("created_at"),
-        "study_config_hash": cfg_hash,
-        "fdr_q": FDR_Q,
-        "n_boot": N_BOOT,
-        "horizons": list(ALL_HORIZONS),
-        "primary_horizon": PRIMARY_HORIZON,
-        "per_test": {
-            "H1_Q5Q1_63d": {
-                "block_size_q5": result["H1"]["block_size_q5"],
-                "block_size_q1": result["H1"]["block_size_q1"],
-                "p_boot": result["H1"]["p_boot"],
-                "p_nw": result["H1"]["p_nw"],
-                "n_q5": result["H1"]["n_q5"],
-                "n_q1": result["H1"]["n_q1"],
-            },
-            "H1b_spearman_63d": {
-                "p_exact_onesided": result["H1b"]["p_exact_onesided"],
-                "rho_s": result["H1b"]["rho_s"],
-                "n_quintile_points": N_QUINTILES,
-            },
-            "H2_Q5abs_63d": {
-                "p_boot": result["H2"]["p_boot"],
-                "n_q5": result["H2"]["n_q5"],
-            },
-        },
-        "per_quintile_counts": {
-            q_label: result["per_quintile"][q_label]["n"]
-            for q_label in result["per_quintile"]
-        },
-        "perturbation_sign_table": {
-            k: {
-                "gap_sign": v["gap_sign"],
-                "rho_sign": v["rho_sign"],
-            }
-            for k, v in result["perturbation_band"]["band_table"].items()
-        },
-        "bh_rejection_set": {
-            k: v["rejected"]
-            for k, v in result["fdr_report"].items()
-        },
-        "explore_decision": result["explore_decision"],
-        "mde_q5q1_pp": result["mde_q5q1_pp"],
-    }
+    entry = _build_r1_ledger_entry(
+        result=result,
+        study_name=study_name,
+        cfg_hash=cfg_hash,
+        primary_horizon=primary_horizon,
+        all_horizons=all_horizons,
+    )
 
     try:
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1470,18 +1541,19 @@ def _atomic_write(path: Path, content: str) -> None:
 
 def _print_plain_english_summary(result: dict) -> None:
     """Print a concise plain-English summary — every term defined inline."""
+    ph = result.get("primary_horizon", PRIMARY_HORIZON)  # F410: use actual primary horizon
     print("\n" + "=" * 72)
     print("R-1 INSIDER CLUSTER EXPLORE — PLAIN-ENGLISH SUMMARY")
     print("=" * 72)
     print(f"Study: {result['study_name']}")
-    print(f"Valid events (explore split, score present, 63td excess not null): {result['n_valid_events']}")
+    print(f"Valid events (explore split, score present, {ph}td excess not null): {result['n_valid_events']}")
     print(f"Score undefined (missing market cap or price): {result['n_score_undefined']}")
     print()
     print("DOSE-RESPONSE (did more insider buying → more forward excess?)")
     gap = result["H1"]["obs_gap_q5q1_pp"]
     ci_low = result["H1"]["ci_low_95"]
     ci_high = result["H1"]["ci_high_95"]
-    print(f"  Q5−Q1 gap (top-dose fifth minus bottom-dose fifth, 63 trading-day excess): "
+    print(f"  Q5−Q1 gap (top-dose fifth minus bottom-dose fifth, {ph} trading-day excess): "
           f"{gap:.2f}pp" if gap is not None else "  Q5−Q1 gap: N/A")
     if ci_low is not None and ci_high is not None:
         print(f"  95% CI on difference: [{ci_low:.2f}, {ci_high:.2f}]pp")
@@ -1510,11 +1582,11 @@ def _print_plain_english_summary(result: dict) -> None:
             print(f"  Fraction of years with positive monotone trend: {frac_pos:.0%}")
     print(f"\nQ5 ABSOLUTE EXCESS (is top-dose bucket itself positive vs the market?)")
     q5_abs = result["H2"]["q5_abs_mean_pp"]
-    print(f"  Q5 mean 63td excess: {q5_abs:.2f}pp" if q5_abs is not None else "  N/A")
+    print(f"  Q5 mean {ph}td excess: {q5_abs:.2f}pp" if q5_abs is not None else "  N/A")
     print(f"  Bootstrap p-value: {result['H2']['p_boot']:.4f}")
     print(f"\nMDE (smallest gap this test could reliably detect at 80% power):")
     mde = result["mde_q5q1_pp"]
-    print(f"  63td Q5−Q1 MDE: {mde:.2f}pp (abort threshold: {MDE_ABORT_PP}pp)" if mde is not None else "  MDE: N/A")
+    print(f"  {ph}td Q5−Q1 MDE: {mde:.2f}pp (abort threshold: {MDE_ABORT_PP}pp)" if mde is not None else "  MDE: N/A")
     print(f"  MDE gate passed (<=1.0pp): {result['mde_gate_passed']}")
     print(f"\nPERTURBATION BAND (are results sign-stable to small constant tweaks?):")
     print(f"  All 9 window/floor variants have same sign as primary: {result['perturbation_band']['band_sign_stable']}")

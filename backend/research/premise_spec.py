@@ -160,6 +160,18 @@ class PremiseSpec(BaseModel):
     # Validators
     # ---------------------------------------------------------------------------
 
+    @field_validator("horizons")
+    @classmethod
+    def _validate_horizons(cls, v: tuple) -> tuple:
+        if len(v) == 0:
+            raise ValueError(
+                "horizons must be non-empty. "
+                "Provide at least one horizon (e.g. horizons=(21, 63, 126)). "
+                "Ledger enforcement: an empty horizons tuple would cause max() to raise "
+                "at run time and silently fail the study."
+            )
+        return v
+
     @field_validator("stream")
     @classmethod
     def _validate_stream(cls, v: str) -> str:
