@@ -139,9 +139,13 @@ dispatch_worker() {
   # Always sync backend/research/**/*.py — research grew subpackages (e.g.
   # backend/research/streams/, F388); a -maxdepth 1 glob left them behind and
   # the worker died on ModuleNotFoundError: research.streams (F409 dispatch).
-  while IFS= read -r f; do
+  # test_*.py excluded: worker-run.sh never executes pytest (it only runs
+  # python3 <script>); shipping test files wastes sync bandwidth (REL-01).
+  # NUL-delimited pipeline (-print0 / read -r -d '') so filenames with spaces
+  # or special characters cannot split the path assignment (REL-02).
+  while IFS= read -r -d '' f; do
     sync_paths+=("$f")
-  done < <(cd "$REPO_ROOT" && find backend/research -name '*.py' -not -path '*/__pycache__/*')
+  done < <(cd "$REPO_ROOT" && find backend/research -name '*.py' -not -path '*/__pycache__/*' -not -name 'test_*.py' -print0)
 
   # Always sync backend-root modules that research code imports transitively.
   # Without this, adding a symbol to (e.g.) fileutil.py leaves the worker on

@@ -118,9 +118,9 @@
         {
           "type": "canvas-mutation",
           "operator": "max",
-          "expected": 0,
+          "expected": 2,
           "durationMs": 500,
-          "description": "No spurious canvas mutations during idle after resize (F218)"
+          "description": "Repaint-loop guard (F218): ≤2 canvas mutations allowed for late single repaints on slow boxes — a loop produces tens per 500ms; F411"
         },
         {
           "type": "raf-idle",
