@@ -460,8 +460,13 @@ def test_disposition_put_echoes_saved_note(tmp_path):
 # ===========================================================================
 
 def test_duplicate_spec_version_reset_clean_history(tmp_path):
-    """Clone of a versioned premise starts at spec_version=0; first add_spec yields
-    a clean single-entry spec_history (no phantom archived entry)."""
+    """Clone of a versioned premise starts at spec_version=1 (F416 fix); first add_spec
+    archives the founding copy and yields spec_version=2 with exactly one spec_history entry.
+
+    F416 rationale: setting spec_version=1 (not 0) on the clone means the copied spec is
+    the clone's founding version 1.  This ensures lineage is preserved — the first add_spec
+    on the clone correctly archives the founding copy rather than silently overwriting it.
+    """
     from research.premise_spec import PremiseSpec
 
     store = make_store(tmp_path)
@@ -483,26 +488,26 @@ def test_duplicate_spec_version_reset_clean_history(tmp_path):
     clone_pid = store.duplicate_premise(pid)
     clone = store._get(clone_pid)
 
-    # Clone spec_version must be 0 (reset)
-    assert clone.get("spec_version") == 0, (
-        f"Expected spec_version=0 on clone, got {clone.get('spec_version')}"
+    # F416: Clone spec_version must be 1 (founding copy, not reset to 0)
+    assert clone.get("spec_version") == 1, (
+        f"Expected spec_version=1 on clone (F416 fix), got {clone.get('spec_version')}"
     )
     # Clone spec_history must be empty (no phantom archived entry)
     assert clone.get("spec_history") == [], (
         f"Expected empty spec_history on fresh clone, got {clone.get('spec_history')}"
     )
 
-    # First add_spec on clone should produce spec_version=1 with empty spec_history
-    # (nothing archived yet — only the current spec is set)
+    # First add_spec on clone should produce spec_version=2 and archive the founding v1
     new_spec = PremiseSpec(premise_text="original with versioned spec", stream="form4", entry_lag_days=3)
     store.add_spec(clone_pid, new_spec.model_dump())
     clone_after = store._get(clone_pid)
-    assert clone_after.get("spec_version") == 1, (
-        f"Expected spec_version=1 after first add_spec on clone, got {clone_after.get('spec_version')}"
+    assert clone_after.get("spec_version") == 2, (
+        f"Expected spec_version=2 after first add_spec on clone (F416), got {clone_after.get('spec_version')}"
     )
-    # spec_history should still be empty — nothing was archived (v0 → v1 is the first set)
-    assert clone_after.get("spec_history") == [], (
-        f"Expected empty spec_history after first add_spec on clone, got {clone_after.get('spec_history')}"
+    # spec_history should have exactly 1 entry (the founding v1 was archived)
+    assert len(clone_after.get("spec_history", [])) == 1, (
+        f"Expected 1 spec_history entry after first add_spec on clone (F416), "
+        f"got {clone_after.get('spec_history')}"
     )
 
 
