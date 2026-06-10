@@ -129,6 +129,49 @@ def _open_work_count(text: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+# Sections excluded from the Open Work count — must match sync-todo-index.py's
+# SKIP_SECTION_RE exactly (COR-06 contract).  Defined here as a literal constant
+# so the test asserts the *expected behaviour*, not a copy of the script's code.
+_SKIP_SECTIONS = re.compile(
+    r"^(Critical \(P1\)|Up Next|Open Work|Deferred \(gated\))$",
+    re.IGNORECASE,
+)
+
+_H2_RE = re.compile(r"^## (.+)$")
+_BULLET_RE = re.compile(r"^- \[[ x]\] (?:<a id=\"[^\"]+\"></a> )?\*\*([A-Z]+\d+[a-z0-9\-]*)")
+
+
+def _bullets_with_h2(text: str) -> list[dict]:
+    """Parse open bullets from *text*, tagging each with its enclosing H2 section.
+
+    Returns a list of dicts with keys: ``item_id``, ``h2_section``.
+    Only unchecked bullets (``- [ ]``) are returned.
+    """
+    current_h2 = ""
+    results = []
+    for line in text.splitlines():
+        h2_m = _H2_RE.match(line.rstrip())
+        if h2_m:
+            current_h2 = h2_m.group(1)
+        bullet_m = _BULLET_RE.match(line)
+        if bullet_m and "- [ ]" in line[:6]:
+            results.append({"item_id": bullet_m.group(1), "h2_section": current_h2})
+    return results
+
+
+def _expected_open_work_count(bullets: list[dict]) -> int:
+    """Compute the expected Open Work count from parsed bullet metadata.
+
+    Mirrors the script's logic: count open items whose h2_section does NOT
+    match _SKIP_SECTIONS.  The expected IDs that will (and won't) be counted
+    are determined entirely by h2_section — not by text position.
+    """
+    return sum(
+        1 for b in bullets
+        if not _SKIP_SECTIONS.match(b["h2_section"])
+    )
+
+
 def _section_contains(text: str, section_h2: str, item_id: str) -> bool:
     """Return True if item_id appears inside the named H2 section."""
     # Find the section start
@@ -598,7 +641,12 @@ class TestSyncTodoIndex:
 
     def test_open_work_count_matches_actual(self, workspace):
         """COR-06: Open Work table count == actual unchecked items
-        (Deferred items are EXCLUDED from the count)."""
+        (Deferred items are EXCLUDED from the count).
+
+        Uses h2_section grouping metadata — same logic as the script — instead
+        of a text-split heuristic so the test fails if the script's grouping
+        logic changes incorrectly (e.g., section rename, new skip section).
+        """
         result = _run(
             [PYTHON, str(_SYNC_INDEX), str(workspace["todo"])],
         )
@@ -608,24 +656,104 @@ class TestSyncTodoIndex:
         table_count = _open_work_count(text)
         assert table_count is not None, "## Open Work — N items header not found"
 
-        # Count open items not under ## Deferred (gated)
-        # Split at the Deferred section and count only items BEFORE it
-        deferred_pos = text.find("## Deferred (gated)")
-        if deferred_pos != -1:
-            non_deferred_text = text[:deferred_pos]
-        else:
-            non_deferred_text = text
+        # Build expected count from h2_section metadata — mirrors script's
+        # render_open_work() logic without duplicating its text parsing.
+        bullets = _bullets_with_h2(text)
+        expected_count = _expected_open_work_count(bullets)
 
-        # Count unchecked bullets in non-deferred regions
-        # (exclude generated section headers like Critical/Up Next/Open Work)
-        non_deferred_open = len(re.findall(
-            r"^- \[ \] (?:<a id=\"[^\"]+\"></a> )?\*\*[A-Z]+\d+",
-            non_deferred_text,
-            re.MULTILINE,
-        ))
-        assert table_count == non_deferred_open, (
-            f"Open Work table says {table_count} but counted {non_deferred_open} "
-            f"non-deferred open items"
+        # Explicit fixture check: fixture has F901 (Testing), F902 (Infra),
+        # F911 (Testing) = 3 countable items; F903 (Deferred/gated) excluded.
+        counted_ids = [b["item_id"] for b in bullets
+                       if not _SKIP_SECTIONS.match(b["h2_section"])]
+        excluded_ids = [b["item_id"] for b in bullets
+                        if _SKIP_SECTIONS.match(b["h2_section"])]
+        assert expected_count == 3, (
+            f"Fixture should have exactly 3 non-deferred open items "
+            f"(F901, F902, F911), got {expected_count}: counted={counted_ids}, "
+            f"excluded={excluded_ids}"
+        )
+        assert "F903" not in counted_ids, "F903 (gated/Deferred) must be excluded"
+        assert "F903" in excluded_ids, "F903 must appear in the excluded set"
+
+        # Primary assertion: table header count matches h2_section-derived count.
+        assert table_count == expected_count, (
+            f"Open Work table says {table_count} but h2_section grouping "
+            f"gives {expected_count} (counted={counted_ids}, "
+            f"excluded={excluded_ids})"
+        )
+
+    def test_open_work_count_explicit_fixture(self, tmp_path):
+        """COR-06 (explicit fixture): mixed-section TODO with stated literal counts.
+
+        Constructs a fresh fixture where the expected Open Work count is known
+        exactly, independent of _TODO_FIXTURE.  Verifies that sections listed
+        in _SKIP_SECTIONS are excluded and that the table header reflects the
+        correct count even when gated items are interleaved with non-gated ones.
+        """
+        # Fixture: 2 countable items (F980 in Features, F981 in Arch),
+        # 1 gated item (F982 in Deferred), 1 checked item (F983 — never counted).
+        explicit_fixture = """\
+# Explicit fixture
+
+## Critical (P1)
+
+_(none open)_
+
+## Up Next
+
+_(none tagged)_
+
+## Open Work — 0 items
+
+| Section | Open | IDs |
+|---|---|---|
+
+## Features
+
+- [ ] **F980** Feature item — countable. [easy] [arch]
+
+## Architecture
+
+- [ ] **F981** Arch item — countable. [medium] [arch]
+
+## Deferred (gated)
+
+- [ ] **F982** Gated item — excluded. [arch] [gated: needs spec]
+
+## Closed 2026-06
+
+- [x] **F983** Already closed — never counted. [easy] [arch]
+
+"""
+        todo_path = tmp_path / "TODO.md"
+        todo_path.write_text(explicit_fixture, encoding="utf-8")
+
+        result = _run([PYTHON, str(_SYNC_INDEX), str(todo_path)])
+        assert result.returncode == 0, (
+            f"sync-todo-index failed:\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
+        )
+
+        text = todo_path.read_text(encoding="utf-8")
+        table_count = _open_work_count(text)
+        assert table_count is not None, "## Open Work — N items header not found"
+
+        bullets = _bullets_with_h2(text)
+        expected_count = _expected_open_work_count(bullets)
+
+        counted_ids = [b["item_id"] for b in bullets
+                       if not _SKIP_SECTIONS.match(b["h2_section"])]
+        excluded_ids = [b["item_id"] for b in bullets
+                        if _SKIP_SECTIONS.match(b["h2_section"])]
+
+        # Literal expectation: F980 + F981 = 2; F982 gated = excluded; F983 checked = absent.
+        assert expected_count == 2, (
+            f"Explicit fixture: expected 2 non-gated open items, "
+            f"got {expected_count}: counted={counted_ids}, excluded={excluded_ids}"
+        )
+        assert "F982" not in counted_ids, "F982 (gated) must not be counted"
+        assert "F983" not in counted_ids, "F983 (checked) must not appear at all"
+        assert table_count == expected_count, (
+            f"Table header says {table_count} but h2_section grouping gives {expected_count}"
         )
 
     def test_no_duplicate_ids_after_sync(self, workspace):
