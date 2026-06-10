@@ -96,6 +96,9 @@ export interface PremiseSpec {
   fdr_q: number
   n_boot: number
   spec_hash?: string | null
+  // F419: analysis form fields (optional — old specs won't have these)
+  analysis_form?: 'dose_response' | 'one_sample' | null
+  design_mde_pp?: number | null
 }
 
 // ---------------------------------------------------------------------------
@@ -288,5 +291,80 @@ export async function setDisposition(id: string, req: SetDispositionRequest): Pr
 
 export async function duplicatePremise(id: string): Promise<DuplicatePremiseResponse> {
   const res = await api.post(`/api/premises/${id}/duplicate`)
+  return res.data
+}
+
+// ---------------------------------------------------------------------------
+// F417: Autopsy types + API (contracts.md frozen shape — single failed_gate, not array)
+// ---------------------------------------------------------------------------
+
+export interface AutopsyCensus {
+  n_valid: number | null
+  n_score_defined: number | null
+  primary_horizon: number | null
+  analysis_form: 'one_sample' | 'dose_response' | null
+  testable_1samp: boolean | null
+  testable_gap: boolean | null
+  design_mde_pp: number | null
+  note: string | null
+  // horizon_td is the dict key; per-row fields match backend HorizonCensus exactly
+  horizons: Record<string, {
+    horizon_td: number
+    mean_excess_pp: number
+    std_excess_pp: number
+    mde_1samp_pp: number | null
+    mde_gap_pp: number | null
+    arm_size: number | null
+  }> | null
+}
+
+export interface AutopsySuggestion {
+  rationale: string
+  spec_overrides: Record<string, unknown>
+  predicted: {
+    n_events: number | null
+    mde_pp: number | null
+    observed_pp: number | null
+    powered: boolean | null
+  }
+  caveat: string
+  // C-02: backend may emit predicted_testable to indicate whether the
+  // suggested reformulation is expected to be testable
+  predicted_testable: boolean | null
+  // actionable=false entries are advice-only (no reformulation to derive)
+  actionable?: boolean
+}
+
+export interface AutopsyResponse {
+  premise_id: string
+  study_name: string | null
+  explore_decision: string
+  // KTS-01: backend Literal type — never an arbitrary string
+  analysis_form: 'dose_response' | 'one_sample' | null
+  failed_gate: string | null
+  failed_gate_detail: string | null
+  census: AutopsyCensus | null
+  suggestions: AutopsySuggestion[]
+  plain_summary: string | null
+}
+
+export async function getAutopsy(id: string): Promise<AutopsyResponse> {
+  const res = await api.get(`/api/premises/${id}/autopsy`)
+  return res.data
+}
+
+// F417: derive (create a child premise with spec overrides)
+export interface DerivePremiseRequest {
+  spec_overrides: Record<string, unknown>
+}
+
+export interface DerivePremiseResponse {
+  premise_id: string
+  derived_from: string
+  status: string
+}
+
+export async function derivePremise(id: string, req: DerivePremiseRequest): Promise<DerivePremiseResponse> {
+  const res = await api.post(`/api/premises/${id}/derive`, req)
   return res.data
 }

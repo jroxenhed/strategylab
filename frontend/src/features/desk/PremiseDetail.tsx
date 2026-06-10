@@ -1,11 +1,14 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import type {
   PremiseFull,
+  PremiseListItem,
   PremiseSpec,
   RunStatusResponse,
   VerdictResponse,
   VerdictPayload,
   Disposition,
+  AutopsyResponse,
+  AutopsySuggestion,
 } from '../../api/premises'
 import {
   getPremise,
@@ -18,10 +21,13 @@ import {
   deletePremise,
   setDisposition,
   duplicatePremise,
+  getAutopsy,
+  derivePremise,
 } from '../../api/premises'
 
 interface PremiseDetailProps {
   premiseId: string
+  allPremises?: PremiseListItem[]
   onDeleted: () => void
   onStatusChange: () => void
   onSelectId?: (id: string) => void
@@ -64,6 +70,456 @@ function VerdictDisplay({ payload }: { payload: VerdictPayload | null | undefine
     </table>
   )
 }
+
+// ---------------------------------------------------------------------------
+// F419: LineageStrip — walks derived_from chain client-side
+// ---------------------------------------------------------------------------
+
+function LineageStrip({
+  premiseId,
+  allPremises,
+  onSelectId,
+}: {
+  premiseId: string
+  allPremises: PremiseListItem[]
+  onSelectId?: (id: string) => void
+}) {
+  // Walk backward: collect ancestors (oldest first)
+  // KTS-07: track missing ancestor id so we can render a placeholder pill
+  const ancestors: PremiseListItem[] = []
+  let missingAncestorId: string | null = null
+  const visited = new Set<string>()
+  visited.add(premiseId)
+  let current = allPremises.find(p => p.premise_id === premiseId)
+  while (current?.derived_from && !visited.has(current.derived_from)) {
+    const parent = allPremises.find(p => p.premise_id === current!.derived_from)
+    if (!parent) {
+      missingAncestorId = current.derived_from
+      break
+    }
+    visited.add(parent.premise_id)
+    ancestors.unshift(parent)
+    current = parent
+  }
+
+  // Walk forward: direct children only
+  const children = allPremises.filter(p => p.derived_from === premiseId)
+
+  // If isolated (no lineage at all), render nothing
+  if (ancestors.length === 0 && children.length === 0) return null
+
+  const self = allPremises.find(p => p.premise_id === premiseId)
+
+  const pillStyle = (isSelf: boolean, status: string): React.CSSProperties => ({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    padding: '2px 8px',
+    borderRadius: 12,
+    fontSize: 11,
+    fontFamily: 'monospace',
+    border: isSelf
+      ? `2px solid ${statusColor(status)}`
+      : `1px solid ${statusColor(status)}55`,
+    background: statusColor(status) + '18',
+    color: isSelf ? statusColor(status) : '#8b949e',
+    cursor: isSelf ? 'default' : 'pointer',
+    whiteSpace: 'nowrap',
+  })
+
+  const renderNode = (p: PremiseListItem, isSelf: boolean) => (
+    <span
+      key={p.premise_id}
+      style={pillStyle(isSelf, p.status)}
+      onClick={isSelf || !onSelectId ? undefined : () => onSelectId(p.premise_id)}
+      title={p.premise_text_excerpt}
+    >
+      {p.premise_id.slice(0, 12)}
+      {isSelf && <span style={{ fontWeight: 700 }}>★</span>}
+      <span
+        style={{
+          width: 6, height: 6, borderRadius: '50%',
+          background: statusColor(p.status),
+          display: 'inline-block',
+        }}
+      />
+    </span>
+  )
+
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      gap: 4,
+      padding: '6px 0',
+      fontSize: 11,
+      color: '#8b949e',
+    }}>
+      {/* KTS-07: if oldest known ancestor has a missing parent, show a placeholder */}
+      {missingAncestorId && (
+        <React.Fragment>
+          <span style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            padding: '2px 8px',
+            borderRadius: 12,
+            fontSize: 11,
+            fontFamily: 'monospace',
+            border: '1px solid #484f5855',
+            background: '#484f5818',
+            color: '#484f58',
+            whiteSpace: 'nowrap',
+          }}>
+            {missingAncestorId.slice(0, 12)} (not loaded)
+          </span>
+          <span style={{ color: '#484f58' }}>→</span>
+        </React.Fragment>
+      )}
+      {ancestors.map(p => (
+        <React.Fragment key={p.premise_id}>
+          {renderNode(p, false)}
+          <span style={{ color: '#484f58' }}>→</span>
+        </React.Fragment>
+      ))}
+      {self && renderNode(self, true)}
+      {children.length > 0 && <span style={{ color: '#484f58' }}>→</span>}
+      {children.map((p, i) => (
+        <React.Fragment key={p.premise_id}>
+          {renderNode(p, false)}
+          {i < children.length - 1 && <span style={{ color: '#484f58' }}>/</span>}
+        </React.Fragment>
+      ))}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// F417: VerdictAutopsy — inline component using autopsy API (contracts.md shape)
+// ---------------------------------------------------------------------------
+
+function SuggestionCard({
+  suggestion,
+  premiseId,
+  censusMde,
+  onSelectId,
+}: {
+  suggestion: AutopsySuggestion
+  premiseId: string
+  censusMde: number | null
+  onSelectId?: (id: string) => void
+}) {
+  const [userMde, setUserMde] = useState<string>(
+    censusMde != null ? String(censusMde) : ''
+  )
+  const [deriving, setDeriving] = useState(false)
+  const [deriveError, setDeriveError] = useState<string | null>(null)
+
+  const parsedMde = parseFloat(userMde)
+  const powered =
+    suggestion.predicted.mde_pp != null && !isNaN(parsedMde) && parsedMde > 0
+      ? suggestion.predicted.mde_pp <= parsedMde
+      : null
+
+  const handleDerive = async () => {
+    if (isNaN(parsedMde) || parsedMde <= 0) {
+      setDeriveError('Enter a valid MDE target (pp) before creating.')
+      return
+    }
+    setDeriving(true)
+    setDeriveError(null)
+    try {
+      const overrides = { ...suggestion.spec_overrides, design_mde_pp: parsedMde }
+      const resp = await derivePremise(premiseId, { spec_overrides: overrides })
+      if (onSelectId) onSelectId(resp.premise_id)
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        ?? 'Failed to create derived premise'
+      setDeriveError(msg)
+    } finally {
+      setDeriving(false)
+    }
+  }
+
+  return (
+    <div style={{
+      border: '1px solid #30363d',
+      borderRadius: 6,
+      padding: '10px 14px',
+      marginBottom: 10,
+      background: '#161b22',
+    }}>
+      <div style={{ color: '#e6edf3', fontSize: 13, marginBottom: 6 }}>
+        {suggestion.rationale}
+      </div>
+      <div style={{ fontSize: 12, color: '#8b949e', marginBottom: 6 }}>
+        {suggestion.predicted.n_events != null && (
+          <span style={{ marginRight: 12 }}>Projected events: <strong style={{ color: '#e6edf3' }}>{suggestion.predicted.n_events}</strong></span>
+        )}
+        {suggestion.predicted.mde_pp != null && (
+          <span style={{ marginRight: 12 }}>Projected MDE: <strong style={{ color: '#e6edf3' }}>{suggestion.predicted.mde_pp.toFixed(2)} pp</strong></span>
+        )}
+        {suggestion.predicted.observed_pp != null && (
+          <span>Current observed: <strong style={{ color: '#e6edf3' }}>{suggestion.predicted.observed_pp.toFixed(2)} pp</strong></span>
+        )}
+      </div>
+      {/* Powered badge — client-side, keyed on user input */}
+      {powered != null && (
+        <div style={{
+          display: 'inline-block',
+          fontSize: 11,
+          fontWeight: 700,
+          padding: '2px 8px',
+          borderRadius: 4,
+          marginBottom: 8,
+          background: powered ? '#238636' : '#6e402a',
+          color: powered ? '#e6edf3' : '#f0883e',
+        }}>
+          {powered ? 'Powered at your MDE target' : 'Under-powered at your MDE target'}
+        </div>
+      )}
+      {/* C-02: predicted_testable badge */}
+      {suggestion.predicted_testable != null && (
+        <div style={{
+          display: 'inline-block',
+          fontSize: 11,
+          fontWeight: 700,
+          padding: '2px 8px',
+          borderRadius: 4,
+          marginBottom: 8,
+          marginRight: 6,
+          background: suggestion.predicted_testable ? '#1f6feb22' : '#8b949e22',
+          color: suggestion.predicted_testable ? '#58a6ff' : '#8b949e',
+          border: `1px solid ${suggestion.predicted_testable ? '#1f6feb44' : '#8b949e44'}`,
+        }}>
+          {suggestion.predicted_testable ? 'Expected: testable' : 'Expected: still borderline'}
+        </div>
+      )}
+      {/* Caveat — always visible, never tooltip */}
+      <div style={{
+        fontSize: 11,
+        color: '#f0883e',
+        background: '#f0883e18',
+        border: '1px solid #f0883e44',
+        borderRadius: 4,
+        padding: '4px 8px',
+        marginBottom: 8,
+      }}>
+        {suggestion.caveat}
+      </div>
+      {/* MDE input — only shown for actionable suggestions */}
+      {suggestion.actionable !== false && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <label style={{ fontSize: 12, color: '#8b949e', whiteSpace: 'nowrap' }}>
+            Your MDE target (pp):
+          </label>
+          <input
+            type="number"
+            min={0}
+            step={0.5}
+            value={userMde}
+            onChange={e => setUserMde(e.target.value)}
+            style={{
+              width: 80,
+              padding: '3px 6px',
+              fontSize: 12,
+              background: '#0d1117',
+              border: '1px solid #30363d',
+              borderRadius: 4,
+              color: '#e6edf3',
+            }}
+            placeholder="e.g. 8.0"
+          />
+          {censusMde != null && userMde === String(censusMde) && (
+            <span style={{ fontSize: 10, color: '#8b949e' }}>pre-filled from current spec — adjust</span>
+          )}
+        </div>
+      )}
+      {deriveError && (
+        <div style={{ fontSize: 12, color: '#f85149', marginBottom: 6 }}>{deriveError}</div>
+      )}
+      {/* actionable !== false: show Create button; otherwise advice-only card */}
+      {suggestion.actionable !== false ? (
+        <button
+          onClick={handleDerive}
+          disabled={deriving}
+          style={{
+            padding: '4px 12px',
+            fontSize: 12,
+            background: '#1f6feb',
+            color: '#e6edf3',
+            border: 'none',
+            borderRadius: 4,
+            cursor: deriving ? 'not-allowed' : 'pointer',
+            opacity: deriving ? 0.7 : 1,
+          }}
+        >
+          {deriving ? 'Creating…' : 'Create derived premise'}
+        </button>
+      ) : (
+        <div style={{ fontSize: 11, color: '#484f58', fontStyle: 'italic' }}>
+          Advice only — no derived premise can be created for this suggestion.
+        </div>
+      )}
+    </div>
+  )
+}
+
+function VerdictAutopsy({
+  premiseId,
+  onSelectId,
+}: {
+  premiseId: string
+  onSelectId?: (id: string) => void
+}) {
+  const [autopsy, setAutopsy] = useState<AutopsyResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    setAutopsy(null)
+    getAutopsy(premiseId)
+      .then(data => { if (!cancelled) { setAutopsy(data); setLoading(false) } })
+      .catch((e: unknown) => {
+        if (cancelled) return
+        // 404 = autopsy not available yet — render nothing
+        const status = (e as { response?: { status?: number } })?.response?.status
+        if (status === 404) {
+          setAutopsy(null)
+          setLoading(false)
+          return
+        }
+        const msg = (e as { response?: { data?: { detail?: string } }; message?: string })
+          ?.response?.data?.detail ?? (e as { message?: string })?.message ?? 'Failed to load autopsy'
+        setError(msg)
+        setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [premiseId])
+
+  if (loading) {
+    return (
+      <div style={{ padding: '8px 0', color: '#8b949e', fontSize: 12 }}>Loading autopsy…</div>
+    )
+  }
+  if (error) {
+    return (
+      <div style={{ padding: '8px 0', color: '#f85149', fontSize: 12 }}>Autopsy error: {error}</div>
+    )
+  }
+  if (!autopsy) return null
+
+  const census = autopsy.census
+
+  return (
+    <div style={{
+      border: '1px solid #21262d',
+      borderRadius: 6,
+      padding: '12px 16px',
+      marginTop: 8,
+      background: '#0d1117',
+    }}>
+      <div style={{ fontWeight: 700, fontSize: 13, color: '#f0883e', marginBottom: 10 }}>
+        Autopsy — Why this test couldn't be answered
+      </div>
+
+      {/* Plain summary */}
+      {autopsy.plain_summary && (
+        <div style={{ fontSize: 13, color: '#e6edf3', marginBottom: 12, lineHeight: 1.5 }}>
+          {autopsy.plain_summary}
+        </div>
+      )}
+
+      {/* Why it failed */}
+      {(autopsy.failed_gate || autopsy.failed_gate_detail) && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontWeight: 600, fontSize: 12, color: '#8b949e', marginBottom: 6 }}>
+            Why it failed
+          </div>
+          <div style={{
+            background: '#161b22',
+            border: '1px solid #30363d',
+            borderRadius: 4,
+            padding: '8px 12px',
+            fontSize: 12,
+          }}>
+            {autopsy.failed_gate && (
+              <span style={{ fontFamily: 'monospace', color: '#f0883e', marginRight: 8 }}>
+                {autopsy.failed_gate}
+              </span>
+            )}
+            {autopsy.failed_gate_detail && (
+              <span style={{ color: '#e6edf3' }}>{autopsy.failed_gate_detail}</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Census numbers */}
+      {census && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontWeight: 600, fontSize: 12, color: '#8b949e', marginBottom: 6 }}>
+            What the numbers show
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <tbody>
+              {[
+                ['Events found', census.n_valid != null ? String(census.n_valid) : '—'],
+                ['Scoreable events', census.n_score_defined != null ? String(census.n_score_defined) : '—'],
+                ['Primary horizon (days)', census.primary_horizon != null ? String(census.primary_horizon) : '—'],
+                ['Analysis form', census.analysis_form ?? '—'],
+                ['Design MDE target (pp)', census.design_mde_pp != null ? `${census.design_mde_pp.toFixed(1)} pp` : '—'],
+                ...(census.note ? [['Note', census.note]] : []),
+              ].map(([label, value]) => (
+                <tr key={label} style={{ borderBottom: '1px solid #21262d' }}>
+                  <td style={{ padding: '4px 8px', color: '#8b949e', whiteSpace: 'nowrap', width: 180 }}>{label}</td>
+                  <td style={{ padding: '4px 8px', color: '#e6edf3' }}>{value}</td>
+                </tr>
+              ))}
+              {/* Per-horizon MDE table if available */}
+              {census.horizons && Object.entries(census.horizons).map(([horizon, h]) => (
+                <tr key={`h-${horizon}`} style={{ borderBottom: '1px solid #21262d' }}>
+                  <td style={{ padding: '4px 8px', color: '#8b949e', whiteSpace: 'nowrap' }}>
+                    {horizon}d MDE (1-samp)
+                  </td>
+                  <td style={{ padding: '4px 8px', color: '#e6edf3' }}>
+                    {h.mde_1samp_pp != null ? `${h.mde_1samp_pp.toFixed(2)} pp` : '—'}
+                    {h.arm_size != null ? ` (arm_size=${h.arm_size})` : ''}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Suggestions */}
+      {autopsy.suggestions && autopsy.suggestions.length > 0 && (
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 12, color: '#8b949e', marginBottom: 8 }}>
+            Suggested next steps
+          </div>
+          {autopsy.suggestions.map((s, i) => (
+            <SuggestionCard
+              key={i}
+              suggestion={s}
+              premiseId={premiseId}
+              censusMde={census?.design_mde_pp ?? null}
+              onSelectId={onSelectId}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// End F417 / F419 helpers
+// ---------------------------------------------------------------------------
 
 const DEFAULT_SPEC_SKELETON = (premiseText: string): PremiseSpec => ({
   premise_text: premiseText,
@@ -119,7 +575,7 @@ function formatTs(ts: string | null | undefined): string {
   }
 }
 
-export default function PremiseDetail({ premiseId, onDeleted, onStatusChange, onSelectId }: PremiseDetailProps) {
+export default function PremiseDetail({ premiseId, allPremises = [], onDeleted, onStatusChange, onSelectId }: PremiseDetailProps) {
   const [premise, setPremise] = useState<PremiseFull | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -191,6 +647,7 @@ export default function PremiseDetail({ premiseId, onDeleted, onStatusChange, on
     setSpecEditOpen(false)
     setRunStatus(null)
     setVerdict(null)
+    setVerdictError(null)
     setGraduateConfirmPending(false)
     setDeleteConfirmPending(false)
     setRunError(null)
@@ -448,6 +905,14 @@ export default function PremiseDetail({ premiseId, onDeleted, onStatusChange, on
             </button>
           </div>
         )}
+        {/* F419: lineage strip — shows full ancestor/descendant chain */}
+        {allPremises.length > 0 && (
+          <LineageStrip
+            premiseId={premiseId}
+            allPremises={allPremises}
+            onSelectId={onSelectId}
+          />
+        )}
         <div style={styles.headerRow}>
           <span
             style={{
@@ -506,6 +971,21 @@ export default function PremiseDetail({ premiseId, onDeleted, onStatusChange, on
           <div style={styles.readback}>{premise.spec.plain_summary}</div>
         ) : (
           <div style={styles.mutedNote}>[No readback yet — AI will fill this during formalization]</div>
+        )}
+        {/* F419: analysis_form / design_mde_pp — one_sample only */}
+        {premise.spec?.analysis_form === 'one_sample' && (
+          <div style={{ ...styles.timestamps, marginTop: 6, display: 'flex', gap: 16 }}>
+            <span>
+              <span style={{ color: '#8b949e' }}>Analysis form: </span>
+              one-sample direction test
+            </span>
+            <span>
+              <span style={{ color: '#8b949e' }}>MDE target: </span>
+              {premise.spec.design_mde_pp != null
+                ? `${premise.spec.design_mde_pp.toFixed(1)} pp`
+                : '—'}
+            </span>
+          </div>
         )}
       </div>
 
@@ -645,6 +1125,19 @@ export default function PremiseDetail({ premiseId, onDeleted, onStatusChange, on
           )}
         </div>
       )}
+
+      {/* Section 6b — Verdict Autopsy (F417): shown when latest explore run is UNTESTABLE or NOT-SUPPORTED */}
+      {(() => {
+        const exploreDecision =
+          verdict?.verdict?.explore_decision ?? latestRun?.verdict?.explore_decision
+        const showAutopsy = typeof exploreDecision === 'string' &&
+          (exploreDecision.includes('UNTESTABLE') || exploreDecision === 'NOT-SUPPORTED' || exploreDecision.includes('WEAKENED'))
+        return showAutopsy ? (
+          <div style={styles.section}>
+            <VerdictAutopsy premiseId={premiseId} onSelectId={onSelectId} />
+          </div>
+        ) : null
+      })()}
 
       {/* Section 7 — Graduate-to-confirm gate */}
       {canGraduate && (

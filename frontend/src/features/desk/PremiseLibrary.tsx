@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import type { PremiseListItem, PremiseStatus, Disposition } from '../../api/premises'
 import { listPremises, createPremise } from '../../api/premises'
 import PremiseDetail from './PremiseDetail'
@@ -101,18 +101,10 @@ export default function PremiseLibrary() {
     refreshList()
   }, [refreshList])
 
-  // F397: live refresh every 15s
-  const liveRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // F397: live refresh every 15s (F398: simplified to single-closure useEffect)
   useEffect(() => {
-    liveRefreshRef.current = setInterval(() => {
-      refreshList()
-    }, 15000)
-    return () => {
-      if (liveRefreshRef.current) {
-        clearInterval(liveRefreshRef.current)
-        liveRefreshRef.current = null
-      }
-    }
+    const id = setInterval(refreshList, 15_000)
+    return () => clearInterval(id)
   }, [refreshList])
 
   const handleCreate = async () => {
@@ -242,6 +234,7 @@ export default function PremiseLibrary() {
           <PremiseDetail
             key={selectedId}
             premiseId={selectedId}
+            allPremises={premises}
             onDeleted={() => {
               setSelectedId(null)
               refreshList()
