@@ -12,9 +12,15 @@ Smuggling-resistance hardening (build 24 adversarial review):
 - When Transfer-Encoding is present the Content-Length fast path is skipped
   and the slow path counts actual streamed bytes — closes the
   CL=0+chunked-body and TE+CL coexistence desync variants.
+
+F199: RequestDeadlineMiddleware — per-route and global-default HTTP deadlines.
+See class docstring for trade-offs and env-override knob.
 """
 
+import asyncio
 import json
+import os
+from typing import Final
 from starlette.types import ASGIApp, Scope, Receive, Send
 
 DEFAULT_MAX_BYTES = 1_048_576  # 1 MB
@@ -152,6 +158,152 @@ class BodySizeLimitMiddleware:
             return {"type": "http.request", "body": b"", "more_body": False}
 
         await self.app(scope, replay_receive, send)
+
+
+# ---------------------------------------------------------------------------
+# F199: RequestDeadlineMiddleware
+# ---------------------------------------------------------------------------
+
+#: Sentinel — assign to a path in ROUTE_DEADLINES to exempt it entirely.
+#: KP-03: Final[None] makes the intent explicit in type signatures and prevents
+#: accidental assignment (e.g. ROUTE_DEADLINES['/foo'] = unset_var).
+NO_DEADLINE: Final[None] = None
+
+#: Per-path deadline table.  Longest-prefix wins for paths not in the dict.
+#: Streaming / long-lived routes that self-manage timeouts internally must be
+#: listed here with NO_DEADLINE to prevent the middleware from cancelling them.
+ROUTE_DEADLINES: dict[str, float | None] = {
+    # Streaming WFA — exempt; self-manages via _WFA_TIMEOUT_SECS
+    "/api/backtest/walk_forward/stream": NO_DEADLINE,
+    # WFA (non-stream): 20 s headroom above _WFA_TIMEOUT_SECS=600
+    "/api/backtest/walk_forward":        620.0,
+    # Optimizer: 10 s headroom above _TIMEOUT_SECS=60
+    "/api/backtest/optimize":             70.0,
+    # Sweep
+    "/api/backtest/sweep":               120.0,
+    # Quick batch: already has internal deadline; belt-and-suspenders
+    "/api/backtest/quick/batch":          30.0,
+    # Quick (single)
+    "/api/backtest/quick":                15.0,
+    # Standard backtest (90 s covers wide date ranges + slow yfinance fetch)
+    "/api/backtest":                      90.0,
+    # Turnaround scan
+    "/api/turnaround/scan":              180.0,
+    # Trading scan
+    "/scan":                              60.0,
+}
+
+#: Global fallback applied to any path NOT matched by ROUTE_DEADLINES.
+#: Override at startup via STRATEGYLAB_REQUEST_DEADLINE_SECS (seconds, float).
+_env_default = os.environ.get("STRATEGYLAB_REQUEST_DEADLINE_SECS")
+try:
+    GLOBAL_DEFAULT_DEADLINE_SECS: float = float(_env_default) if _env_default else 60.0
+except (ValueError, TypeError):
+    GLOBAL_DEFAULT_DEADLINE_SECS = 60.0
+
+
+class RequestDeadlineMiddleware:
+    """Pure-ASGI middleware that wraps each HTTP request in asyncio.wait_for.
+
+    Route-specific deadlines are read from *route_deadlines* using an exact
+    match first, then a longest-prefix match.  Paths mapped to ``None``
+    (NO_DEADLINE) pass through without any timeout — use this for streaming
+    responses and other long-lived connections that self-manage their own
+    timeouts internally.
+
+    Known limitation (sync routes):
+        FastAPI dispatches sync route handlers to a threadpool via
+        run_in_executor.  ``asyncio.wait_for`` wraps the coroutine that
+        *awaits* that executor future, so timing out bounds CLIENT-VISIBLE
+        latency — the threadpool thread itself is NOT cancelled and continues
+        running until it finishes naturally.  This is an unavoidable
+        consequence of Python's sync-handler model.  Under sustained load,
+        timed-out-but-still-running threads will hold threadpool slots until
+        they complete; this is a known and accepted trade-off.
+
+    Known limitation (partial results):
+        Unlike ``/api/backtest/quick/batch`` (which returns per-symbol
+        ``error="deadline exceeded"`` rows on timeout), a middleware 504
+        returns no partial results.  Non-batch routes have no partial-results
+        format, so this is intentional.
+
+    Double-send protection:
+        A ``send`` wrapper tracks whether ``http.response.start`` has already
+        been sent.  If the handler is mid-write when the timeout fires,
+        sending a second 504 start would violate the ASGI protocol.  The
+        guard skips the 504 in that case and lets the connection close
+        naturally.
+
+    Env override:
+        ``STRATEGYLAB_REQUEST_DEADLINE_SECS`` overrides ``default_deadline``
+        at module import time (affects the module-level
+        ``GLOBAL_DEFAULT_DEADLINE_SECS`` constant).  Per-route budgets are
+        code-only constants for now.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        route_deadlines: dict[str, float | None] | None = None,
+        default_deadline: float = GLOBAL_DEFAULT_DEADLINE_SECS,
+    ) -> None:
+        self.app = app
+        self.route_deadlines: dict[str, float | None] = (
+            route_deadlines if route_deadlines is not None else ROUTE_DEADLINES
+        )
+        self.default_deadline = default_deadline
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        # Non-HTTP scopes (WebSocket, lifespan) bypass deadline entirely.
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path: str = scope.get("path", "")
+        deadline = self._resolve_deadline(path)
+        if deadline is None:
+            # Exempt path — pass through unconditionally.
+            await self.app(scope, receive, send)
+            return
+
+        # Wrap send to detect whether response.start has been sent.
+        response_started = False
+
+        async def send_with_flag(message: dict) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await asyncio.wait_for(
+                self.app(scope, receive, send_with_flag),
+                timeout=deadline,
+            )
+        except asyncio.TimeoutError:
+            if not response_started:
+                await _reply(
+                    send,
+                    504,
+                    f"Request deadline exceeded ({deadline:.0f}s)",
+                )
+            # else: partial response already in flight — can't 504 now;
+            # connection will close and the client will see a truncated
+            # response, which is the best we can do without violating ASGI.
+
+    def _resolve_deadline(self, path: str) -> float | None:
+        """Return the deadline for *path*: exact match → longest prefix → default."""
+        # Exact match.
+        if path in self.route_deadlines:
+            return self.route_deadlines[path]
+        # Longest-prefix match.
+        best_len = -1
+        best_val: float | None = self.default_deadline
+        for prefix, val in self.route_deadlines.items():
+            if path.startswith(prefix) and len(prefix) > best_len:
+                best_len = len(prefix)
+                best_val = val
+        return best_val
 
 
 async def _reply(send: Send, status: int, detail: str) -> None:

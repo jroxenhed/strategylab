@@ -44,7 +44,10 @@ from routes.turnaround import router as turnaround_router
 from routes.premises import router as premises_router
 import routes.bots as bots_module
 from bot_manager import BotManager
-from middleware import BodySizeLimitMiddleware, DEFAULT_MAX_BYTES, parse_max_body_env
+from middleware import (
+    BodySizeLimitMiddleware, DEFAULT_MAX_BYTES, parse_max_body_env,
+    RequestDeadlineMiddleware, ROUTE_DEADLINES, GLOBAL_DEFAULT_DEADLINE_SECS,
+)
 
 
 @asynccontextmanager
@@ -124,9 +127,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# F86: body size cap. add_middleware wraps from inside-out, so this runs FIRST
-# (outermost layer) — rejecting oversized requests before CORS preflight
-# handling and before any route dispatch. Override via STRATEGYLAB_MAX_BODY_BYTES.
+# F86: body size cap.  add_middleware wraps inside-out (LIFO): the LAST-added
+# middleware is the OUTERMOST layer at runtime.  Registration order here:
+#   add(CORS) → add(BodySizeLimit) → add(Deadline)
+# Execution order at runtime:
+#   Deadline (outermost) → BodySizeLimit → CORS → app
+# RequestDeadlineMiddleware is outermost: the deadline clock starts first, before
+# the body-size check.  BodySizeLimitMiddleware is inner: body-size check runs
+# inside the deadline budget.  Override via STRATEGYLAB_MAX_BODY_BYTES.
 _max_body_env = os.environ.get("STRATEGYLAB_MAX_BODY_BYTES")
 try:
     _max_body = parse_max_body_env(_max_body_env)
@@ -134,6 +142,16 @@ except (ValueError, TypeError):
     logger.warning("Invalid STRATEGYLAB_MAX_BODY_BYTES=%r, falling back to %d", _max_body_env, DEFAULT_MAX_BYTES)
     _max_body = DEFAULT_MAX_BYTES
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=_max_body)
+
+# F199: per-route request deadline.  This is added LAST so it becomes the
+# outermost middleware layer (deadline clock starts before body-size check).
+# The global default and per-route budgets are defined in middleware.py;
+# STRATEGYLAB_REQUEST_DEADLINE_SECS overrides the global default.
+app.add_middleware(
+    RequestDeadlineMiddleware,
+    route_deadlines=ROUTE_DEADLINES,
+    default_deadline=GLOBAL_DEFAULT_DEADLINE_SECS,
+)
 
 app.include_router(data_router)
 app.include_router(indicators_router)
