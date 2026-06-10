@@ -12,7 +12,7 @@ _(none open)_
 
 _(none tagged)_
 
-## Open Work — 26 items
+## Open Work — 28 items
 
 | Section | Open | IDs |
 |---|---|---|
@@ -20,7 +20,7 @@ _(none tagged)_
 | [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372) |
 | [Hardening](#hardening) | 5 | [F362](#f362), [F383](#f383), [F391](#f391)–[F392](#f392), [F394](#f394) |
 | [Polish](#polish) | 2 | [F310](#f310), [F398](#f398) |
-| [Testing](#testing) | 6 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F360](#f360), [F413](#f413) |
+| [Testing](#testing) | 8 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F360](#f360), [F413](#f413), [F415](#f415)–[F416](#f416) |
 | [Infra](#infra) | 5 | [F97](#f97), [F302](#f302), [F309](#f309), [F406](#f406), [F408](#f408) |
 
 ## Features
@@ -75,6 +75,8 @@ _(none open)_
 - [ ] <a id="f161"></a> **F161** Visual smoke verification for C28 walk-forward — manual QA. Run a known overfit strategy (e.g. over-tuned RSI threshold on AAPL daily 2020-2024) and confirm: WFE < 0.5, multiple windows tagged `"spike"`, stitched equity chart renders without sawtooth, per-window table shows IS/OOS Sharpe divergence, `low_windows_warn` callout appears when configured for ≤5 windows. Then run a robust 50/200 MA crossover and confirm WFE > 0.5 with some `"stable_plateau"` tags. C28 shipped with `npm run build` clean + 39 backend + 8 frontend tests but was not visually verified in-session. [easy] [testing] (added 2026-05-12)
 
 - [ ] <a id="f211"></a> **F211** F206 audit found `close_all_positions` (line ~258) delegates to `provider.close_all_positions()` (a broker primitive) with no per-symbol direction probe. Verify the IBKR and Alpaca primitives actually buy-to-cover shorts correctly when called from this endpoint — particularly IBKR's `close_all` if it exists, since the SMART-routing trap previously hid this kind of bug. May require a paper-trading test (open one long + one short on the same broker, then hit the Close-All button, check both close cleanly + journal correctly). (from F206 audit follow-up 2026-05-15) [medium] [hardening]
+- [ ] <a id="f415"></a> **F415** Harness `mde_ppt` is 100× percentage points — `event_study.py` per_horizon `"mde_ppt": round(mde * 100, 4)` multiplies an mde already computed from percent-valued std (line ~1299), so every per_horizon mde_ppt and the run.log "MDE >= 659.07ppt" lines are 100× the true pp value (population: all per_horizon outputs since the field was added; verified against the F396 census 6.59pp vs harness 659.07). s1_onesample_analysis now computes its own MDE and documents the trap; r1_analysis was never affected (computes its own dose-gap MDE). Decide: fix the field units (touches R-1 meta bit-identity — needs the F410-style pinning treatment) or rename to make units explicit; fix the log lines either way. [hardening]
+- [ ] <a id="f416"></a> **F416** Premise-store + ledger audit polish (F414 review deferrals) — DI-F414-05: `duplicate_premise` sets spec_version=0 so the clone's first add_spec replaces the founding spec without archiving it to spec_history (fix sketch: set spec_version=1 on copy); DI-F414-06: r1-family ledger entries lack an `analysis_form` field (one-sample entries have it; add to `_build_r1_ledger_entry` for shape-uniform audits); DI-F414-08: `spec_horizons` recorded only-when-different in s1 entries vs always in r1 — pick one convention. [polish] [hardening]
 - [ ] <a id="f413"></a> **F413** End-to-end premise-explore test through premise_run_worker (C6, F410 review, deferred) — the F410 horizon tests are unit-level (run_r1_analysis called directly); no test drives a premise spec through premise_run_worker.run_full_explore_sync on a small fixture to assert the full chain (63-injection via dataclasses.replace → harness → verdict at spec primary → ledger_entry.json sidecar shape). The 2026-06-10 real-data probe covered this chain once manually; a fixture test keeps it covered. [medium] [testing] (added 2026-06-10)
 - [ ] <a id="f307"></a> **F307** test_tooling.py COR-06 open-work count test derives its expected count via a text-split heuristic that can diverge from the script's own grouping logic — assert against explicitly constructed fixture expectations instead (COR P3, F-BATCH-0604D review). [easy] [testing]
 - [ ] <a id="f360"></a> **F360** Re-measure both browser MCPs' snapshot size at the F217 blowup condition (chart view WITH populated backtest results, not the default empty state) — the 2026-06-07 shakedown measured playwright 18.5KB vs chrome-devtools 16.3KB at default state and could NOT reproduce the ~117k cdt blowup, so the "comparable" verdict in live-browser-verification.md is only validated for unpopulated pages. Run a backtest via `curl POST /api/backtest` + seeded state, re-snapshot both, update the doc. [easy] [testing] (added 2026-06-07)
