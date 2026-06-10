@@ -12,16 +12,16 @@ _(none open)_
 
 _(none tagged)_
 
-## Open Work — 28 items
+## Open Work — 24 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
 | [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F199](#f199), [F272](#f272), [F372](#f372) |
-| [Hardening](#hardening) | 5 | [F362](#f362), [F383](#f383), [F391](#f391)–[F392](#f392), [F394](#f394) |
-| [Polish](#polish) | 2 | [F310](#f310), [F398](#f398) |
-| [Testing](#testing) | 8 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F360](#f360), [F413](#f413), [F415](#f415)–[F416](#f416) |
-| [Infra](#infra) | 5 | [F97](#f97), [F302](#f302), [F309](#f309), [F406](#f406), [F408](#f408) |
+| [Hardening](#hardening) | 2 | [F362](#f362), [F383](#f383) |
+| [Polish](#polish) | 2 | [F310](#f310), [F420](#f420) |
+| [Testing](#testing) | 6 | [D24b](#d24b), [F161](#f161), [F211](#f211), [F307](#f307), [F360](#f360), [F415](#f415) |
+| [Infra](#infra) | 6 | [F97](#f97), [F302](#f302), [F309](#f309), [F406](#f406), [F408](#f408), [F421](#f421) |
 
 ## Features
 
@@ -52,10 +52,6 @@ _(none tagged)_
 
 ## Hardening
 
-- [ ] <a id="f394"></a> **F394** F389 run-service hardening — power_audit cache TOCTOU (concurrent callers both recompute; harmless but wasteful), `_job_locks`/`_jobs` dicts grow unboundedly (add cleanup on terminal job state), and `poll_explore_status` is a synchronous SSH-blocking call inside an async endpoint (wrap in `asyncio.to_thread`). Also (from F390 review AN-5/COR-5): a server restart loses the in-memory job dict, so a premise stuck in `exploring` returns run-status `unknown` with no recovery — add a "reset stuck run" path (exploring→spec_ready) and reconcile job state on startup. All P2/P3 from the F389/F390 review waves; low impact, deferred to keep the phase commits focused. (Also DI-8 from the F410 review, 2026-06-10: a server restart between worker STATUS=DONE and the next poll means the ledger_entry.json sidecar is never appended to the FDR ledger — the startup reconciliation should scan study dirs for un-appended sidecars, idempotency-keyed by study_name.) [hardening]
-- [ ] <a id="f391"></a> **F391** Per-key event_filter VALUE-type validation in stream vocabularies — F388 validates that `event_filter`/`dose_params` KEYS are in-vocabulary but not that their VALUES are well-typed (a wrong-typed value passes spec validation and would only fail when filters are applied). Extend the stream vocabulary from a key set to typed value schemas so a malformed value is rejected at spec validation, preserving the "bounded = always a real test" guarantee. Pairs with F389 (which actually applies the filters). Surfaced by F388 review (KP-6). [hardening] [testing]
-- [ ] <a id="f392"></a> **F392** F388 reviewer polish — document that `PremiseSpec.model_construct()` bypasses validators (public-API footgun), add the missing type annotation on the `Stream.stream_id` Protocol property, and type the `cost_fn` event parameter in premise_compile (currently `type: ignore`/untyped). Minor clarity items deferred from the F388 review (C7 / KP-8 / KP-9). [polish]
-
 - [ ] <a id="f383"></a> **F383** Consume the new `shares_source` flag (F322) in valuation — derived shares now carry a source tag (instantaneous/dei/wa/wa_fy) but `compute_valuation` ignores it; mark P/S as approximate / lower-confidence when WA-sourced (weighted-average period shares, not point-in-time). Surfaced by the F322 review wave (DI-01/COR-03/RM-02). [hardening]
 
 - [ ] <a id="f362"></a> **F362** review-wave workflow ↔ run-state integration — the new `.claude/workflows/review-wave.js` returns a wave-level `tokens_spent` but run-state.py expects per-agent rows (`add-agent --tokens`). Decide: record the wave as one synthetic agent row, or extend the workflow to return per-persona usage from the engine's accounting. **(Partial 2026-06-08, F-BATCH-0608: playbook review section now documents review-wave as the DEFAULT mechanism + the exact `{taskId,files,intent,personas}` structured-args contract — the `review-wave` skill's "Invoke:" hint echoes prose into `args`, which the workflow `JSON.parse`s and dies on; remaining sub-task: fix the SKILL to emit structured args, and the per-persona token telemetry.)** [easy] [infra]
@@ -64,8 +60,7 @@ _(none open)_
 
 ## Polish
 
-- [ ] <a id="f398"></a> **F398** F397 idea-history polish (deferred from review) — make `DispositionRequest.disposition` a `Literal` of the valid set (currently plain str, store validates); simplify the live-refresh ref approach; add a test asserting the lazy-default migration preserves pre-existing non-F397 premise fields; harden the test DATA_PATH monkeypatch against parallelism. All P3 from the F397 review wave; cosmetic/robustness, iterate-later per "try it and change it later." [polish] [testing]
-
+- [ ] <a id="f420"></a> **F420** F-BATCH-0610C review-deferral cluster — C-04: `_read_worker_verdict` hardcodes r1_explore_verdict.json (works via the s1 mirror; make the mirror contract explicit or read s1_onesample_verdict.json first); R-5: poll_explore_status mutates `_jobs` from a to_thread thread without the per-premise asyncio lock (GIL-safe dict ops, logical race only — DI-01's idempotency guard removed the consequence); KTS-04: suggestion-card design_mde_pp numeric-coercion edge on submit; KTS-08: structured rendering of Pydantic 422 detail in the derive/save flows; plus P3 tail (SEC-05 premise_text length cap, SEC-07 log truncation, DI-06..08 doc/test nits, KTS-06/10, R-9 test fixture extra-key). All low-impact, none user-facing today. [polish] [hardening]
 - [ ] <a id="f310"></a> **F310** One-frame crosshair/pane misalignment possible during render-interval swap — main-pane and SubPane setData run in separate effects on the same commit; lw-charts may emit a range event between them and sync a logical range onto a sub-pane still holding the old bar count (try/catch prevents errors; visual blip only). Structural fix needs shared dep-chain plumbing. (RACE-04, A8-render-resample review, rated acceptable-as-is.) [medium] [polish]
 
 ## Testing
@@ -76,13 +71,12 @@ _(none open)_
 
 - [ ] <a id="f211"></a> **F211** F206 audit found `close_all_positions` (line ~258) delegates to `provider.close_all_positions()` (a broker primitive) with no per-symbol direction probe. Verify the IBKR and Alpaca primitives actually buy-to-cover shorts correctly when called from this endpoint — particularly IBKR's `close_all` if it exists, since the SMART-routing trap previously hid this kind of bug. May require a paper-trading test (open one long + one short on the same broker, then hit the Close-All button, check both close cleanly + journal correctly). (from F206 audit follow-up 2026-05-15) [medium] [hardening]
 - [ ] <a id="f415"></a> **F415** Harness `mde_ppt` is 100× percentage points — `event_study.py` per_horizon `"mde_ppt": round(mde * 100, 4)` multiplies an mde already computed from percent-valued std (line ~1299), so every per_horizon mde_ppt and the run.log "MDE >= 659.07ppt" lines are 100× the true pp value (population: all per_horizon outputs since the field was added; verified against the F396 census 6.59pp vs harness 659.07). s1_onesample_analysis now computes its own MDE and documents the trap; r1_analysis was never affected (computes its own dose-gap MDE). Decide: fix the field units (touches R-1 meta bit-identity — needs the F410-style pinning treatment) or rename to make units explicit; fix the log lines either way. [hardening]
-- [ ] <a id="f416"></a> **F416** Premise-store + ledger audit polish (F414 review deferrals) — DI-F414-05: `duplicate_premise` sets spec_version=0 so the clone's first add_spec replaces the founding spec without archiving it to spec_history (fix sketch: set spec_version=1 on copy); DI-F414-06: r1-family ledger entries lack an `analysis_form` field (one-sample entries have it; add to `_build_r1_ledger_entry` for shape-uniform audits); DI-F414-08: `spec_horizons` recorded only-when-different in s1 entries vs always in r1 — pick one convention. [polish] [hardening]
-- [ ] <a id="f413"></a> **F413** End-to-end premise-explore test through premise_run_worker (C6, F410 review, deferred) — the F410 horizon tests are unit-level (run_r1_analysis called directly); no test drives a premise spec through premise_run_worker.run_full_explore_sync on a small fixture to assert the full chain (63-injection via dataclasses.replace → harness → verdict at spec primary → ledger_entry.json sidecar shape). The 2026-06-10 real-data probe covered this chain once manually; a fixture test keeps it covered. [medium] [testing] (added 2026-06-10)
 - [ ] <a id="f307"></a> **F307** test_tooling.py COR-06 open-work count test derives its expected count via a text-split heuristic that can diverge from the script's own grouping logic — assert against explicitly constructed fixture expectations instead (COR P3, F-BATCH-0604D review). [easy] [testing]
 - [ ] <a id="f360"></a> **F360** Re-measure both browser MCPs' snapshot size at the F217 blowup condition (chart view WITH populated backtest results, not the default empty state) — the 2026-06-07 shakedown measured playwright 18.5KB vs chrome-devtools 16.3KB at default state and could NOT reproduce the ~117k cdt blowup, so the "comparable" verdict in live-browser-verification.md is only validated for unpopulated pages. Run a backtest via `curl POST /api/backtest` + seeded state, re-snapshot both, update the doc. [easy] [testing] (added 2026-06-07)
 
 ## Infra
 
+- [ ] <a id="f421"></a> **F421** Worker-route heavy test suites — the full backend suite (1,553 tests, ~28 min, 100% of a core) and any @slow-marked test default to LOCAL today; 2026-06-10 the orchestrator's gate command additionally ran the @slow e2e (a full premise explore) on John's MacBook because `-m "not slow"` wasn't passed (Mac runs HOT, John caught it). Two fixes: (a) make `slow` opt-in via pytest config (`addopts = -m "not slow"` in backend pytest.ini so local runs NEVER pick up @slow without explicit override), and (b) a `bin/worker-pytest.sh` wrapper that dispatches a suite to the reachable worker via worker-dispatch (proven: the e2e ran there green in 20:09). Local stays for targeted subsets + verify-batch (needs the local browser). [infra]
 - [ ] <a id="f406"></a> **F406** `worker-probe.sh` should report load, not just reachability — the probe pings reachability only, so it recommended `mfcore01` (office) while that box was ~100% CPU-saturated as a Deadline/Mantra render node (John, 2026-06-09). Reachability ≠ availability: a saturated render node is SSH-reachable but useless for CPU-bound research compute (a premise explore / matrix build would crawl contending with Mantra). Add a load check (load-avg vs core count, or `uptime`) to the probe output so worker selection can avoid a saturated box; network-bound fetches can ignore load. [infra]
 - [ ] <a id="f408"></a> **F408** Incremental month-append for the GKG news panel — a full re-run is ~338GB but one month is ~3GB. Add an --append mode to news_gkg_ingest.py that builds only missing recent months, merges into the parquet, and updates the sidecar (coverage_end, gap days re-check). Keeps F404 news features fresh without re-spending quota. [infra]
 
