@@ -39,13 +39,15 @@ client = TestClient(app, raise_server_exceptions=True)
 
 _PREMISE_ID = "p-aabbccdd"
 _SPEC = {
+    # R-9: use 'dose' (the correct PremiseSpec field name); 'dose_builder' is
+    # a CompileResult attribute, not a spec field — Pydantic was silently ignoring it.
     "analysis_form": "dose_response",
     "direction": "long",
     "horizons": [30],
     "n_boot": 99,
     "fdr_q": 0.05,
     "design_mde_pp": None,
-    "dose_builder": "r1_score",
+    "dose": "r1_score",
     "event_filter": {},
     "dose_params": {},
     "floors": {},

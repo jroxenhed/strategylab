@@ -36,7 +36,10 @@ _PREMISE_ID_PATTERN = r"^p-[0-9a-f]{8}$"
 # ---------------------------------------------------------------------------
 
 class CreatePremiseRequest(BaseModel):
-    premise_text: str
+    # SEC-05: max_length bounds input and prevents DoS via MB-sized strings in the
+    # store (store.load() re-reads premises.json on every endpoint call).
+    # 4000 chars matches PremiseSpec.premise_text; generous for a research premise.
+    premise_text: str = Field(..., max_length=4000)
 
 
 class RunRequest(BaseModel):
@@ -53,7 +56,10 @@ class DispositionRequest(BaseModel):
 
 class DeriveRequest(BaseModel):
     """F417: derive a descendant premise with optional spec overrides."""
-    spec_overrides: dict = Field(default_factory=dict)
+    # SEC-D: cap key count to prevent large error messages from interpolating
+    # thousands of keys into the response body (BodySizeLimitMiddleware caps
+    # the request to 1 MB, but bounding key count here is cheaper and clearer).
+    spec_overrides: dict = Field(default_factory=dict, max_length=50)
 
 
 # ---------------------------------------------------------------------------

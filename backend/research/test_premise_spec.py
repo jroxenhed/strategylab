@@ -775,3 +775,121 @@ class TestF391ValueTypeValidation:
         assert isinstance(schemas, dict)
         assert "window_bdays" in schemas
         assert schemas["window_bdays"] is int
+
+
+# ===========================================================================
+# DI-07 — duplicate_premise: legacy premise (no spec_version key) (F420)
+# ===========================================================================
+
+def test_duplicate_premise_legacy_no_spec_version(tmp_path):
+    """DI-07: duplicate_premise must not crash when source premise lacks spec_version key.
+
+    Legacy premises written before spec_version was introduced (H2/F416) do not have
+    the 'spec_version' key in their store entry.  duplicate_premise must handle this
+    gracefully: the clone should be created with spec_version=1 if a spec is present,
+    or no spec_version key if there is no spec.
+    """
+    import json as _json
+
+    # Build a legacy store file that NEVER had spec_version written
+    legacy_data = {
+        "version": 1,
+        "premises": [
+            {
+                "premise_id": "p-legacyaa",
+                "created_at": "2025-01-01T00:00:00+00:00",
+                "updated_at": "2025-01-01T00:00:00+00:00",
+                "status": "spec_ready",
+                "premise_text": "Legacy premise without spec_version key",
+                "spec": {
+                    "premise_text": "Legacy premise without spec_version key",
+                    "stream": "form4",
+                    "dose": "r1_score",
+                },
+                # Intentionally NO "spec_version" key — simulates pre-H2 data
+                "spec_history": [],
+                "run_history": [],
+                "error_note": None,
+                "disposition": "active",
+                "disposition_note": "",
+                "derived_from": None,
+            }
+        ],
+    }
+    store_path = tmp_path / "legacy_premises.json"
+    store_path.write_text(_json.dumps(legacy_data), encoding="utf-8")
+
+    with patch.object(_ps_module, "DATA_PATH", str(store_path)):
+        store = PremiseStore()
+        # Verify the legacy entry loaded correctly (no spec_version key)
+        assert "p-legacyaa" in store.premises
+        assert "spec_version" not in store.premises["p-legacyaa"]
+
+        # duplicate_premise must not raise
+        new_pid = store.duplicate_premise("p-legacyaa")
+
+    # The clone must exist
+    assert new_pid in store.premises
+    clone = store.premises[new_pid]
+
+    # H2: clone must have spec_version=1 (spec was present in source)
+    assert clone.get("spec_version") == 1, (
+        "duplicate_premise must set spec_version=1 on the clone when source has a spec "
+        "(even if source lacked spec_version — legacy compatibility)"
+    )
+
+    # spec_hash must be cleared on the clone (R-8)
+    spec = clone.get("spec") or {}
+    assert "spec_hash" not in spec or spec.get("spec_hash") is None, (
+        "duplicate_premise must clear spec_hash on the clone"
+    )
+
+    # derived_from must point to the original
+    assert clone["derived_from"] == "p-legacyaa"
+
+    # Original must be unchanged (no spec_version added to it)
+    with patch.object(_ps_module, "DATA_PATH", str(store_path)):
+        store2 = PremiseStore()
+    assert "spec_version" not in store2.premises["p-legacyaa"]
+
+
+def test_duplicate_premise_legacy_no_spec_no_spec_version(tmp_path):
+    """DI-07b: duplicate_premise with source having no spec AND no spec_version.
+
+    Clone should have no spec_version key (spec is None → spec_version not set).
+    """
+    import json as _json
+
+    legacy_data = {
+        "version": 1,
+        "premises": [
+            {
+                "premise_id": "p-legacybb",
+                "created_at": "2025-01-01T00:00:00+00:00",
+                "updated_at": "2025-01-01T00:00:00+00:00",
+                "status": "draft",
+                "premise_text": "Legacy premise no spec, no spec_version",
+                "spec": None,
+                # No "spec_version" key
+                "spec_history": [],
+                "run_history": [],
+                "error_note": None,
+                "disposition": "active",
+                "disposition_note": "",
+                "derived_from": None,
+            }
+        ],
+    }
+    store_path = tmp_path / "legacy_no_spec.json"
+    store_path.write_text(_json.dumps(legacy_data), encoding="utf-8")
+
+    with patch.object(_ps_module, "DATA_PATH", str(store_path)):
+        store = PremiseStore()
+        new_pid = store.duplicate_premise("p-legacybb")
+
+    clone = store.premises[new_pid]
+    # No spec → no spec_version on clone
+    assert clone.get("spec") is None
+    assert "spec_version" not in clone, (
+        "Clone of no-spec premise must not have spec_version key"
+    )

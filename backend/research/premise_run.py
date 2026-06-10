@@ -28,10 +28,11 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # ---------------------------------------------------------------------------
 # Premise ID format (G5: used in service-level guard + FastAPI Path constraint)
@@ -126,10 +127,45 @@ _power_audit_cache: dict = {}  # keys: "result", "cached_at"
 _POWER_AUDIT_TTL_SECS = 3600
 # F394: asyncio.Lock guarding the cache read-check-write to prevent TOCTOU.
 # Must be held in the async wrapper (_check_power_audit), not inside the sync
-# function — the Lock is created at module level (not inside any coroutine)
-# so it binds to the event loop on first await, which is fine for a long-lived
-# FastAPI process (single event loop per process).
-_power_audit_cache_lock: asyncio.Lock = asyncio.Lock()
+# function.
+# SEC-06/DI-06: Lock deferred to first use via getter to avoid Python <3.10
+# event-loop binding at module import time (RuntimeError in per-test event loops).
+_power_audit_cache_lock: Optional[asyncio.Lock] = None
+# Module-level threading.Lock guards the double-checked creation of
+# _power_audit_cache_lock so concurrent calls from to_thread() or tests that
+# share the module cannot race on the check-then-set window (R-03).
+_power_audit_cache_lock_guard: threading.Lock = threading.Lock()
+
+
+def _get_power_audit_lock() -> asyncio.Lock:
+    """Lazy getter for the power-audit cache lock.
+
+    Creates the Lock on first call (inside a running event loop) rather than
+    at module import time, which avoids 'Future attached to a different loop'
+    errors in test environments that spin up a fresh event loop per test.
+
+    Thread-safe: double-checked locking via _power_audit_cache_lock_guard so
+    concurrent to_thread() callers cannot each create a separate Lock instance.
+
+    Loop-aware: if the cached lock was created in a now-closed event loop (a
+    common pattern in pytest sessions that tear down and recreate the loop),
+    the lock is re-created.  The stale lock is discarded — no waiters can exist
+    on a closed loop's lock.
+    """
+    global _power_audit_cache_lock
+    with _power_audit_cache_lock_guard:
+        if _power_audit_cache_lock is None:
+            _power_audit_cache_lock = asyncio.Lock()
+        else:
+            # Re-create if the lock's loop is closed or mismatched (per-test isolation).
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = None
+            lock_loop = getattr(_power_audit_cache_lock, "_loop", None)
+            if lock_loop is not None and (lock_loop.is_closed() or lock_loop is not loop):
+                _power_audit_cache_lock = asyncio.Lock()
+    return _power_audit_cache_lock
 
 # ---------------------------------------------------------------------------
 # Job state (in-process memory only; cleared on server restart)
@@ -170,7 +206,7 @@ def _utcnow_str() -> str:
 # F418 census gate helpers
 # ---------------------------------------------------------------------------
 
-def _find_latest_preview_outdir(premise_id: str, store) -> Optional[Path]:
+def _find_latest_preview_outdir(premise_id: str, store: Any) -> Optional[Path]:
     """Return Path to the latest preview outdir for the given premise, or None."""
     try:
         p = store._get(premise_id)
@@ -182,7 +218,7 @@ def _find_latest_preview_outdir(premise_id: str, store) -> Optional[Path]:
     return None
 
 
-def _census_testable(census, analysis_form: str) -> bool:
+def _census_testable(census: Any, analysis_form: str) -> bool:
     """Return True if the census indicates the premise is testable.
 
     Conservative: None → False.
@@ -295,14 +331,19 @@ def _reconcile_ledger_sidecars() -> None:
                 )
                 continue
 
+            # SEC-07/SEC-C: sanitize study_name before logging to prevent log injection
+            # (crafted sidecar with embedded newlines, ANSI escapes, or tabs would
+            # corrupt the log stream or spoof log entries).
+            safe_name = re.sub(r'[\x00-\x1f\x7f]', ' ', str(study_name)[:128])
+
             if study_name in existing_study_names:
-                log.debug("F394 reconcile: %s already in ledger — skip", study_name)
+                log.debug("F394 reconcile: %s already in ledger — skip", safe_name)
                 continue
 
             ledger_rows.append(entry)
             existing_study_names.add(study_name)
             appended += 1
-            log.info("F394 reconcile: appended %s from sidecar %s", study_name, sidecar_path)
+            log.info("F394 reconcile: appended %s from sidecar %s", safe_name, sidecar_path)
 
         if appended > 0:
             try:
@@ -904,6 +945,27 @@ def poll_explore_status(premise_id: str) -> dict:
         return dict(job)
 
     if "STATUS=DONE" in output:
+        # R-5: TOCTOU guard — re-read the job from _jobs inside this thread after the
+        # subprocess call.  A concurrent poll may have already processed STATUS=DONE
+        # and mutated status to 'done' or 'failed'.  Bail if status is no longer 'running'
+        # to prevent duplicate run_history entries and duplicate FDR ledger appends.
+        # (Ledger dedup in _existing_names below is an additional safety net for the
+        # case where the guard is bypassed, e.g. an older server version.)
+        current_job = _jobs.get(premise_id)
+        if current_job is None or current_job.get("status") != "running":
+            log.info(
+                "poll_explore_status TOCTOU guard: status for %s is no longer 'running' "
+                "(concurrent poll already processed this DONE transition) — skipping.",
+                premise_id,
+            )
+            # COR-07: bail without appending run_history — intentional duplicate suppression.
+            # The concurrent poll that did NOT bail already appended the run_history entry
+            # and transitioned the status.  run_history is NOT appended here to prevent
+            # duplicate explore-run entries in the store.  Low-probability edge: if the
+            # concurrent caller fails between status update and run_history.append(), this
+            # premise will have 'explored' status with no corresponding run_history entry;
+            # that inconsistency is recoverable via re-run (deferred per COR-02 decision).
+            return dict(current_job) if current_job is not None else {"status": "not_found"}
         # Read verdict from outdir
         verdict = _read_worker_verdict(outdir)
         if verdict:
@@ -1012,7 +1074,8 @@ def poll_explore_status(premise_id: str) -> dict:
             # G3: DONE but verdict file missing/corrupt → treat as failure
             error_msg = (
                 f"Worker reported STATUS=DONE but verdict file is missing or unreadable "
-                f"at {outdir}/r1_explore_verdict.json. Reverting to spec_ready."
+                f"at {outdir}/ (checked: r1_explore_verdict.json, s1_onesample_verdict.json). "
+                f"Reverting to spec_ready."
             )
             log.error("DONE-without-verdict for %s: %s", premise_id, error_msg)
             job.update({
@@ -1064,18 +1127,42 @@ def poll_explore_status(premise_id: str) -> dict:
 
 
 def _read_worker_verdict(outdir: str) -> Optional[dict]:
-    """Read the verdict JSON written by premise_run_worker.py."""
+    """Read the verdict JSON written by premise_run_worker.py.
+
+    C-04: Try r1_explore_verdict.json first (dose_response path + s1 mirror write),
+    then s1_onesample_verdict.json (direct path, if mirror write failed mid-flight).
+    This handles a disk-full or crash between the s1 write and the mirror write.
+    """
     import json
-    verdict_path = Path(outdir) / "r1_explore_verdict.json"
-    if not verdict_path.exists():
-        log.warning("Worker verdict not found at %s", verdict_path)
-        return None
-    try:
-        with open(verdict_path, encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as exc:
-        log.error("Failed to read worker verdict from %s: %s", verdict_path, exc)
-        return None
+    base = Path(outdir)
+    # Preferred name: the mirror contract — premise_run_worker.py writes r1_explore_verdict.json
+    # for both dose_response and one_sample specs (lines 275–276 and 316–317 of worker).
+    candidates = [
+        base / "r1_explore_verdict.json",
+        base / "s1_onesample_verdict.json",  # fallback: mirror write may have failed
+    ]
+    for verdict_path in candidates:
+        if verdict_path.exists():
+            try:
+                with open(verdict_path, encoding="utf-8") as f:
+                    data = json.load(f)
+                if verdict_path.name != "r1_explore_verdict.json":
+                    log.info(
+                        "Worker verdict found at fallback path %s "
+                        "(r1_explore_verdict.json missing — mirror write may have failed)",
+                        verdict_path,
+                    )
+                return data
+            except Exception as exc:
+                log.error("Failed to read worker verdict from %s: %s", verdict_path, exc)
+                # Try the next candidate rather than bailing immediately
+                continue
+    log.warning(
+        "Worker verdict not found at %s — checked: %s",
+        outdir,
+        ", ".join(p.name for p in candidates),
+    )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1108,14 +1195,14 @@ async def _check_power_audit() -> None:
 
     Raises HTTPException(400) if underpowered.
 
-    F394: _power_audit_cache_lock prevents TOCTOU — two concurrent callers both
+    F394: _get_power_audit_lock() prevents TOCTOU — two concurrent callers both
     seeing a stale cache would both invoke run_audit() (wasteful but harmless since
     it's idempotent).  The lock is held around the entire to_thread call so only
     one thread runs the audit at a time.
     """
     from fastapi import HTTPException
 
-    async with _power_audit_cache_lock:
+    async with _get_power_audit_lock():
         result = await asyncio.to_thread(_run_power_audit_sync)
     mde_vals = [v for v in result.get("mde_80pct", {}).values() if v is not None]
     if not mde_vals:

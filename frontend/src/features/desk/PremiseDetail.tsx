@@ -41,6 +41,26 @@ function isDisposition(x: unknown): x is Disposition {
   return _KNOWN_DISPOSITIONS.includes(x as Disposition)
 }
 
+// KTS-08: parse FastAPI-standard 422 detail (array of {loc, msg, type}) into
+// a readable multi-line string. Falls back to stringified detail for non-array shapes.
+function formatErrorDetail(detail: unknown): string {
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item: unknown) => {
+        if (item && typeof item === 'object') {
+          const d = item as { loc?: unknown[]; msg?: unknown; type?: unknown }
+          const field = Array.isArray(d.loc) ? d.loc.filter(s => s !== 'body').join('.') : ''
+          const msg = typeof d.msg === 'string' ? d.msg : String(d.msg ?? '')
+          return field ? `${field}: ${msg}` : msg
+        }
+        return String(item)
+      })
+      .join('\n')
+  }
+  if (detail == null) return 'Unknown error'
+  return String(detail)
+}
+
 // H2: render verdict dict's display-safe scalar fields (not raw object)
 function VerdictDisplay({ payload }: { payload: VerdictPayload | null | undefined }) {
   if (!payload) return null
@@ -233,8 +253,10 @@ function SuggestionCard({
       const resp = await derivePremise(premiseId, { spec_overrides: overrides })
       if (onSelectId) onSelectId(resp.premise_id)
     } catch (e: unknown) {
-      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-        ?? 'Failed to create derived premise'
+      const rawDetail = (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+      const msg = rawDetail != null
+        ? formatErrorDetail(rawDetail)
+        : 'Failed to create derived premise'
       setDeriveError(msg)
     } finally {
       setDeriving(false)
@@ -336,7 +358,7 @@ function SuggestionCard({
         </div>
       )}
       {deriveError && (
-        <div style={{ fontSize: 12, color: '#f85149', marginBottom: 6 }}>{deriveError}</div>
+        <div style={{ fontSize: 12, color: '#f85149', marginBottom: 6, whiteSpace: 'pre-wrap' }}>{deriveError}</div>
       )}
       {/* actionable !== false: show Create button; otherwise advice-only card */}
       {suggestion.actionable !== false ? (
@@ -746,8 +768,10 @@ export default function PremiseDetail({ premiseId, allPremises = [], onDeleted, 
       await loadPremise()
       onStatusChange()
     } catch (e: unknown) {
-      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-        ?? 'Failed to save spec'
+      const rawDetail = (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+      const detail = rawDetail != null
+        ? formatErrorDetail(rawDetail)
+        : 'Failed to save spec'
       setSpecEditError(detail)
     } finally {
       setSpecSaving(false)
@@ -1585,6 +1609,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 4,
     color: '#f85149',
     fontSize: 12,
+    whiteSpace: 'pre-wrap' as const,
   },
   refreshBtn: {
     fontSize: 11,

@@ -138,9 +138,12 @@ class PremiseSpec(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     # --- Provenance (excluded from spec_hash) ---
-    premise_text: str                         # the plain-English idea (required)
-    guided: Optional[GuidedAnswers] = None    # optional scaffolded Q&A fields
-    plain_summary: Optional[str] = None       # AI's plain-English readback
+    # SEC-05: max_length bounds on-disk size and prevents DoS via MB-sized strings
+    # in premises.json (store.load() re-reads on every endpoint call).  4000 chars
+    # is generous for a research premise description or AI readback.
+    premise_text: str = Field(..., max_length=4000)   # the plain-English idea (required)
+    guided: Optional[GuidedAnswers] = None            # optional scaffolded Q&A fields
+    plain_summary: Optional[str] = Field(None, max_length=4000)  # AI's plain-English readback
 
     # --- Stream selection (vocab-bounded) ---
     stream: str = Field(default="form4", validate_default=True)  # registered stream id

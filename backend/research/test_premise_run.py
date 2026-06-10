@@ -1513,6 +1513,246 @@ class TestG11PydanticValidation:
         assert "spec" in r2.json()["detail"].lower()
 
 
+# ===========================================================================
+# §C-04 — _read_worker_verdict tries both filenames (F420)
+# ===========================================================================
+
+class TestC04ReadWorkerVerdictBothFilenames:
+    """C-04: _read_worker_verdict must try r1_explore_verdict.json first,
+    then fall back to s1_onesample_verdict.json if the mirror write failed."""
+
+    def test_reads_r1_explore_verdict_json(self, tmp_path):
+        """Primary path: r1_explore_verdict.json is present — use it."""
+        import research.premise_run as pr
+
+        outdir = str(tmp_path / "study")
+        Path(outdir).mkdir(parents=True, exist_ok=True)
+        verdict = {"explore_decision": "ADVANCE", "source": "r1"}
+        (Path(outdir) / "r1_explore_verdict.json").write_text(
+            json.dumps(verdict), encoding="utf-8"
+        )
+        result = pr._read_worker_verdict(outdir)
+        assert result is not None
+        assert result["source"] == "r1"
+
+    def test_falls_back_to_s1_onesample_verdict_json(self, tmp_path):
+        """Fallback path: r1_explore_verdict.json absent (mirror write failed),
+        s1_onesample_verdict.json present — must be returned with a warning."""
+        import research.premise_run as pr
+
+        outdir = str(tmp_path / "study2")
+        Path(outdir).mkdir(parents=True, exist_ok=True)
+        verdict = {"explore_decision": "ADVANCE", "source": "s1"}
+        (Path(outdir) / "s1_onesample_verdict.json").write_text(
+            json.dumps(verdict), encoding="utf-8"
+        )
+        result = pr._read_worker_verdict(outdir)
+        assert result is not None, "Should fall back to s1_onesample_verdict.json"
+        assert result["source"] == "s1"
+
+    def test_returns_none_when_neither_present(self, tmp_path):
+        """No verdict file at all → None (unchanged behavior)."""
+        import research.premise_run as pr
+
+        outdir = str(tmp_path / "study3")
+        Path(outdir).mkdir(parents=True, exist_ok=True)
+        result = pr._read_worker_verdict(outdir)
+        assert result is None
+
+    def test_r1_takes_precedence_over_s1(self, tmp_path):
+        """When both files exist, r1_explore_verdict.json must be returned."""
+        import research.premise_run as pr
+
+        outdir = str(tmp_path / "study4")
+        Path(outdir).mkdir(parents=True, exist_ok=True)
+        (Path(outdir) / "r1_explore_verdict.json").write_text(
+            json.dumps({"source": "r1_preferred"}), encoding="utf-8"
+        )
+        (Path(outdir) / "s1_onesample_verdict.json").write_text(
+            json.dumps({"source": "s1_fallback"}), encoding="utf-8"
+        )
+        result = pr._read_worker_verdict(outdir)
+        assert result is not None
+        assert result["source"] == "r1_preferred"
+
+
+# ===========================================================================
+# §R-5 — TOCTOU guard in poll_explore_status (F420)
+# ===========================================================================
+
+class TestR5TOCTOUGuard:
+    """R-5: poll_explore_status must bail if job status is no longer 'running'
+    when re-checked inside the thread (after subprocess returns STATUS=DONE).
+    Deterministic unit test — no sleep-based race."""
+
+    @pytest.fixture(autouse=True)
+    def reset_jobs(self, tmp_path):
+        import research.premise_run as pr
+        pr._jobs.clear()
+        pr._job_locks.clear()
+        _ps_module.DATA_PATH = str(tmp_path / "premises.json")
+
+    def test_second_poll_skips_when_status_already_done(self, tmp_path, monkeypatch):
+        """Simulate concurrent DONE processing: the first poll mutates status to 'done'
+        while subprocess.run is in flight for the second poll.
+
+        Strategy: monkeypatch subprocess.run to mutate the job dict before returning,
+        so when poll_explore_status re-reads _jobs inside the function, status is
+        already 'done' (not 'running') — the guard should bail.
+        """
+        import research.premise_run as pr
+
+        store = PremiseStore()
+        pid = store.add_premise("R-5 TOCTOU guard test")
+        spec = _minimal_spec()
+        store.add_spec(pid, spec.model_dump())
+        outdir = str(tmp_path / "study_r5")
+        logname = "r5_test.log"
+        Path(outdir).mkdir(parents=True, exist_ok=True)
+
+        # Write a real verdict file so the first poll would succeed normally
+        fake_verdict = {"explore_decision": "ADVANCE", "n_valid_events": 10}
+        (Path(outdir) / "r1_explore_verdict.json").write_text(
+            json.dumps(fake_verdict), encoding="utf-8"
+        )
+
+        # Inject a running job
+        pr._jobs[pid] = {
+            "status": "running",
+            "run_type": "explore",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": None,
+            "error": None,
+            "outdir": outdir,
+            "logname": logname,
+            "verdict": None,
+        }
+        store.premises[pid]["status"] = "exploring"
+        store.save()
+
+        # Simulate: while subprocess.run is "in flight", a concurrent poll mutates status
+        original_subprocess_run = __import__("subprocess").run
+
+        def mock_subprocess_run(cmd, **kwargs):
+            # Simulate first poll already processing the DONE verdict:
+            # mutate the job dict to 'done' mid-flight
+            pr._jobs[pid]["status"] = "done"
+            pr._jobs[pid]["verdict"] = fake_verdict
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            mock_result.stdout = "STATUS=DONE exit=0"
+            mock_result.stderr = ""
+            return mock_result
+
+        monkeypatch.setattr("subprocess.run", mock_subprocess_run)
+
+        # This poll arrives "second" — the guard should detect status != 'running' and bail
+        result = pr.poll_explore_status(pid)
+
+        # The TOCTOU guard must have bailed: returned the already-done job state
+        # without re-processing the DONE transition (no duplicate ledger append etc.)
+        assert result["status"] == "done", (
+            f"Expected guard to return already-done state, got {result['status']!r}"
+        )
+        # The verdict must be the one set by the first poll, not None
+        assert result["verdict"] is not None
+
+    def test_normal_poll_still_works_when_status_is_running(self, tmp_path, monkeypatch):
+        """Normal case: status IS 'running' when re-read — guard passes, poll proceeds."""
+        import research.premise_run as pr
+
+        store = PremiseStore()
+        pid = store.add_premise("R-5 normal poll test")
+        spec = _minimal_spec()
+        store.add_spec(pid, spec.model_dump())
+        outdir = str(tmp_path / "study_r5_normal")
+        logname = "r5_normal.log"
+        Path(outdir).mkdir(parents=True, exist_ok=True)
+
+        fake_verdict = {"explore_decision": "ADVANCE", "n_valid_events": 5}
+        (Path(outdir) / "r1_explore_verdict.json").write_text(
+            json.dumps(fake_verdict), encoding="utf-8"
+        )
+
+        pr._jobs[pid] = {
+            "status": "running",
+            "run_type": "explore",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": None,
+            "error": None,
+            "outdir": outdir,
+            "logname": logname,
+            "verdict": None,
+        }
+        store.premises[pid]["status"] = "exploring"
+        store.save()
+
+        # Normal subprocess — status stays 'running' until the guard check
+        def mock_subprocess_run(cmd, **kwargs):
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            mock_result.stdout = "STATUS=DONE exit=0"
+            mock_result.stderr = ""
+            return mock_result
+
+        monkeypatch.setattr("subprocess.run", mock_subprocess_run)
+
+        result = pr.poll_explore_status(pid)
+        # Normal path: guard passed, poll processed to done
+        assert result["status"] == "done"
+        assert result["verdict"] is not None
+
+
+# ===========================================================================
+# §SEC-05 — max_length on premise_text / plain_summary (F420)
+# ===========================================================================
+
+class TestSec05MaxLength:
+    """SEC-05: CreatePremiseRequest.premise_text must reject strings > 4000 chars (422)."""
+
+    @pytest.fixture(autouse=True)
+    def setup_app(self, tmp_path):
+        import research.premise_run as pr
+        _ps_module.DATA_PATH = str(tmp_path / "premises.json")
+        pr._jobs.clear()
+        pr._job_locks.clear()
+
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routes.premises import router
+
+        app = FastAPI()
+        app.include_router(router)
+        self.client = TestClient(app, raise_server_exceptions=False)
+
+    def test_premise_text_too_long_returns_422(self):
+        """POST /api/premises with premise_text > 4000 chars → 422."""
+        long_text = "A" * 4001
+        r = self.client.post("/api/premises", json={"premise_text": long_text})
+        assert r.status_code == 422, (
+            f"Expected 422 for premise_text > 4000 chars, got {r.status_code}"
+        )
+
+    def test_premise_text_exactly_4000_chars_accepted(self):
+        """POST /api/premises with premise_text == 4000 chars → 201 (at boundary)."""
+        boundary_text = "B" * 4000
+        r = self.client.post("/api/premises", json={"premise_text": boundary_text})
+        assert r.status_code == 201, (
+            f"Expected 201 for 4000-char premise_text (boundary), got {r.status_code}"
+        )
+
+    def test_premise_spec_plain_summary_too_long_rejected(self):
+        """PremiseSpec.plain_summary > 4000 chars → Pydantic ValidationError."""
+        from pydantic import ValidationError
+        from research.premise_spec import PremiseSpec
+
+        with pytest.raises(ValidationError):
+            PremiseSpec(
+                premise_text="Valid premise text",
+                plain_summary="P" * 4001,
+            )
+
+
 @pytest.mark.slow
 def test_preview_run_real_data(tmp_path):
     """Real fast preview with pre-stated F338 anchors.
