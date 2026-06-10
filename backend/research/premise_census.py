@@ -8,9 +8,12 @@ ledger.
 MDE convention (matches premise_p1569aa97_census.py and r1_analysis.py):
     two-sided alpha=0.05, 80% power → z_0.975 + z_0.80 = 2.80158
 
-F415 TRAP: never consume per_horizon["mde_ppt"] from meta.json — that field
-is 100× the true pp value.  All MDE math uses std_excess_pct + n from the
-events themselves.
+F415 TRAP (FIXED as of F415): the harness's per_horizon["mde_ppt"] formerly
+emitted values 100× too large (round(mde*100) over percent-valued std).
+Fixed in F415 (event_study.py). Pre-F415 artifacts carry the inflated values.
+This module always recomputes MDE from std_excess_pct + n directly (never
+consumes the meta.json mde_ppt field), so it is correct for both old and new
+artifacts.
 """
 from __future__ import annotations
 

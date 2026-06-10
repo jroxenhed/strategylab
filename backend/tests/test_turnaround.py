@@ -552,6 +552,7 @@ class TestRunFilter:
         stub.get_quarterly_gross_profit = _count_call
         stub.get_quarterly_ocf = _count_call
         stub.get_shares_outstanding = lambda *a, **kw: None
+        stub.get_shares_outstanding_detail = lambda *a, **kw: None  # F383
         stub.get_form4_net_buys = lambda *a, **kw: 0
         stub.has_buyback_authorization = lambda *a, **kw: False
         monkeypatch.setitem(sys.modules, "edgar", stub)
@@ -596,6 +597,7 @@ class TestRunFilter:
         stub.get_quarterly_gross_profit = lambda cik: gp
         stub.get_quarterly_ocf = lambda cik: ocf
         stub.get_shares_outstanding = lambda cik, as_of: 10_000_000.0
+        stub.get_shares_outstanding_detail = lambda cik, as_of: (10_000_000.0, "primary")  # F383
         stub.get_form4_net_buys = lambda cik, months_back=6: 0
         stub.has_buyback_authorization = lambda cik, months_back=12: False
         monkeypatch.setitem(sys.modules, "edgar", stub)
@@ -632,6 +634,7 @@ class TestRunFilter:
         stub.get_quarterly_gross_profit = lambda cik: []
         stub.get_quarterly_ocf = lambda cik: []
         stub.get_shares_outstanding = lambda cik, as_of: None
+        stub.get_shares_outstanding_detail = lambda cik, as_of: None  # F383
         stub.get_form4_net_buys = lambda cik, months_back=6: 0
         stub.has_buyback_authorization = lambda cik, months_back=12: False
         monkeypatch.setitem(sys.modules, "edgar", stub)
@@ -1372,6 +1375,7 @@ class TestUniverseV2Preset:
         stub.get_quarterly_gross_profit = lambda cik: []
         stub.get_quarterly_ocf = lambda cik: []
         stub.get_shares_outstanding = lambda cik, as_of: None
+        stub.get_shares_outstanding_detail = lambda cik, as_of: None  # F383
         stub.get_form4_net_buys = lambda cik, months_back=6: 0
         stub.has_buyback_authorization = lambda cik, months_back=12: False
 
@@ -1442,6 +1446,7 @@ class TestUniverseV2Preset:
         stub.get_quarterly_gross_profit = lambda cik: []
         stub.get_quarterly_ocf = lambda cik: []
         stub.get_shares_outstanding = lambda cik, as_of: None
+        stub.get_shares_outstanding_detail = lambda cik, as_of: None  # F383
         stub.get_form4_net_buys = lambda cik, months_back=6: 0
         stub.has_buyback_authorization = lambda cik, months_back=12: False
         monkeypatch.setitem(sys.modules, "edgar", stub)

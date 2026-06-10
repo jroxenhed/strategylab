@@ -67,8 +67,12 @@ _MDE_MULT: float = 2.80158  # z_0.975 + z_0.80 — census convention (premise_po
 def _mde_1samp_pp(ph: dict) -> Optional[float]:
     """One-sample MDE in TRUE percentage points from a harness per_horizon row.
 
-    Never consume the harness's per_horizon["mde_ppt"] — that field is 100x the
-    pp value (round(mde*100) over percent-valued std, event_study.py:1299).
+    F415 TRAP (FIXED as of F415): the harness's per_horizon["mde_ppt"] field
+    formerly emitted round(mde*100) over percent-valued std (event_study.py:1293),
+    producing values ~100× too large (e.g. 659.07 instead of ~6.59pp).  Fixed in
+    F415 by removing the ×100 multiplication.  Pre-F415 artifacts carry the 100×
+    inflated values — consumers of those artifacts must recompute from std/n
+    (which is what this function does, for backward-compat safety).
     """
     std = ph.get("std_excess_pct")
     n = ph.get("n_explore_valid")
@@ -190,11 +194,12 @@ def run_s1_onesample_analysis(
     p_nw: Optional[float] = ph.get("p_nw")
     n_events: Optional[int] = ph.get("n_explore_valid")
 
-    # The harness's per_horizon["mde_ppt"] is NOT percentage points — it is
-    # round(mde * 100, 4) over an mde computed from percent-valued std
-    # (event_study.py:1299), i.e. 100x the pp value. Caught by the F338 anchor
-    # (expected 6.59pp, harness field said 659.07). Compute the one-sample MDE
-    # from std_excess_pct and n instead (_mde_1samp_pp, census convention).
+    # F415 TRAP (FIXED as of F415): the harness's per_horizon["mde_ppt"] field
+    # formerly emitted round(mde * 100, 4) over percent-valued std (100× inflated,
+    # e.g. 659.07 instead of ~6.59pp). Caught by the F338 anchor.  Fixed in F415
+    # by removing the ×100 in event_study.py.  For pre-F415 artifacts this function
+    # still recomputes from std_excess_pct and n directly (_mde_1samp_pp) to stay
+    # correct regardless of whether the artifact predates the fix.
     mde_ppt: Optional[float] = _mde_1samp_pp(ph)
 
     if mean_excess is None or p_bootstrap is None:

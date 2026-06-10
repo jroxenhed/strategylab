@@ -1455,6 +1455,16 @@ def _append_r1_ledger(
     Brief: 'entry study_name = meta study_name + "_r1_family"'
     Read-modify-write with _atomic_write. NEVER truncate existing entries.
     F410: primary_horizon and all_horizons passed through to _build_r1_ledger_entry.
+
+    DI-08: spec_horizons is NOT accepted by this function — it delegates to
+    _build_r1_ledger_entry, which will record spec_horizons=None in the ledger entry.
+    This is intentional for the "direct path" (callers that do not carry a PremiseSpec
+    context, e.g. standalone run_r1_explore.py harness).  When a spec context IS
+    available, callers should use _build_r1_ledger_entry directly (passing
+    spec_horizons=spec.horizons) and write the resulting entry via the sidecar contract
+    (premise_run_worker.py) rather than calling _append_r1_ledger.
+    The spec_horizons=None value in the ledger means "not recorded at this call site";
+    it does NOT mean the study had no horizon spec — it means the direct path was used.
     """
     import sys
     from pathlib import Path as _Path

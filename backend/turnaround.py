@@ -112,6 +112,10 @@ class CandidateResult:
     is_null_candidate: bool
     # Data quality: count of data-gap decisions (valuation/conviction skipped due to missing data)
     data_gap_count: int = 0
+    # F383: shares source tag from edgar. One of 'primary', 'dei', 'wa', 'wa_fy',
+    # or None (no shares data). 'wa'/'wa_fy' indicate weighted-average period shares
+    # (lower point-in-time precision for P/S) — consumers should flag approximate.
+    ps_shares_source: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -558,12 +562,18 @@ def compute_valuation(
     as_of: date,
     params: FilterParams,
     bars_loader: Optional[Callable[[str], Optional[pd.DataFrame]]] = None,
-) -> tuple[bool, Optional[float], int]:
-    """Return (passes_valuation, ps_ratio, data_gap_count).
+) -> tuple[bool, Optional[float], int, Optional[str]]:
+    """Return (passes_valuation, ps_ratio, data_gap_count, shares_source).
 
     Passes if ps_ratio <= params.ps_ratio_max.
     ps_ratio = market_cap / trailing_12m_revenue.
     market_cap = shares_outstanding * close_price.
+
+    shares_source is one of 'primary', 'dei', 'wa', 'wa_fy' (from edgar) or
+    None when shares data is unavailable.  'wa' and 'wa_fy' indicate that the
+    share count is a weighted-average period figure (lower P/S precision) —
+    the result is marked approximate in CandidateResult.ps_shares_source so
+    callers can flag lower-confidence valuations.
 
     Fail-CLOSED on data errors: missing/error data → does NOT pass valuation.
     Spec principle: never manufacture conviction.
@@ -579,7 +589,7 @@ def compute_valuation(
         import edgar
     except ImportError:
         logger.debug("edgar not available — skipping valuation for %s", ticker)
-        return True, None, data_gap  # pass through if edgar module unavailable
+        return True, None, data_gap, None  # pass through if edgar module unavailable
 
     try:
         # Get close price as_of
@@ -591,21 +601,27 @@ def compute_valuation(
         if df is None or df.empty:
             data_gap += 1
             logger.debug("compute_valuation: no price bars for %s — data gap", ticker)
-            return False, None, data_gap
+            return False, None, data_gap, None
 
         sliced = _df_up_to(df, as_of)
         if sliced.empty:
             data_gap += 1
             logger.debug("compute_valuation: empty sliced bars for %s — data gap", ticker)
-            return False, None, data_gap
+            return False, None, data_gap, None
 
         price = float(_get_close(sliced).iloc[-1])
 
-        shares = edgar.get_shares_outstanding(cik, as_of)
-        if shares is None or shares <= 0:
+        # F383: use the detail function to capture shares_source tag
+        shares_detail = edgar.get_shares_outstanding_detail(cik, as_of)
+        if shares_detail is None:
             data_gap += 1
             logger.debug("compute_valuation: no shares outstanding for CIK %s — data gap", cik)
-            return False, None, data_gap
+            return False, None, data_gap, None
+        shares, shares_source = shares_detail
+        if shares <= 0:
+            data_gap += 1
+            logger.debug("compute_valuation: shares outstanding <= 0 for CIK %s — data gap", cik)
+            return False, None, data_gap, None
 
         market_cap = price * shares
 
@@ -616,26 +632,26 @@ def compute_valuation(
         if not recent_4:
             data_gap += 1
             logger.debug("compute_valuation: no revenue quarters for CIK %s — data gap", cik)
-            return False, None, data_gap
+            return False, None, data_gap, None
 
         ttm_rev = sum(q.get("val", 0.0) or 0.0 for q in recent_4)
         if ttm_rev <= 0:
             data_gap += 1
             logger.debug("compute_valuation: TTM revenue <= 0 for CIK %s — data gap", cik)
-            return False, None, data_gap
+            return False, None, data_gap, None
 
         ps_ratio = market_cap / ttm_rev
 
         # Compare against params threshold (primary check only)
         if ps_ratio <= params.ps_ratio_max:
-            return True, ps_ratio, data_gap
+            return True, ps_ratio, data_gap, shares_source
 
-        return False, ps_ratio, data_gap
+        return False, ps_ratio, data_gap, shares_source
 
     except Exception as exc:
         logger.warning("compute_valuation failed for %s: %s", ticker, exc)
         data_gap += 1
-        return False, None, data_gap
+        return False, None, data_gap, None
 
 
 # ---------------------------------------------------------------------------
@@ -922,7 +938,7 @@ def _process_symbol(
 
     # ---- Stage 2: Fundamental inflection ----
     fund_passes, fund_metrics = is_fundamental_inflecting(cik, as_of, params)
-    val_passes, ps_ratio, val_data_gap = compute_valuation(ticker, cik, as_of, params, _cached_loader)
+    val_passes, ps_ratio, val_data_gap, ps_shares_source = compute_valuation(ticker, cik, as_of, params, _cached_loader)
 
     is_null = wo_passes and not fund_passes
     # For fundamentals failures that also fail valuation, still is_null
@@ -947,6 +963,7 @@ def _process_symbol(
         net_income_consec_improving=int(fund_metrics.get("net_income_consec_improving", 0)),
         ocf_positive_quarters=int(fund_metrics.get("ocf_positive_quarters", 0)),
         ps_ratio=ps_ratio,
+        ps_shares_source=ps_shares_source,
         has_insider_buying=bool(conviction.get("has_insider_buying", False)),
         has_buyback=bool(conviction.get("has_buyback", False)),
         composite_score=0.0,

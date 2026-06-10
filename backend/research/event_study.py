@@ -1290,14 +1290,18 @@ def compute_study_stats(
                     h, p_boot, p_nw,
                 )
 
-        stats["mde_by_horizon"][h] = round(mde * 100, 4) if math.isfinite(mde) else None
-        stats["mde_raw_by_horizon"][h] = round(mde_raw * 100, 4) if math.isfinite(mde_raw) else None
+        # F415 FIX: mde is already in percentage points (minimum_detectable_effect
+        # receives std_excess which is in pct-units from fwd_excess_pct). The prior
+        # code multiplied by 100 again, emitting values like 659.07 when the true
+        # MDE was ~6.59pp. Removed the ×100. Pre-F415 artifacts carry 100× values.
+        stats["mde_by_horizon"][h] = round(mde, 4) if math.isfinite(mde) else None
+        stats["mde_raw_by_horizon"][h] = round(mde_raw, 4) if math.isfinite(mde_raw) else None
         stats["per_horizon"][h] = {
             "n_explore_valid": n_valid,
             "mean_excess_pct": round(mean_excess, 4) if math.isfinite(mean_excess) else None,
             "std_excess_pct": round(std_excess, 4) if math.isfinite(std_excess) else None,
-            "mde_ppt": round(mde * 100, 4) if math.isfinite(mde) else None,
-            "mde_raw_ppt": round(mde_raw * 100, 4) if math.isfinite(mde_raw) else None,
+            "mde_ppt": round(mde, 4) if math.isfinite(mde) else None,
+            "mde_raw_ppt": round(mde_raw, 4) if math.isfinite(mde_raw) else None,
             "p_bootstrap": round(p_boot, 4),
             "p_nw": round(p_nw, 4),
             "block_size_used": block_size_used,

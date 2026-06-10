@@ -63,6 +63,7 @@ import argparse
 import io
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -360,20 +361,201 @@ def download_table(table: str) -> pd.DataFrame:
 # Panel build
 # ---------------------------------------------------------------------------
 
+def _month_chunks(start: date, end: date) -> list[tuple[date, date, str]]:
+    """Monthly chunks [chunk_start, chunk_end) clamped to [start, end).
+
+    F408: Used for append mode so each incremental fetch covers one calendar
+    month (~3 GB BQ cost) rather than a full year.
+
+    The first chunk's start is clamped to `start` (so mid-month starts are
+    respected). Subsequent chunks begin at calendar month boundaries.
+    The label uses the calendar month of chunk_start (e.g. panel_202605).
+    """
+    chunks = []
+    current_month = date(start.year, start.month, 1)
+    while current_month < end:
+        next_month = (current_month.replace(day=1) + timedelta(days=32)).replace(day=1)
+        c_start = max(current_month, start)
+        c_end = min(next_month, end)
+        if c_start < c_end:
+            chunks.append((c_start, c_end, f"panel_{c_start.strftime('%Y%m')}"))
+        current_month = next_month
+    return chunks
+
+
+def _compute_gap_days(days_present: set[date]) -> list[date]:
+    """Compute calendar days missing inside [min, max] of days_present."""
+    if not days_present:
+        return []
+    d0, d1 = min(days_present), max(days_present)
+    return sorted(
+        d for d in (d0 + timedelta(days=i) for i in range((d1 - d0).days + 1))
+        if d not in days_present
+    )
+
+
+def _finalize_panel(
+    panel: pd.DataFrame,
+    output_dir: Path,
+    total_gb: float,
+    existing_meta: dict | None = None,
+) -> Path:
+    """Sort, dedupe, write parquet + sidecar. Returns the parquet path.
+
+    Deduplication key: (ticker, date, alias_type) — keep last (newest data wins).
+    If existing_meta is provided, its static fields (mapping_method, honesty_note,
+    survivorship, pit_field, source, item) are preserved; dynamic fields
+    (coverage_start, coverage_end, n_rows, n_tickers, coverage_gap_days,
+    bytes_processed_gb, fetch_vintage) are recomputed.
+    """
+    panel = panel[["ticker", "date", "alias_type", "n_articles", "avg_tone"]]
+    panel = panel.sort_values(["ticker", "date", "alias_type"]).reset_index(drop=True)
+    # Dedupe: keep='last' is intentional — in append mode the new fetch is
+    # concatenated AFTER the existing panel, so the last row for any
+    # (ticker, date, alias_type) triple is the freshest data (refresh wins).
+    panel = panel.drop_duplicates(subset=["ticker", "date", "alias_type"], keep="last")
+    panel = panel.sort_values(["ticker", "date", "alias_type"]).reset_index(drop=True)
+
+    # DI-F408-ATOMIC: write to a tmp path then os.replace() so a crash mid-write
+    # never leaves a partially-written (unreadable) parquet.  Sidecar is written
+    # LAST — if a crash occurs between the two writes, the sidecar is stale but the
+    # parquet is intact (next run re-derives the sidecar from the parquet).
+    out_path = output_dir / "news_panel_gkg.parquet"
+    tmp_path = out_path.with_suffix(".tmp.parquet")
+    panel.to_parquet(tmp_path, index=False)
+    os.replace(tmp_path, out_path)  # atomic on POSIX (same filesystem)
+
+    days_present = set(panel.date.unique())
+    gap_days = _compute_gap_days(days_present)
+
+    base = existing_meta or {}
+    meta = {
+        "source": base.get("source", "gdelt_gkg_bulk_bigquery (gdelt-bq.gdeltv2.gkg_partitioned)"),
+        "item": base.get("item", "F405"),
+        "fetch_vintage": datetime.now(timezone.utc).isoformat(),
+        "survivorship": base.get("survivorship",
+            "current-listing snapshot (F400 universe manifest) — delisted names "
+            "(e.g. SIVB, FRC) are ABSENT from the panel for all history"
+        ),
+        "coverage_start": str(panel.date.min()),
+        "coverage_end": str(panel.date.max()),
+        "pit_field": base.get("pit_field", "publication date (GKG partition date, UTC)"),
+        "n_rows": int(len(panel)),
+        "n_tickers": int(panel.ticker.nunique()),
+        "mapping_method": base.get("mapping_method",
+            "exact normalized org-name match against universe-manifest aliases "
+            "(v2/F407: &/- → space, leading-'The' and trailing-parenthetical "
+            "stripped, progressive suffix stages, 's-variants); channels: full "
+            "(cleaned name), core (suffix-strip stages), alt (curated "
+            "colloquial/pre-rename: facebook/google/disney), any "
+            "(article-deduped union); aliases shared by >1 ticker dropped"
+        ),
+        "honesty_note": base.get("honesty_note",
+            "Capture rate is name-shape dependent (GDELT NER never emits bare "
+            "'Apple'/'Tesla'; coined names like 'netflix' appear bare) — volume is "
+            "only meaningful WITHIN-ticker vs its own baseline, never across "
+            "tickers. Known pathological core aliases match non-company usage: "
+            "'nasdaq' (index references), 'visa' (immigration news) — use the "
+            "'full' channel for precision-critical work. 'any'-channel avg_tone "
+            "weighs an article once per matching alias (negligible double-count). "
+            "Known capture GAPS (probe-discovered 2026-06-09): (1) leading-'The' "
+            "names produce dead core aliases ('The Boeing Company' → 'the boeing') "
+            "— BA has ZERO rows; (2) aliases are CURRENT names applied to all "
+            "history, so renamed companies' pre-rename coverage is missed (META "
+            "alias never matches 2018 'facebook' orgs); (3) saturated-coverage "
+            "names (NFLX) barely move on investor shocks — volume spike ≠ "
+            "investor-news spike for entertainment/consumer megabrands."
+        ),
+        "bytes_processed_gb": round(total_gb, 1),
+        "coverage_gap_days": [str(d) for d in gap_days],
+        "coverage_gap_note": base.get("coverage_gap_note",
+            "calendar days inside [coverage_start, coverage_end] with zero panel "
+            "rows. Known gaps were verified against raw GKG partitions as "
+            "upstream corpus outages (probe _VERIFIED_CORPUS_GAPS); any NEW gap "
+            "fails probe anchor A5 until verified the same way"
+        ),
+    }
+    # Preserve any extra fields from existing_meta not covered above
+    if existing_meta:
+        for k, v in existing_meta.items():
+            if k not in meta:
+                meta[k] = v
+
+    # Sidecar written LAST (after atomic parquet rename) so a crash between
+    # the two writes leaves the parquet intact and the sidecar at worst stale.
+    meta_path = output_dir / "news_panel_gkg.meta.json"
+    meta_tmp = meta_path.with_suffix(".tmp.json")
+    meta_tmp.write_text(json.dumps(meta, indent=2))
+    os.replace(meta_tmp, meta_path)
+    log.info("panel written: %s (%d rows, %d tickers) + %s",
+             out_path, len(panel), panel.ticker.nunique(), meta_path)
+    return out_path
+
+
 def build_panel(
     output_dir: Path,
     manifest_path: Path,
     start: date,
     end: date,
     dry_run_only: bool = False,
+    append_mode: bool = False,
 ) -> Path | None:
+    """Build (or incrementally append to) the GKG news panel.
+
+    If append_mode=True:
+    - Reads coverage_end from existing sidecar (news_panel_gkg.meta.json)
+    - Sets start = coverage_end + 1 day (avoids refetching old data)
+    - Fetches only new months using _month_chunks (not _year_chunks)
+    - Merges new rows into the existing parquet with dedupe on (ticker, date, alias_type)
+    - Rewrites both parquet and sidecar with updated coverage_end / gap_days
+
+    If append_mode=False (default): full build from start→end using year-chunks.
+
+    ABSOLUTE CONSTRAINT: never executes real BigQuery queries unless dry_run_only=False.
+    The query boundary is the _bq_query() + download_table() calls — those are
+    only reached past the dry_run_only gate.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     fh = logging.FileHandler(output_dir / "run.log")
     fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logging.getLogger().addHandler(fh)
 
-    chunks = _year_chunks(start, end)
-    log.info("F405 GKG panel build: %s → %s, %d year-chunks", start, end, len(chunks))
+    # ---- Append mode: detect coverage_end from sidecar, adjust start ----
+    existing_meta: dict | None = None
+    existing_panel: pd.DataFrame | None = None
+    if append_mode:
+        meta_path = output_dir / "news_panel_gkg.meta.json"
+        parquet_path = output_dir / "news_panel_gkg.parquet"
+        if not meta_path.exists():
+            raise FileNotFoundError(
+                f"--append requires existing sidecar at {meta_path}; "
+                "run a full build first."
+            )
+        existing_meta = json.loads(meta_path.read_text())
+        coverage_end_date = date.fromisoformat(existing_meta["coverage_end"])
+        new_start = coverage_end_date + timedelta(days=1)
+        if new_start >= end:
+            log.info("append: coverage_end=%s already >= end=%s, nothing to do",
+                     coverage_end_date, end)
+            return parquet_path if parquet_path.exists() else None
+        log.info("append mode: coverage_end=%s → fetching %s → %s",
+                 coverage_end_date, new_start, end)
+        start = new_start
+        existing_panel = pd.read_parquet(parquet_path) if parquet_path.exists() else None
+
+    # ---- Chunk strategy: month-chunks for append, year-chunks for full build ----
+    if append_mode:
+        chunks = _month_chunks(start, end)
+        log.info("F408 GKG append: %s → %s, %d month-chunks", start, end, len(chunks))
+    else:
+        chunks = _year_chunks(start, end)
+        log.info("F405 GKG panel build: %s → %s, %d year-chunks", start, end, len(chunks))
+
+    if not chunks:
+        log.info("No chunks to process (date range already covered).")
+        if append_mode and existing_panel is not None:
+            return output_dir / "news_panel_gkg.parquet"
+        return None
 
     ensure_dataset()
     aliases = build_alias_frame(manifest_path)
@@ -395,82 +577,48 @@ def build_panel(
                  df.ticker.nunique() if len(df) else 0)
         frames.append(df)
 
-    panel = pd.concat(frames, ignore_index=True)
-    panel["date"] = pd.to_datetime(panel.pop("day")).dt.date
-    panel = panel[["ticker", "date", "alias_type", "n_articles", "avg_tone"]]
-    panel = panel.sort_values(["ticker", "date", "alias_type"]).reset_index(drop=True)
+    new_panel = pd.concat(frames, ignore_index=True)
+    new_panel["date"] = pd.to_datetime(new_panel.pop("day")).dt.date
 
-    out_path = output_dir / "news_panel_gkg.parquet"
-    panel.to_parquet(out_path, index=False)
+    # ---- Merge with existing panel in append mode ----
+    if append_mode and existing_panel is not None:
+        # Ensure date column is the right type in existing panel
+        if existing_panel["date"].dtype != object:
+            existing_panel["date"] = pd.to_datetime(existing_panel["date"]).dt.date
+        combined = pd.concat([existing_panel, new_panel], ignore_index=True)
+    else:
+        combined = new_panel
 
-    days_present = set(panel.date.unique())
-    d0, d1 = min(days_present), max(days_present)
-    gap_days = sorted(
-        d for d in (d0 + timedelta(days=i) for i in range((d1 - d0).days + 1))
-        if d not in days_present
+    # Account for the full GB cost including any existing panel's original scan
+    full_gb = total_gb if not append_mode else (
+        float(existing_meta.get("bytes_processed_gb", 0.0)) + total_gb
+        if existing_meta else total_gb
     )
 
-    meta = {
-        "source": "gdelt_gkg_bulk_bigquery (gdelt-bq.gdeltv2.gkg_partitioned)",
-        "item": "F405",
-        "fetch_vintage": datetime.now(timezone.utc).isoformat(),
-        "survivorship": (
-            "current-listing snapshot (F400 universe manifest) — delisted names "
-            "(e.g. SIVB, FRC) are ABSENT from the panel for all history"
-        ),
-        "coverage_start": str(panel.date.min()),
-        "coverage_end": str(panel.date.max()),
-        "pit_field": "publication date (GKG partition date, UTC)",
-        "n_rows": int(len(panel)),
-        "n_tickers": int(panel.ticker.nunique()),
-        "mapping_method": (
-            "exact normalized org-name match against universe-manifest aliases "
-            "(v2/F407: &/- → space, leading-'The' and trailing-parenthetical "
-            "stripped, progressive suffix stages, 's-variants); channels: full "
-            "(cleaned name), core (suffix-strip stages), alt (curated "
-            "colloquial/pre-rename: facebook/google/disney), any "
-            "(article-deduped union); aliases shared by >1 ticker dropped"
-        ),
-        "honesty_note": (
-            "Capture rate is name-shape dependent (GDELT NER never emits bare "
-            "'Apple'/'Tesla'; coined names like 'netflix' appear bare) — volume is "
-            "only meaningful WITHIN-ticker vs its own baseline, never across "
-            "tickers. Known pathological core aliases match non-company usage: "
-            "'nasdaq' (index references), 'visa' (immigration news) — use the "
-            "'full' channel for precision-critical work. 'any'-channel avg_tone "
-            "weighs an article once per matching alias (negligible double-count). "
-            "Known capture GAPS (probe-discovered 2026-06-09): (1) leading-'The' "
-            "names produce dead core aliases ('The Boeing Company' → 'the boeing') "
-            "— BA has ZERO rows; (2) aliases are CURRENT names applied to all "
-            "history, so renamed companies' pre-rename coverage is missed (META "
-            "alias never matches 2018 'facebook' orgs); (3) saturated-coverage "
-            "names (NFLX) barely move on investor shocks — volume spike ≠ "
-            "investor-news spike for entertainment/consumer megabrands."
-        ),
-        "bytes_processed_gb": round(total_gb, 1),
-        "coverage_gap_days": [str(d) for d in gap_days],
-        "coverage_gap_note": (
-            "calendar days inside [coverage_start, coverage_end] with zero panel "
-            "rows. Known gaps were verified against raw GKG partitions as "
-            "upstream corpus outages (probe _VERIFIED_CORPUS_GAPS); any NEW gap "
-            "fails probe anchor A5 until verified the same way"
-        ),
-    }
-    meta_path = output_dir / "news_panel_gkg.meta.json"
-    meta_path.write_text(json.dumps(meta, indent=2))
-    log.info("panel written: %s (%d rows, %d tickers) + %s",
-             out_path, len(panel), panel.ticker.nunique(), meta_path)
-    return out_path
+    return _finalize_panel(combined, output_dir, full_gb, existing_meta=existing_meta)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="F405 GDELT GKG bulk news panel build")
+    parser = argparse.ArgumentParser(description="F405/F408 GDELT GKG bulk news panel build")
     parser.add_argument("--start", default=str(_GKG_START), help="Start date YYYY-MM-DD")
-    parser.add_argument("--end", default=str(date.today()), help="End date YYYY-MM-DD (exclusive)")
+    # COR-03: --end is exclusive (SQL uses < TIMESTAMP(end)).  Defaulting to today()
+    # permanently excludes today's GKG partitions — the last chunk ends at today and
+    # the upper bound is exclusive, so today's rows are never fetched.  Default to
+    # tomorrow so the panel always covers through yesterday (the last complete day).
+    parser.add_argument("--end", default=str(date.today() + timedelta(days=1)),
+                        help="End date YYYY-MM-DD (exclusive). Default: tomorrow, "
+                             "covering through today. Use --end=$(date -d '+1 day' +%%Y-%%m-%%d) "
+                             "on Linux or --end=$(date -v+1d +%%Y-%%m-%%d) on macOS.")
     parser.add_argument("--manifest", default=str(_DEFAULT_MANIFEST))
     parser.add_argument("--output-dir", default=str(_DEFAULT_OUTPUT_DIR))
     parser.add_argument("--dry-run-only", action="store_true",
                         help="Upload aliases + print dry-run GB total, build nothing")
+    parser.add_argument("--append", action="store_true",
+                        help=(
+                            "F408: Incremental append mode — read coverage_end from existing "
+                            "sidecar, fetch only new months, merge+dedupe into existing parquet. "
+                            "Costs ~3 GB/month instead of ~315 GB for a full rebuild."
+                        ))
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -480,6 +628,7 @@ def main() -> None:
         start=date.fromisoformat(args.start),
         end=date.fromisoformat(args.end),
         dry_run_only=args.dry_run_only,
+        append_mode=args.append,
     )
 
 
