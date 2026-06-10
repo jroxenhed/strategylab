@@ -5,6 +5,7 @@
 #   1. Frontend build  (npm run build)
 #   2. Preview server  (start if :4173 not up; reuse if already up)
 #   3. Render probe    (bin/render-probe.mjs --url http://localhost:4173)
+#   3b. A8 manifest    (OPT-IN ONLY: set RUN_A8_MANIFEST=1 in environment)
 #   4. Backend smoke   (AST + import-time check on all backend .py files)
 #
 # Outputs a PASS/FAIL table to stdout and writes it to
@@ -14,11 +15,19 @@
 #
 # Usage:
 #   bin/verify-batch.sh <task-id>
+#   RUN_A8_MANIFEST=1 bin/verify-batch.sh <task-id>   # include A8 manifest gate
 #
 # Prerequisites:
 #   - Node / npm installed; frontend/ already has node_modules
 #   - backend/venv/bin/python (falls back to python3)
 #   - Backend on :8000 must already be running for the render probe
+#
+# A8 manifest opt-in (RUN_A8_MANIFEST=1):
+#   Gate 3b requires VITE_ENABLE_DEBUG_HOOKS=true at build time (so Gate 1
+#   rebuilds with that flag).  It also requires an Alpaca-seeded 5m AAPL dataset
+#   (seed-a8-aapl-5m-alpaca.json) and a running backend on :8000.  The default
+#   run does NOT rebuild with the hook or run the A8 manifest — both to keep the
+#   default fast and to avoid the Alpaca data dependency.
 #
 # Notes:
 #   - Never uses bare `cd` in compound commands (cwd-poisoning guard)
@@ -188,7 +197,19 @@ echo "==> Gate 1: frontend build"
 BUILD_LOG="$RUN_DIR/gate-0.log"
 BUILD_OK=0
 
-if npm --prefix "$FRONTEND_DIR" run build > "$BUILD_LOG" 2>&1; then
+# DI-F309-DEBUG-HOOKS: when RUN_A8_MANIFEST=1, build with VITE_ENABLE_DEBUG_HOOKS=true
+# so window.__chartDebug is exposed in the preview build for gate 3b.  The default
+# run (no RUN_A8_MANIFEST) passes no extra env — the hook is stripped from production
+# builds, which is the correct default (see SEC-F in review-security.json).
+if [[ "${RUN_A8_MANIFEST:-}" == "1" ]]; then
+  VITE_ENABLE_DEBUG_HOOKS=true npm --prefix "$FRONTEND_DIR" run build > "$BUILD_LOG" 2>&1
+  BUILD_RC=$?
+else
+  npm --prefix "$FRONTEND_DIR" run build > "$BUILD_LOG" 2>&1
+  BUILD_RC=$?
+fi
+
+if [[ "$BUILD_RC" -eq 0 ]]; then
   BUILD_OK=1
   record_gate "1. frontend build" "PASS"
   echo "    PASS"
@@ -322,6 +343,40 @@ else
     record_gate "3. render probe" "FAIL" "one or more probe checks failed (exit $PROBE_EXIT)"
     echo "    FAIL (exit $PROBE_EXIT) — tail -20:"
     tail -20 "$PROBE_LOG" | sed 's/^/    /'
+  fi
+fi
+
+# ── Gate 3b: A8 manifest (OPT-IN — RUN_A8_MANIFEST=1 only) ───────────────────
+# Requires VITE_ENABLE_DEBUG_HOOKS=true build (gate 1 sets it when RUN_A8_MANIFEST=1)
+# and an Alpaca-seeded AAPL 5m dataset via docs/qa/seed-a8-aapl-5m-alpaca.json.
+# The default run skips this gate entirely — it is gated so the normal fast path
+# (no Alpaca dependency, no debug-hook build) is byte-for-byte identical.
+
+if [[ "${RUN_A8_MANIFEST:-}" == "1" ]]; then
+  echo ""
+  echo "==> Gate 3b: A8 manifest (VITE_ENABLE_DEBUG_HOOKS build + Alpaca seed)"
+  A8_SEED="$REPO_ROOT/docs/qa/seed-a8-aapl-5m-alpaca.json"
+  A8_MANIFEST="$REPO_ROOT/docs/qa/manifest-a8-auto-switch.json"
+  A8_LOG="$RUN_DIR/gate-3b.log"
+
+  if [[ "$BUILD_OK" -eq 0 || "$PREVIEW_OK" -eq 0 ]]; then
+    record_gate "3b. A8 manifest" "FAIL" "skipped — build or preview failed"
+    echo "    SKIPPED (build or preview not ready)"
+  else
+    node "$BIN_DIR/render-probe.mjs" \
+      --url "http://localhost:$PORT" \
+      --seed "$A8_SEED" \
+      --manifest "$A8_MANIFEST" \
+      > "$A8_LOG" 2>&1
+    A8_EXIT=$?
+    if [[ "$A8_EXIT" -eq 0 ]]; then
+      record_gate "3b. A8 manifest" "PASS"
+      echo "    PASS"
+    else
+      record_gate "3b. A8 manifest" "FAIL" "A8 manifest assertions failed (exit $A8_EXIT)"
+      echo "    FAIL (exit $A8_EXIT) — tail -20:"
+      tail -20 "$A8_LOG" | sed 's/^/    /'
+    fi
   fi
 fi
 

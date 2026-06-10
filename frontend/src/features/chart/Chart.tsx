@@ -596,10 +596,12 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
     if (!series || !chart || renderCandleData.length === 0) return
     series.setData(renderCandleData)
 
-    // Dev-only assertion surface for auto-downsampling zoom verification (D5).
+    // Dev + probe-build assertion surface for auto-downsampling zoom verification (D5/F309).
     // lastSetDataPoints reflects the RENDERED bar count (render-layer resolution).
     // setVisibleLogicalRange lets scripted verification drive zoom without wheel events.
-    if (import.meta.env.DEV) {
+    // VITE_ENABLE_DEBUG_HOOKS=true enables this in render-probe builds (production build
+    // with the env flag set); regular production builds (no flag) still exclude the hook.
+    if (import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEBUG_HOOKS === 'true') {
       window.__chartDebug = {
         lastSetDataPoints: renderCandleData.length,
         setVisibleLogicalRange: (from: number, to: number) => {

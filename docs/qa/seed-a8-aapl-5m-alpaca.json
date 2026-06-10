@@ -1,0 +1,19 @@
+{
+  "description": "F309 A8 auto-switch seed — AAPL 5m Alpaca 2023-01-01→2025-06-01 (~47K bars). Seeds strategylab-settings so the app loads this config on startup without UI interaction. Seeds a narrow sessionStorage chart range (last ~1000 bars visible) so fitContent is skipped and the initial view shows < 8000 bars, preventing premature auto-switch on load. The probe then calls setVisibleLogicalRange(0, 30000) to manually trigger the switch. Backend cache must have this data pre-warmed (run: curl http://127.0.0.1:8000/api/ohlcv/AAPL?interval=5m&start=2023-01-01&end=2025-06-01&source=alpaca).",
+  "localStorage": [
+    {
+      "key": "strategylab-settings",
+      "value": "{\"ticker\":\"AAPL\",\"start\":\"2023-01-01\",\"end\":\"2025-06-01\",\"interval\":\"5m\",\"dataSource\":\"alpaca\",\"showSpy\":false,\"showQqq\":false,\"extendedHours\":false}"
+    },
+    {
+      "key": "activeTab",
+      "value": "chart"
+    }
+  ],
+  "sessionStorage": [
+    {
+      "key": "strategylab-chart-range",
+      "value": "{\"from\":46000,\"to\":47000}"
+    }
+  ]
+}

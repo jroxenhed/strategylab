@@ -284,6 +284,22 @@ async function applySeed(seed, page) {
       console.log(`[seed]   localStorage.${key} set`);
     }
   }
+
+  // ── sessionStorage injection via addInitScript (F309) ────────────────────────
+  // sessionStorage is tab-scoped and persists for the browser session only.
+  // Use to seed per-tab state (e.g. chart range restore) without polluting localStorage.
+  if (Array.isArray(seed.sessionStorage) && seed.sessionStorage.length > 0) {
+    console.log(`[seed] Injecting ${seed.sessionStorage.length} sessionStorage key(s)…`);
+    const ssItems = seed.sessionStorage;
+    await page.addInitScript((items) => {
+      items.forEach(({ key, value }) => {
+        sessionStorage.setItem(key, value);
+      });
+    }, ssItems);
+    for (const { key } of ssItems) {
+      console.log(`[seed]   sessionStorage.${key} set`);
+    }
+  }
 }
 
 // ── F298: Manifest loading and assertion execution ────────────────────────────
@@ -324,6 +340,12 @@ async function loadManifest(manifestFile) {
  *                mouse API so apps tracking mousemove events see a real drag.
  *                offset is added to each element's bounding-box top-left corner
  *                (default: centre of the element, i.e. offset not required).
+ *   script (F309) — { type: "script", script: "<JS expression>" }
+ *                Evaluates the expression in the page context via page.evaluate().
+ *                Used to call window.__chartDebug hooks or other JS APIs that
+ *                are not reachable via DOM selectors. Return value is ignored
+ *                (use 'eval' assertion type for value-based checks). The expression
+ *                may contain semicolons (multi-statement). No assertion — side-effects only.
  */
 async function executeTrigger(trigger, page) {
   if (!trigger) return;
@@ -340,6 +362,16 @@ async function executeTrigger(trigger, page) {
       const tabBtn = page.getByRole('button', { name: new RegExp(value, 'i') });
       await tabBtn.first().click({ timeout: 5000 });
       console.log(`  [trigger] navigate: ${value}`);
+    } else if (type === 'script') {
+      // F309: evaluate arbitrary JS in the page context (side-effects; no assertion).
+      // Wraps in a function so multi-statement scripts work without explicit 'return'.
+      const scriptExpr = trigger.script ?? '';
+      await page.evaluate((expr) => {
+        // eslint-disable-next-line no-new-func
+        (new Function(expr))();
+      }, scriptExpr);
+      const preview = scriptExpr.length > 60 ? scriptExpr.slice(0, 57) + '…' : scriptExpr;
+      console.log(`  [trigger] script: ${preview}`);
     } else if (type === 'drag') {
       // F301: mouse-based drag — from element (+ optional offset) to target element
       // (+ optional offset) with intermediate move steps so mousemove listeners fire.

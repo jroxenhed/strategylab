@@ -1,0 +1,107 @@
+{
+  "_comment": "OPT-IN GATE: requires VITE_ENABLE_DEBUG_HOOKS=true at build time (window.__chartDebug is stripped in production builds without this flag). Run via verify-batch.sh with RUN_A8_MANIFEST=1 set in the environment — the default verify-batch run does NOT set this env var and does NOT execute this manifest.",
+  "description": "F309 — A8 auto-interval zoom→switch scripted verification. Seeds AAPL 5m Alpaca (2023-2025, ~47K bars). Zooms out to force tier-2 coarsen (5m→1h, ~12x drop), asserts lastSetDataPoints drops ≥10x and Auto badge appears, then zooms back in to restore full resolution.",
+  "views": [
+    {
+      "name": "A8 Data Load",
+      "before": {
+        "settleMs": 15000
+      },
+      "assertions": [
+        {
+          "type": "selector",
+          "selector": "canvas",
+          "operator": "visible",
+          "timeout": 14000,
+          "description": "Canvas renders after data load"
+        },
+        {
+          "type": "eval",
+          "expression": "typeof window.__chartDebug !== 'undefined' && window.__chartDebug !== null",
+          "expected": true,
+          "description": "__chartDebug hook exposed (preview build gate)"
+        },
+        {
+          "type": "eval",
+          "expression": "(window.__a8Before = (window.__chartDebug?.lastSetDataPoints ?? 0)) > 1000",
+          "expected": true,
+          "description": "Baseline lastSetDataPoints > 1000 (full 5m dataset loaded; captures value into window.__a8Before)"
+        },
+        {
+          "type": "console",
+          "level": "error",
+          "operator": "count",
+          "expected": 0,
+          "description": "No console errors on load"
+        }
+      ],
+      "screenshot": "a8-01-initial-load.png"
+    },
+    {
+      "name": "A8 Zoom Out (auto-switch trigger)",
+      "trigger": {
+        "type": "script",
+        "script": "window.__chartDebug.setVisibleLogicalRange(0, 30000)"
+      },
+      "before": {
+        "settleMs": 2500
+      },
+      "assertions": [
+        {
+          "type": "eval",
+          "expression": "window.__chartDebug?.lastSetDataPoints <= window.__a8Before / 10",
+          "expected": true,
+          "description": "lastSetDataPoints dropped ≥10x after zoom-out (5m→1h auto-coarsen; ~12x ratio confirmed in manual A8 verification)"
+        },
+        {
+          "type": "selector",
+          "selector": "span[title*='Auto render-layer']",
+          "operator": "visible",
+          "timeout": 3000,
+          "description": "Auto (...) badge visible in UI (confirms auto-interval engaged)"
+        },
+        {
+          "type": "console",
+          "level": "error",
+          "operator": "count",
+          "expected": 0,
+          "description": "No console errors during auto-switch"
+        }
+      ],
+      "screenshot": "a8-02-zoomed-out.png"
+    },
+    {
+      "name": "A8 Zoom In (restore full resolution)",
+      "trigger": {
+        "type": "script",
+        "script": "window.__chartDebug.setVisibleLogicalRange(0, 400)"
+      },
+      "before": {
+        "settleMs": 2500
+      },
+      "assertions": [
+        {
+          "type": "eval",
+          "expression": "window.__chartDebug?.lastSetDataPoints >= window.__a8Before * 0.9",
+          "expected": true,
+          "description": "lastSetDataPoints restored ≥90% of baseline after zoom-in (full 5m resolution back)"
+        },
+        {
+          "type": "selector",
+          "selector": "span[title*='Auto render-layer']",
+          "operator": "hidden",
+          "timeout": 3000,
+          "description": "Auto (...) badge hidden after restore (auto-interval disengaged)"
+        },
+        {
+          "type": "console",
+          "level": "error",
+          "operator": "count",
+          "expected": 0,
+          "description": "No console errors during restore"
+        }
+      ],
+      "screenshot": "a8-03-restored.png"
+    }
+  ]
+}
