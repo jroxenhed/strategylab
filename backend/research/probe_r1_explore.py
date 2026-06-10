@@ -681,6 +681,14 @@ def anchor_07_mde_perturbation(study_dir: Path) -> AnchorResult:
     except Exception as e:
         return False, f"FAIL: could not read r1_explore_verdict.json: {e}"
 
+    # F414: a one_sample verdict mirrored into r1_explore_verdict.json has no
+    # dose-gap MDE by design — check its one-sample MDE instead of false-FAILing.
+    if verdict.get("analysis_form") == "one_sample":
+        mde_1s = verdict.get("mde_1samp_pp")
+        if mde_1s is None or not math.isfinite(float(mde_1s)):
+            return False, f"FAIL: one_sample verdict lacks finite mde_1samp_pp: {mde_1s}"
+        return True, f"PASS (one_sample): mde_1samp_pp={mde_1s:.2f}pp finite; dose-gap MDE n/a by design"
+
     mde = verdict.get("mde_q5q1_pp")
     n_valid = verdict.get("n_valid_events", 0)
     if mde is None:

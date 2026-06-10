@@ -72,6 +72,19 @@ Valid `event_filter` keys (form4 stream vocabulary):
 
 Valid `dose_params` keys: none yet (r1_score has no free params in v1).
 
+**F414: analysis_form field (new in F414):**
+
+| Value | Meaning |
+|-------|---------|
+| `"dose_response"` | Default. Tests the Q5−Q1 dose-response gap (H1/H1b/H2 family of 3). Use when the premise is about *ranking* events by dose magnitude. |
+| `"one_sample"` | Tests whether the all-event mean excess has the correct direction and is BH-rejected. Use when the premise is about *direction* (e.g. "insider selling precedes underperformance"). Requires `design_mde_pp` set and > 0. |
+
+When `analysis_form="one_sample"`, also set:
+- `design_mde_pp` — the charter-stated smallest effect worth trading (in percentage points). This is the power gate floor. Example: `8.0` for 8pp.
+- `direction` — `"short"` if the thesis predicts underperformance (harness computes short-side returns; positive = thesis correct); `"long"` if predicts outperformance.
+
+**Circularity caveat for derived premises:** If `derived_from` is set AND the explore window is the same as the parent's explore, the `plain_summary` MUST include: "CIRCULARITY CAVEAT: The hypothesis direction was formed by observing this data in [parent premise]. This explore is hypothesis-confirming, not hypothesis-generating. Advance to confirm requires a FRESH OOS window."
+
 ### Submit the spec
 
 ```bash
@@ -152,6 +165,30 @@ Key fields to interpret (all defined in terms the reader already has):
 | `regime_lens` | Signal split by market regime (RISK_ON, NEUTRAL, RISK_OFF, STRESS). |
 | `perturbation_band` | Robustness: range of estimates under small parameter perturbations. Narrow band = robust. |
 
+### Special cases: one_sample premises (analysis_form="one_sample")
+
+One-sample verdicts have a different result structure than dose-response. Key differences:
+
+| Dose-response (default) | One-sample (F414) |
+|------------------------|-------------------|
+| `H1`, `H1b`, `H2` keys | `H_mean_excess_{N}d` key (single hypothesis) |
+| `mde_q5q1_pp` | `mde_1samp_pp` |
+| `mde_gate_passed` | `power_gate_passed` |
+| FDR family of 3 | FDR family of 1 (p_raw <= fdr_q) |
+| ADVANCE = gap + rho + band stable | ADVANCE = direction + BH-rejected + power |
+| `perturbation_band` available | `perturbation_note` = "not computed" |
+
+**Direction semantics for one_sample:** `direction="short"` in the spec means the harness computes short-side returns `(entry-exit)/entry`. Positive mean_excess = thesis correct (stock went down). The gate always checks `mean_excess > 0` — the harness has already inverted the sign.
+
+**Power gate for one_sample graduate-to-confirm:**
+- Use `mde_1samp_pp` instead of `mde_q5q1_pp` in the power audit
+- Advance condition: `explore_decision == "ADVANCE"` AND `mde_1samp_pp <= design_mde_pp`
+- If `explore_decision == "UNTESTABLE-underpowered"` (mde > design_mde_pp), do NOT graduate — the test lacks the power to find the effect
+
+**63td comparability row** (`comparability_63td` field): always report-only. Never a bar, never in the FDR family. Absent (`null`) if 63 not in meta horizons.
+
+**Circularity caveat protocol:** Any premise with `derived_from` set and the same explore window as the parent MUST state the circularity caveat verbatim in its verdict interpretation. The explore p-values on hypothesis-confirming data carry NO novel inferential weight.
+
 ### Plain-language verdict checklist (every verdict must answer all 5)
 
 1. **What stocks?** Which companies are in the signal? (e.g. "all Form 4 open-market purchases by insiders at US equities with ≥500k avg daily volume")
@@ -177,13 +214,21 @@ curl -s -X PUT http://localhost:8000/api/premises/<premise_id>/spec \
 
 Only graduate when `explore_decision == "ADVANCE"` and you are confident the spec is final.
 
-**Checklist before graduating:**
+**Checklist before graduating (dose_response):**
 - [ ] `explore_decision` is `"ADVANCE"`
 - [ ] `mde_gate_passed` is true
 - [ ] `H1.bh_rejected` is true (BH correction passed at fdr_q=0.10)
 - [ ] The plain-language verdict answers all 5 questions
 - [ ] The spec `plain_summary` is written and reflects the verdict
 - [ ] The spec is final — no further parameter changes planned
+
+**Checklist before graduating (one_sample, F414):**
+- [ ] `explore_decision` is `"ADVANCE"`
+- [ ] `power_gate_passed` is true (`mde_1samp_pp <= design_mde_pp`)
+- [ ] `H_mean_excess_{N}d.bh_rejected` is true
+- [ ] Circularity caveat in `plain_summary` if `derived_from` is set
+- [ ] The plain-language verdict answers all 5 questions
+- [ ] The spec is final
 
 ```bash
 curl -s -X POST http://localhost:8000/api/premises/<premise_id>/graduate-to-confirm \

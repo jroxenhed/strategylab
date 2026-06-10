@@ -10,7 +10,7 @@ spec_hash()
 Hashes STRUCTURAL fields ONLY (the fields that define the statistical test):
     stream, event_filter, dose, dose_params, horizons, entry_lag_days,
     dedup_same_ticker, dedup_window_days, direction, floors, min_peer_count,
-    fdr_q, n_boot.
+    fdr_q, n_boot, analysis_form, design_mde_pp.
 
 Excluded from the hash:
     - premise_text  : prose provenance; rewording must not mint a new test
@@ -92,6 +92,8 @@ _STRUCTURAL_FIELDS = frozenset({
     "min_peer_count",
     "fdr_q",
     "n_boot",
+    "analysis_form",
+    "design_mde_pp",
 })
 
 # Non-structural fields excluded from the hash.
@@ -153,6 +155,11 @@ class PremiseSpec(BaseModel):
     fdr_q: float = 0.10
     n_boot: int = 999
 
+    # --- Analysis form (F414) ---
+    analysis_form: Literal["dose_response", "one_sample"] = "dose_response"
+    design_mde_pp: Optional[float] = None    # charter-stated smallest effect worth trading
+                                              # required and > 0 for one_sample form
+
     # --- Identity (set only at confirm-freeze) ---
     spec_hash: Optional[str] = None           # content hash; None until frozen
 
@@ -192,6 +199,23 @@ class PremiseSpec(BaseModel):
                 f"Ledger enforcement: only registered dose formulas accepted."
             )
         return v
+
+    @model_validator(mode="after")
+    def _validate_one_sample_mde(self) -> "PremiseSpec":
+        """one_sample analysis form requires design_mde_pp set and > 0."""
+        if self.analysis_form == "one_sample":
+            if self.design_mde_pp is None:
+                raise ValueError(
+                    "analysis_form='one_sample' requires design_mde_pp to be set. "
+                    "Provide the charter-stated smallest effect worth trading (pp). "
+                    "Example: design_mde_pp=8.0 (8 percentage points)."
+                )
+            if self.design_mde_pp <= 0:
+                raise ValueError(
+                    f"design_mde_pp must be > 0, got {self.design_mde_pp}. "
+                    "This is the charter-stated MDE floor in percentage points."
+                )
+        return self
 
     @model_validator(mode="after")
     def _validate_event_filter(self) -> "PremiseSpec":
@@ -261,7 +285,7 @@ def spec_hash(spec: PremiseSpec) -> str:
     Hashes ONLY the fields that define the statistical test (stream,
     event_filter, dose, dose_params, horizons, entry_lag_days,
     dedup_same_ticker, dedup_window_days, direction, floors, min_peer_count,
-    fdr_q, n_boot).
+    fdr_q, n_boot, analysis_form, design_mde_pp).
 
     Excluded: premise_text, guided, plain_summary, spec_hash.
     Rationale: two specs with identical structure but different prose ARE the

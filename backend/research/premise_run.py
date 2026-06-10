@@ -297,11 +297,26 @@ def _run_preview_sync(premise_id: str) -> dict:
     )
 
     # Analysis (ledger_path=None → skip FDR append)
-    analysis_result = run_r1_analysis(
-        study_dir=output_dir,
-        seed=_SEED,
-        ledger_path=None,
-    )
+    # F414: dispatch by analysis_form — a one_sample spec must not get the
+    # dose-response quintile analysis (preview parity with the worker branch).
+    if getattr(spec, "analysis_form", "dose_response") == "one_sample":
+        from research.s1_onesample_analysis import run_s1_onesample_analysis
+        analysis_result = run_s1_onesample_analysis(
+            study_dir=output_dir,
+            seed=_SEED,
+            ledger_path=None,
+            primary_horizon=max(spec.horizons),
+            horizons=tuple(sorted(spec.horizons)),
+            direction=spec.direction,
+            design_mde_pp=spec.design_mde_pp,
+            fdr_q=spec.fdr_q,
+        )
+    else:
+        analysis_result = run_r1_analysis(
+            study_dir=output_dir,
+            seed=_SEED,
+            ledger_path=None,
+        )
 
     verdict = _extract_verdict(analysis_result, harness_meta)
     verdict["run_type"] = "preview"

@@ -226,41 +226,96 @@ def run_full_explore_sync(premise_id: str, outdir: Path) -> dict:
     spec_primary = max(spec.horizons)
     spec_horizons = tuple(sorted(spec.horizons))
 
-    # Analysis (ledger_path=None → no FDR append in v1; deliberate ledger handoff via sidecar)
-    log.info("Running r1_analysis on %s (primary_horizon=%d)...", outdir, spec_primary)
-    analysis_result = run_r1_analysis(
-        study_dir=outdir,
-        seed=_SEED,
-        ledger_path=None,
-        primary_horizon=spec_primary,    # F410: spec-designated primary
-        horizons=spec_horizons,          # F410: spec horizons; 63 added internally for H3
-    )
-    log.info("Analysis done. explore_decision=%s", analysis_result.get("explore_decision"))
+    # F414: dispatch analysis by analysis_form (new one_sample path vs existing r1 path)
+    analysis_form = getattr(spec, "analysis_form", "dose_response")
 
-    # F410: Write ledger_entry.json for deliberate local append (never write real ledger from worker)
-    try:
-        entry = _build_r1_ledger_entry(
-            result=analysis_result,
-            study_name=study_name,
-            cfg_hash=analysis_result.get("config_hash", ""),
-            primary_horizon=spec_primary,
-            all_horizons=harness_horizons,   # DI-5: actual computed set (includes 63 always)
-            spec_horizons=spec_horizons,     # DI-5: declared spec intent; recorded separately
+    if analysis_form == "one_sample":
+        # ---------------------------------------------------------------
+        # F414: S-1 one-sample direction analysis
+        # ---------------------------------------------------------------
+        from research.s1_onesample_analysis import (
+            run_s1_onesample_analysis,
+            _build_s1_ledger_entry,
+            _atomic_write as _s1_aw,
         )
-        ledger_entry_path = outdir / "ledger_entry.json"
-        # DI-4: use atomic write-then-rename so a worker kill mid-write never
-        # leaves a corrupt sidecar (bare open+json.dump could produce a partial
-        # file, which poll_explore_status would silently skip).
-        _r1_aw(ledger_entry_path, json.dumps(entry, indent=2, default=str))
-        log.info("Ledger entry written to %s", ledger_entry_path)
-    except Exception as exc:
-        log.warning("Failed to write ledger_entry.json: %s", exc)
+        log.info("Running s1_onesample_analysis on %s (primary_horizon=%d, direction=%s)...",
+                 outdir, spec_primary, spec.direction)
+        analysis_result = run_s1_onesample_analysis(
+            study_dir=outdir,
+            seed=_SEED,
+            ledger_path=None,
+            primary_horizon=spec_primary,
+            horizons=spec_horizons,
+            direction=spec.direction,
+            design_mde_pp=getattr(spec, "design_mde_pp", None),
+            fdr_q=spec.fdr_q,
+        )
+        log.info("S-1 analysis done. explore_decision=%s", analysis_result.get("explore_decision"))
 
-    # Write verdict JSON to outdir (polling route reads this)
-    verdict_path = outdir / "r1_explore_verdict.json"
-    with open(verdict_path, "w", encoding="utf-8") as f:
-        json.dump(analysis_result, f, indent=2, default=str)
-    log.info("Verdict written to %s", verdict_path)
+        # Write ledger_entry.json sidecar (deliberate local append; never writes real ledger)
+        try:
+            entry = _build_s1_ledger_entry(
+                result=analysis_result,
+                study_name=study_name,
+                cfg_hash=analysis_result.get("config_hash", ""),
+                primary_horizon=spec_primary,
+                all_horizons=harness_horizons,
+                spec_horizons=spec_horizons,
+            )
+            ledger_entry_path = outdir / "ledger_entry.json"
+            _s1_aw(ledger_entry_path, json.dumps(entry, indent=2, default=str))
+            log.info("S-1 ledger entry written to %s", ledger_entry_path)
+        except Exception as exc:
+            log.warning("Failed to write s1 ledger_entry.json: %s", exc)
+
+        # Write s1_onesample_verdict.json (already written by run_s1_onesample_analysis,
+        # but also write to r1_explore_verdict.json so the polling route finds it)
+        verdict_path = outdir / "s1_onesample_verdict.json"
+        # Mirror to r1_explore_verdict.json so premise_run.py:_read_worker_verdict() works
+        compat_path = outdir / "r1_explore_verdict.json"
+        _s1_aw(compat_path, json.dumps(analysis_result, indent=2, default=str))
+        log.info("S-1 verdict mirrored to %s", compat_path)
+
+    else:
+        # ---------------------------------------------------------------
+        # Existing R-1 dose-response path (UNTOUCHED)
+        # ---------------------------------------------------------------
+        # Analysis (ledger_path=None → no FDR append in v1; deliberate ledger handoff via sidecar)
+        log.info("Running r1_analysis on %s (primary_horizon=%d)...", outdir, spec_primary)
+        analysis_result = run_r1_analysis(
+            study_dir=outdir,
+            seed=_SEED,
+            ledger_path=None,
+            primary_horizon=spec_primary,    # F410: spec-designated primary
+            horizons=spec_horizons,          # F410: spec horizons; 63 added internally for H3
+        )
+        log.info("Analysis done. explore_decision=%s", analysis_result.get("explore_decision"))
+
+        # F410: Write ledger_entry.json for deliberate local append (never write real ledger from worker)
+        try:
+            entry = _build_r1_ledger_entry(
+                result=analysis_result,
+                study_name=study_name,
+                cfg_hash=analysis_result.get("config_hash", ""),
+                primary_horizon=spec_primary,
+                all_horizons=harness_horizons,   # DI-5: actual computed set (includes 63 always)
+                spec_horizons=spec_horizons,     # DI-5: declared spec intent; recorded separately
+            )
+            ledger_entry_path = outdir / "ledger_entry.json"
+            # DI-4: use atomic write-then-rename so a worker kill mid-write never
+            # leaves a corrupt sidecar (bare open+json.dump could produce a partial
+            # file, which poll_explore_status would silently skip).
+            _r1_aw(ledger_entry_path, json.dumps(entry, indent=2, default=str))
+            log.info("Ledger entry written to %s", ledger_entry_path)
+        except Exception as exc:
+            log.warning("Failed to write ledger_entry.json: %s", exc)
+
+        # Write verdict JSON to outdir (polling route reads this).
+        # Atomic write-then-rename — a mid-write kill must not leave a truncated
+        # verdict for the poller to parse (DI-F414-04, same class as the sidecar).
+        verdict_path = outdir / "r1_explore_verdict.json"
+        _r1_aw(verdict_path, json.dumps(analysis_result, indent=2, default=str))
+        log.info("Verdict written to %s", verdict_path)
 
     return analysis_result
 
