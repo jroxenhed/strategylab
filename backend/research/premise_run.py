@@ -124,6 +124,12 @@ _CONFIRM_MDE_THRESHOLD_PP = 10.0  # programme-level sanity gate
 # ---------------------------------------------------------------------------
 _power_audit_cache: dict = {}  # keys: "result", "cached_at"
 _POWER_AUDIT_TTL_SECS = 3600
+# F394: asyncio.Lock guarding the cache read-check-write to prevent TOCTOU.
+# Must be held in the async wrapper (_check_power_audit), not inside the sync
+# function — the Lock is created at module level (not inside any coroutine)
+# so it binds to the event loop on first await, which is fine for a long-lived
+# FastAPI process (single event loop per process).
+_power_audit_cache_lock: asyncio.Lock = asyncio.Lock()
 
 # ---------------------------------------------------------------------------
 # Job state (in-process memory only; cleared on server restart)
@@ -139,8 +145,178 @@ def _get_job_lock(premise_id: str) -> asyncio.Lock:
     return _job_locks.setdefault(premise_id, asyncio.Lock())
 
 
+async def _cleanup_job(premise_id: str) -> None:
+    """Remove terminal job entries from _jobs/_job_locks after a short delay.
+
+    F394: prevents unbounded memory growth.  Called from _bg() finally blocks
+    after the terminal status update has been written so one polling cycle can
+    still read the final state.
+
+    R-1: 60s delay (up from 1s) covers realistic polling intervals for both
+    preview and explore terminal jobs.  A poller that arrives after the job is
+    gone falls back to store-derived status via the run-status endpoint.
+    """
+    await asyncio.sleep(60)
+    _jobs.pop(premise_id, None)
+    _job_locks.pop(premise_id, None)
+    log.debug("F394: cleaned up job state for %s", premise_id)
+
+
 def _utcnow_str() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# ---------------------------------------------------------------------------
+# F418 census gate helpers
+# ---------------------------------------------------------------------------
+
+def _find_latest_preview_outdir(premise_id: str, store) -> Optional[Path]:
+    """Return Path to the latest preview outdir for the given premise, or None."""
+    try:
+        p = store._get(premise_id)
+    except KeyError:
+        return None
+    for entry in reversed(p.get("run_history", [])):
+        if entry.get("run_type") == "preview" and entry.get("output_dir"):
+            return Path(entry["output_dir"])
+    return None
+
+
+def _census_testable(census, analysis_form: str) -> bool:
+    """Return True if the census indicates the premise is testable.
+
+    Conservative: None → False.
+    """
+    if analysis_form == "one_sample":
+        return bool(census.testable_1samp)
+    # dose_response
+    return bool(census.testable_gap)
+
+
+# ---------------------------------------------------------------------------
+# F394 startup reconciliation: scan study dirs for ledger sidecars not yet in ledger
+# ---------------------------------------------------------------------------
+
+def _reconcile_ledger_sidecars() -> None:
+    """Scan event_studies dirs for ledger_entry.json sidecars not yet in the FDR ledger.
+
+    Idempotency: keyed by study_name — safe to run on every startup.
+    Corrupt sidecars are backed up and skipped rather than crashing startup.
+
+    Called from main.py lifespan after BotManager.load(), inside a try/except
+    so a corrupt sidecar never blocks startup.
+    """
+    import json as _json
+    import shutil as _shutil
+    import time as _time
+    from research.event_study import _atomic_write as _aw
+
+    if not _STUDIES_DIR.exists():
+        log.info("F394 reconcile: studies dir does not exist yet — nothing to reconcile")
+        return
+
+    raw_sidecars = list(_STUDIES_DIR.glob("premise_*_explore_*/ledger_entry.json"))
+    # DI-04/SEC-04: filter sidecar list before any disk reads:
+    #   1. Skip symlinked parent dirs (prevents attacker-symlink injection into FDR ledger).
+    #   2. Require exact filename match "ledger_entry.json" (no .bak, no corrupt_* variants).
+    #   3. Require a verdict file present in the same dir (only accept completed runs).
+    sidecars = []
+    for _sp in raw_sidecars:
+        # Exact name check — glob should already guarantee this, but be explicit
+        if _sp.name != "ledger_entry.json":
+            continue
+        # Skip symlinked parent dirs
+        if _sp.parent.is_symlink():
+            log.warning(
+                "F394 reconcile: skipping sidecar in symlinked dir %s", _sp.parent
+            )
+            continue
+        # Require at least one verdict file in the dir
+        _has_verdict = (
+            (_sp.parent / "r1_explore_verdict.json").exists()
+            or (_sp.parent / "s1_onesample_verdict.json").exists()
+        )
+        if not _has_verdict:
+            log.debug(
+                "F394 reconcile: no verdict file in %s — skipping (incomplete run)",
+                _sp.parent,
+            )
+            continue
+        sidecars.append(_sp)
+
+    if not sidecars:
+        log.info("F394 reconcile: no eligible ledger sidecars found in %s", _STUDIES_DIR)
+        return
+
+    log.info("F394 reconcile: found %d eligible ledger sidecar(s) to check", len(sidecars))
+
+    with _fileutil_file_lock(_REAL_FDR_LEDGER):
+        # Read current ledger
+        ledger_rows: list = []
+        if _REAL_FDR_LEDGER.exists():
+            try:
+                ledger_rows = _json.loads(_REAL_FDR_LEDGER.read_text(encoding="utf-8"))
+                if not isinstance(ledger_rows, list):
+                    ledger_rows = []
+            except (ValueError, _json.JSONDecodeError):
+                ledger_rows = []
+
+        # Build set of already-present study_names for O(1) lookup
+        existing_study_names = {
+            entry.get("study_name") for entry in ledger_rows if isinstance(entry, dict)
+        }
+
+        appended = 0
+        for sidecar_path in sidecars:
+            try:
+                entry = _json.loads(sidecar_path.read_text(encoding="utf-8"))
+            except (ValueError, _json.JSONDecodeError) as parse_exc:
+                # DI-3 pattern: back up corrupt sidecar, skip it
+                _backup = sidecar_path.with_name(
+                    f"ledger_entry.corrupt_{int(_time.time())}.json"
+                )
+                try:
+                    _shutil.copy2(sidecar_path, _backup)
+                except OSError:
+                    pass
+                log.error(
+                    "F394 reconcile: corrupt sidecar at %s — backed up to %s, skipping. Error: %s",
+                    sidecar_path, _backup, parse_exc,
+                )
+                continue
+            except OSError as read_exc:
+                log.warning("F394 reconcile: cannot read %s: %s — skipping", sidecar_path, read_exc)
+                continue
+
+            study_name = entry.get("study_name")
+            if not study_name:
+                log.warning(
+                    "F394 reconcile: sidecar %s has no study_name — skipping", sidecar_path
+                )
+                continue
+
+            if study_name in existing_study_names:
+                log.debug("F394 reconcile: %s already in ledger — skip", study_name)
+                continue
+
+            ledger_rows.append(entry)
+            existing_study_names.add(study_name)
+            appended += 1
+            log.info("F394 reconcile: appended %s from sidecar %s", study_name, sidecar_path)
+
+        if appended > 0:
+            try:
+                _aw(_REAL_FDR_LEDGER, _json.dumps(ledger_rows, indent=2, default=str))
+                log.info(
+                    "F394 reconcile: wrote %d new entry/entries to FDR ledger (%d total)",
+                    appended, len(ledger_rows),
+                )
+            except OSError as write_exc:
+                log.error(
+                    "F394 reconcile: FDR ledger write failed: %s", write_exc, exc_info=True
+                )
+        else:
+            log.info("F394 reconcile: all sidecars already in ledger — no changes")
 
 
 # ---------------------------------------------------------------------------
@@ -535,6 +711,9 @@ async def run_preview(premise_id: str) -> None:
                 s.transition(premise_id, "spec_ready")
             except Exception as te:
                 log.warning("Failed to transition %s back to spec_ready: %s", premise_id, te)
+        finally:
+            # F394: clean up terminal job after a 1s delay so polling can read final state
+            asyncio.create_task(_cleanup_job(premise_id))
 
     asyncio.create_task(_bg())
 
@@ -553,6 +732,63 @@ async def run_full_explore(premise_id: str) -> None:
     _RUNNABLE_STATES = {"spec_ready", "explored"}
 
     lock = _get_job_lock(premise_id)
+
+    # R-3: compute census BEFORE acquiring the lock so blocking file I/O does not
+    # stall the event loop while holding the per-premise asyncio lock.
+    # We need to read the preview_outdir + spec from the store first (short, non-blocking).
+    _pre_store = PremiseStore()
+    try:
+        _pre_p = _pre_store._get(premise_id)
+    except KeyError:
+        raise HTTPException(404, f"Premise not found: {premise_id!r}")
+    preview_outdir_pre = _find_latest_preview_outdir(premise_id, _pre_store)
+
+    census_result = None
+    census_warn = None
+    import dataclasses as _dc
+    if preview_outdir_pre:
+
+        def _compute_census_pre():
+            try:
+                from research.premise_census import compute_census as _cc
+                from research.premise_spec import PremiseSpec as _PremiseSpec
+                _spec_obj = _PremiseSpec(**_pre_p.get("spec", {}))
+                _events_path = preview_outdir_pre / "events.ndjson"
+                return _cc(
+                    events_path=_events_path,
+                    analysis_form=_spec_obj.analysis_form,
+                    horizons=tuple(_spec_obj.horizons),
+                    primary_horizon=max(_spec_obj.horizons),
+                    design_mde_pp=_spec_obj.design_mde_pp,
+                ), _spec_obj.analysis_form
+            except FileNotFoundError:
+                log.info(
+                    "F418 census gate: no events.ndjson in preview dir for %s — skipping",
+                    premise_id,
+                )
+                return None, None
+            except Exception as _cg_exc:
+                log.warning(
+                    "F418 census gate: census computation failed for %s: %s — skipping",
+                    premise_id, _cg_exc,
+                )
+                return None, None
+
+        _census_pre, _analysis_form_pre = await asyncio.to_thread(_compute_census_pre)
+        if _census_pre is not None:
+            if not _census_testable(_census_pre, _analysis_form_pre):
+                census_result = _census_pre
+                census_warn = _census_pre.note
+                log.warning(
+                    "F418 census gate: %s for %s — proceeding anyway (warn mode)",
+                    census_warn, premise_id,
+                )
+            else:
+                census_result = _census_pre
+                log.info(
+                    "F418 census gate: %s for %s — OK", _census_pre.note, premise_id
+                )
+
     async with lock:
         existing = _jobs.get(premise_id, {})
         if existing.get("status") == "running":
@@ -592,6 +828,9 @@ async def run_full_explore(premise_id: str) -> None:
             "outdir": outdir,
             "logname": logname,
             "verdict": None,
+            # F418: census computed from preview events before the full explore starts
+            "census": _dc.asdict(census_result) if census_result is not None else None,
+            "census_warn": census_warn,
         }
 
     # Capture outdir/logname at lock-close time (G from review-reliability R8)
@@ -622,6 +861,13 @@ async def run_full_explore(premise_id: str) -> None:
                 s.transition(premise_id, "spec_ready")
             except Exception as te:
                 log.warning("Failed to transition %s back to spec_ready: %s", premise_id, te)
+            finally:
+                # F394: clean up terminal dispatch-failure job after polling window
+                # NOTE: only runs on dispatch failure. Poll-driven terminal states
+                # (DONE/FAILED from worker) are cleaned up by poll_explore_status
+                # path — that path does not call _cleanup_job because the job must
+                # remain readable until the next poll cycle after the verdict write.
+                asyncio.create_task(_cleanup_job(premise_id))
 
     asyncio.create_task(_bg())
 
@@ -710,20 +956,34 @@ def poll_explore_status(premise_id: str) -> dict:
                                         _ledger_rows = []
                                 except (ValueError, _json.JSONDecodeError):
                                     _ledger_rows = []
-                            _ledger_rows.append(_entry)
-                            try:
-                                _aw(_REAL_FDR_LEDGER, _json.dumps(_ledger_rows, indent=2, default=str))
-                            except OSError as write_exc:
-                                # DI-3: ledger write failure — log at ERROR with traceback.
-                                log.error(
-                                    "FDR ledger write failed for %s: %s",
-                                    premise_id, write_exc, exc_info=True,
+                            # DI-01/R-2: dedup by study_name before append — mirrors
+                            # _reconcile_ledger_sidecars() to prevent double-append
+                            # under concurrent GET /run-status polls.
+                            _existing_names = {
+                                r.get("study_name") for r in _ledger_rows
+                                if isinstance(r, dict)
+                            }
+                            if _entry.get("study_name") in _existing_names:
+                                log.warning(
+                                    "FDR ledger: study_name %r already present, "
+                                    "skipping duplicate append for %s",
+                                    _entry.get("study_name"), premise_id,
                                 )
-                                raise
-                        log.info(
-                            "FDR ledger entry appended from %s (total entries: %d)",
-                            ledger_entry_path, len(_ledger_rows),
-                        )
+                            else:
+                                _ledger_rows.append(_entry)
+                                try:
+                                    _aw(_REAL_FDR_LEDGER, _json.dumps(_ledger_rows, indent=2, default=str))
+                                except OSError as write_exc:
+                                    # DI-3: ledger write failure — log at ERROR with traceback.
+                                    log.error(
+                                        "FDR ledger write failed for %s: %s",
+                                        premise_id, write_exc, exc_info=True,
+                                    )
+                                    raise
+                                log.info(
+                                    "FDR ledger entry appended from %s (total entries: %d)",
+                                    ledger_entry_path, len(_ledger_rows),
+                                )
                 except Exception as exc:
                     log.warning("Failed to append ledger entry for %s: %s", premise_id, exc)
             else:
@@ -741,6 +1001,9 @@ def poll_explore_status(premise_id: str) -> dict:
                     "output_dir": outdir,
                     "verdict_valid": True,
                     "verdict": verdict,
+                    # F418: persist the pre-explore census so autopsy can reuse it
+                    "census": job.get("census"),
+                    "census_warn": job.get("census_warn"),
                 })
                 s.transition(premise_id, "explored")
             except Exception as exc:
@@ -844,10 +1107,16 @@ async def _check_power_audit() -> None:
     """Async power audit pre-check for graduate_to_confirm.
 
     Raises HTTPException(400) if underpowered.
+
+    F394: _power_audit_cache_lock prevents TOCTOU — two concurrent callers both
+    seeing a stale cache would both invoke run_audit() (wasteful but harmless since
+    it's idempotent).  The lock is held around the entire to_thread call so only
+    one thread runs the audit at a time.
     """
     from fastapi import HTTPException
 
-    result = await asyncio.to_thread(_run_power_audit_sync)
+    async with _power_audit_cache_lock:
+        result = await asyncio.to_thread(_run_power_audit_sync)
     mde_vals = [v for v in result.get("mde_80pct", {}).values() if v is not None]
     if not mde_vals:
         raise HTTPException(

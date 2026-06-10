@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 load_dotenv()
 
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -67,6 +68,17 @@ async def lifespan(app: FastAPI):
     manager = BotManager()
     manager.load()
     bots_module.bot_manager = manager
+
+    # F394: reconcile any ledger sidecars written between server restarts
+    # R-6: wrap in asyncio.to_thread — reconcile does blocking file I/O (glob,
+    # fcntl.flock, JSON reads/writes) that would stall the event loop if called
+    # directly in the async lifespan coroutine.
+    try:
+        from research.premise_run import _reconcile_ledger_sidecars
+        await asyncio.to_thread(_reconcile_ledger_sidecars)
+    except Exception as reconcile_exc:
+        logger.warning("F394 startup ledger reconcile failed (non-fatal): %s", reconcile_exc)
+
     try:
         yield
     finally:
