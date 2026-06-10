@@ -68,6 +68,22 @@ class Stream(Protocol):
         """Declared keys that dose_params may reference."""
         ...
 
+    def filter_value_schemas(self) -> "dict[str, type | tuple[type, ...]]":
+        """Return {key: accepted_type(s)} for runtime value validation.
+
+        Keys not present in this dict are not value-validated (backward compat).
+        Default: empty dict (no value validation).  Streams that don't implement
+        this method inherit the no-op default — no value type checking is applied.
+        """
+        return {}
+
+    def dose_value_schemas(self) -> "dict[str, type | tuple[type, ...]]":
+        """Return {key: accepted_type(s)} for dose_params runtime value validation.
+
+        Same backward-compat semantics as filter_value_schemas().
+        """
+        return {}
+
 
 # Registry: stream_id → Stream instance
 _REGISTRY: dict[str, "Stream"] = {}

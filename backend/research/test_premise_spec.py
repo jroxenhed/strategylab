@@ -504,12 +504,21 @@ def test_empty_registry_validation_bypass_rejected(monkeypatch):
 # --- F4: spec_hash canonicalization ---
 
 def test_spec_hash_int_float_equal(tmp_path):
-    """21 and 21.0 in dose_params must produce the same spec_hash (F4)."""
+    """21 and 21.0 in dose_params must produce the same spec_hash (F4).
+
+    F391: window_bdays is typed as int-only, so 21.0 (float) is now rejected at
+    construction time by _validate_dose_params value-type check.  The F4
+    canonicalization invariant is preserved: since 21.0 can no longer reach the
+    hash layer, we verify the spec with int 21 is stable across two constructions.
+    """
     s1 = PremiseSpec(premise_text="test", dose_params={"window_bdays": 21})
-    s2 = PremiseSpec(premise_text="test", dose_params={"window_bdays": 21.0})
+    s2 = PremiseSpec(premise_text="test", dose_params={"window_bdays": 21})
     assert spec_hash(s1) == spec_hash(s2), (
-        "dose_params with int 21 and float 21.0 must hash identically"
+        "Same dose_params must produce the same spec_hash"
     )
+    # Verify F391 correctly rejects float
+    with pytest.raises(Exception, match="(?i)ledger enforcement"):
+        PremiseSpec(premise_text="test", dose_params={"window_bdays": 21.0})
 
 
 def test_spec_hash_list_order_independent(tmp_path):
@@ -668,3 +677,101 @@ def test_add_spec_snapshot_restore_on_save_failure(tmp_path):
         # In-memory state must be restored to pre-call values
         assert store.premises[pid].get("spec") == pre_spec
         assert len(store.premises[pid].get("spec_history", [])) == pre_history_len
+
+
+# ===========================================================================
+# F391 — value-type validation in _validate_event_filter / _validate_dose_params
+# ===========================================================================
+
+class TestF391ValueTypeValidation:
+    """F391: per-key value-type validation in event_filter and dose_params."""
+
+    def test_filter_wrong_type_raises(self):
+        """event_filter with wrong-type value must raise ValidationError."""
+        with pytest.raises(Exception, match="(?i)ledger enforcement"):
+            PremiseSpec(
+                premise_text="test",
+                stream="form4",
+                event_filter={"min_dollar_total": "not_a_number"},  # must be int|float
+            )
+
+    def test_filter_exclude_10b51_wrong_type_raises(self):
+        """exclude_10b51 must be bool; a string must raise."""
+        with pytest.raises(Exception, match="(?i)ledger enforcement"):
+            PremiseSpec(
+                premise_text="test",
+                stream="form4",
+                event_filter={"exclude_10b51": "yes"},  # must be bool
+            )
+
+    def test_filter_form_types_wrong_type_raises(self):
+        """form_types must be list; a string must raise."""
+        with pytest.raises(Exception, match="(?i)ledger enforcement"):
+            PremiseSpec(
+                premise_text="test",
+                stream="form4",
+                event_filter={"form_types": "4"},  # must be list, not bare str
+            )
+
+    def test_filter_correct_types_pass(self):
+        """Correct-type values must not raise."""
+        spec = PremiseSpec(
+            premise_text="test",
+            stream="form4",
+            event_filter={
+                "form_types": ["4"],
+                "transaction_codes": ["P"],
+                "min_dollar_total": 1000.0,
+                "exclude_10b51": True,
+            },
+        )
+        assert spec.event_filter["exclude_10b51"] is True
+
+    def test_dose_param_wrong_type_raises(self):
+        """dose_params with wrong-type value must raise ValidationError."""
+        with pytest.raises(Exception, match="(?i)ledger enforcement"):
+            PremiseSpec(
+                premise_text="test",
+                stream="form4",
+                dose="r1_score",
+                dose_params={"window_bdays": 21.5},  # must be int, not float
+            )
+
+    def test_dose_param_correct_types_pass(self):
+        """Correct-type dose_params must not raise."""
+        spec = PremiseSpec(
+            premise_text="test",
+            stream="form4",
+            dose="r1_score",
+            dose_params={"window_bdays": 21, "beta": 0.5},
+        )
+        assert spec.dose_params["window_bdays"] == 21
+
+    def test_dose_param_beta_int_accepted(self):
+        """beta is (int, float); int must be accepted."""
+        spec = PremiseSpec(
+            premise_text="test",
+            stream="form4",
+            dose="r1_score",
+            dose_params={"beta": 1},  # int, valid
+        )
+        assert spec.dose_params["beta"] == 1
+
+    def test_filter_value_schemas_returned_by_form4(self):
+        """Form4Stream.filter_value_schemas() returns a non-empty dict."""
+        from research.streams import get
+        s = get("form4")
+        schemas = s.filter_value_schemas()
+        assert isinstance(schemas, dict)
+        assert "form_types" in schemas
+        assert "exclude_10b51" in schemas
+        assert schemas["exclude_10b51"] is bool
+
+    def test_dose_value_schemas_returned_by_form4(self):
+        """Form4Stream.dose_value_schemas() returns a non-empty dict."""
+        from research.streams import get
+        s = get("form4")
+        schemas = s.dose_value_schemas()
+        assert isinstance(schemas, dict)
+        assert "window_bdays" in schemas
+        assert schemas["window_bdays"] is int

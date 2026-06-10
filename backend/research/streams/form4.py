@@ -148,6 +148,22 @@ class Form4Stream:
         """Declared keys that dose_params may reference."""
         return FORM4_DOSE_VOCAB
 
+    def filter_value_schemas(self) -> dict:
+        """F391: per-key value type schemas for runtime event_filter validation."""
+        return {
+            "form_types": list,
+            "transaction_codes": list,
+            "min_dollar_total": (int, float),
+            "exclude_10b51": bool,
+        }
+
+    def dose_value_schemas(self) -> dict:
+        """F391: per-key value type schemas for runtime dose_params validation."""
+        return {
+            "window_bdays": int,
+            "beta": (int, float),
+        }
+
 
 # ---------------------------------------------------------------------------
 # Auto-registration at module load (required by streams/__init__.py D2)

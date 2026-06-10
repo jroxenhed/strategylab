@@ -1376,10 +1376,10 @@ def _build_r1_ledger_entry(
     the entry for its ledger_entry.json sidecar without writing to the real ledger.
     FDR per_test keys are dynamic, based on primary_horizon (e.g. "H1_Q5Q1_30d").
 
-    DI-5/DI-7: all_horizons should be the actual computed set (harness_horizons,
-    which always includes 63).  spec_horizons records the declared spec intent.
-    When spec_horizons is None (R-1 default path where spec==harness), it is
-    omitted from the entry so the field is only present when the two sets differ.
+    F416: spec_horizons is recorded unconditionally (even when equal to all_horizons)
+    for audit completeness.  None is recorded when spec_horizons is not provided
+    (direct path via _append_r1_ledger without a spec context).
+    analysis_form is always "dose_response" for r1-family entries.
     """
     h1_key = f"H1_Q5Q1_{primary_horizon}d"
     h1b_key = f"H1b_spearman_{primary_horizon}d"
@@ -1388,6 +1388,7 @@ def _build_r1_ledger_entry(
     entry_study_name = study_name + "_r1_family"
     entry: dict = {
         "study_name": entry_study_name,
+        "analysis_form": "dose_response",
         "created_at": result.get("created_at"),
         "study_config_hash": cfg_hash,
         "fdr_q": FDR_Q,
@@ -1395,11 +1396,11 @@ def _build_r1_ledger_entry(
         "horizons": list(all_horizons),
         "primary_horizon": primary_horizon,
     }
-    # DI-5/DI-7: record spec_horizons only when the harness injected extra horizons
-    # (e.g. 63td forced in for comparability).  Allows post-hoc audit to answer
-    # "was 63td computed?" without reading study artifacts directly.
-    if spec_horizons is not None and tuple(sorted(spec_horizons)) != tuple(sorted(all_horizons)):
-        entry["spec_horizons"] = list(spec_horizons)
+    # F416: record spec_horizons unconditionally for audit completeness.
+    # When spec_horizons is None (harness default path), record None — the caller
+    # (premise_run_worker) always passes spec_horizons explicitly; None in practice
+    # only arises via _append_r1_ledger (direct path without spec context).
+    entry["spec_horizons"] = list(spec_horizons) if spec_horizons is not None else None
     entry.update({
         "per_test": {
             h1_key: {

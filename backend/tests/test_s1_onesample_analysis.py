@@ -377,8 +377,8 @@ class TestS1LedgerEntry:
         # spec_horizons recorded when different from all_horizons
         assert "spec_horizons" in entry
 
-    def test_ledger_entry_no_spec_horizons_when_same(self, tmp_path: Path) -> None:
-        """spec_horizons absent when spec horizons == all_horizons."""
+    def test_ledger_spec_horizons_always_present(self, tmp_path: Path) -> None:
+        """F416: spec_horizons always present in ledger entry (even when equal to all_horizons)."""
         per_h = {
             30: _make_per_horizon_entry(5.0, 5.0, 0.05, 0.06, 4.0),
             63: _make_per_horizon_entry(8.0, 7.0, 0.03, 0.04, 5.5),
@@ -393,7 +393,8 @@ class TestS1LedgerEntry:
             design_mde_pp=8.0,
             fdr_q=0.10,
         )
-        entry = _build_s1_ledger_entry(
+        # Case 1: spec_horizons == all_horizons — still recorded (F416 convention)
+        entry_same = _build_s1_ledger_entry(
             result=result,
             study_name="s1_ledger_test2",
             cfg_hash=result["config_hash"],
@@ -401,7 +402,20 @@ class TestS1LedgerEntry:
             all_horizons=(30, 63),
             spec_horizons=(30, 63),  # same as all_horizons
         )
-        assert "spec_horizons" not in entry
+        assert "spec_horizons" in entry_same, "spec_horizons must be present even when equal to all_horizons"
+        assert entry_same["spec_horizons"] == [30, 63]
+
+        # Case 2: spec_horizons=None — recorded as None
+        entry_none = _build_s1_ledger_entry(
+            result=result,
+            study_name="s1_ledger_test2",
+            cfg_hash=result["config_hash"],
+            primary_horizon=30,
+            all_horizons=(30, 63),
+            spec_horizons=None,
+        )
+        assert "spec_horizons" in entry_none, "spec_horizons key must be present even when None"
+        assert entry_none["spec_horizons"] is None
 
 
 class TestS1Misc:

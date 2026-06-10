@@ -52,7 +52,7 @@ _BACKEND_DIR = os.path.dirname(_THIS_DIR)
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
-from research.event_study import EventStudyConfig, _EXPLORE_CUTOFF  # noqa: E402
+from research.event_study import EventStudyConfig, EventRecord, _EXPLORE_CUTOFF  # noqa: E402
 from research.premise_spec import PremiseSpec, UniverseFloors, _VALID_DOSES  # noqa: E402
 
 
@@ -79,12 +79,12 @@ class CompileResult:
 # cost_fn registry (dose → callable)
 # ---------------------------------------------------------------------------
 
-def _cost_fn_r1_score(event, price: float) -> float:  # type: ignore[type-arg]
+def _cost_fn_r1_score(event: EventRecord, price: float) -> float:
     """R-1 charter §7: 2 bps/leg × 2 legs = 0.04 (4 bps round-trip)."""
     return 0.04
 
 
-def _cost_fn_s1_score(event, price: float) -> float:  # type: ignore[type-arg]
+def _cost_fn_s1_score(event: EventRecord, price: float) -> float:
     """S-1: 2 bps/leg × 2 legs = 0.04 (mirror r1 charter §7)."""
     return 0.04
 

@@ -121,11 +121,19 @@ class PremiseSpec(BaseModel):
     - stream must be a registered stream id (ledger enforcement)
     - dose must be a registered dose formula id (ledger enforcement)
     - event_filter keys must be in the stream's filter_vocabulary() (ledger enforcement)
+    - event_filter values must match the stream's filter_value_schemas() types (F391)
     - dose_params keys must be in the stream's dose_vocabulary() (ledger enforcement)
+    - dose_params values must match the stream's dose_value_schemas() types (F391)
 
     Frozen: structural fields cannot be mutated after construction, preventing
     stale spec_hash values (spec_hash is assigned at confirm-freeze, not at
     add_spec time — see F389).
+
+    # F392 WARNING: PremiseSpec.model_construct() bypasses all field validators
+    # (stream membership, dose membership, event_filter vocab, event_filter value
+    # types, one_sample MDE check).  Never use model_construct() to create a
+    # PremiseSpec — always use PremiseSpec(...) or PremiseSpec(**dict) to ensure
+    # ledger enforcement invariants are upheld.
     """
     model_config = ConfigDict(frozen=True)
 
@@ -225,11 +233,24 @@ class PremiseSpec(BaseModel):
         # immediately rather than silently skipping — fail loud, not silent.
         stream = _REGISTRY[self.stream]
         vocab = stream.filter_vocabulary()
-        for key in self.event_filter:
+        # F391: value-type validation via per-key schema (backward-compat: empty dict = no check)
+        value_schemas = stream.filter_value_schemas()
+        for key, val in self.event_filter.items():
             if key not in vocab:
                 raise ValueError(
                     f"event_filter key {key!r} not in {self.stream} vocabulary "
                     f"{sorted(vocab)}. Ledger enforcement."
+                )
+            if key in value_schemas and not isinstance(val, value_schemas[key]):
+                expected = value_schemas[key]
+                type_names = (
+                    " | ".join(t.__name__ for t in expected)
+                    if isinstance(expected, tuple)
+                    else expected.__name__
+                )
+                raise ValueError(
+                    f"event_filter[{key!r}] must be of type {type_names}, "
+                    f"got {type(val).__name__!r} ({val!r}). Ledger enforcement."
                 )
         return self
 
@@ -241,11 +262,24 @@ class PremiseSpec(BaseModel):
         # immediately rather than silently skipping — fail loud, not silent.
         stream = _REGISTRY[self.stream]
         vocab = stream.dose_vocabulary()
-        for key in self.dose_params:
+        # F391: value-type validation via per-key schema (backward-compat: empty dict = no check)
+        value_schemas = stream.dose_value_schemas()
+        for key, val in self.dose_params.items():
             if key not in vocab:
                 raise ValueError(
                     f"dose_params key {key!r} not in {self.stream} dose vocabulary "
                     f"{sorted(vocab)}. Ledger enforcement."
+                )
+            if key in value_schemas and not isinstance(val, value_schemas[key]):
+                expected = value_schemas[key]
+                type_names = (
+                    " | ".join(t.__name__ for t in expected)
+                    if isinstance(expected, tuple)
+                    else expected.__name__
+                )
+                raise ValueError(
+                    f"dose_params[{key!r}] must be of type {type_names}, "
+                    f"got {type(val).__name__!r} ({val!r}). Ledger enforcement."
                 )
         return self
 

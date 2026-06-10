@@ -397,13 +397,19 @@ class PremiseStore:
             "disposition_note": "",
             "derived_from": premise_id,
         }
-        # H2: reset spec_version to 0 on the clone — the copied spec is its
-        # starting point, not the product of a prior versioning cycle.  Carrying
-        # the original's spec_version forward would cause the first add_spec on
-        # the clone to archive the copied spec as a phantom "version N+1" entry
-        # even though no actual editing has happened on the clone.
+        # H2: set spec_version = 1 on the clone (F416 fix).  The copied spec is
+        # the clone's founding version 1.  Setting 0 would cause the first
+        # add_spec call to see "no spec yet" (0 means no spec), silently skip
+        # archiving the founding copy, and overwrite it without a history record.
+        # With spec_version=1, add_spec correctly archives the founding copy at
+        # version 1 and writes version 2 on first edit — preserving lineage.
         if original.get("spec") is not None:
-            new_entry["spec_version"] = 0
+            new_entry["spec_version"] = 1
+            # R-8: always clear spec_hash from the cloned spec so a derived premise
+            # never carries the parent's frozen hash.  This prevents a spurious 409
+            # "duplicate structural spec" when the descendant tries to graduate.
+            if isinstance(new_entry.get("spec"), dict):
+                new_entry["spec"].pop("spec_hash", None)
         # F11: snapshot-before-mutate
         prior = copy.deepcopy(self.premises)
         self.premises[new_pid] = new_entry

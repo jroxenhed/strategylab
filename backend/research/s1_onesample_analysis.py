@@ -431,7 +431,8 @@ def _build_s1_ledger_entry(
 
     study_name suffix = "_s1_onesample_family" (distinct from r1_family).
     F410: all_horizons = actual computed set (incl. 63 always); spec_horizons = declared spec.
-    DI-5/DI-7: spec_horizons recorded only when different from all_horizons.
+    F416: spec_horizons is recorded unconditionally (even when equal to all_horizons)
+    for audit completeness.  None is recorded when spec_horizons is not provided.
     """
     h_key = f"H_mean_excess_{primary_horizon}d"
     entry_study_name = study_name + "_s1_onesample_family"
@@ -446,9 +447,8 @@ def _build_s1_ledger_entry(
         "all_horizons": list(all_horizons),
         "design_mde_pp": result.get("design_mde_pp"),
     }
-    # DI-5/DI-7
-    if spec_horizons is not None and tuple(sorted(spec_horizons)) != tuple(sorted(all_horizons)):
-        entry["spec_horizons"] = list(spec_horizons)
+    # F416: record spec_horizons unconditionally for audit completeness.
+    entry["spec_horizons"] = list(spec_horizons) if spec_horizons is not None else None
 
     h_data = result.get(h_key, {})
     entry.update({

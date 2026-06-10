@@ -463,8 +463,46 @@ class TestLedgerAppend:
             "study_name", "study_config_hash", "fdr_q", "n_boot", "horizons",
             "per_test", "per_quintile_counts", "perturbation_sign_table",
             "bh_rejection_set", "explore_decision",
+            "analysis_form", "spec_horizons",  # F416: always present
         ]:
             assert required_key in entry, f"Ledger entry missing required key: {required_key}"
+
+    def test_ledger_analysis_form_is_dose_response(self, tmp_path):
+        """F416: r1-family ledger entry must have analysis_form='dose_response'."""
+        rows = _make_monotone_rows(n_per_quintile=8)
+        study_dir = _write_study(tmp_path, rows, "af_study")
+        ledger_path = tmp_path / "af_ledger.json"
+        run_r1_analysis(study_dir, seed=20260606, ledger_path=ledger_path)
+        entry = json.loads(ledger_path.read_text())[0]
+        assert entry["analysis_form"] == "dose_response", (
+            f"Expected analysis_form='dose_response', got {entry.get('analysis_form')!r}"
+        )
+
+    def test_ledger_spec_horizons_always_present(self, tmp_path):
+        """F416: spec_horizons must be present in ledger entry (even when None).
+
+        The default path (no spec context, spec_horizons=None) records None explicitly —
+        the key must still be present so downstream audit code can iterate over it
+        without a KeyError.
+        """
+        rows = _make_monotone_rows(n_per_quintile=8)
+        study_dir = _write_study(tmp_path, rows, "sh_study")
+        ledger_path = tmp_path / "sh_ledger.json"
+        run_r1_analysis(study_dir, seed=20260606, ledger_path=ledger_path)
+        entry = json.loads(ledger_path.read_text())[0]
+        # Key must be present; value is None when no spec_horizons passed
+        assert "spec_horizons" in entry, "spec_horizons key missing from ledger entry"
+        # When spec_horizons is explicitly passed, it should be recorded as a list
+        from research.r1_analysis import _build_r1_ledger_entry
+        result = run_r1_analysis(study_dir, seed=20260606)
+        dummy_entry = _build_r1_ledger_entry(
+            result, "test", "deadbeef",
+            primary_horizon=63, all_horizons=(21, 63, 126),
+            spec_horizons=(21, 63),
+        )
+        assert dummy_entry["spec_horizons"] == [21, 63], (
+            f"spec_horizons not recorded correctly, got {dummy_entry['spec_horizons']!r}"
+        )
 
     def test_existing_ledger_not_truncated(self, tmp_path):
         """Pre-existing non-r1 entry in ledger is preserved."""
