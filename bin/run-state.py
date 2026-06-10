@@ -24,7 +24,7 @@ Usage:
   bin/run-state.py add-agent F123 --role reviewer --persona correctness \\
                    --result .run/F123/review-correctness.json --status ok \\
                    --headline "3 findings, 1 P1" \\
-                   --tokens 38467 --tool-uses 15 --duration-ms 101394
+                   --tokens 38467 --tool-uses 15 --duration-ms 101394 [--cap-hit]
   bin/run-state.py add-finding F123 --id C-01 --severity P1
   bin/run-state.py decide F123 --finding C-01 --decision fix
   bin/run-state.py verify F123 backend/routes/bots.py
@@ -149,6 +149,9 @@ def cmd_add_agent(a):
         "tokens": a.tokens,
         "tool_uses": a.tool_uses,
         "duration_ms": a.duration_ms,
+        # Effort cap (F302): set True when the reviewer hit the ≤25-tool-call cap
+        # and returned partial findings.  Surfaces in `report` as a cap-hit count.
+        "cap_hit": a.cap_hit,
     }
     # Dedup by (role, persona) — re-running updates in place.
     for i, existing in enumerate(state["agents"]):
@@ -162,12 +165,17 @@ def cmd_add_agent(a):
                 row["result"] = existing.get("result")
             if not row["headline"]:
                 row["headline"] = existing.get("headline")
+            # cap_hit: only upgrade from False→True; never overwrite True with False
+            # (a re-run without --cap-hit must not erase a previously recorded hit).
+            if not row["cap_hit"] and existing.get("cap_hit"):
+                row["cap_hit"] = True
             state["agents"][i] = row
             break
     else:
         state["agents"].append(row)
     save(a.task, state)
-    print(f"agent {a.role}/{a.persona}: {a.status} — {row['headline']}")
+    cap_note = " [CAP HIT]" if row.get("cap_hit") else ""
+    print(f"agent {a.role}/{a.persona}: {a.status}{cap_note} — {row['headline']}")
 
 
 def cmd_add_finding(a):
@@ -223,14 +231,15 @@ def cmd_report(a):
     name_w = max(len(f"{ag.get('role')}/{ag.get('persona') or '-'}") for ag in agents)
     print(f"{'agent':<{name_w}}  {'tokens':>8}  {'tools':>5}  {'time':>7}  status")
     total_tok = total_ms = 0
-    review_tok = review_n = 0
+    review_tok = review_n = cap_n = 0
     missing = []
     for ag in agents:
         name = f"{ag.get('role')}/{ag.get('persona') or '-'}"
         tok, ms = ag.get("tokens"), ag.get("duration_ms")
         tools = ag.get("tool_uses")
+        cap_flag = " [CAP]" if ag.get("cap_hit") else ""
         print(f"{name:<{name_w}}  {tok if tok is not None else '—':>8}  "
-              f"{tools if tools is not None else '—':>5}  {_fmt_duration(ms):>7}  {ag.get('status')}")
+              f"{tools if tools is not None else '—':>5}  {_fmt_duration(ms):>7}  {ag.get('status')}{cap_flag}")
         if tok is None:
             missing.append(name)
         else:
@@ -240,8 +249,12 @@ def cmd_report(a):
                 review_n += 1
         if ms is not None:
             total_ms += ms
+        if ag.get("cap_hit"):
+            cap_n += 1
+    cap_suffix = f", {cap_n} cap-hit" if cap_n else ""
     print(f"total: {total_tok} tokens, {_fmt_duration(total_ms)} agent-time"
-          + (f"  |  review: {review_tok} tokens across {review_n} agent(s)" if review_n else ""))
+          + (f"  |  review: {review_tok} tokens across {review_n} agent(s){cap_suffix}" if review_n else "")
+          + (f"  |  cap-hit: {cap_n}" if cap_n and not review_n else ""))
     if missing:
         print(f"missing usage: {', '.join(missing)}")
     # Unattributed session usage footer — rows from the hook log not yet merged
@@ -318,7 +331,7 @@ def main():
     s = sub.add_parser("get"); s.add_argument("task"); s.add_argument("key"); s.set_defaults(fn=cmd_get)
     s = sub.add_parser("set"); s.add_argument("task"); s.add_argument("key"); s.add_argument("value"); s.set_defaults(fn=cmd_set)
     s = sub.add_parser("add-target"); s.add_argument("task"); s.add_argument("paths", nargs="+"); s.set_defaults(fn=cmd_add_target)
-    s = sub.add_parser("add-agent"); s.add_argument("task"); s.add_argument("--role", required=True); s.add_argument("--persona", default=""); s.add_argument("--result", default=None); s.add_argument("--status", required=True, choices=sorted(STATUSES)); s.add_argument("--headline", default=""); s.add_argument("--tokens", type=int, default=None); s.add_argument("--tool-uses", type=int, default=None); s.add_argument("--duration-ms", type=int, default=None); s.set_defaults(fn=cmd_add_agent)
+    s = sub.add_parser("add-agent"); s.add_argument("task"); s.add_argument("--role", required=True); s.add_argument("--persona", default=""); s.add_argument("--result", default=None); s.add_argument("--status", required=True, choices=sorted(STATUSES)); s.add_argument("--headline", default=""); s.add_argument("--tokens", type=int, default=None); s.add_argument("--tool-uses", type=int, default=None); s.add_argument("--duration-ms", type=int, default=None); s.add_argument("--cap-hit", action="store_true", default=False, dest="cap_hit", help="reviewer hit the ≤25-tool-call effort cap (F302)"); s.set_defaults(fn=cmd_add_agent)
     s = sub.add_parser("add-finding"); s.add_argument("task"); s.add_argument("--id", required=True); s.add_argument("--severity", required=True, choices=sorted(SEVERITIES)); s.add_argument("--decision", default=None, choices=["fix", "defer"]); s.set_defaults(fn=cmd_add_finding)
     s = sub.add_parser("decide"); s.add_argument("task"); s.add_argument("--finding", required=True); s.add_argument("--decision", required=True, choices=["fix", "defer"]); s.set_defaults(fn=cmd_decide)
     s = sub.add_parser("verify"); s.add_argument("task"); s.add_argument("files", nargs="+"); s.set_defaults(fn=cmd_verify)

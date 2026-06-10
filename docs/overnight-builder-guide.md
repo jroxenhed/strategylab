@@ -184,6 +184,16 @@ reviewers and must be omitted.
 
 Then append the diff, the intent, and the JSON schema (see below).
 
+**EFFORT CAP (include verbatim in every persona dispatch):**
+```
+EFFORT CAP: ≤25 tool calls / ~3 minutes per reviewer. If you hit the cap,
+return partial findings (all severities found so far) + include the string
+"cap_hit" anywhere in your response. Incomplete coverage is better than timeout.
+P0/P1 findings found before the cap are mandatory — exhaust those before lower
+severities. Record cap_hit in run-state: python3 bin/run-state.py add-agent
+<task-id> --role reviewer --persona <key> --cap-hit --status ok [--tokens N].
+```
+
 Dispatch the personas listed below in parallel via the Task tool. The `subagent_type` column documents the dedicated agent name for the day the routine env loads them; until then, every dispatch uses `subagent_type: general-purpose` with the prefix above.
 
 Each agent gets:

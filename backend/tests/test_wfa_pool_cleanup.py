@@ -29,6 +29,7 @@ def _sleep_forever():
 
 # --- Tests ---
 
+@pytest.mark.slow
 class TestForceKillExecutor:
     """F279 — _force_kill_executor correctly kills live workers."""
 
@@ -107,6 +108,7 @@ class TestForceKillExecutor:
         _force_kill_executor(EmptyExecutor())  # Must not raise.
 
 
+@pytest.mark.slow
 class TestShutdownAllExecutors:
     """F279 — shutdown_all_executors() drains _LIVE_EXECUTORS."""
 
