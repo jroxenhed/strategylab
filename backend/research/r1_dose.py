@@ -621,6 +621,7 @@ def build_r1_events(
     subs_dir: Path,
     loader_fn: Callable[[str], Optional[pd.DataFrame]],
     shares_fn: Optional[Callable[[str, date], Optional[float]]] = None,
+    max_market_cap: Optional[float] = None,  # S2-FIX: mirrors s1 signature; default None = no ceiling
 ) -> tuple[list[EventRecord], dict]:
     """Build R-1 EventRecord list with dose payload.
 
@@ -639,6 +640,12 @@ def build_r1_events(
     shares_fn
         (cik: str, as_of: date) → Optional[float]; defaults to
         _shares_outstanding_disk_only (disk-only, offline-safe).
+    max_market_cap
+        If set, events with MC > max_market_cap are excluded entirely
+        (not appended to results). Use for small/mid-cap universe ceiling.
+        None = no ceiling (default). Additive parameter — no behavior change
+        when not passed (S2-FIX: COR-09 latent TypeError when dispatch passes
+        max_market_cap to a builder that did not accept it).
 
     Returns
     -------
@@ -652,7 +659,8 @@ def build_r1_events(
     meta : dict
         filings_scanned, filings_qualifying, acceptance_fallbacks,
         n_10b51_excluded_total, missing_price_txns_total,
-        score_undefined_total, events_raw, events_returned
+        score_undefined_total, events_raw, events_returned,
+        n_cap_ceiling_excluded, n_excluded_unknown_mc
     """
     if shares_fn is None:
         shares_fn = _shares_outstanding_disk_only
@@ -704,6 +712,8 @@ def build_r1_events(
     n_10b51_excluded_total = 0
     missing_price_txns_total = 0
     score_undefined_total = 0
+    n_cap_ceiling_excluded = 0   # S2/S3-FIX: events excluded by max_market_cap
+    n_excluded_unknown_mc = 0    # S3-FIX: events with uncomputable MC excluded when cap set
 
     # Accumulate per-(ticker, ET date) candidates
     # Key: (ticker_upper, et_date) → list of (event_ts, accession, filed_str, is_fallback, cik)
@@ -801,6 +811,10 @@ def build_r1_events(
         cached_close = _get_cached_close(ticker, et_date, loader_fn, frame_cache=frame_cache)
 
         if shares_outstanding is None or cached_close is None:
+            # S3-FIX: when max_market_cap is set, MC-None events cannot be verified within cap → exclude
+            if max_market_cap is not None:
+                n_excluded_unknown_mc += 1
+                continue
             score = None
             MC = None
             score_undefined = True
@@ -812,6 +826,10 @@ def build_r1_events(
                 score_undefined = True
                 score_undefined_total += 1
             else:
+                # S2-FIX: apply max_market_cap ceiling filter (mirrors s1_dose)
+                if max_market_cap is not None and MC > max_market_cap:
+                    n_cap_ceiling_excluded += 1
+                    continue  # don't append — above cap ceiling
                 score = _compute_score(D, k, MC)
                 score_undefined = False
 
@@ -827,10 +845,21 @@ def build_r1_events(
         if score_undefined:
             score_perturb = {v: None for v in _PERTURB_KEY_MAP.values()}
 
-        # Verify W21_F0 == primary score (same code path sanity)
-        assert score_perturb.get("W21_F0") == score or (score is None and score_perturb.get("W21_F0") is None), (
-            f"W21_F0 mismatch: {score_perturb.get('W21_F0')} vs {score}"
-        )
+        # S4-FIX: use math.isclose for numeric comparison (float == is fragile),
+        # and explicitly require both-None or both-defined (None==None silently
+        # passes the old assert even when the perturb path is broken).
+        _w21 = score_perturb.get("W21_F0")
+        if score is None and _w21 is None:
+            pass  # both undefined — ok
+        elif score is None or _w21 is None:
+            raise AssertionError(
+                f"W21_F0 mismatch: one is None but not the other: "
+                f"W21_F0={_w21!r} vs score={score!r}"
+            )
+        else:
+            assert math.isclose(_w21, score, rel_tol=1e-9, abs_tol=1e-12), (
+                f"W21_F0 mismatch: {_w21} vs {score}"
+            )
 
         payload = {
             "form_type": "4",  # event may aggregate 4/4A — use generic form_type
@@ -865,16 +894,20 @@ def build_r1_events(
         "score_undefined_total": score_undefined_total,
         "events_raw": len(day_candidates),
         "events_returned": len(events),
+        "n_cap_ceiling_excluded": n_cap_ceiling_excluded,    # S2/S3-FIX
+        "n_excluded_unknown_mc": n_excluded_unknown_mc,      # S3-FIX
     }
     log.info(
         "build_r1_events: scanned=%d qualifying=%d fallbacks=%d 10b51_excl=%d "
-        "missing_price=%d score_undefined=%d events=%d",
+        "missing_price=%d score_undefined=%d cap_excl=%d unknown_mc_excl=%d events=%d",
         filings_scanned,
         filings_qualifying,
         acceptance_fallbacks,
         n_10b51_excluded_total,
         missing_price_txns_total,
         score_undefined_total,
+        n_cap_ceiling_excluded,
+        n_excluded_unknown_mc,
         len(events),
     )
     return events, meta

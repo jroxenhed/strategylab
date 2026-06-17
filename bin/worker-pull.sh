@@ -19,7 +19,20 @@ fi
 
 REMOTE_REL="$1"
 LOCAL_PATH="$2"
-WORKER_HOST="strategylab-worker"
+WORKER_HOST="${WORKER_HOST:-strategylab-worker}"
+WORKER_SHELL="${WORKER_SHELL:-wsl}"
+
+# Wrap an inner bash command for the remote host's shell (mirrors worker-dispatch.sh).
+#   native: inner runs directly under the remote login shell (Linux/macOS box)
+#   wsl:    inner handed to `wsl bash -lc "…"` (Windows cmd.exe → wsl → bash)
+rwrap() {
+  local inner="$1"
+  if [[ "$WORKER_SHELL" == "native" ]]; then
+    printf '%s' "$inner"
+  else
+    printf 'wsl bash -lc "%s"' "$inner"
+  fi
+}
 
 # Validate REMOTE_REL: only safe characters, no ".." path traversal.
 if [[ ! "$REMOTE_REL" =~ ^[A-Za-z0-9_./-]+$ ]]; then
@@ -45,7 +58,7 @@ do_pull() {
 
   local inner="cat ~/strategylab/$REMOTE_REL"
   local rc=0
-  ssh "$WORKER_HOST" "wsl bash -lc \"$inner\"" 2>"$_stderr_tmp" || rc=$?
+  ssh "$WORKER_HOST" "$(rwrap "$inner")" 2>"$_stderr_tmp" || rc=$?
   grep -vE "post-quantum|store now|openssh|upgraded|vulnerable" "$_stderr_tmp" >&2 || true
   return $rc
 }

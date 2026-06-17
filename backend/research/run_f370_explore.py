@@ -35,6 +35,7 @@ import math
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -290,7 +291,6 @@ def return_between_dates(
     start_date: str,
     end_date: str,
     loader_fn: Callable,
-    sorted_dates: Optional[list] = None,
 ) -> Optional[float]:
     """Compute the return from start_date to end_date for ticker (close-to-close).
 
@@ -305,13 +305,10 @@ def return_between_dates(
     if frame is None or frame.empty:
         return None
 
-    # Normalize index to date strings
+    # Normalize index to date strings (MAINT-06: both DatetimeIndex and plain
+    # string indices use the same [:10] slice — the if/else was dead code).
     idx = frame.index
-    if hasattr(idx, "date"):
-        # DatetimeIndex
-        date_strs = [str(d)[:10] for d in idx]
-    else:
-        date_strs = [str(d)[:10] for d in idx]
+    date_strs = [str(d)[:10] for d in idx]
 
     if not date_strs:
         return None
@@ -390,6 +387,30 @@ def _run_dose_analysis(
     # Assign quintiles within-year (uses the r1_analysis helper directly)
     quintiles = _assign_quintiles_all_years(valid_rows, score_fn=score_fn)
 
+    # C370-04 fix: define _get_dates_for_quintile once, outside the horizon loop,
+    # with explicit parameters so there is no loop-variable capture.  The old pattern
+    # (defining the function inside `for h in horizons`) was correct because the
+    # function body does not use `h`, but re-definition on every iteration is
+    # recognised as a Python gotcha (if the call pattern ever changes to lazy
+    # evaluation the captured binding would silently use the last h value).
+    def _get_dates_for_quintile(
+        q_label: int,
+        _rows: list = valid_rows,
+        _qs: list = quintiles,
+    ) -> list:
+        dates = []
+        for row, q in zip(_rows, _qs):
+            if q != q_label:
+                continue
+            ed = row.get("entry_date", "")
+            if not ed:
+                continue
+            try:
+                dates.append(_date.fromisoformat(str(ed)[:10]))
+            except Exception:
+                pass
+        return sorted(dates)
+
     horizon_results: dict[int, dict] = {}
     for h in horizons:
         pqs = _per_quintile_stats(valid_rows, quintiles, h)
@@ -410,20 +431,6 @@ def _run_dose_analysis(
         # Block size uses event_study._block_size_for_horizon(h, entry_dates)
         p_boot = None
         if n5 >= 2 and n1 >= 2:
-            def _get_dates_for_quintile(q_label: int) -> list:
-                dates = []
-                for row, q in zip(valid_rows, quintiles):
-                    if q != q_label:
-                        continue
-                    ed = row.get("entry_date", "")
-                    if not ed:
-                        continue
-                    try:
-                        dates.append(_date.fromisoformat(str(ed)[:10]))
-                    except Exception:
-                        pass
-                return sorted(dates)
-
             q5_dates = _get_dates_for_quintile(5)
             q1_dates = _get_dates_for_quintile(1)
             L_a = _block_size_for_horizon(h, q5_dates)
@@ -485,7 +492,14 @@ def _run_dose_analysis(
                 "n": pqs.get(q, {}).get("n", 0),
             }
 
+        # K4/DI-F370-05: report per-horizon event count (sum of all quintile ns).
+        # valid_rows is filtered on 63td non-null excess; for 21td and 126td horizons
+        # some rows may lack that horizon's return, so n_events_h can differ from
+        # len(valid_rows).  This is the authoritative count for each horizon.
+        n_events_h = int(sum(pqs.get(q, {}).get("n", 0) for q in range(1, 6)))
+
         horizon_results[h] = {
+            "n_events": n_events_h,
             "q5q1_gap_pct": q5q1_gap,
             "p_boot": float(p_boot) if p_boot is not None and math.isfinite(p_boot) else p_boot,
             "rho_s": float(rho_s) if rho_s is not None else None,
@@ -506,6 +520,86 @@ def _run_dose_analysis(
         "coverage_pct": coverage_pct,
         "by_horizon": horizon_results,
     }
+
+
+# ---------------------------------------------------------------------------
+# Module-level picklable worker for parallel dose dispatch (F380a)
+# ---------------------------------------------------------------------------
+
+# Sentinel key used to carry the pre-computed composite score in row dicts.
+# Defined at module level so workers can reference it without capturing a
+# closure from the parent process.
+_COMPOSITE_KEY = "_f370_composite_score"
+
+# Payload key for each dose (earnings/revenue are directly in the payload;
+# composite is injected into the row dict under _COMPOSITE_KEY).
+_DOSE_PAYLOAD_KEYS: dict[str, str] = {
+    "earnings_yoy": "earnings_yoy",
+    "revenue_yoy": "revenue_yoy",
+    "composite": _COMPOSITE_KEY,
+}
+
+
+def _score_by_key(row: dict, payload_key: str) -> Optional[float]:
+    """Return the dose score for ``row`` given a payload key.
+
+    For 'earnings_yoy' and 'revenue_yoy': reads from ``row['payload']``.
+    For _COMPOSITE_KEY: reads from the row directly (injected by the driver).
+
+    Module-level so it is picklable across fork boundaries.
+    """
+    if payload_key == _COMPOSITE_KEY:
+        v = row.get(_COMPOSITE_KEY)
+    else:
+        v = (row.get("payload") or {}).get(payload_key)
+    if v is None:
+        return None
+    try:
+        f = float(v)
+        return f if math.isfinite(f) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _dose_worker(task: tuple, _parallel_map_seed: int) -> dict:
+    """Picklable worker: run _run_dose_analysis for one dose.
+
+    ``task`` is ``(dose_name, payload_key, valid_rows, horizons, seed)``.
+
+    MAINT-01 / RM-05 — EMBEDDED-SEED SCHEME (intentional, non-fragile):
+    The seed is embedded in the task tuple rather than using parallel_map's
+    auto-derived XOR seed.  Rationale:
+
+      * All three doses MUST run with the same base seed (_SEED = 20260608)
+        so their bootstrap results are comparable and byte-identical to the
+        serial path.
+
+      * parallel_map's contract derives ``seed = seed_base ^ task_index``,
+        giving doses 0/1/2 seeds [_SEED, _SEED^1, _SEED^2] — three DIFFERENT
+        seeds — which would break comparability across doses.
+
+      * The caller embeds ``_SEED`` directly in every task tuple and the
+        worker reads it from there.  This is correct and intentional.
+
+    ``_parallel_map_seed`` (the XOR-derived value from parallel_map) is
+    therefore explicitly IGNORED here.  If you are tempted to use it, first
+    verify that the caller passes seed_base=_SEED and all tasks embed the
+    same seed — otherwise results will differ from the serial path.
+
+    Module-level (pickle-safe on macOS spawn).
+    """
+    dose_name, payload_key, valid_rows, horizons, seed = task
+
+    def _score_fn(row: dict) -> Optional[float]:
+        return _score_by_key(row, payload_key)
+
+    return _run_dose_analysis(
+        valid_rows=valid_rows,
+        score_fn=_score_fn,
+        dose_name=dose_name,
+        horizons=horizons,
+        seed=seed,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -584,7 +678,7 @@ def run(workers: int = 1) -> None:
     # ------------------------------------------------------------------
     # 2. Build universe
     # ------------------------------------------------------------------
-    log.info("Building universe tickers (4,678 expected) ...")
+    log.info("Building universe tickers ...")
     universe_tickers = _build_universe_tickers()
     log.info("Universe: %d tickers", len(universe_tickers))
 
@@ -722,28 +816,6 @@ def run(workers: int = 1) -> None:
     # ------------------------------------------------------------------
     # 7. Build dose scores on the explore rows
     # ------------------------------------------------------------------
-    # Dose 1: earnings_yoy (directly from payload)
-    def score_fn_earnings(row: dict) -> Optional[float]:
-        v = (row.get("payload") or {}).get("earnings_yoy")
-        if v is None:
-            return None
-        try:
-            f = float(v)
-            return f if math.isfinite(f) else None
-        except (TypeError, ValueError):
-            return None
-
-    # Dose 2: revenue_yoy (directly from payload)
-    def score_fn_revenue(row: dict) -> Optional[float]:
-        v = (row.get("payload") or {}).get("revenue_yoy")
-        if v is None:
-            return None
-        try:
-            f = float(v)
-            return f if math.isfinite(f) else None
-        except (TypeError, ValueError):
-            return None
-
     # Dose 3: composite (frozen formula — computed cross-sectionally over explore_rows).
     # C370-02/DI-F370-01: z-scores are computed over explore_rows (all floor_ok events)
     # while quintile analysis runs on valid_rows (subset with non-null 63td excess).
@@ -752,20 +824,11 @@ def run(workers: int = 1) -> None:
     # Q5−Q1 is unaffected. No logic change needed; this comment documents the rationale.
     log.info("Computing composite dose (cross-sectional z-scores over explore rows) ...")
     composite_scores = composite_dose(explore_rows)
-    # Build a lookup by index so we can use a closure
-    _composite_map: dict[int, Optional[float]] = {
-        i: v for i, v in enumerate(composite_scores)
-    }
-    # We need a score_fn that takes a row and returns its composite score.
-    # Since composite is pre-computed over the list, we use the list index approach:
-    # Attach composite score to each row temporarily under a sentinel key.
-    _COMPOSITE_KEY = "_f370_composite_score"
+    # Attach composite score to each row under the module-level _COMPOSITE_KEY
+    # so _score_by_key() can read it in workers without a closure.
+    # (_COMPOSITE_KEY is defined at module level for pickle safety.)
     for i, row in enumerate(explore_rows):
         row[_COMPOSITE_KEY] = composite_scores[i]
-
-    def score_fn_composite(row: dict) -> Optional[float]:
-        v = row.get(_COMPOSITE_KEY)
-        return v  # already float|None
 
     # ------------------------------------------------------------------
     # 8. Run per-dose analysis (reusing r1_analysis low-level helpers)
@@ -783,22 +846,45 @@ def run(workers: int = 1) -> None:
     valid_rows = [r for r in explore_rows if _has_valid_excess(r, 63)]
     log.info("Valid rows for analysis (non-null 63td excess): %d", len(valid_rows))
 
-    doses = [
-        ("earnings_yoy", score_fn_earnings),
-        ("revenue_yoy", score_fn_revenue),
-        ("composite", score_fn_composite),
+    # F380(a): Parallel dose dispatch.
+    # Dose × horizon cells are independent; dispatch each dose as a separate
+    # ProcessPool task.  _dose_worker is module-level (pickle-safe on macOS
+    # spawn) and receives a deterministic per-task seed via parallel_map.
+    # workers=1 falls back to the exact serial path (byte-for-byte identical
+    # results — parallel_map serial path calls fn(task, seed) in input order).
+    from research.parallel_map import parallel_map as _parallel_map
+
+    _dose_name_to_key = {
+        "earnings_yoy": "earnings_yoy",
+        "revenue_yoy": "revenue_yoy",
+        "composite": _COMPOSITE_KEY,
+    }
+    _dose_order = ["earnings_yoy", "revenue_yoy", "composite"]
+    # Seed is embedded in the task tuple (not from parallel_map's XOR
+    # derivation) so each dose uses the same _SEED as the serial path,
+    # preserving byte-identical results.
+    _dose_tasks = [
+        (dn, _dose_name_to_key[dn], valid_rows, _HORIZONS, _SEED)
+        for dn in _dose_order
     ]
 
+    # Use min(workers, 3) for dose parallelism — only 3 doses.
+    _dose_workers = min(workers, len(_dose_order))
+    log.info(
+        "F380(a): Running dose analysis (%d doses, %d workers, seed=%d) ...",
+        len(_dose_order), _dose_workers, _SEED,
+    )
+    t_dose = time.monotonic()
+    _dose_results_list = _parallel_map(
+        _dose_worker, _dose_tasks,
+        workers=_dose_workers,
+        seed_base=_SEED,
+    )
+    log.info("Dose analysis done in %.1fs (workers=%d).", time.monotonic() - t_dose, _dose_workers)
+
     dose_results = {}
-    for dose_name, sfn in doses:
-        log.info("Running dose analysis: %s ...", dose_name)
-        result = _run_dose_analysis(
-            valid_rows=valid_rows,
-            score_fn=sfn,
-            dose_name=dose_name,
-            horizons=_HORIZONS,
-            seed=_SEED,
-        )
+    for result in _dose_results_list:
+        dose_name = result["dose_name"]
         dose_results[dose_name] = result
         h_primary = result["by_horizon"].get(_PRIMARY_HORIZON, {})
         log.info(
@@ -811,9 +897,18 @@ def run(workers: int = 1) -> None:
         )
 
     # ------------------------------------------------------------------
-    # 9. Power audit (one-time; design MDE for this family)
+    # 9. Power audit (one-time; characterises the generic F340-design family)
     # ------------------------------------------------------------------
-    log.info("Running power_audit.run_audit (n_reps=200, seed=%d) ...", _SEED)
+    # F381-1 (DI-F370-04): run_audit uses a GENERIC simulation population
+    # (quarterly/monthly/event-time schedules on a random-ticker panel), NOT the
+    # actual PEAD event structure.  Its mde_80pct is therefore NOT the design MDE
+    # for this study — it characterises abstract schedule designs, not PEAD quintile
+    # Q5-Q1 spreads.  The per-dose empirical _compute_mde_q5q1 (stored in
+    # by_horizon[h]["mde_pp"] for each dose) is the authoritative go/no-go MDE.
+    # We still run run_audit as a calibration reference (F340 smoke gate) but we
+    # deliberately EXCLUDE its mde_80pct from the summary JSON to prevent it
+    # being misread as the study's detectable effect size.
+    log.info("Running power_audit.run_audit (n_reps=200, seed=%d, workers=%d) ...", _SEED, workers)
     t_pa = time.monotonic()
     from research.power_audit import run_audit
     pa_result = run_audit(
@@ -821,17 +916,21 @@ def run(workers: int = 1) -> None:
         e_grid=[0, 0.5, 1.0, 1.5, 2.0, 3.0],
         seed=_SEED,
         verbose=True,
+        workers=workers,
     )
-    design_mde_80pct = pa_result.get("mde_80pct")
     log.info(
-        "Power audit done in %.1fs. Design MDE (80%% power): %s pp",
+        "Power audit done in %.1fs. "
+        "(mde_80pct omitted from summary — generic-population MDE, not PEAD MDE; "
+        "see by_horizon[h]['mde_pp'] per dose for the empirical design MDE.)",
         time.monotonic() - t_pa,
-        design_mde_80pct,
     )
 
     # ------------------------------------------------------------------
     # 10. Gap lens: 8-K item 2.02 → filing date return
-    #     Reuses census 8-K 2.02 identification (premise_power_census.py)
+    #     Mirrors the 8-K 2.02 scan pattern from premise_power_census.run_eightk()
+    #     (the census function is too entangled to call directly — it runs the full
+    #     scan and produces EventOutcome objects; we replicate the identification
+    #     logic inline rather than importing the private helper).
     # ------------------------------------------------------------------
     log.info("Building gap lens (8-K item 2.02 to 10-Q/10-K filing date drift) ...")
     ticker_to_cik: dict[str, str] = {}
@@ -850,66 +949,92 @@ def run(workers: int = 1) -> None:
 
             eightk_index = _build_eightk_202_index(cik_to_ticker, _SUBS_DIR)
 
-            # For each explore event, look up same cik + period
-            gap_returns = []
-            n_gap_found = 0
-            n_gap_missing = 0
-
-            import bisect
+            # F380(b): Parallel gap-lens I/O.
+            # Pre-resolve (ticker, announce_date, filing_date) pairs in a single
+            # pass, then dispatch the disk reads concurrently via ThreadPoolExecutor.
+            # ThreadPool (not ProcessPool) because:
+            #   - loader is an in-process closure (not pickle-safe)
+            #   - PriceFrameCache.load() is thread-safe (read-only)
+            #   - GIL is released during pickle.load() I/O
             _GAP_WINDOW_DAYS = 90  # 2.02 for this quarter precedes its 10-Q by days-to-weeks
+            # Phase 1: resolve matches (CPU-light, serial)
+            _gap_candidates: list[tuple] = []  # (ticker, announce_date, filing_date, row)
+            n_gap_missing_pre = 0
             for row in explore_rows[:]:
                 ticker = row.get("ticker", "")
                 cik = ticker_to_cik.get(ticker, "")
                 filing_ts = row.get("event_ts")
                 if not cik or not filing_ts:
-                    n_gap_missing += 1
+                    n_gap_missing_pre += 1
                     continue
-
-                # Filing date = the 10-Q/10-K's ET acceptance date (COR-02).
                 filing_date = _adt_to_et_date(filing_ts)
                 if not filing_date:
-                    n_gap_missing += 1
+                    n_gap_missing_pre += 1
                     continue
-
-                # Link by TIME, not period key: the most recent 8-K item-2.02
-                # announcement strictly before this filing, within the window
-                # (that is the earnings announcement for the same quarter).
                 announces = eightk_index.get(cik, [])
                 if not announces:
-                    n_gap_missing += 1
+                    n_gap_missing_pre += 1
                     continue
-                pos = bisect.bisect_left(announces, filing_date)  # first >= filing_date
+                pos = bisect.bisect_left(announces, filing_date)
                 if pos == 0:
-                    n_gap_missing += 1  # no 2.02 strictly before the filing
+                    n_gap_missing_pre += 1
                     continue
-                announce_date = announces[pos - 1]  # latest 2.02 before the filing
+                announce_date = announces[pos - 1]
                 try:
                     gap_days = (date.fromisoformat(filing_date) - date.fromisoformat(announce_date)).days
                 except ValueError:
-                    n_gap_missing += 1
+                    n_gap_missing_pre += 1
                     continue
                 if gap_days <= 0 or gap_days > _GAP_WINDOW_DAYS:
-                    n_gap_missing += 1  # out-of-order or too far back (prior quarter)
+                    n_gap_missing_pre += 1
                     continue
+                _gap_candidates.append((ticker, announce_date, filing_date, row))
 
+            # Phase 2: parallel disk reads via threads (I/O-bound)
+            # CONC-03: respect --workers 1 as a "no extra parallelism" signal.
+            # When workers==1, use exactly 1 thread (serial I/O path).
+            # For workers>1, scale up to 4× workers (I/O-bound; safe to over-
+            # subscribe relative to CPU count), capped at 32 and n_candidates.
+            if workers <= 1:
+                _gap_thread_workers = 1
+            else:
+                _gap_thread_workers = min(workers * 4, 32, len(_gap_candidates)) if _gap_candidates else 1
+            _gap_thread_workers = max(1, _gap_thread_workers)
+            log.info(
+                "F380(b): Gap lens I/O — %d candidates, %d thread workers ...",
+                len(_gap_candidates), _gap_thread_workers,
+            )
+            t_gap_io = time.monotonic()
+
+            def _fetch_gap(candidate):
+                ticker, announce_date, filing_date, row = candidate
                 gap_ret = return_between_dates(ticker, announce_date, filing_date, loader)
-                if gap_ret is not None:
-                    n_gap_found += 1
-                    gap_returns.append({
-                        "ticker": ticker,
-                        "announce_date": announce_date,
-                        "filing_date": filing_date,
-                        "gap_return_pct": gap_ret,
-                        # Store dose correlates
-                        "earnings_yoy": (row.get("payload") or {}).get("earnings_yoy"),
-                        "composite": row.get(_COMPOSITE_KEY),
-                    })
-                else:
-                    n_gap_missing += 1
+                return gap_ret, ticker, announce_date, filing_date, row
+
+            gap_returns = []
+            n_gap_found = 0
+            n_gap_missing = n_gap_missing_pre
+            if _gap_candidates:
+                with ThreadPoolExecutor(max_workers=_gap_thread_workers) as _tpool:
+                    for gap_ret, ticker, announce_date, filing_date, row in _tpool.map(
+                        _fetch_gap, _gap_candidates
+                    ):
+                        if gap_ret is not None:
+                            n_gap_found += 1
+                            gap_returns.append({
+                                "ticker": ticker,
+                                "announce_date": announce_date,
+                                "filing_date": filing_date,
+                                "gap_return_pct": gap_ret,
+                                "earnings_yoy": (row.get("payload") or {}).get("earnings_yoy"),
+                                "composite": row.get(_COMPOSITE_KEY),
+                            })
+                        else:
+                            n_gap_missing += 1
 
             log.info(
-                "Gap lens: n_found=%d, n_missing=%d (no 2.02 match or no price)",
-                n_gap_found, n_gap_missing,
+                "Gap lens I/O done in %.1fs. n_found=%d, n_missing=%d (no 2.02 match or no price)",
+                time.monotonic() - t_gap_io, n_gap_found, n_gap_missing,
             )
 
             if gap_returns:
@@ -999,6 +1124,16 @@ def run(workers: int = 1) -> None:
             pass
         return obj
 
+    # RM-03: PROGRAM.md requires "every charter states its design MDE".
+    # power_audit's mde_80pct is OMITTED (generic population — not PEAD).
+    # Expose per-dose empirical mde_pp at primary horizon (63td) as the
+    # labeled design MDE so the charter requirement is formally met.
+    # This is the authoritative go/no-go MDE for this study.
+    _design_mde_pp: dict[str, object] = {}
+    for _dn, _dr in dose_results.items():
+        _h_primary = _dr.get("by_horizon", {}).get(_PRIMARY_HORIZON, {})
+        _design_mde_pp[_dn] = _h_primary.get("mde_pp")  # float or None
+
     summary = {
         "study_name": STUDY_NAME,
         "explore_start": str(_EXPLORE_START),
@@ -1009,7 +1144,12 @@ def run(workers: int = 1) -> None:
         "n_events_harness": harness_meta.get("n_events"),
         "n_explore": harness_meta.get("n_explore"),
         "n_valid_for_analysis": len(valid_rows),
-        "power_audit_design_mde_80pct_pp": design_mde_80pct,
+        # RM-03: per-dose empirical design MDE at primary horizon (63td).
+        # Source: _compute_mde_q5q1 (r1_analysis) applied to Q5 vs Q1 arrays.
+        # Units: percentage points (pp).  This is the charter-required design
+        # MDE.  power_audit's mde_80pct is intentionally absent — it uses a
+        # generic schedule population, not PEAD Q5-Q1 structure (F381-1).
+        "design_mde_pp": _jsonify(_design_mde_pp),
         "doses": _jsonify(dose_results),
         "gap_lens": _jsonify(gap_lens_summary),
         "elapsed_sec": round(time.monotonic() - t0, 1),
@@ -1023,17 +1163,19 @@ def run(workers: int = 1) -> None:
     # Log headline results for easy reading in run.log
     log.info("=" * 60)
     log.info("F370 explore-0 HEADLINE RESULTS")
-    log.info("Design MDE (80%% power, power_audit): %s pp", design_mde_80pct)
+    log.info("Design MDE (RM-03): design_mde_pp in summary = per-dose empirical mde_pp @ 63td (power_audit MDE omitted — generic population, not PEAD)")
     for dose_name, result in dose_results.items():
         h = result["by_horizon"].get(_PRIMARY_HORIZON, {})
         log.info(
-            "  Dose %-20s @ 63td: Q5-Q1=%+.3f%% p_boot=%s rho=%s MDE=%.3f%% n=%d coverage=%.1f%%",
+            "  Dose %-20s @ 63td: Q5-Q1=%+.3f%% p_boot=%s rho=%s MDE=%.3f%%"
+            " n_events_h=%d n_global=%d coverage=%.1f%%",
             dose_name,
             h.get("q5q1_gap_pct") or 0.0,
             h.get("p_boot"),
             h.get("rho_s"),
             h.get("mde_pp") or float("nan"),
-            result.get("n_with_dose", 0),
+            h.get("n_events", 0),           # K4: per-horizon count
+            result.get("n_with_dose", 0),    # global (63td-filtered) coverage count
             result.get("coverage_pct", 0.0),
         )
     log.info("Total elapsed: %.1fs", time.monotonic() - t0)

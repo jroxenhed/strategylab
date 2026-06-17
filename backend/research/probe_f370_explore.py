@@ -252,14 +252,34 @@ def anchor_a3_no_lookahead(rows: list[dict]) -> AnchorResult:
             continue
 
         try:
-            # Parse event_ts to ET date
+            # Parse event_ts to ET date.
+            # C370-05 fix: always ensure the parsed datetime is tz-aware before
+            # calling .astimezone(), so the conversion is always UTC→ET regardless
+            # of the server's local timezone (server is in Sweden/CEST, not UTC).
+            # Pattern mirrors _adt_to_et_date() in run_f370_explore.py:
+            #   1. Normalise trailing Z → +00:00
+            #   2. Strip fractional seconds but preserve any explicit offset
+            #   3. If still naive after parsing, assume UTC (treat as +00:00)
             if isinstance(event_ts, str):
-                # Remove trailing Z and parse
-                ts_str = event_ts.replace("Z", "+00:00")
+                ts_str = event_ts
+                if ts_str.endswith("Z"):
+                    ts_str = ts_str[:-1] + "+00:00"
                 if "." in ts_str:
-                    ts_str = ts_str.split(".")[0] + "+00:00"
-                dt_utc = datetime.fromisoformat(ts_str)
-                dt_et = dt_utc.astimezone(_ET_TZ)
+                    dot = ts_str.index(".")
+                    after = ts_str[dot + 1:]
+                    has_offset = "+" in after or (after.count("-") > 0)
+                    if has_offset:
+                        for sep in ("+", "-"):
+                            if sep in after:
+                                ts_str = ts_str[:dot] + sep + after.split(sep, 1)[1]
+                                break
+                    else:
+                        ts_str = ts_str[:dot] + "+00:00"
+                dt = datetime.fromisoformat(ts_str)
+                if dt.tzinfo is None:
+                    # No offset in string: treat as UTC (never rely on local tz)
+                    dt = dt.replace(tzinfo=timezone.utc)
+                dt_et = dt.astimezone(_ET_TZ)
                 event_et_date = dt_et.date()
             else:
                 continue
@@ -298,12 +318,14 @@ def anchor_a4_face_validity(summary: dict) -> AnchorResult:
     if not summary:
         return (None, "f370_explore_summary.json not found — NOT-RUN")
 
-    design_mde = summary.get("power_audit_design_mde_80pct_pp")
     doses = summary.get("doses") or {}
     if not doses:
         return (None, "No dose results in summary — NOT-RUN")
 
-    lines = [f"Design MDE (80%% power): {design_mde} pp"]
+    # F381-1: power_audit_design_mde_80pct_pp was intentionally removed from the
+    # summary (generic-population MDE ≠ PEAD design MDE).  Report the per-dose
+    # empirical MDE (by_horizon[h]["mde_pp"]) instead.
+    lines = ["Empirical MDE (per-dose, Q5-Q1 spread, 80% power):"]
     any_finite = False
     for dose_name, dose_result in doses.items():
         by_h = dose_result.get("by_horizon") or {}
@@ -313,6 +335,7 @@ def anchor_a4_face_validity(summary: dict) -> AnchorResult:
         p_boot = h_result.get("p_boot")
         rho_s = h_result.get("rho_s")
         cov = dose_result.get("coverage_pct")
+        n_events_h = h_result.get("n_events")
 
         if gap is not None and math.isfinite(gap):
             any_finite = True
@@ -321,9 +344,11 @@ def anchor_a4_face_validity(summary: dict) -> AnchorResult:
         p_str = f"{p_boot:.3f}" if (p_boot is not None and math.isfinite(p_boot)) else "n/a"
         rho_str = f"{rho_s:.3f}" if (rho_s is not None and math.isfinite(rho_s)) else "n/a"
         cov_str = f"{cov:.1f}%" if cov is not None else "n/a"
+        n_str = str(n_events_h) if n_events_h is not None else "n/a"
 
         lines.append(
-            f"  {dose_name}: Q5-Q1={gap_str} p={p_str} rho={rho_str} MDE={mde_str} cov={cov_str}"
+            f"  {dose_name}: Q5-Q1={gap_str} p={p_str} rho={rho_str}"
+            f" MDE={mde_str} n={n_str} cov={cov_str}"
         )
 
     if not any_finite:

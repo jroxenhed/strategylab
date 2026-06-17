@@ -150,6 +150,11 @@ def _worker_build_chunk(
     no_frame_syms: list[str] = []
     no_row_syms: list[str] = []
     nan_rejected: int = 0  # F363: count of NaN forward-returns rejected before append
+    # F375: per-symbol NaN counts for coverage-audit traceability.
+    # A symbol that appears in the produced-rows bucket but has some NaN cells has
+    # invisible coverage holes when only the global nan_rejected count is reported.
+    # Dict is omitted from the return value when empty (zero-overhead common case).
+    nan_rejected_by_sym: dict[str, int] = {}
     for sym_i, sym in enumerate(ticker_chunk):
         if progress_path is not None:
             try:
@@ -245,6 +250,10 @@ def _worker_build_chunk(
                     # it explicitly rather than silently dropping it.
                     if _math.isnan(r):
                         nan_rejected += 1
+                        # F375: per-symbol attribution so coverage-audit can identify
+                        # which tickers have invisible NaN holes even though they appear
+                        # in the produced-rows bucket.
+                        nan_rejected_by_sym[sym] = nan_rejected_by_sym.get(sym, 0) + 1
                         _wlog.debug(
                             "nan_rejected: sym=%s entry=%s h=%s r=NaN (exit bar NaN Close)",
                             sym, entry_date, h,
@@ -275,11 +284,16 @@ def _worker_build_chunk(
     # F363: nan_rejected is surfaced here so the parent can accumulate across chunks
     # and log the total.  A nonzero total is informational (not a build failure) but
     # means some (sym, date, horizon) cells had NaN exit prices — worth knowing.
-    return rows, {
+    # F375: nan_rejected_by_sym gives per-symbol attribution.  Only included when
+    # non-empty to avoid inflating the pickle payload for the zero-NaN common case.
+    coverage: dict = {
         "no_frame": no_frame_syms,
         "no_rows": no_row_syms,
         "nan_rejected": nan_rejected,
     }
+    if nan_rejected_by_sym:
+        coverage["nan_rejected_by_sym"] = nan_rejected_by_sym
+    return rows, coverage
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +470,8 @@ def _build_universe_returns_matrix_inner(
     no_row_tickers: list[str] = []
     failed_chunk_tickers: list[str] = []  # COV-1: failed chunks' tickers must not count as covered
     total_nan_rejected: int = 0  # F363: accumulate NaN-rejected cells across all chunks
+    # F375: per-symbol NaN counts aggregated across chunks; only populated when nonzero.
+    total_nan_rejected_by_sym: dict[str, int] = {}
     t0 = time.monotonic()
     completed = 0
     errors = 0
@@ -478,6 +494,9 @@ def _build_universe_returns_matrix_inner(
                 no_frame_tickers.extend(chunk_coverage["no_frame"])
                 no_row_tickers.extend(chunk_coverage["no_rows"])
                 total_nan_rejected += chunk_coverage.get("nan_rejected", 0)  # F363
+                # F375: merge per-symbol NaN counts (only present when nonzero in chunk)
+                for sym, cnt in chunk_coverage.get("nan_rejected_by_sym", {}).items():
+                    total_nan_rejected_by_sym[sym] = total_nan_rejected_by_sym.get(sym, 0) + cnt
                 completed += 1
                 if completed % 10 == 0 or completed == n_chunks:
                     elapsed = time.monotonic() - t0
@@ -597,6 +616,7 @@ def _build_universe_returns_matrix_inner(
         no_row_tickers=no_row_tickers,
         failed_chunk_tickers=failed_chunk_tickers,
         nan_rejected_count=total_nan_rejected,  # F363
+        nan_rejected_by_sym=total_nan_rejected_by_sym,  # F375
     )
     _write_parquet_and_meta_atomic(df, out_path, meta)
 
@@ -654,6 +674,7 @@ def _build_metadata(
     no_row_tickers: Optional[list[str]] = None,
     failed_chunk_tickers: Optional[list[str]] = None,
     nan_rejected_count: int = 0,  # F363: cells with NaN forward-return rejected before append
+    nan_rejected_by_sym: Optional[dict] = None,  # F375: per-symbol attribution
 ) -> dict:
     """Build metadata dict (no I/O — caller writes it)."""
     now_utc = datetime.now(tz=timezone.utc)
@@ -706,6 +727,11 @@ def _build_metadata(
         # Zero is expected (measured 0 in the accepted 8.9M-row build).
         # Nonzero means some (sym, date, horizon) cells had NaN exit prices.
         "nan_rejected_count": nan_rejected_count,
+        # F375: per-symbol attribution for coverage-audit traceability.
+        # Only populated when nan_rejected_count > 0; empty dict otherwise.
+        # A symbol here may still appear in ticker_coverage.tickers_with_rows —
+        # it produced SOME valid rows but has invisible NaN holes for specific dates/horizons.
+        "nan_rejected_by_sym": dict(sorted((nan_rejected_by_sym or {}).items())),
         "horizons_trading_days": list(horizons),
         "last_full_coverage_date": last_full_coverage,
         "price_cache_fingerprint": cache_fingerprint_note,

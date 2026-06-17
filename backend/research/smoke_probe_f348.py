@@ -246,12 +246,8 @@ def probe_a3_distribution_sanity(
     rev_yoys = [e["payload"].get("revenue_yoy") for e in events_sample
                 if e["payload"].get("revenue_yoy") is not None]
 
-    # Check for infinities/NaNs across all numeric fields
-    NUMERIC_KEYS = (
-        "revenue_yoy", "revenue_accel", "earnings_yoy", "net_margin",
-        "net_margin_infl_pp", "gross_margin_infl_pp", "dilution_yoy",
-        "ocf_accrual_ratio",
-    )
+    # Check for infinities/NaNs across all numeric fields — import canonical list (F377)
+    from research.fundamental_surprise import NUMERIC_KEYS  # noqa: PLC0415
     inf_nan_hits = []
     for ev in events_sample:
         p = ev["payload"]

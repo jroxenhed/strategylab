@@ -439,6 +439,15 @@ def main() -> None:
         print(f'ERROR: {todo_path} not found', file=sys.stderr)
         sys.exit(1)
 
+    # F323: freshly-added [x] items have no <a id="..."></a> anchor until
+    # sync-todo-index runs (the pre-commit hook runs it at commit time, not at
+    # archive time). Run sync FIRST so every item carries its anchor before we
+    # enumerate + verify — otherwise archive verification hard-fails on
+    # same-session items. Idempotent; the end-of-run sync still handles the
+    # index regeneration after items are removed.
+    if not args.no_sync and not args.dry_run:
+        _run_sync(todo_path)
+
     text = todo_path.read_text(encoding='utf-8')
     lines = text.splitlines(keepends=True)
 
@@ -487,7 +496,10 @@ def main() -> None:
         print(
             f'ERROR: archive verification failed — these slugs not found in {archive_path}:\n'
             + ''.join(f'  {s}\n' for s in missing)
-            + 'TODO.md was NOT modified.',
+            + 'TODO.md was NOT modified.\n'
+            + 'Likely cause: these items lack their <a id="..."></a> anchor.\n'
+            + 'Cure: run  bin/sync-todo-index.py  first, then re-run archive-todo.py\n'
+            + '      (or re-run without --no-sync, which now pre-syncs anchors).',
             file=sys.stderr,
         )
         sys.exit(1)

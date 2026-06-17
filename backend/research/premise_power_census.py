@@ -1960,6 +1960,101 @@ def write_human_report(results: dict, out_dir: Path, logger: logging.Logger) -> 
                 "",
             ]
 
+    # --- Orchestrator synthesis section (F373a) ---
+    # Written from census data so re-runs don't require a separate orchestrator pass.
+    # Verdict: YES = MDE_1samp ≤ 1.0pp (one-sample), DOSE = MDE_gap ≤ 1.0pp (dose-gap).
+    lines += [
+        "",
+        "---",
+        "",
+        "## Orchestrator Synthesis",
+        "",
+        "> **Decision guide:** MDE_1samp ≤ 1.0pp → one-sample test is POWERED. "
+        "MDE_gap ≤ 1.0pp → dose-gap (Q5 vs Q1 score split) is POWERED. "
+        "These are power gates, not verdicts — a powered family still needs a well-defined signal.",
+        "",
+    ]
+
+    # Emit per-family synthesis rows derived from the results dict
+    synth_rows: list[str] = []
+    for fam_name in families_order:
+        fam = results.get(fam_name)
+        if fam is None:
+            synth_rows.append(f"| {fam_name} | pending | pending | — |")
+            continue
+
+        if fam.get("status") == "blocked":
+            synth_rows.append(f"| {fam_name} | blocked | blocked | {fam.get('reason', '?')} |")
+            continue
+
+        # Extract MDE values depending on family shape
+        if fam_name == "calibration":
+            s = fam.get("stats_stored_excess", {})
+            mde1 = s.get("MDE_1samp_63", float("nan"))
+            mde_g = s.get("MDE_gap_63", float("nan"))
+        elif fam_name == "r1b_subuniverse":
+            # Use overall MC-subset
+            s = fam.get("overall_mc_subset", {})
+            mde1 = s.get("MDE_1samp", float("nan"))
+            mde_g = s.get("MDE_gap")
+        else:
+            mde1 = fam.get("MDE_1samp", float("nan"))
+            mde_g = fam.get("MDE_gap")
+
+        verdict_1samp = _testable(mde1)
+        verdict_gap = _testable(mde_g) if mde_g is not None else "N/A (no score)"
+
+        if isinstance(mde1, float) and math.isfinite(mde1) and mde1 <= 1.0:
+            action = "PROCEED to signal design — one-sample test powered"
+        elif isinstance(mde1, float) and math.isfinite(mde1):
+            n_needed = _n_needed_1pp(mde1)
+            action = f"UNDERPOWERED for 1samp — need ~{n_needed} events for 1.0pp"
+        else:
+            action = "Cannot assess — MDE not computed"
+
+        synth_rows.append(
+            f"| {fam_name} | {_fmt(mde1, 3)} | {verdict_1samp} / {verdict_gap} | {action} |"
+        )
+
+    lines += [
+        "| family | MDE_1samp_63 (pp) | testable (1samp / gap) | action |",
+        "|---|---|---|---|",
+    ] + synth_rows + [""]
+
+    # --- Known approximations section (F373) ---
+    lines += [
+        "",
+        "---",
+        "",
+        "## Known Approximations and Methodology Notes",
+        "",
+        "The following approximations are documented for transparency.  "
+        "None affect the MDE conclusions; all are within the tolerance bands of a power census.",
+        "",
+        "### COR-05 — Calibration quintile-n (593 vs 596, within tolerance)",
+        "",
+        "The dose-gap MDE for the calibration family uses the score-based quintile path "
+        "(`np.percentile(s_valid, 20/80)` on 2,964 scored events). This produces "
+        "n_q1 ≈ 593 / n_q5 ≈ 593 rather than the verdict-stored values of n_q1=596 / n_q5=591. "
+        "The difference (≤3 events per tail) arises because `np.percentile` with the default "
+        "interpolation method can land on a tie boundary differently from the method used "
+        "in the original R-1b verdict. "
+        "The resulting MDE_gap is 3.375pp — within the A3_gap tolerance (3.40 ± 0.10pp) — "
+        "so the calibration anchor still passes. No fix required; documented for reproducibility.",
+        "",
+        "### COR-08 — R-2 intra-week dedup approximation",
+        "",
+        "The R-2 family deduplicates filing events at the `(ticker, entry_date)` level, "
+        "where `entry_date` is the next matrix trading day after the filing's ET calendar date. "
+        "If the same ticker files two 10-Q/10-K documents in the same calendar week and both "
+        "map to the same matrix entry_date (e.g., a filing and its amendment both have "
+        "the same next-trading-day), only the first occurrence is evaluated for the D2 predicate. "
+        "10-K/A amendments are rare enough that this marginally affects n. "
+        "For a power census this is acceptable. "
+        "If exact event counts are needed, dedup at `(ticker, acceptanceDateTime)` instead.",
+        "",
+    ]
+
     lines += [
         "---",
         "",
@@ -2017,6 +2112,11 @@ def main() -> None:
     results = {}
 
     # Try to load existing census.json for partial results
+    # PY-05: warn explicitly with file size and corruption note so the operator
+    # knows prior results are being discarded (not a silent no-op).  A corrupt
+    # file most likely came from a crash during write_census_json; the atomic-
+    # write guard (PY-09) prevents this on clean exits, but SIGKILL can still
+    # leave a partial .json.tmp that was already renamed.
     census_path = out_dir / "census.json"
     if census_path.exists():
         try:
@@ -2024,8 +2124,12 @@ def main() -> None:
                 results = json.load(f)
             logger.info("Loaded existing census.json (%d families)", len(results))
         except Exception as exc:
+            file_size = census_path.stat().st_size if census_path.exists() else -1
             logger.warning(
-                "Could not load existing census.json (%s) — starting fresh", exc
+                "CORRUPT or unreadable census.json at %s (size=%d bytes, error=%s). "
+                "Starting fresh — any previously computed family results are LOST for this run. "
+                "If this is unexpected, inspect or restore the file before re-running.",
+                census_path, file_size, exc,
             )
             results = {}
 

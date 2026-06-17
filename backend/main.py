@@ -40,6 +40,7 @@ from routes.walk_forward import router as walk_forward_router
 from routes.strategies import router as strategies_router
 from routes.nodebuilder import router as nodebuilder_router
 from routes.turnaround import router as turnaround_router
+from routes.premises import router as premises_router
 import routes.bots as bots_module
 from bot_manager import BotManager
 from middleware import BodySizeLimitMiddleware, DEFAULT_MAX_BYTES, parse_max_body_env
@@ -141,6 +142,7 @@ app.include_router(walk_forward_router)
 app.include_router(strategies_router)
 app.include_router(nodebuilder_router)
 app.include_router(turnaround_router)
+app.include_router(premises_router)
 
 
 @app.get("/api/cache")

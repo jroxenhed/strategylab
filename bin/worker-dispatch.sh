@@ -66,12 +66,34 @@ ssh_clean() {
   grep -vE "post-quantum|store now|openssh|upgraded|vulnerable" || true
 }
 
-# ── worker probe ─────────────────────────────────────────────────────────────
-WORKER_HOST="strategylab-worker"
+# ── worker host + remote-shell wrapper ────────────────────────────────────────
+# WORKER_HOST     — ssh alias of the compute box (default: home 14900k).
+# WORKER_SHELL    — "wsl" (Windows host: cmd.exe → wsl → bash, the home worker)
+#                   or "native" (Linux/macOS host: ssh runs the inner command
+#                   directly under the remote login shell, e.g. office mfcore01).
+# Examples:
+#   WORKER_HOST=mfcore01 WORKER_SHELL=native bin/worker-dispatch.sh …
+WORKER_HOST="${WORKER_HOST:-strategylab-worker}"
+WORKER_SHELL="${WORKER_SHELL:-wsl}"
 
+# Wrap an inner bash command for the remote host, returning the string to pass
+# as the SINGLE ssh command argument. The wsl form keeps the hand-tuned
+# cmd.exe → wsl → bash quoting exactly as before; native hands the inner command
+# straight to the remote login shell. Inner commands must not contain literal
+# double-quotes (none do today).
+rwrap() {
+  local inner="$1"
+  if [[ "$WORKER_SHELL" == "native" ]]; then
+    printf '%s' "$inner"
+  else
+    printf 'wsl bash -lc "%s"' "$inner"
+  fi
+}
+
+# ── worker probe ─────────────────────────────────────────────────────────────
 worker_reachable() {
   ssh -o ConnectTimeout=8 -o BatchMode=yes "$WORKER_HOST" \
-    'wsl bash -lc "echo ok"' 2>&1 | ssh_clean | grep -q '^ok$'
+    "$(rwrap 'echo ok')" 2>&1 | ssh_clean | grep -q '^ok$'
 }
 
 # ── pre-flight manifest check (shared: worker + local-fallback) ───────────────
@@ -86,7 +108,7 @@ check_worker_require() {
   for rp in "${required[@]}"; do
     validate_path "WORKER_REQUIRE entry" "$rp"
     result=$(ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$WORKER_HOST" \
-      "wsl bash -lc \"test -e ~/strategylab/$rp && echo present || echo absent\"" \
+      "$(rwrap "test -e ~/strategylab/$rp && echo present || echo absent")" \
       2>&1 | ssh_clean)
     if [[ "$result" != "present" ]]; then
       missing+=("$rp")
@@ -119,6 +141,36 @@ dispatch_worker() {
     sync_paths+=("backend/research/$f")
   done < <(find "$REPO_ROOT/backend/research" -maxdepth 1 -name '*.py' -exec basename {} \;)
 
+  # Always sync backend-root modules that research code imports transitively.
+  # Without this, adding a symbol to (e.g.) fileutil.py leaves the worker on
+  # a stale copy until the caller remembers to pass WORKER_SYNC — the F348
+  # probe crashed exactly this way (missing file_lock in fileutil.py).
+  #
+  # MAINT-02 — ALLOWLIST DRIFT COST:
+  # Adding a new backend-root module that research code imports transitively
+  # will cause a silent ModuleNotFoundError on the worker until that file is
+  # added here.  To audit: run
+  #   grep -rh "^import\|^from" backend/research/*.py | grep -v "research\." \
+  #     | awk '{print $2}' | cut -d. -f1 | sort -u
+  # and cross-check against this list.  Review whenever a new top-level module
+  # is added to backend/ that research code imports.  WORKER_SYNC is the
+  # escape hatch for one-off extras (no allowlist edit needed for short-lived
+  # scripts).
+  #
+  # Allowlist is the known set; WORKER_SYNC remains the escape hatch for extras.
+  local backend_root_deps=(
+    "backend/edgar.py"
+    "backend/fileutil.py"
+    "backend/shared.py"
+    "backend/turnaround.py"
+    "backend/turnaround_validation.py"
+  )
+  for dep in "${backend_root_deps[@]}"; do
+    if [[ -f "$REPO_ROOT/$dep" ]]; then
+      sync_paths+=("$dep")
+    fi
+  done
+
   # Extra paths from WORKER_SYNC env — validate each entry
   if [[ -n "${WORKER_SYNC:-}" ]]; then
     IFS=',' read -ra extra <<< "$WORKER_SYNC"
@@ -136,7 +188,7 @@ dispatch_worker() {
   if ! (cd "$REPO_ROOT" && tar -czf - "${sync_paths[@]}") | \
       ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
         "$WORKER_HOST" \
-        'wsl bash -lc "cd ~/strategylab && tar -xzf -"' 2>&1 | ssh_clean; then
+        "$(rwrap 'cd ~/strategylab && tar -xzf -')" 2>&1 | ssh_clean; then
     echo "" >&2
     echo "ERROR: Code sync to $WORKER_HOST FAILED — aborting dispatch." >&2
     echo "  Never launching on stale code. Check network / worker disk / tar errors above." >&2
@@ -166,7 +218,7 @@ dispatch_worker() {
   if ! (cd "$REPO_ROOT" && tar -czf - ".run/$launch_name") | \
       ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
         "$WORKER_HOST" \
-        'wsl bash -lc "cd ~/strategylab && tar -xzf -"' 2>&1 | ssh_clean; then
+        "$(rwrap 'cd ~/strategylab && tar -xzf -')" 2>&1 | ssh_clean; then
     rm -f "$launch_script"
     echo "" >&2
     echo "ERROR: Launcher sync to $WORKER_HOST FAILED — aborting dispatch." >&2
@@ -184,12 +236,12 @@ dispatch_worker() {
     -o ServerAliveInterval=15 \
     -o ServerAliveCountMax=3 \
     "$WORKER_HOST" \
-    "wsl bash -lc \"bash ~/strategylab/.run/$launch_name\"" \
+    "$(rwrap "bash ~/strategylab/.run/$launch_name")" \
     2>&1 | ssh_clean)
 
   # Cleanup remote launcher script after execution
   ssh -o ConnectTimeout=15 "$WORKER_HOST" \
-    "wsl bash -lc \"rm -f ~/strategylab/.run/$launch_name\"" 2>&1 | ssh_clean || true
+    "$(rwrap "rm -f ~/strategylab/.run/$launch_name")" 2>&1 | ssh_clean || true
 
   # Extract PID — only print DISPATCHED when we received a real WORKER_RUN_LAUNCHED token
   local PID
@@ -205,8 +257,12 @@ dispatch_worker() {
   fi
 
   echo ""
-  echo "DISPATCHED target=worker pid=$PID log=$OUTDIR/$LOGNAME"
-  echo "Poll: ssh $WORKER_HOST 'wsl bash -lc \"tail -f ~/strategylab/$OUTDIR/$LOGNAME\"'"
+  echo "DISPATCHED target=worker pid=$PID log=$OUTDIR/$LOGNAME done=$OUTDIR/.${LOGNAME}.done"
+  echo "Status: WORKER_HOST=$WORKER_HOST WORKER_SHELL=$WORKER_SHELL bin/worker-status.sh $OUTDIR $LOGNAME [--wait]"
+  local poll_inner
+  # G6: quote path vars in the informational poll-hint string
+  poll_inner="$(rwrap "tail -f ~/strategylab/\"${OUTDIR}\"/\"${LOGNAME}\"")"
+  echo "Poll: ssh $WORKER_HOST '$poll_inner'"
 }
 
 # ── LOCAL FALLBACK branch ─────────────────────────────────────────────────────
