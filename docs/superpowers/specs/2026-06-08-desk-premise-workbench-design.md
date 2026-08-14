@@ -28,6 +28,13 @@ This is the front-end of the **explore mill** that `docs/research/PROGRAM.md` al
 | D7 | Input = **free-text AND guided prompts** | Scaffolding for when phrasing won't come; free text when it will. |
 | D8 | "Start simple, refine through use" | User will generate new interface/procedure ideas by testing. v1 is the smallest honest version of the loop. |
 
+**D5 addendum (2026-08-14): local-model seat dry-run VALIDATED.** Qwen3.8-27B (Q4_K_M on the PC 4090, llama-server, driven from the Mac) formalized a plain-English premise into a PremiseSpec that passed the real store-boundary validator first try (spec_hash `1c553fc030876603`), including deliberate non-default mapping (horizons → `[63, 126]` for "3-6 months"). Guardrails required before a production seat, learned from the trial:
+- **Pin charter-fixed fields in the prompt** (`dedup_window_days`, `min_peer_count`, `fdr_q`, `n_boot`) or hard-set them post-hoc — the model silently retuned `dedup_window_days` 30→21 from premise prose. Legal per validator, wrong per charter.
+- **Token budget ≥ 4k or thinking disabled** (`chat_template_kwargs: {"enable_thinking": false}`) — reasoning otherwise consumes the whole budget and content comes back empty.
+- **Retry-once policy**: `API Error: Content block not found` through the LiteLLM proxy is retryable-harness (litellm must be pinned ==1.96.2), never model failure.
+- **Provenance stamped mechanically from config, never model self-report** — the model's identity beliefs are prompt-determined and correction-resistant.
+Stack details + verdicts: session memory `reference_local_qwen_stack.md`; mailbox record in `~/three-body/specs/mailbox/` (2026-08-14).
+
 ## 3. Architecture
 
 ### 3.1 PremiseSpec (the core artifact)
