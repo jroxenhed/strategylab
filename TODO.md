@@ -12,21 +12,19 @@ _(none open)_
 
 _(none tagged)_
 
-## Open Work — 18 items
+## Open Work — 17 items
 
 | Section | Open | IDs |
 |---|---|---|
-| [Features](#features) | 4 | [B9](#b9), [F428](#f428)–[F429](#f429), [F431](#f431) |
+| [Features](#features) | 2 | [B9](#b9), [F431](#f431) |
 | [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F272](#f272), [F372](#f372), [F423](#f423) |
-| [Hardening](#hardening) | 1 | [F422](#f422) |
+| [Hardening](#hardening) | 2 | [F422](#f422), [F432](#f432) |
 | [Polish](#polish) | 2 | [F310](#f310), [F426](#f426) |
 | [Testing](#testing) | 2 | [D24b](#d24b), [F211](#f211) |
 | [Infra](#infra) | 2 | [F97](#f97), [F424](#f424) |
 
 ## Features
 
-- [ ] <a id="f428"></a> **F428** Gateway panel in the app — IB Gateway login state from the IBC log (logged in / waiting for 2FA / re-login needed / locked out / down), Restart and Reconnect buttons over IBC's command port, ntfy + Slack alert when the Gateway needs a human. Code shipped 2026-09-12 (backend/gateway.py, GatewayPanel.tsx, 27+15 tests, Opus-5 review wave: 7 findings fixed, 3 deferred — see .run/F428/decisions.md). Close when the VM runs it. [medium] [features]
-- [ ] <a id="f429"></a> **F429** Gateway screen in the browser — noVNC + websockify behind nginx at /vnc/, reached only through the edge sign-in; install.sh now requires SL_HTTP_ALLOW so port 80 is limited to the edge and the tunnel. Deploy pieces shipped 2026-09-12; close when /vnc/ answers through https://strategylab.milford.se. [easy] [infra]
 - [ ] <a id="f431"></a> **F431** Gateway alert cooldown persists across backend restarts — today a restart re-sends one alert for an ongoing incident (review finding REL-02, deferred). Persist last_alert_ts/last_state in STRATEGYLAB_DATA_DIR. [easy] [hardening]
 - [ ] <a id="b9"></a> **B9** Cost model v2 (deferred from B6): [features]
   - Debit-balance-aware margin interest for shorts (charge margin rate only on days net cash is negative)
@@ -54,6 +52,7 @@ _(none tagged)_
 
 ## Hardening
 
+- [ ] <a id="f432"></a> **F432** Backend re-registers IBKR by itself when the Gateway comes up later — a backend restart while the Gateway is mid-login leaves IBKR unregistered until someone calls the reconnect endpoint (seen on strategylab01 2026-09-12: gateway state logged_in, api_connected false). Let the gateway alert loop call init_ibkr when it sees logged_in with no API connection. [easy] [hardening]
 - [ ] <a id="f422"></a> **F422** Close the poll_explore_status concurrency residual — the F420 TOCTOU re-check narrows but does not close the race (review COR-02/R-02, F-BATCH-0610D): two concurrent polls of the same premise can still duplicate run_history entries (ledger append is idempotent, so no FDR consequence). Full fix = hold the per-premise lock across the subprocess await or serialize polls per premise at the route layer. Single-user desk tool, low urgency. [hardening]
 
 ## Polish
