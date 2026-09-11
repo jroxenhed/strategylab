@@ -235,6 +235,7 @@ dispatch_worker() {
   rm -f "$launch_script"
 
   # Execute on the worker — just a file path, no embedded args to escape
+  # nice 19: mfcore01 is an artist seat in daily use; the home box does not mind.
   # Use timeouts so a hung WSL session can't block the orchestrator indefinitely.
   local launch_out
   launch_out=$(ssh \
@@ -242,7 +243,7 @@ dispatch_worker() {
     -o ServerAliveInterval=15 \
     -o ServerAliveCountMax=3 \
     "$WORKER_HOST" \
-    "$(rwrap "bash ~/strategylab/.run/$launch_name")" \
+    "$(rwrap "nice -n 19 bash ~/strategylab/.run/$launch_name")" \
     2>&1 | ssh_clean)
 
   # Cleanup remote launcher script after execution

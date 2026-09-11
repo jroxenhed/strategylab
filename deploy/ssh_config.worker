@@ -1,0 +1,24 @@
+# SSH config for the strategylab service user on the VM (F434).
+# Installed to /home/strategylab/.ssh/config by deploy/install.sh.
+# Used by bin/worker-probe.sh and bin/worker-dispatch.sh to reach the research workers.
+# The private key ~/.ssh/id_ed25519 is generated on the VM by hand and never leaves it;
+# its public half is authorised on mfcore01 (local account strategylab, placed by the
+# cockpit) and on the home PC (C:\ProgramData\ssh\administrators_authorized_keys).
+
+# Office worker: artist seat in daily use, so dispatch runs at nice 19.
+Host mfcore01
+  HostName mfcore01.milford.hq
+  User strategylab
+  IdentityFile ~/.ssh/id_ed25519
+  ConnectTimeout 8
+
+# Home 14900k: WireGuard peer JohnHomePC. Only bastion01 has a route to the tunnel
+# subnet, so the VM jumps through the no-shell account sl-jump there. The peer drops
+# ICMP; the probe uses SSH, never ping. Up only while the home tunnel handshake is alive.
+Host strategylab-worker
+  HostName 192.168.216.17
+  User john
+  IdentityFile ~/.ssh/id_ed25519
+  ProxyJump sl-jump@172.16.17.102
+  ConnectTimeout 8
+  ServerAliveInterval 30

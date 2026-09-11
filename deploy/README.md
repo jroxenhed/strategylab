@@ -188,6 +188,21 @@ If the order was wrong, press Reconnect in the Gateway panel or `curl -s -X POST
   half-dead and needs a human on VNC.
 - Health from the Mac: `curl -s http://strategylab01/api/cache`
 
+## Research workers
+
+The backend dispatches research runs over SSH to a worker (`bin/worker-dispatch.sh`, picked by `bin/worker-probe.sh`), as the `strategylab` user. The client config is `deploy/ssh_config.worker`, installed to `/home/strategylab/.ssh/config`. The key pair is made once by hand on the VM and never reinstalled:
+
+```
+sudo -u strategylab ssh-keygen -t ed25519 -N "" -C strategylab@strategylab01 -f /home/strategylab/.ssh/id_ed25519
+```
+
+Two workers:
+
+- `mfcore01` (office): local account `strategylab`, created by the cockpit with `scripts/provision-strategylab-worker.sh mfcore01` in the mfIT repo. Host key pinned in the VM's `known_hosts` after the cockpit confirmed the fingerprint from the box.
+- `strategylab-worker` (home 14900k): WireGuard peer `192.168.216.17`, reachable only through `bastion01`, so the config jumps through the no-shell account `sl-jump` there. The VM's public key sits in the Windows admin key file, restricted to the tunnel subnet. The peer drops ping; probe with SSH.
+
+Anchors, run as `strategylab` on the VM: `ssh -o BatchMode=yes mfcore01 hostname` prints `mfcore01`; `ssh -o BatchMode=yes strategylab-worker hostname` prints `i914900ks`.
+
 ## How to hand an app to the cockpit
 
 Learned on 2026-09-11, when mfIT1 built strategylab01 from this directory in one evening and hit three bugs that this list prevents.

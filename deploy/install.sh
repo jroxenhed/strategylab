@@ -106,6 +106,12 @@ restorecon -R "$WEB_ROOT" 2>/dev/null || true
 # --- nginx -------------------------------------------------------------------
 log "nginx"
 install -m 644 "$DEPLOY/nginx/strategylab.conf" /etc/nginx/conf.d/strategylab.conf
+
+# --- Research worker SSH config (F434) ---
+# Only the client config; the key pair stays hand-made on the VM (ssh-keygen as
+# $SL_USER) so a reinstall never rotates it out from under mfcore01 and the home PC.
+install -d -m 700 -o "$SL_USER" -g "$SL_USER" "$SL_HOME/.ssh"
+install -m 600 -o "$SL_USER" -g "$SL_USER" "$DEPLOY/ssh_config.worker" "$SL_HOME/.ssh/config"
 # default server block in nginx.conf would shadow ours on :80 — disable it if present
 if grep -q 'server {' /etc/nginx/nginx.conf && ! grep -q 'STRATEGYLAB-DEFAULT-DISABLED' /etc/nginx/nginx.conf; then
   sed -i '/^    server {/,/^    }/{s/^/#/}' /etc/nginx/nginx.conf
