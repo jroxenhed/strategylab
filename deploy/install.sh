@@ -51,7 +51,8 @@ command -v x0vncserver >/dev/null || die "x0vncserver not found after install â€
 log "service user + directories"
 id "$SL_USER" >/dev/null 2>&1 || useradd --system --create-home --home-dir "$SL_HOME" --shell /sbin/nologin "$SL_USER"
 install -d -m 750 -o root -g "$SL_USER" /etc/strategylab
-install -d -m 750 -o "$SL_USER" -g "$SL_USER" "$DATA_DIR" "$SL_HOME/Jts" /var/log/ibc
+install -d -m 750 -o "$SL_USER" -g "$SL_USER" "$DATA_DIR" "$SL_HOME/Jts" /var/log/ibc "$SL_REPO_DIR/backend/data"
+# backend/data must exist: the unit lists it in ReadWritePaths and systemd fails NAMESPACE (226) if it is missing
 chown -R "$SL_USER:$SL_USER" "$SL_REPO_DIR"
 
 for f in backend.env ibc.env; do
