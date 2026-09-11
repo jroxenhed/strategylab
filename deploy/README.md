@@ -47,6 +47,8 @@ install -d -m 750 -o root -g strategylab /etc/strategylab   # after the user exi
 SL_PUBLIC_URL=http://strategylab01 bash /opt/strategylab/deploy/install.sh
 ```
 
+Run it from a login shell (ssh), not as a transient systemd unit: under SELinux a transient unit puts rsync in a domain that cannot write `/var/www` (hit once, 2026-09-11).
+
 `install.sh` is idempotent: rerun it after `git pull` to rebuild the venv/frontend
 and reload units. It stops short of starting `strategylab-ibc.service` on first
 run — the first Gateway login needs a human watching VNC for the 2FA prompt.

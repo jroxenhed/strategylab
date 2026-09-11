@@ -105,7 +105,7 @@ if [[ "${SL_SKIP_GATEWAY:-0}" != "1" ]]; then
   GW_DIR="$SL_HOME/Jts/ibgateway/$GATEWAY_VRSN"
   if [[ ! -d "$GW_DIR/jars" ]]; then
     log "IB Gateway (stable standalone, bundled JRE) -> $GW_DIR"
-    tmp=$(mktemp -d)
+    tmp=$(mktemp -d); chmod 755 "$tmp"   # mktemp is 0700 root; the installer runs as $SL_USER
     curl -fsSL -o "$tmp/ibgateway.sh" \
       https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/ibgateway-stable-standalone-linux-x64.sh
     chmod +x "$tmp/ibgateway.sh"
