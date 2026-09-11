@@ -12,14 +12,14 @@ _(none open)_
 
 _(none tagged)_
 
-## Open Work — 14 items
+## Open Work — 15 items
 
 | Section | Open | IDs |
 |---|---|---|
 | [Features](#features) | 1 | [B9](#b9) |
 | [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F272](#f272), [F372](#f372), [F423](#f423) |
 | [Hardening](#hardening) | 1 | [F422](#f422) |
-| [Polish](#polish) | 1 | [F310](#f310) |
+| [Polish](#polish) | 2 | [F310](#f310), [F426](#f426) |
 | [Testing](#testing) | 2 | [D24b](#d24b), [F211](#f211) |
 | [Infra](#infra) | 2 | [F97](#f97), [F424](#f424) |
 
@@ -55,6 +55,7 @@ _(none tagged)_
 
 ## Polish
 
+- [ ] <a id="f426"></a> **F426** Bot card log shows months-old `Fetch failed` lines above today's activity — the 200-entry activity_log persists across restarts, so after a long gap ~190 stale WARNs dominate every card. Add a date divider or collapse entries older than the current `started_at`, and/or a "clear log" on card. [easy] [polish]
 - [ ] <a id="f310"></a> **F310** One-frame crosshair/pane misalignment possible during render-interval swap — main-pane and SubPane setData run in separate effects on the same commit; lw-charts may emit a range event between them and sync a logical range onto a sub-pane still holding the old bar count (try/catch prevents errors; visual blip only). Structural fix needs shared dep-chain plumbing. (RACE-04, A8-render-resample review, rated acceptable-as-is.) [medium] [polish]
 
 ## Testing

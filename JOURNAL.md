@@ -4,6 +4,11 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-09-11
+
+- **[F425](TODO-archive.md#f425)** Start All now opens a modal listing every bot that could not start, with the reason in plain words and bot names instead of ids. Found via the ENPH IBKR bot: it was silently blocked by the same-symbol guard because the Alpaca ENPH long bot was already running.
+- Ops: first launch in ~3 months. Homebrew had dropped python@3.12, breaking the backend venv; rebuilt on a reinstalled 3.12 (pandas-ta 0.4.71b0 pins `>=3.12`, numpy/scipy pins lack 3.14 wheels). Recorded in memory. Journal check: zero trades executed 2026-05-30 → 2026-09-11; five positions rode the gap open (ENPH 83 sh at 68.78 now ~36.8, i.e. ≈ −$2.7k unrealized).
+
 ## 2026-08-14
 
 - **Local-model (D5 queue seat) trial: Qwen3.8-27B PASSED both probes.** Released-today model on the PC 4090 (llama.cpp b10430, Q4_K_M, 131k ctx, ~38 tok/s), coordinated across three agent sessions via the three-body mailbox. Test 1 (TODO.md task-pick rematch): picked F424 with correct gated/[next] reasoning, verified grounded — the old local-Qwen failure did not reproduce. Test 2 (formalizer dry-run): plain-English premise → PremiseSpec accepted by the real store-boundary validator first try (spec_hash `1c553fc030876603`). Claude Code harness driven by Qwen via LiteLLM proxy also validated (grounded repo Q&A + multi-step edit-test-iterate loop, independently verified). Guardrails + verdict recorded as a D5 addendum in [the workbench design doc](docs/superpowers/specs/2026-06-08-desk-premise-workbench-design.md) (charter-field pinning, ≥4k thinking budget, retry-once on proxy flake — litellm must pin ==1.96.2 — provenance from config, never model self-report). Decision (John): prove useful locally before any cloud spend; route validator-gated transforms only. `qwen-code` launcher installed (identity brief — Qwen otherwise believes it's Claude, correction-resistant).

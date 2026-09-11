@@ -187,6 +187,19 @@ export default function BotControlCenter() {
 
   const invalidateBots = useCallback(() => qc.invalidateQueries({ queryKey: ['bots'] }), [qc])
 
+  // Start All failures shown in a modal — the one-line banner hid the *reason*
+  // (e.g. same-symbol guard), which looked identical to "forgot to start it".
+  const [startAllFailures, setStartAllFailures] = useState<{ name: string; reason: string }[] | null>(null)
+  const botLabel = useCallback((id: string) => {
+    const b = bots.find(x => x.bot_id === id)
+    return b ? `${b.strategy_name} (${b.symbol} ${b.direction}, ${b.broker})` : id
+  }, [bots])
+  // Backend guard messages embed raw bot ids ("Bot 4f2b…-… is already running long on ENPH");
+  // swap each id for the human label so the message reads without a lookup.
+  const humanizeBotIds = useCallback((msg: string) =>
+    msg.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, id => botLabel(id)),
+  [botLabel])
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   )
@@ -292,7 +305,7 @@ export default function BotControlCenter() {
 
   const handleStart = async (botId: string) => {
     try { await startBot(botId); invalidateBots() }
-    catch (e) { setError(apiErrorDetail(e, 'Failed to start bot')) }
+    catch (e) { setError(humanizeBotIds(apiErrorDetail(e, 'Failed to start bot'))) }
   }
 
   const handleStop = async (botId: string) => {
@@ -329,7 +342,12 @@ export default function BotControlCenter() {
     try {
       const r = await startAllBots()
       invalidateBots()
-      setError(r.failed.length ? `Started ${r.started.length}, ${r.failed.length} failed` : '')
+      if (r.failed.length) {
+        setStartAllFailures(r.failed.map(f => ({ name: botLabel(f.bot_id), reason: humanizeBotIds(f.error) })))
+        setError(`Started ${r.started.length}, ${r.failed.length} could not start`)
+      } else {
+        setError('')
+      }
     } catch (e) {
       setError(apiErrorDetail(e, 'Failed to start all bots'))
     }
@@ -451,6 +469,40 @@ export default function BotControlCenter() {
             ? <button onClick={() => setError('')} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#ef5350', cursor: 'pointer' }}>×</button>
             : <button onClick={() => setBotsErrorDismissed(true)} style={{ marginLeft: 8, background: 'none', border: 'none', color: '#ef5350', cursor: 'pointer' }}>×</button>
           }
+        </div>
+      )}
+
+      {startAllFailures && (
+        <div
+          onClick={() => setStartAllFailures(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            role="dialog"
+            aria-label="Bots that could not start"
+            style={{ background: '#1a1d24', border: '1px solid #ef5350', borderRadius: 6, padding: '14px 18px', minWidth: 380, maxWidth: 640, fontSize: 13, color: '#ddd' }}
+          >
+            <div style={{ fontWeight: 600, color: '#ef5350', marginBottom: 10 }}>
+              {startAllFailures.length === 1 ? '1 bot could not start' : `${startAllFailures.length} bots could not start`}
+            </div>
+            <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {startAllFailures.map((f, i) => (
+                <li key={i}>
+                  <div style={{ fontWeight: 600 }}>{f.name}</div>
+                  <div style={{ color: '#aaa' }}>{f.reason}</div>
+                </li>
+              ))}
+            </ul>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
+              <button
+                onClick={() => setStartAllFailures(null)}
+                style={{ background: '#2a2f3a', border: '1px solid #444', color: '#ddd', borderRadius: 4, padding: '4px 14px', cursor: 'pointer' }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
