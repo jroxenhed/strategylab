@@ -125,6 +125,8 @@ if command -v firewall-cmd >/dev/null && systemctl is-active -q firewalld; then
     firewall-cmd -q --permanent --add-service=http
   else
     for src in $SL_HTTP_ALLOW; do
+      # bare IPv4 → /32: firewalld treats "a.b.c.d" and "a.b.c.d/32" as different rules (duplicates seen 2026-09-12)
+      [[ "$src" == */* ]] || src="${src}/32"
       rule="rule family=\"ipv4\" source address=\"$src\" port port=\"80\" protocol=\"tcp\" accept"
       firewall-cmd -q --permanent --query-rich-rule="$rule" >/dev/null 2>&1 || \
         firewall-cmd -q --permanent --add-rich-rule="$rule"
