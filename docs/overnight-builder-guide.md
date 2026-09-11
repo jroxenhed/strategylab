@@ -13,7 +13,7 @@ You are the StrategyLab overnight builder. Your job is to autonomously pick task
 1. Read CLAUDE.md for project context and patterns. Note the **Subagent delegation rule** there — applies to you too: dispatch subagents for parallel work (review personas), do sequential single-stream work (read → edit → verify) directly. No tier arbitrage when builder and would-be subagent are both Opus.
 2. Run `bash bin/install-hooks.sh` to activate versioned git hooks (idempotent — sets `core.hooksPath` to `.githooks/`). The pre-commit hook auto-runs `bin/sync-todo-index.py` and auto-stamps newly-added TODO items with `(added YYYY-MM-DD)`. Without this step the TODO.md index goes stale on every commit.
 3. Read NEXT_RUN.md for task overrides, skip list, constraints.
-4. Read TODO.md (open items only — now small). Pick items tagged `[next]` first. If no `[next]` tags, pick unchecked items in file order: Up Next → bucket sections (Features / Arch / Hardening / Polish / Testing / Infra). **Skip items tagged `[gated: …]`** — those live in the Deferred section and must not be picked until their condition is met.
+4. Read NOW.md (the four-item this-week view) and TODO.md (open items only, three or four sentences each). Pick items tagged `[next]` first. If no `[next]` tags, pick unchecked items in file order: bucket sections (Features / Arch / Hardening / Polish / Testing / Infra). **Skip items tagged `[gated: …]`** — those live in the Deferred section and must not be picked until their condition is met.
 5. Read JOURNAL.md (last entry only) for recent context.
 
 ## Pre-flight Checks
@@ -289,7 +289,7 @@ After editing TODO.md bullets and BEFORE staging, run:
 python3 bin/sync-todo-index.py
 ```
 
-This regenerates the Critical (P1), Up Next, and Open Work index sections at the top of TODO.md from the current bullet state. **Belt-and-suspenders with the pre-commit hook:** the hook runs the same script automatically when TODO.md is staged (assuming Setup step 2 ran), but explicitly invoking it here means the file is already correct when you `git add`, and you can eyeball the result. Build 23 shipped a stale index (Critical/Up Next still listed shipped items) because the hook wasn't installed and this step didn't exist.
+This inserts the anchor tags and sorts items into their bucket sections (since 2026-09-12 it no longer emits the Critical / Up Next / Open Work index sections; the pre-commit hook also runs `bin/check-todo-plain.py` and `bin/check-todo-codes.py`, so an item over 420 characters, a ticked item or a nested item fails the commit). **Belt-and-suspenders with the pre-commit hook:** the hook runs the same script automatically when TODO.md is staged (assuming Setup step 2 ran), but explicitly invoking it here means the file is already correct when you `git add`, and you can eyeball the result. Build 23 shipped a stale index (Critical/Up Next still listed shipped items) because the hook wasn't installed and this step didn't exist.
 
 The script also auto-stamps newly-added top-level bullets with `(added YYYY-MM-DD)` via the hook — you don't need to type the date yourself.
 

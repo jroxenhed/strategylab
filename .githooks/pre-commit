@@ -1,7 +1,9 @@
 #!/bin/sh
 # Pre-commit:
 #  1. Secret scan on every commit (added 2026-05-30, F279 sibling)
-#  2. TODO auto-stamp + index sync when TODO.md is staged
+#  2. NOW.md focus check when NOW.md is staged
+#  3. TODO auto-stamp + index sync when TODO.md is staged
+#  4. TODO.md shape + ID-uniqueness checks when TODO.md is staged
 # Installed via: bin/install-hooks.sh
 
 set -e
@@ -25,6 +27,20 @@ if [ -n "$leak" ]; then
     exit 1
 fi
 # --- End secret scan ---
+
+# --- NOW.md focus check ---
+# NOW.md carries only the genuinely time-critical work. The check runs at the
+# moment someone is adding to the file, which is the only moment it can help.
+# Placed before the TODO block on purpose: that block can early-exit.
+if git diff --cached --name-only | grep -qx 'NOW.md'; then
+    if [ -f bin/check-now-focused.py ]; then
+        if ! python3 bin/check-now-focused.py; then
+            echo "pre-commit: ABORT — NOW.md failed the focus check above." >&2
+            exit 1
+        fi
+    fi
+fi
+# --- End NOW.md focus check ---
 
 # Only run TODO sync if TODO.md is staged
 if git diff --cached --name-only | grep -qx 'TODO.md'; then
@@ -96,6 +112,25 @@ DIFFEOF
     # --- End date-stamp ---
 
     python3 bin/sync-todo-index.py
+
+    # --- TODO.md shape + ID-uniqueness checks ---
+    # Run on the post-sync file so anchors are in place. check-todo-plain keeps
+    # items short, plain and unticked; check-todo-codes catches a reused F-ID
+    # (interactive and overnight sessions can claim the same number).
+    if [ -f bin/check-todo-plain.py ]; then
+        if ! python3 bin/check-todo-plain.py; then
+            echo "pre-commit: ABORT — TODO.md failed the shape check above." >&2
+            exit 1
+        fi
+    fi
+
+    if [ -f bin/check-todo-codes.py ]; then
+        if ! python3 bin/check-todo-codes.py; then
+            echo "pre-commit: ABORT — TODO.md has a duplicate item ID (see above)." >&2
+            exit 1
+        fi
+    fi
+    # --- End TODO.md shape + ID-uniqueness checks ---
 
     # --- F-item bucket tag gate ---
     # sync-todo-index.py groups F-items by bucket tag ([arch] / [hardening] /

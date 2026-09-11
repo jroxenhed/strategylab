@@ -3,8 +3,10 @@
 
 Jobs:
   1. Insert <a id="..."> anchors on every bullet line (idempotent).
-  2. Regenerate ## Up Next section.
+  2. Regenerate ## Up Next section.  [DISABLED — see EMIT_GENERATED_SECTIONS]
   3. Regenerate merged ## Open Work table (4 columns: Section | Topic | Open | IDs).
+     [DISABLED since the 2026-09-12 TODO.md rewrite — the file no longer carries
+     ## Critical (P1) / ## Up Next / ## Open Work, and the sync no longer emits them.]
      - Replaces both the old intro Section/Topic table AND the old Open Work table.
      - IDs column uses range notation (F2–F3 for consecutive bare numbers).
      - F section split into 4 rows: Architecture, Hardening, Polish, Testing & Infra.
@@ -119,6 +121,15 @@ SECTION_LETTER_RE = re.compile(r'^([A-Z])\d')
 HTML_COMMENT_RE = re.compile(r'^<!--.*-->$')
 
 GENERATED_SECTION_PREFIXES = ("## Critical (P1)", "## Up Next", "## Open Work")
+
+# Since the 2026-09-12 TODO.md rewrite the file has no "## Critical (P1)",
+# "## Up Next" or "## Open Work" index table: 34 items in 3,065 words made the
+# generated scaffolding more to read, not less. Flip this back to True only if
+# those sections are reinstated by hand first — the renderers and
+# replace_generated_sections() below are kept working for exactly that case.
+# Everything else (anchor insertion, rehome_and_sort, bucket H3 grouping,
+# --archive-before) is unaffected by this flag.
+EMIT_GENERATED_SECTIONS = False
 
 # Header counter: **N / M shipped.**
 # Visible bullets in TODO.md only cover items still in the file; items
@@ -1171,13 +1182,16 @@ def process(
     lines = rehome_and_sort(lines)
     bullets, h2_headers = parse_lines(lines)
 
-    # Job 2a + 2 + 3 — regenerate generated sections
-    critical_p1 = render_critical_p1(bullets)
-    up_next = render_up_next(bullets)
-    open_work = render_open_work(bullets, h2_headers)
-    new_block = critical_p1 + '\n' + up_next + '\n' + open_work
+    # Job 2a + 2 + 3 — regenerate generated sections (OFF since the 2026-09-12
+    # rewrite; see EMIT_GENERATED_SECTIONS). A file without those H2s is left
+    # without them; a file that still has them keeps whatever it has.
+    if EMIT_GENERATED_SECTIONS:
+        critical_p1 = render_critical_p1(bullets)
+        up_next = render_up_next(bullets)
+        open_work = render_open_work(bullets, h2_headers)
+        new_block = critical_p1 + '\n' + up_next + '\n' + open_work
 
-    lines = replace_generated_sections(lines, new_block)
+        lines = replace_generated_sections(lines, new_block)
 
     # Job 6 — update the **N / M shipped.** header counter
     lines = update_shipped_counter(lines, bullets)
