@@ -25,6 +25,14 @@ AcceptIncomingConnectionAction=accept
 OverrideTwsApiPort=4002
 AllowBlindTrading=no
 
+# --- IBC command server (F428 gateway panel) ----------------------------------
+# Lets backend/gateway.py send RESTART / RECONNECTACCOUNT / RECONNECTDATA / STOP
+# to IBC over a loopback-only plain-text socket. Must match IBC_COMMAND_PORT in
+# backend.env (default 7462).
+CommandServerPort=7462
+ControlFrom=127.0.0.1
+BindAddress=127.0.0.1
+
 # --- restart / housekeeping --------------------------------------------------
 # Kept for parity with the Mac; the systemd timer is the restart that actually fires.
 AutoRestartTime=05:00 AM

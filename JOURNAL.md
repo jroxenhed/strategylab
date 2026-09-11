@@ -4,6 +4,12 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-09-12
+
+- **[F428](TODO.md#f428)** / **[F429](TODO.md#f429)** Gateway panel + browser screen, code complete: the app now shows the IB Gateway login state, sends Restart/Reconnect to IBC, and pushes an alert when the Gateway waits for a person. noVNC behind nginx for the screen. Built with two Sonnet-5 implementers, reviewed by an Opus-5 wave (2 personas, 5 verifiers), 7 findings fixed. The P0 was ours to codify: the VM's port 80 must be limited to the edge proxy and the tunnel, so install.sh now takes SL_HTTP_ALLOW and refuses an open port.
+- **[F430](TODO-archive.md#f430)** Bots resume after a backend restart unless you stopped them. Needed because systemd on the VM restarts the backend on every deploy.
+- Process: John retired the old-model routing (best current model per job; Fable only as the orchestrating session). mfIT1 shared the cockpit workflow rules and the Milford reader-first output style; both adopted here.
+
 ## 2026-09-11
 
 - **[F427](TODO-archive.md#f427)** closed same night: strategylab01 built by mfIT1 (Proxmox 303, Rocky 9, 4 vCPU/6 GiB), state migrated via the bastion01 store, Gateway logged in over VNC, https://strategylab.milford.se live behind Caddy + oauth2-proxy (Google, john@milford.se), bot ticking on the VM. Mac is out of the loop (Gateway launchd job unloaded). Two installer bugs found on the real box and fixed (tmp-dir perms, backend/data for ReadWritePaths).

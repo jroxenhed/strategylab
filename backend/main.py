@@ -42,6 +42,7 @@ from routes.strategies import router as strategies_router
 from routes.nodebuilder import router as nodebuilder_router
 from routes.turnaround import router as turnaround_router
 from routes.premises import router as premises_router
+from routes.gateway import router as gateway_router
 import routes.bots as bots_module
 from bot_manager import BotManager
 from middleware import (
@@ -82,9 +83,32 @@ async def lifespan(app: FastAPI):
     except Exception as reconcile_exc:
         logger.warning("F394 startup ledger reconcile failed (non-fatal): %s", reconcile_exc)
 
+    # F428: IB Gateway panel alert loop — polls the IBC log every 60s and
+    # notifies on transitions into a "needs a human" state. create_task, not
+    # await: this must not block server startup.
+    import gateway as gateway_module
+    gateway_alert_task = asyncio.create_task(gateway_module.alert_loop())
+
+    # F430: auto-resume bots that were running when the server last went away
+    # (deploy, crash, restart). Bots the user stopped stay stopped: an explicit
+    # Stop persists "stopped", so load() never tags them was_running.
+    try:
+        resumed = manager.resume_was_running()
+        if resumed["resumed"] or resumed["failed"]:
+            logger.info("F430 auto-resume: %s", resumed)
+    except Exception as e:
+        logger.warning("F430 auto-resume failed (non-fatal): %s", e)
+
     try:
         yield
     finally:
+        gateway_alert_task.cancel()
+        try:
+            await gateway_alert_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning("F428: gateway alert_loop shutdown raised: %s", e)
         # F279: Force-kill any orphaned WFA worker processes before other cleanup.
         # Runs in its own try/except so a cleanup error never blocks shutdown.
         # NOTE: only fires on GRACEFUL shutdown (lifespan exit), not on SIGKILL of
@@ -173,6 +197,7 @@ app.include_router(strategies_router)
 app.include_router(nodebuilder_router)
 app.include_router(turnaround_router)
 app.include_router(premises_router)
+app.include_router(gateway_router)
 
 
 @app.get("/api/cache")

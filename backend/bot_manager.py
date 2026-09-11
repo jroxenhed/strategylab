@@ -658,6 +658,39 @@ class BotManager:
         except Exception:
             logger.exception("Failed to load bots.json")
 
+    def resume_was_running(self) -> dict[str, list]:
+        """F430: auto-resume bots that were running when the server last went away.
+
+        `load()` sets `state.was_running` for bots whose persisted status was
+        "running" and forces them to "stopped". An explicit Stop persists
+        "stopped", so was_running is only True after a crash/restart/deploy —
+        never after the user turned a bot off. Bots carrying a pause_reason or
+        error_message are left alone (they stopped for a reason a restart does
+        not clear). Opt out with BOTS_AUTORESUME=0.
+        """
+        result: dict[str, list] = {"resumed": [], "skipped": [], "failed": []}
+        if os.environ.get("BOTS_AUTORESUME", "1") == "0":
+            return result
+        for bot_id, (config, state) in list(self.bots.items()):
+            if not state.was_running:
+                continue
+            if state.pause_reason or state.error_message:
+                result["skipped"].append(bot_id)
+                state.was_running = False
+                continue
+            try:
+                self.start_bot(bot_id)
+                result["resumed"].append(bot_id)
+                logger.info("F430 auto-resumed bot %s (%s %s) after restart",
+                            bot_id, config.symbol, config.interval)
+            except Exception as e:
+                result["failed"].append({"bot_id": bot_id, "error": str(e)})
+                state.was_running = False
+                logger.warning("F430 auto-resume failed for bot %s: %s", bot_id, e)
+        if result["resumed"] or result["skipped"] or result["failed"]:
+            self.save()
+        return result
+
     async def shutdown(self):
         for bot_id, task in list(self.tasks.items()):
             task.cancel()

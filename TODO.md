@@ -12,11 +12,11 @@ _(none open)_
 
 _(none tagged)_
 
-## Open Work — 15 items
+## Open Work — 18 items
 
 | Section | Open | IDs |
 |---|---|---|
-| [Features](#features) | 1 | [B9](#b9) |
+| [Features](#features) | 4 | [B9](#b9), [F428](#f428)–[F429](#f429), [F431](#f431) |
 | [Architecture](#architecture) | 7 | [A8](#a8), [F25](#f25), [F170](#f170), [F188](#f188), [F272](#f272), [F372](#f372), [F423](#f423) |
 | [Hardening](#hardening) | 1 | [F422](#f422) |
 | [Polish](#polish) | 2 | [F310](#f310), [F426](#f426) |
@@ -25,6 +25,9 @@ _(none tagged)_
 
 ## Features
 
+- [ ] <a id="f428"></a> **F428** Gateway panel in the app — IB Gateway login state from the IBC log (logged in / waiting for 2FA / re-login needed / locked out / down), Restart and Reconnect buttons over IBC's command port, ntfy + Slack alert when the Gateway needs a human. Code shipped 2026-09-12 (backend/gateway.py, GatewayPanel.tsx, 27+15 tests, Opus-5 review wave: 7 findings fixed, 3 deferred — see .run/F428/decisions.md). Close when the VM runs it. [medium] [features]
+- [ ] <a id="f429"></a> **F429** Gateway screen in the browser — noVNC + websockify behind nginx at /vnc/, reached only through the edge sign-in; install.sh now requires SL_HTTP_ALLOW so port 80 is limited to the edge and the tunnel. Deploy pieces shipped 2026-09-12; close when /vnc/ answers through https://strategylab.milford.se. [easy] [infra]
+- [ ] <a id="f431"></a> **F431** Gateway alert cooldown persists across backend restarts — today a restart re-sends one alert for an ongoing incident (review finding REL-02, deferred). Persist last_alert_ts/last_state in STRATEGYLAB_DATA_DIR. [easy] [hardening]
 - [ ] <a id="b9"></a> **B9** Cost model v2 (deferred from B6): [features]
   - Debit-balance-aware margin interest for shorts (charge margin rate only on days net cash is negative)
   - IBKR Tiered pricing (exchange fees, SEC fee, FINRA TAF, clearing pass-throughs)

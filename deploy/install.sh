@@ -10,6 +10,14 @@
 #   SL_SKIP_GATEWAY set to 1 to skip the IB Gateway / IBC download+install
 #   GATEWAY_VRSN    Gateway major version dir, no dot. Default 1045
 #   IBC_VRSN        IBC release. Default 3.23.0
+#   SL_HTTP_ALLOW   space-separated IPv4 addresses/CIDRs allowed to reach port 80
+#                   (e.g. the edge proxy + the WireGuard NAT address, "172.16.17.115 192.168.216.0/24 172.16.16.175").
+#                   Required whenever firewalld is active — port 80 fronts /vnc/,
+#                   /websockify, and /api/gateway/command/{cmd}, none of which have
+#                   their own auth, so it must never be opened to the whole network.
+#   SL_HTTP_ALLOW_ANY  set to 1 to explicitly open port 80 network-wide instead
+#                      (bypasses the SL_HTTP_ALLOW requirement) — only for a VM that
+#                      is otherwise fully firewalled off, not the normal path.
 set -euo pipefail
 
 SL_REPO_DIR="${SL_REPO_DIR:-/opt/strategylab}"
@@ -17,6 +25,8 @@ SL_USER="${SL_USER:-strategylab}"
 SL_PUBLIC_URL="${SL_PUBLIC_URL:-http://$(hostname -s)}"
 GATEWAY_VRSN="${GATEWAY_VRSN:-1045}"
 IBC_VRSN="${IBC_VRSN:-3.23.0}"
+SL_HTTP_ALLOW="${SL_HTTP_ALLOW:-}"
+SL_HTTP_ALLOW_ANY="${SL_HTTP_ALLOW_ANY:-0}"
 SL_HOME="/home/${SL_USER}"
 DATA_DIR="/var/lib/strategylab"
 WEB_ROOT="/var/www/strategylab"
@@ -46,6 +56,14 @@ dnf -y install \
 # tigervnc-server-minimal is expected to ship x0vncserver (assumed for Rocky 9; verified by the check below)
 command -v x0vncserver >/dev/null || dnf -y install tigervnc-server >/dev/null
 command -v x0vncserver >/dev/null || die "x0vncserver not found after install — check tigervnc packages"
+
+# F429: noVNC + websockify — bridges the loopback VNC mirror to the browser
+# (/vnc/ via nginx). Package names ASSUMED from EPEL (not yet installed on a
+# live VM at spec time) — die with a clear message if they don't resolve
+# rather than silently skipping the Gateway panel's "Open screen" link.
+dnf -y install novnc python3-websockify >/dev/null || die "novnc / python3-websockify not found in EPEL — check package names for this Rocky/RHEL release"
+[[ -d /usr/share/novnc ]] || die "novnc installed but /usr/share/novnc missing — check the novnc package's file layout"
+command -v websockify >/dev/null || die "websockify not on PATH after installing python3-websockify"
 
 # --- user + dirs -------------------------------------------------------------
 log "service user + directories"
@@ -98,7 +116,21 @@ nginx -t
 systemctl enable --now nginx
 systemctl reload nginx
 if command -v firewall-cmd >/dev/null && systemctl is-active -q firewalld; then
-  firewall-cmd -q --permanent --add-service=http; firewall-cmd -q --reload
+  if [[ -z "$SL_HTTP_ALLOW" && "$SL_HTTP_ALLOW_ANY" != "1" ]]; then
+    die "SL_HTTP_ALLOW is empty. Port 80 fronts /vnc/, /websockify, and /api/gateway/command/{cmd} — none of which have their own auth — so it must be limited to the edge proxy and trusted tunnel sources (e.g. SL_HTTP_ALLOW=\"172.16.17.115 192.168.216.0/24 172.16.16.175\"). Set SL_HTTP_ALLOW_ANY=1 to open it network-wide instead (not the normal path)."
+  fi
+  # Remove the generic http service (opens 80 to the whole zone) — tolerant of it not being present.
+  firewall-cmd -q --permanent --remove-service=http 2>/dev/null || true
+  if [[ "$SL_HTTP_ALLOW_ANY" == "1" ]]; then
+    firewall-cmd -q --permanent --add-service=http
+  else
+    for src in $SL_HTTP_ALLOW; do
+      rule="rule family=\"ipv4\" source address=\"$src\" port port=\"80\" protocol=\"tcp\" accept"
+      firewall-cmd -q --permanent --query-rich-rule="$rule" >/dev/null 2>&1 || \
+        firewall-cmd -q --permanent --add-rich-rule="$rule"
+    done
+  fi
+  firewall-cmd -q --reload
 fi
 
 # --- IB Gateway + IBC --------------------------------------------------------
@@ -147,7 +179,7 @@ install -m 644 "$DEPLOY"/systemd/*.service "$DEPLOY"/systemd/*.timer /etc/system
 systemctl daemon-reload
 systemctl enable --now strategylab-backend
 if [[ "${SL_SKIP_GATEWAY:-0}" != "1" ]]; then
-  systemctl enable --now strategylab-xvfb strategylab-vnc
+  systemctl enable --now strategylab-xvfb strategylab-vnc strategylab-novnc
   systemctl enable strategylab-ibc strategylab-ibc-restart.timer
   systemctl start strategylab-ibc-restart.timer
   if systemctl is-active -q strategylab-ibc; then

@@ -44,8 +44,27 @@ dnf -y install git
 git clone https://github.com/jroxenhed/strategylab /opt/strategylab
 # put the two secret files in place first (see env.example)
 install -d -m 750 -o root -g strategylab /etc/strategylab   # after the user exists; install.sh creates it too
-SL_PUBLIC_URL=http://strategylab01 bash /opt/strategylab/deploy/install.sh
+SL_PUBLIC_URL=http://strategylab01 SL_HTTP_ALLOW="172.16.17.115 192.168.216.0/24 172.16.16.175" \
+  bash /opt/strategylab/deploy/install.sh
 ```
+
+`SL_HTTP_ALLOW` is a space-separated list of IPv4 addresses/CIDRs allowed to
+reach port 80 (the edge proxy plus the WireGuard NAT address — see the trust
+model note below). If firewalld is active, install.sh refuses to run with it
+empty, unless `SL_HTTP_ALLOW_ANY=1` is set to explicitly open the port
+network-wide instead.
+
+### Trust model
+
+Google sign-in lives on the edge proxy, not on this VM — nginx and the
+backend do not authenticate anyone themselves. The VM's port 80 is scoped by
+firewalld rich rules (`SL_HTTP_ALLOW`) to accept only the edge proxy and the
+WireGuard NAT address. Anyone who can reach port 80 directly is, by
+construction, already inside the trusted network (past the edge or on the
+tunnel) — they can use the Gateway screen ("Open screen" / VNC) and the
+Gateway commands (`RESTART` / `RECONNECTACCOUNT` / `RECONNECTDATA` / `STOP`)
+without a second sign-in. Keeping `SL_HTTP_ALLOW` scoped tightly is what
+actually enforces this — it is not a documentation-only assumption.
 
 Run it from a login shell (ssh), not as a transient systemd unit: under SELinux a transient unit puts rsync in a domain that cannot write `/var/www` (hit once, 2026-09-11).
 
@@ -103,11 +122,69 @@ default). 4 GiB works, 6 GiB leaves headroom for a walk-forward run without
 swapping; 2 vCPU is fine for live trading, 4 helps optimizer grids. Research
 compute stays on mfcore01 either way.
 
+## Gateway panel
+
+F428/F429: the app's Trading tab shows a live IB Gateway state bar (backend:
+`backend/gateway.py` + `GET/POST /api/gateway/*`, frontend: `GatewayPanel.tsx`).
+It parses the newest IBC log for the last-seen marker line, so it needs
+`IBC_LOG_DIR` pointed at IBC's log directory — `strategylab-backend.service`
+sets `Environment=IBC_LOG_DIR=/var/log/ibc` to match where IBC actually
+writes on this VM.
+
+State meanings (from the log marker, most recent line wins):
+- `logged_in` — normal, no action needed.
+- `awaiting_2fa` — approve the push on IBKR Mobile (the panel cannot do this
+  for you — see "Out of scope" in the F428 plan).
+- `relogin_required` / `bad_credentials` — session is half-dead; open the
+  Gateway screen and check the login dialog.
+- `locked_out` — too many failed attempts; wait out IBKR's lockout window
+  before retrying.
+- `restarting` / `logging_in` — transient, no action needed unless it sticks.
+- `down` — no recent log activity and the API isn't connected either
+  (only fires once the panel has seen a prior `logged_in`, so a cold boot
+  doesn't alert).
+- `unknown` — log file present but no marker matched yet (e.g. fresh restart).
+
+Alerts (ntfy.sh `notify()` + Slack via `SLACK_WEBHOOK_URL`) fire on
+transition into a needs-a-human state and re-fire every 30 min while stuck
+there; disable with `GATEWAY_ALERTS=0` in `backend.env`.
+
+Commands (`RESTART` / `RECONNECTACCOUNT` / `RECONNECTDATA` / `STOP`) go to
+IBC's CommandServer over a loopback socket — `CommandServerPort=7462` /
+`ControlFrom=127.0.0.1` / `BindAddress=127.0.0.1` in
+`deploy/ibc/config.ini.template`. If the panel shows the command buttons
+disabled, the port isn't reachable — check `config.ini` was rendered with
+those keys and IBC is actually running.
+
+"Open screen" links to `/vnc/vnc.html?autoconnect=1&resize=scale&path=websockify`
+— nginx proxies `/vnc/` (static noVNC assets) and `/websockify` (the
+websocket) to `strategylab-novnc` (`websockify --web=/usr/share/novnc
+127.0.0.1:6080 127.0.0.1:5901`), which bridges to the same loopback VNC
+mirror (`strategylab-vnc`, port 5901) used for the manual 2FA ritual above.
+Neither noVNC nor the VNC mirror has its own auth — both are reachable only
+through whatever edge auth fronts this nginx server block, same as every
+other `/` route.
+
 ## Diagnostics
 
 - Backend: `journalctl -u strategylab-backend -f`, `curl -s localhost:8000/api/cache`
+- Gateway panel: `curl -s localhost:8000/api/gateway/status`; noVNC bridge:
+  `journalctl -u strategylab-novnc -f`
 - IBKR errors: `curl -s localhost:8000/api/debug/ibkr-errors` (50-entry ring buffer)
 - IBC: `/var/log/ibc/ibc-*_GATEWAY-1045_<Weekday>.txt` — look for
   `Login has completed`; `Re-login is required` without it means the session is
   half-dead and needs a human on VNC.
 - Health from the Mac: `curl -s http://strategylab01/api/cache`
+
+## How to hand an app to the cockpit
+
+Learned on 2026-09-11, when mfIT1 built strategylab01 from this directory in one evening and hit three bugs that this list prevents.
+
+1. Put everything after "fresh OS with root" in one idempotent `install.sh`. Run it from a login shell, never as a transient systemd unit (SELinux gives rsync a domain that cannot write `/var/www`).
+2. Any file the installer downloads and then runs as the service user must be readable by that user (`chmod 755` the mktemp dir).
+3. Every path in a unit's `ReadWritePaths` must exist. Create it in the installer.
+4. Secrets go to `bastion01:/root/.mfit/secrets/<app>/` first. The cockpit copies them to `/etc/<app>/`. Never paste a secret in the peer channel.
+5. App state (bots.json, journal) goes through the same store. The cockpit owns the copy: stop the service, copy, start.
+6. Name the OS packages and mark the ones you have not seen installed as assumed. Fail loudly on a missing package.
+7. Say which ports must be open and from where. Port 80 here is limited to the edge proxy and the tunnel (`SL_HTTP_ALLOW`). Sign-in lives on the edge.
+8. Say what needs a human (the first Gateway 2FA over VNC) and leave that service enabled but not started.

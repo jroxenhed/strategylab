@@ -131,6 +131,18 @@ async def notify_test(
         raise
 
 
+async def slack(text: str) -> None:
+    """Post a Slack message via an incoming webhook (F428). Fire-and-forget —
+    never raises. No-op if SLACK_WEBHOOK_URL is unset."""
+    url = os.environ.get("SLACK_WEBHOOK_URL")
+    if not url:
+        return
+    try:
+        await _client.post(url, json={"text": text})
+    except Exception as exc:
+        logger.warning("slack: failed to send notification: %s", exc)
+
+
 async def close_client() -> None:
     """Close the shared httpx client. Call from FastAPI lifespan on shutdown."""
     await _client.aclose()

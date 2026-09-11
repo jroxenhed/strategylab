@@ -1,0 +1,18 @@
+[Unit]
+Description=noVNC websocket bridge for the Gateway panel (F429)
+After=strategylab-vnc.service
+Requires=strategylab-vnc.service
+
+[Service]
+Type=simple
+User=strategylab
+Group=strategylab
+# Bridges the loopback VNC mirror (strategylab-vnc, 127.0.0.1:5901) to a
+# websocket nginx proxies at /vnc/ and /websockify. Both ends stay on
+# loopback — only reachable through nginx's edge auth.
+ExecStart=/usr/bin/websockify --web=/usr/share/novnc 127.0.0.1:6080 127.0.0.1:5901
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

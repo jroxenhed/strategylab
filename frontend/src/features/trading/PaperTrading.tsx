@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import AccountBar from './AccountBar'
+import GatewayPanel from './GatewayPanel'
 import BotControlCenter from './BotControlCenter'
 import PositionsTable from './PositionsTable'
 import TradeJournal from './TradeJournal'
@@ -65,6 +66,7 @@ export default function PaperTrading() {
         </div>
       )}
       <AccountBar />
+      <GatewayPanel />
       <BotControlCenter />
       <PositionsTable
         brokerFilter={brokerFilter}

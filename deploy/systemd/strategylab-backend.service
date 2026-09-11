@@ -11,6 +11,8 @@ WorkingDirectory=/opt/strategylab/backend
 EnvironmentFile=-/etc/strategylab/backend.env
 Environment=STRATEGYLAB_DATA_DIR=/var/lib/strategylab
 Environment=PYTHONUNBUFFERED=1
+# F428: gateway panel reads IBC's log for Gateway login state
+Environment=IBC_LOG_DIR=/var/log/ibc
 # bind to loopback only; nginx fronts it on :80
 ExecStart=/opt/strategylab/backend/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
 Restart=always
