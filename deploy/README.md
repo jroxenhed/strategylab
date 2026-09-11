@@ -73,13 +73,27 @@ lock the account ("Too many failed login attempts", seen 2026-09-09).
 
 ## Migrating state from the Mac
 
+The VM takes ssh from bastion01 only, so state moves through the secrets store.
+**Order matters: stop → copy → start.** A running backend saves its in-memory
+state on SIGTERM (backup depth 1), so copying first and restarting after
+overwrites the copied file and then its `.bak` (hit once, 2026-09-11).
+
 ```sh
-# with the Mac backend stopped and the Mac Gateway unloaded:
-scp backend/data/bots.json backend/data/trade_journal.json strategylab01:/var/lib/strategylab/
-ssh strategylab01 'chown strategylab: /var/lib/strategylab/*.json && systemctl restart strategylab-backend'
+# Mac: backend stopped, Gateway unloaded, then
+scp backend/data/bots.json backend/data/trade_journal.json bastion01:/root/.mfit/secrets/strategylab/state/
+# VM (as root):
+systemctl stop strategylab-backend
+scp bastion01:/root/.mfit/secrets/strategylab/state/*.json /var/lib/strategylab/
+chown strategylab:strategylab /var/lib/strategylab/*.json && chmod 640 /var/lib/strategylab/*.json
+systemctl start strategylab-backend
+curl -s 127.0.0.1:8000/api/bots | grep -o '"bot_id"' | wc -l   # expect the bot count
 ```
 
 Bots are restored in `stopped` state; start them from the UI.
+
+WireGuard note: the VM sees tunnel clients as the MikroTik's NAT address
+(172.16.16.175), not 192.168.216.x — firewall rules for "reach from WireGuard"
+must allow that address.
 
 ## Sizing
 
