@@ -1,0 +1,36 @@
+[Unit]
+Description=IB Gateway under IBC (paper) on display :1
+After=strategylab-xvfb.service network-online.target
+Requires=strategylab-xvfb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=strategylab
+Group=strategylab
+WorkingDirectory=/home/strategylab
+Environment=DISPLAY=:1
+# Variables consumed by IBC's scripts/displaybannerandlaunch.sh (same names as gatewaystart.sh)
+Environment=APP=GATEWAY
+Environment=TWS_MAJOR_VRSN=1045
+Environment=IBC_PATH=/opt/ibc
+Environment=IBC_INI=/opt/ibc/config.ini
+Environment=TRADING_MODE=paper
+Environment=TWS_PATH=/home/strategylab/Jts
+Environment=TWS_SETTINGS_PATH=
+Environment=LOG_PATH=/var/log/ibc
+Environment=JAVA_PATH=
+Environment=TWSUSERID=
+Environment=TWSPASSWORD=
+Environment=FIXUSERID=
+Environment=FIXPASSWORD=
+ExecStart=/opt/ibc/scripts/displaybannerandlaunch.sh
+# IBC exits when the Gateway closes (daily restart, crash, session kick) — always come back.
+# 20s pause matters: IBKR rate-limits rapid logins ("Too many failed login attempts", 2026-09-09).
+Restart=always
+RestartSec=20
+KillMode=mixed
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

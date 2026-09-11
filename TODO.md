@@ -12,7 +12,7 @@ _(none open)_
 
 _(none tagged)_
 
-## Open Work — 15 items
+## Open Work — 16 items
 
 | Section | Open | IDs |
 |---|---|---|
@@ -21,7 +21,7 @@ _(none tagged)_
 | [Hardening](#hardening) | 1 | [F422](#f422) |
 | [Polish](#polish) | 2 | [F310](#f310), [F426](#f426) |
 | [Testing](#testing) | 2 | [D24b](#d24b), [F211](#f211) |
-| [Infra](#infra) | 2 | [F97](#f97), [F424](#f424) |
+| [Infra](#infra) | 3 | [F97](#f97), [F424](#f424), [F427](#f427) |
 
 ## Features
 
@@ -66,6 +66,7 @@ _(none tagged)_
 
 ## Infra
 
+- [ ] <a id="f427"></a> **F427** StrategyLab on office VM `strategylab01` (Proxmox 303, Rocky 9) + public `strategylab.milford.se` behind Google sign-in — repo-side `deploy/` shipped 2026-09-11 (install.sh, systemd units for backend/xvfb/vnc/ibc + 05:00 ET restart timer, nginx, IBC config template). Open: VM provisioned + installer run by mfIT1, secrets from bastion01 store, first Gateway 2FA over VNC, Mac Gateway unloaded, bots.json migrated, edge-proxy01 + oauth2-proxy (Google, allowlist john@milford.se) + TLS. Close when John opens the public URL and a bot ticks on the VM. [medium] [infra] (added 2026-09-11)
 - [ ] <a id="f97"></a> **F97** [medium] Provision `backend/venv/` in routine builder container — overnight builds 21/22/23 all hit the same gap: §3.5 backend smoke test originally specified `cd backend && venv/bin/uvicorn …` but the routine container ships without a venv. Spec now codifies AST + import-time check as the substitute. Real fix: the container image includes `backend/venv/` with pinned deps (Pydantic, FastAPI, pytest). Once landed, restore the full uvicorn smoke test path. Container/infra change, not application code. (from build 23 process review) [infra]
 
 - [ ] <a id="f424"></a> **F424** Live-validate bin/worker-pytest.sh on a reachable worker — F421(b) shipped dry-run-validated only (no worker reachable from the build session). Run the full backend suite incl. @slow on the worker, confirm green + wall-clock, record in the F374 worker contract docs. [easy] [infra]

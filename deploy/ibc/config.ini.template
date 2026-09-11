@@ -1,0 +1,32 @@
+# IBC config for StrategyLab's IB Gateway. Rendered by deploy/install.sh from
+# /etc/strategylab/ibc.env (@IB_USER@ / @IB_PASSWORD@ / @IB_TRADING_MODE@).
+# Only keys that differ from IBC defaults, plus the ones the Mac setup relied on.
+# Full reference: /opt/ibc/config.ini (the shipped default) and the IBC user guide.
+
+# --- login -------------------------------------------------------------------
+FIX=no
+IbLoginId=@IB_USER@
+IbPassword=@IB_PASSWORD@
+TradingMode=@IB_TRADING_MODE@
+SecondFactorDevice=
+SecondFactorAuthenticationTimeout=180
+ReloginAfterSecondFactorAuthenticationTimeout=yes
+LoginDialogDisplayTimeout=60
+ExistingSessionDetectedAction=secondary
+AcceptNonBrokerageAccountWarning=yes
+
+# --- API ---------------------------------------------------------------------
+# Orders fail with Error 321 unless the API is writable.
+ReadOnlyApi=no
+ReadOnlyLogin=no
+AcceptIncomingConnectionAction=accept
+# Backend talks to the Gateway on 127.0.0.1:4002 (paper). Pin it so a Gateway
+# settings reset can't silently move it.
+OverrideTwsApiPort=4002
+AllowBlindTrading=no
+
+# --- restart / housekeeping --------------------------------------------------
+# Kept for parity with the Mac; the systemd timer is the restart that actually fires.
+AutoRestartTime=05:00 AM
+MinimizeMainWindow=yes
+AcceptBidAskLastSizeDisplayUpdateNotification=accept

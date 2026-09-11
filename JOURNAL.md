@@ -6,6 +6,7 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 ## 2026-09-11
 
+- **[F427](TODO.md#f427)** Shipped `deploy/` for hosting StrategyLab on a Rocky 9 VM: idempotent installer, systemd units (backend on loopback, Xvfb + localhost VNC, IBC/Gateway with 20s restart backoff, daily 05:00 ET restart timer), nginx same-origin proxy, IBC config template rendered from a secrets file, README runbook (2FA ritual, one-session rule, state migration, sizing). Co-driven with mfIT1 over the peer channel; VM 303 `strategylab01` on the office Proxmox cluster.
 - **[F425](TODO-archive.md#f425)** Start All now opens a modal listing every bot that could not start, with the reason in plain words and bot names instead of ids. Found via the ENPH IBKR bot: it was silently blocked by the same-symbol guard because the Alpaca ENPH long bot was already running.
 - Ops: first launch in ~3 months. Homebrew had dropped python@3.12, breaking the backend venv; rebuilt on a reinstalled 3.12 (pandas-ta 0.4.71b0 pins `>=3.12`, numpy/scipy pins lack 3.14 wheels). Recorded in memory. Journal check: zero trades executed 2026-05-30 → 2026-09-11; five positions rode the gap open (ENPH 83 sh at 68.78 now ~36.8, i.e. ≈ −$2.7k unrealized).
 

@@ -1,0 +1,6 @@
+[Unit]
+Description=Restart IB Gateway (fired by strategylab-ibc-restart.timer)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl restart strategylab-ibc.service

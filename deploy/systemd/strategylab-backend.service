@@ -1,0 +1,27 @@
+[Unit]
+Description=StrategyLab backend (FastAPI + bot runner)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=strategylab
+Group=strategylab
+WorkingDirectory=/opt/strategylab/backend
+EnvironmentFile=-/etc/strategylab/backend.env
+Environment=STRATEGYLAB_DATA_DIR=/var/lib/strategylab
+Environment=PYTHONUNBUFFERED=1
+# bind to loopback only; nginx fronts it on :80
+ExecStart=/opt/strategylab/backend/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+# hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/var/lib/strategylab /opt/strategylab/backend/data
+
+[Install]
+WantedBy=multi-user.target

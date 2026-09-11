@@ -1,0 +1,17 @@
+[Unit]
+Description=VNC mirror of display :1 (localhost only; reach via ssh -L 5901:127.0.0.1:5901)
+After=strategylab-xvfb.service
+Requires=strategylab-xvfb.service
+
+[Service]
+Type=simple
+User=strategylab
+Group=strategylab
+Environment=DISPLAY=:1
+# no auth because it is bound to loopback and only reachable through an ssh tunnel over WireGuard
+ExecStart=/usr/bin/x0vncserver -display :1 -rfbport 5901 -localhost yes -SecurityTypes None -AlwaysShared
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

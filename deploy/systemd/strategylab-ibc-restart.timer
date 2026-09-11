@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily IB Gateway restart at 05:00 New York (IBC AutoRestartTime is unreliable on Gateway >= 10.34)
+
+[Timer]
+OnCalendar=Mon..Sat 05:00 America/New_York
+Persistent=false
+Unit=strategylab-ibc-restart.service
+
+[Install]
+WantedBy=timers.target
