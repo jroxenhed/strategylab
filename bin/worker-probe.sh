@@ -33,6 +33,12 @@
 
 set -uo pipefail
 
+# ssh runs a ProxyCommand (used for the ProxyJump to the home worker) through
+# $SHELL. The strategylab service account has /sbin/nologin as its shell, which
+# prints "This account is currently not available." and aborts the jump. Force a
+# real shell for ssh here so the account shell stays nologin (F434).
+case "${SHELL:-}" in */nologin|"") export SHELL=/bin/sh ;; esac
+
 QUIET=0
 [[ "${1:-}" == "--quiet" ]] && QUIET=1
 

@@ -25,6 +25,12 @@
 
 set -euo pipefail
 
+# ssh runs a ProxyCommand (the ProxyJump to the home worker) through $SHELL. The
+# strategylab service account has /sbin/nologin as its shell, which would print
+# "This account is currently not available." and abort the jump before it dials
+# bastion01. Force a real shell for ssh so the account shell stays nologin (F434).
+case "${SHELL:-}" in */nologin|"") export SHELL=/bin/sh ;; esac
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # ── args ──────────────────────────────────────────────────────────────────────
