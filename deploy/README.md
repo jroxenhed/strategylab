@@ -165,6 +165,18 @@ Neither noVNC nor the VNC mirror has its own auth — both are reachable only
 through whatever edge auth fronts this nginx server block, same as every
 other `/` route.
 
+## Start order
+
+Restart the Gateway before the backend. The backend registers IBKR once, at startup. If it starts while the Gateway is still logging in, the panel shows "logged in" but the API stays disconnected until F432 lands.
+
+```sh
+systemctl restart strategylab-ibc
+grep -q 'Login has completed' /var/log/ibc/ibc-*_$(date +%A).txt   # wait for this
+systemctl restart strategylab-backend
+```
+
+If the order was wrong, press Reconnect in the Gateway panel or `curl -s -X POST 127.0.0.1:8000/api/broker/ibkr/reconnect`.
+
 ## Diagnostics
 
 - Backend: `journalctl -u strategylab-backend -f`, `curl -s localhost:8000/api/cache`
