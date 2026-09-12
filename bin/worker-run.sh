@@ -21,8 +21,24 @@ LOG="$OUTDIR/$LOGNAME"
 DONE="$OUTDIR/.${LOGNAME}.done"
 rm -f "$DONE"
 
+# Bootstrap the worker venv when a fresh native worker has none (F434: the
+# strategylab service account on mfcore01 arrived with only the system Python).
+# Picks the newest python3 on the box and installs the research minimum; the
+# full backend/requirements.txt is not needed on a research worker.
+if [ ! -x backend/venv/bin/python3 ]; then
+  PY_BIN=""
+  for cand in python3.13 python3.12 python3.11 python3; do
+    if command -v "$cand" >/dev/null 2>&1; then PY_BIN="$cand"; break; fi
+  done
+  echo "bootstrap: no backend/venv, creating with $PY_BIN on $(hostname)" >"$LOG"
+  "$PY_BIN" -m venv backend/venv >>"$LOG" 2>&1
+  backend/venv/bin/python3 -m pip install --quiet --upgrade pip >>"$LOG" 2>&1
+  backend/venv/bin/python3 -m pip install --quiet numpy pandas pyarrow scipy >>"$LOG" 2>&1
+  echo "bootstrap: venv ready" >>"$LOG"
+fi
+
 # Verify deps before launching (fail loud, in the log)
-backend/venv/bin/python3 - <<'PY' >"$LOG" 2>&1
+backend/venv/bin/python3 - <<'PY' >>"$LOG" 2>&1
 import pandas, numpy, pyarrow
 print(f"deps_ok pandas={pandas.__version__} numpy={numpy.__version__} pyarrow={pyarrow.__version__}")
 PY
