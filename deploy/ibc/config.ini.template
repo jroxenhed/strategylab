@@ -1,5 +1,6 @@
 # IBC config for StrategyLab's IB Gateway. Rendered by deploy/install.sh from
-# /etc/strategylab/ibc.env (@IB_USER@ / @IB_PASSWORD@ / @IB_TRADING_MODE@).
+# /etc/strategylab/ibc.env (user, password, trading mode). Keep the placeholders
+# out of comments: install.sh substitutes them everywhere in this file.
 # Only keys that differ from IBC defaults, plus the ones the Mac setup relied on.
 # Full reference: /opt/ibc/config.ini (the shipped default) and the IBC user guide.
 
@@ -12,7 +13,10 @@ SecondFactorDevice=
 SecondFactorAuthenticationTimeout=180
 ReloginAfterSecondFactorAuthenticationTimeout=yes
 LoginDialogDisplayTimeout=60
-ExistingSessionDetectedAction=secondary
+# primary: this Gateway is the only IBKR session that should exist for the
+# account, so a leftover session (its own, after a restart) gets kicked instead
+# of IBC exiting and systemd relaunching it every 20 s (822 logins on 2026-09-16).
+ExistingSessionDetectedAction=primary
 AcceptNonBrokerageAccountWarning=yes
 
 # --- API ---------------------------------------------------------------------
@@ -34,7 +38,11 @@ ControlFrom=127.0.0.1
 BindAddress=127.0.0.1
 
 # --- restart / housekeeping --------------------------------------------------
-# Kept for parity with the Mac; the systemd timer is the restart that actually fires.
-AutoRestartTime=05:00 AM
+# No Gateway self-restart. The Gateway's own 05:00 restart (host local time)
+# re-execs under systemd's KillMode=mixed, loses the session and collided with
+# its own zombie session for hours (2026-09-15..17). The systemd timer
+# strategylab-ibc-restart.timer is the one daily restart; the unit's
+# ExecStartPre turns the stored AutoRestart flag off in jts.ini.
+AutoRestartTime=
 MinimizeMainWindow=yes
 AcceptBidAskLastSizeDisplayUpdateNotification=accept

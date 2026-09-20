@@ -7,9 +7,15 @@ Mac). send_command() talks to the IBC CommandServer (a plain-text line
 protocol on 127.0.0.1:7462 by default) to trigger RESTART / RECONNECTACCOUNT
 / RECONNECTDATA / STOP.
 
-alert_loop() polls read_state() every 60s and fires notify()/slack() on
-transitions into a "needs a human" state, re-alerting every 30 min while
-stuck there. Per CLAUDE.md ("Key Bugs Fixed" — fire-and-forget notifications
+alert_loop() polls read_state() every 60s. States a restart cures
+(relogin_required / bad_credentials / down) are self-healed first: after
+HEAL_AFTER_SECS in such a state the Gateway unit is restarted via sudo
+(deploy/sudoers.d/strategylab-ibc), at most once per HEAL_MIN_INTERVAL and
+HEAL_MAX_ATTEMPTS times per episode. Only when those are used up, or for
+states a restart cannot fix (awaiting_2fa / locked_out), does it fire
+notify()/slack(), re-alerting every 30 min while stuck there. Origin: IBKR's
+Saturday reset left IBC at "Unrecognized Username or Password" for a whole
+weekend (2026-09-20) with an alert every 30 min. Per CLAUDE.md ("Key Bugs Fixed" — fire-and-forget notifications
 must use asyncio.create_task, never await, inside a polling loop), the
 notify/slack calls are scheduled via asyncio.create_task so a slow or down
 ntfy.sh/Slack webhook never stalls the loop.
@@ -237,6 +243,14 @@ async def send_command(cmd: str) -> str:
 NEEDS_HUMAN = {"awaiting_2fa", "relogin_required", "locked_out", "bad_credentials", "down"}
 REALERT_SECS = 30 * 60
 
+# Self-heal: states a Gateway restart cures. Not locked_out (IBKR wants us to
+# wait) and not awaiting_2fa (a restart would just ask again).
+HEAL_STATES = {"relogin_required", "bad_credentials", "down"}
+HEAL_AFTER_SECS = 3 * 60        # be sure it is stuck, not a transient
+HEAL_MIN_INTERVAL = 30 * 60     # IBKR rate-limits logins ("Too many failed login attempts", 2026-09-09)
+HEAL_MAX_ATTEMPTS = 4           # per episode; then alert every REALERT_SECS as before
+DEFAULT_RESTART_CMD = "sudo -n /usr/bin/systemctl restart strategylab-ibc.service"
+
 
 class AlertState:
     """Mutable transition-tracking state for the alert loop. A fresh instance
@@ -255,9 +269,59 @@ class AlertState:
         self.last_state: Optional[str] = None
         self.last_alert_ts: float = 0.0
         self.ever_logged_in: bool = False
+        # Self-heal episode: opened when the state first lands in HEAL_STATES,
+        # closed on logged_in.
+        self.stuck_since: Optional[float] = None
+        self.heal_attempts: int = 0
+        self.last_heal_ts: float = 0.0
+        self.alerted_this_episode: bool = False
 
 
 _alert_state = AlertState()
+
+
+def _self_heal_enabled() -> bool:
+    return os.environ.get("GATEWAY_SELF_HEAL", "1") not in ("0", "false", "False", "")
+
+
+async def restart_gateway_service(reason: str) -> bool:
+    """Restart the Gateway systemd unit (GATEWAY_RESTART_CMD, default sudo
+    systemctl). Fire-and-forget from the alert loop; never raises."""
+    cmd = os.environ.get("GATEWAY_RESTART_CMD", DEFAULT_RESTART_CMD)
+    logger.warning("gateway: self-heal restart (state=%s): %s", reason, cmd)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd.split(),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=90)
+    except Exception as exc:
+        logger.error("gateway: self-heal restart failed to run: %s", exc)
+        return False
+    if proc.returncode != 0:
+        logger.error("gateway: self-heal restart exited %s: %s", proc.returncode,
+                     out.decode(errors="replace").strip()[:500])
+        return False
+    return True
+
+
+def _try_self_heal(state: str, alert_state: AlertState, ts: float) -> bool:
+    """Bookkeeping for one poll in a HEAL_STATES state. Returns True while the
+    episode is still being handled automatically (alert suppressed), False
+    once the attempts are used up (caller alerts as before)."""
+    if alert_state.stuck_since is None:
+        alert_state.stuck_since = ts
+        alert_state.heal_attempts = 0
+    if alert_state.heal_attempts >= HEAL_MAX_ATTEMPTS:
+        return False
+    stuck_for = ts - alert_state.stuck_since
+    since_last = (ts - alert_state.last_heal_ts) if alert_state.last_heal_ts else float("inf")
+    if stuck_for >= HEAL_AFTER_SECS and since_last >= HEAL_MIN_INTERVAL:
+        alert_state.heal_attempts += 1
+        alert_state.last_heal_ts = ts
+        asyncio.create_task(restart_gateway_service(state))
+    return True
 
 
 async def check_and_alert(
@@ -273,25 +337,37 @@ async def check_and_alert(
     prev = alert_state.last_state
 
     if state == "logged_in":
-        if prev is not None and prev != "logged_in":
+        # "All clear" only if someone was actually told about a problem; a
+        # silent self-heal stays silent.
+        if prev is not None and prev != "logged_in" and alert_state.alerted_this_episode:
             asyncio.create_task(
                 notify(title="Gateway logged in", message="IB Gateway is logged in.", priority="default")
             )
         alert_state.ever_logged_in = True
+        alert_state.stuck_since = None
+        alert_state.heal_attempts = 0
+        alert_state.alerted_this_episode = False
     elif state in NEEDS_HUMAN:
         if state == "down" and not alert_state.ever_logged_in:
             # Avoid alert storms on cold start (never seen logged_in yet).
+            pass
+        elif state in HEAL_STATES and _self_heal_enabled() and _try_self_heal(state, alert_state, ts):
+            # Healing in progress (or just scheduled): no alert this round.
             pass
         else:
             transitioned = prev != state
             due = (ts - alert_state.last_alert_ts) >= REALERT_SECS
             if transitioned or due:
-                msg = f"IB Gateway state: {state}"
+                detail = state
+                if alert_state.heal_attempts:
+                    detail += f" (after {alert_state.heal_attempts} automatic restarts)"
                 asyncio.create_task(
-                    notify(title="IB Gateway needs you", message=msg, priority="high", tags="warning")
+                    notify(title="IB Gateway needs you", message=f"IB Gateway state: {detail}",
+                           priority="high", tags="warning")
                 )
-                asyncio.create_task(slack(f"IB Gateway needs you: {state}"))
+                asyncio.create_task(slack(f"IB Gateway needs you: {detail}"))
                 alert_state.last_alert_ts = ts
+                alert_state.alerted_this_episode = True
 
     alert_state.last_state = state
 

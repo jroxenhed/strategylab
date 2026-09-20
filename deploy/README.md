@@ -30,7 +30,7 @@ store first and are copied to `/etc/strategylab/` from there.
 | `strategylab-xvfb.service` | `Xvfb :1` virtual display for the Gateway | — |
 | `strategylab-vnc.service` | `x0vncserver` mirror of `:1`, **localhost only** | 127.0.0.1:5901 |
 | `strategylab-ibc.service` | IBC → IB Gateway on `DISPLAY=:1` | 127.0.0.1:4002 (API) |
-| `strategylab-ibc-restart.timer` | restarts the Gateway daily at 05:00 America/New_York (IBC's own `AutoRestartTime` is unreliable on Gateway ≥ 10.34) | — |
+| `strategylab-ibc-restart.timer` | restarts the Gateway daily at 05:00 America/New_York. The only scheduled restart: the Gateway's own auto-restart is off (`AutoRestartTime=` blank, `AutoRestart=0` forced in jts.ini by the unit) because it re-execs under systemd, loses the session and looped against its own zombie session for hours (2026-09-15..17) | — |
 
 The frontend is built with `VITE_API_URL=<public url>` so browser calls go to
 `http://strategylab01/api/...` and nginx proxies them same-origin. The backend
@@ -148,6 +148,17 @@ State meanings (from the log marker, most recent line wins):
 Alerts (ntfy.sh `notify()` + Slack via `SLACK_WEBHOOK_URL`) fire on
 transition into a needs-a-human state and re-fire every 30 min while stuck
 there; disable with `GATEWAY_ALERTS=0` in `backend.env`.
+
+Self-heal (since 2026-09-20): `relogin_required`, `bad_credentials` and `down`
+are usually not a human's problem. IBKR's weekend reset kicks the session,
+IBC clicks Re-login, the auth servers answer "Unrecognized Username or
+Password" while they are still down, and IBC stops there for good. The alert
+loop now waits 3 min in such a state, then runs
+`sudo systemctl restart strategylab-ibc.service` (sudoers drop-in
+`deploy/sudoers.d/strategylab-ibc`), at most once per 30 min and 4 times per
+episode. Alerts only start once those attempts are used up, or for
+`awaiting_2fa` / `locked_out`, which a restart cannot fix. Tune with
+`GATEWAY_SELF_HEAL=0`, `GATEWAY_RESTART_CMD` in `backend.env`.
 
 Commands (`RESTART` / `RECONNECTACCOUNT` / `RECONNECTDATA` / `STOP`) go to
 IBC's CommandServer over a loopback socket — `CommandServerPort=7462` /

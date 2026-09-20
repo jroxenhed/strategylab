@@ -298,8 +298,10 @@ async def test_alert_skips_down_on_cold_start(monkeypatch):
     assert state.last_state == "down"
 
 
-async def test_alert_fires_on_down_after_previously_logged_in(monkeypatch):
-    calls = {"notify": 0}
+async def test_down_after_previously_logged_in_heals_not_alerts(monkeypatch):
+    """down after a prior login is a self-heal state now: restart after the
+    grace period, no alert. With self-heal off it alerts as it always did."""
+    calls = {"notify": 0, "restart": []}
 
     async def fake_notify(**kwargs):
         calls["notify"] += 1
@@ -307,13 +309,29 @@ async def test_alert_fires_on_down_after_previously_logged_in(monkeypatch):
     async def fake_slack(text):
         pass
 
+    async def fake_restart(reason):
+        calls["restart"].append(reason)
+        return True
+
     monkeypatch.setattr("notifications.notify", fake_notify)
     monkeypatch.setattr("notifications.slack", fake_slack)
+    monkeypatch.setattr(gateway, "restart_gateway_service", fake_restart)
+    monkeypatch.delenv("GATEWAY_SELF_HEAL", raising=False)
 
     state = gateway.AlertState()
     state.ever_logged_in = True
     state.last_state = "logged_in"
 
+    await gateway.check_and_alert({"state": "down"}, state, now=1000.0)
+    await gateway.check_and_alert({"state": "down"}, state, now=1000.0 + gateway.HEAL_AFTER_SECS)
+    await asyncio.sleep(0)
+    assert calls["notify"] == 0
+    assert calls["restart"] == ["down"]
+
+    monkeypatch.setenv("GATEWAY_SELF_HEAL", "0")
+    state = gateway.AlertState()
+    state.ever_logged_in = True
+    state.last_state = "logged_in"
     await gateway.check_and_alert({"state": "down"}, state, now=1000.0)
     await asyncio.sleep(0)
     assert calls["notify"] == 1
@@ -334,6 +352,7 @@ async def test_alert_fires_once_on_return_to_logged_in(monkeypatch):
     state = gateway.AlertState()
     state.last_state = "awaiting_2fa"
     state.ever_logged_in = True
+    state.alerted_this_episode = True   # a human was told, so tell them it is over
 
     await gateway.check_and_alert({"state": "logged_in"}, state, now=1000.0)
     await asyncio.sleep(0)
@@ -344,3 +363,126 @@ async def test_alert_fires_once_on_return_to_logged_in(monkeypatch):
     await gateway.check_and_alert({"state": "logged_in"}, state, now=2000.0)
     await asyncio.sleep(0)
     assert len(calls["notify"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# self-heal — restart the unit before bothering a human
+# ---------------------------------------------------------------------------
+
+def _healing_harness(monkeypatch):
+    calls = {"notify": [], "slack": [], "restart": []}
+
+    async def fake_notify(**kwargs):
+        calls["notify"].append(kwargs)
+
+    async def fake_slack(text):
+        calls["slack"].append(text)
+
+    async def fake_restart(reason):
+        calls["restart"].append(reason)
+        return True
+
+    monkeypatch.setattr("notifications.notify", fake_notify)
+    monkeypatch.setattr("notifications.slack", fake_slack)
+    monkeypatch.setattr(gateway, "restart_gateway_service", fake_restart)
+    monkeypatch.delenv("GATEWAY_SELF_HEAL", raising=False)
+    state = gateway.AlertState()
+    state.last_state = "logged_in"
+    state.ever_logged_in = True
+    return calls, state
+
+
+async def test_heal_state_restarts_after_grace_and_does_not_alert(monkeypatch):
+    calls, state = _healing_harness(monkeypatch)
+    t0 = 10_000.0
+    await gateway.check_and_alert({"state": "bad_credentials"}, state, now=t0)
+    await gateway.check_and_alert({"state": "bad_credentials"}, state, now=t0 + 60)
+    await asyncio.sleep(0)
+    assert calls["restart"] == []          # inside the 3-min grace
+    assert calls["notify"] == []
+
+    await gateway.check_and_alert({"state": "bad_credentials"}, state, now=t0 + gateway.HEAL_AFTER_SECS)
+    await asyncio.sleep(0)
+    assert calls["restart"] == ["bad_credentials"]
+    assert calls["notify"] == [] and calls["slack"] == []
+    assert state.heal_attempts == 1
+
+
+async def test_heal_respects_min_interval_then_retries(monkeypatch):
+    calls, state = _healing_harness(monkeypatch)
+    t0 = 10_000.0
+    await gateway.check_and_alert({"state": "relogin_required"}, state, now=t0)
+    await gateway.check_and_alert({"state": "relogin_required"}, state, now=t0 + gateway.HEAL_AFTER_SECS)
+    await gateway.check_and_alert({"state": "bad_credentials"}, state, now=t0 + gateway.HEAL_AFTER_SECS + 600)
+    await asyncio.sleep(0)
+    assert len(calls["restart"]) == 1      # too soon for a second restart
+
+    await gateway.check_and_alert(
+        {"state": "bad_credentials"}, state, now=t0 + gateway.HEAL_AFTER_SECS + gateway.HEAL_MIN_INTERVAL
+    )
+    await asyncio.sleep(0)
+    assert len(calls["restart"]) == 2
+    assert calls["notify"] == []
+
+
+async def test_heal_exhausted_then_alerts_with_attempt_count(monkeypatch):
+    calls, state = _healing_harness(monkeypatch)
+    t = 10_000.0
+    await gateway.check_and_alert({"state": "bad_credentials"}, state, now=t)
+    for _ in range(gateway.HEAL_MAX_ATTEMPTS):
+        t += max(gateway.HEAL_AFTER_SECS, gateway.HEAL_MIN_INTERVAL)
+        await gateway.check_and_alert({"state": "bad_credentials"}, state, now=t)
+    await asyncio.sleep(0)
+    assert len(calls["restart"]) == gateway.HEAL_MAX_ATTEMPTS
+    assert calls["notify"] == []
+
+    t += gateway.HEAL_MIN_INTERVAL
+    await gateway.check_and_alert({"state": "bad_credentials"}, state, now=t)
+    await asyncio.sleep(0)
+    assert len(calls["restart"]) == gateway.HEAL_MAX_ATTEMPTS   # no more restarts
+    assert len(calls["notify"]) == 1
+    assert "4 automatic restarts" in calls["notify"][0]["message"]
+    assert state.alerted_this_episode
+
+
+async def test_heal_success_is_silent_and_resets_episode(monkeypatch):
+    calls, state = _healing_harness(monkeypatch)
+    t0 = 10_000.0
+    await gateway.check_and_alert({"state": "bad_credentials"}, state, now=t0)
+    await gateway.check_and_alert({"state": "bad_credentials"}, state, now=t0 + gateway.HEAL_AFTER_SECS)
+    await gateway.check_and_alert({"state": "logging_in"}, state, now=t0 + gateway.HEAL_AFTER_SECS + 30)
+    await gateway.check_and_alert({"state": "logged_in"}, state, now=t0 + gateway.HEAL_AFTER_SECS + 90)
+    await asyncio.sleep(0)
+    assert calls["restart"] == ["bad_credentials"]
+    assert calls["notify"] == []           # nobody was told, so no "logged in" either
+    assert state.stuck_since is None and state.heal_attempts == 0
+
+
+async def test_non_heal_states_still_alert_immediately(monkeypatch):
+    calls, state = _healing_harness(monkeypatch)
+    await gateway.check_and_alert({"state": "locked_out"}, state, now=1000.0)
+    await asyncio.sleep(0)
+    assert calls["restart"] == []
+    assert len(calls["notify"]) == 1
+    # and the all-clear fires because a human was alerted
+    await gateway.check_and_alert({"state": "logged_in"}, state, now=1100.0)
+    await asyncio.sleep(0)
+    assert len(calls["notify"]) == 2
+
+
+async def test_heal_disabled_by_env_alerts_as_before(monkeypatch):
+    calls, state = _healing_harness(monkeypatch)
+    monkeypatch.setenv("GATEWAY_SELF_HEAL", "0")
+    await gateway.check_and_alert({"state": "bad_credentials"}, state, now=1000.0)
+    await asyncio.sleep(0)
+    assert calls["restart"] == []
+    assert len(calls["notify"]) == 1
+
+
+async def test_restart_gateway_service_runs_configured_command(monkeypatch, tmp_path):
+    marker = tmp_path / "ran"
+    monkeypatch.setenv("GATEWAY_RESTART_CMD", f"/usr/bin/touch {marker}")
+    assert await gateway.restart_gateway_service("bad_credentials") is True
+    assert marker.exists()
+    monkeypatch.setenv("GATEWAY_RESTART_CMD", "/usr/bin/false")
+    assert await gateway.restart_gateway_service("down") is False

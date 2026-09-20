@@ -24,6 +24,8 @@ Environment=TWSUSERID=
 Environment=TWSPASSWORD=
 Environment=FIXUSERID=
 Environment=FIXPASSWORD=
+# Gateway self-restart off: it fights systemd (see deploy/ibc/config.ini.template).
+ExecStartPre=-/usr/bin/sed -i 's/^AutoRestart=1$/AutoRestart=0/' /home/strategylab/Jts/jts.ini
 ExecStart=/opt/ibc/scripts/displaybannerandlaunch.sh
 # IBC exits when the Gateway closes (daily restart, crash, session kick) — always come back.
 # 20s pause matters: IBKR rate-limits rapid logins ("Too many failed login attempts", 2026-09-09).
