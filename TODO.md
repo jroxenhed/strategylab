@@ -40,6 +40,7 @@ This file holds open work only. Finished work lives in TODO-archive.md, half for
 
 ## Infra
 
+- [ ] <a id="f441"></a> **F441** The VM move carried only bots.json and trade_journal.json, so saved strategies and the watchlist were left behind and restored by hand on 2026-09-22. Make the deploy state list cover every live file in backend/data/, and give the VM a backup of them. See deploy/README.md. [easy] [infra]
 - [ ] <a id="f439"></a> **F439** Run one real explore end to end on a worker from the VM. Both workers have only run a small power audit, and the full price cache is still missing from the mfcore01 service account. Use the home worker, then record wall clock time and any trap in the worker section of docs/private/orchestrator-playbook.md. Waits on F434. [medium] [infra]
 - [ ] <a id="f434"></a> **F434** Both workers now run real jobs from the VM. The dispatch account on mfcore01 holds only a small slice of the price cache, so a full run there reads a few hundred stocks instead of 6,663. The full cache, 32,000 files and 4.1 GB, already sits in John's clone on that box, so this is a local copy plus write access. Make the pre-flight check file counts, not only that the folder exists. [medium] [infra]
 - [ ] <a id="f433"></a> **F433** The commit check that used to catch a to-do filed without a category tag no longer fires under the new section layout, so untagged items slip in. Make sync-todo-index.py or the pre-commit hook flag an untagged item under any layout, and add a test in bin/tests/. [easy] [infra]
