@@ -425,24 +425,121 @@ async def test_heal_respects_min_interval_then_retries(monkeypatch):
     assert calls["notify"] == []
 
 
-async def test_heal_exhausted_then_alerts_with_attempt_count(monkeypatch):
+async def test_heal_fast_attempts_then_one_alert_with_attempt_count(monkeypatch):
     calls, state = _healing_harness(monkeypatch)
     t = 10_000.0
     await gateway.check_and_alert({"state": "bad_credentials"}, state, now=t)
-    for _ in range(gateway.HEAL_MAX_ATTEMPTS):
+    for _ in range(gateway.HEAL_FAST_ATTEMPTS):
         t += max(gateway.HEAL_AFTER_SECS, gateway.HEAL_MIN_INTERVAL)
         await gateway.check_and_alert({"state": "bad_credentials"}, state, now=t)
     await asyncio.sleep(0)
-    assert len(calls["restart"]) == gateway.HEAL_MAX_ATTEMPTS
+    assert len(calls["restart"]) == gateway.HEAL_FAST_ATTEMPTS
     assert calls["notify"] == []
 
     t += gateway.HEAL_MIN_INTERVAL
     await gateway.check_and_alert({"state": "bad_credentials"}, state, now=t)
     await asyncio.sleep(0)
-    assert len(calls["restart"]) == gateway.HEAL_MAX_ATTEMPTS   # no more restarts
+    assert len(calls["restart"]) == gateway.HEAL_FAST_ATTEMPTS   # next gap is longer
     assert len(calls["notify"]) == 1
     assert "4 automatic restarts" in calls["notify"][0]["message"]
+    assert calls["notify"][0]["title"] == "IB Gateway still not logged in"
+    assert calls["slack"][0].startswith("IB Gateway still not logged in: bad_credentials")
     assert state.alerted_this_episode
+
+
+def test_heal_interval_doubles_to_cap():
+    fast = [gateway._heal_interval(n) for n in range(gateway.HEAL_FAST_ATTEMPTS)]
+    assert fast == [gateway.HEAL_MIN_INTERVAL] * gateway.HEAL_FAST_ATTEMPTS
+    n = gateway.HEAL_FAST_ATTEMPTS
+    assert gateway._heal_interval(n) == 2 * gateway.HEAL_MIN_INTERVAL
+    assert gateway._heal_interval(n + 1) == gateway.HEAL_MAX_INTERVAL
+    assert gateway._heal_interval(500) == gateway.HEAL_MAX_INTERVAL
+
+
+async def test_heal_never_stops_and_reminds_every_6h(monkeypatch):
+    """IBKR's weekend reset (2026-09-27): the login servers stay down for
+    hours. Restarts continue at the slow cadence; the state flickers through
+    restarting/logging_in on each one without a new alert, and a reminder
+    comes only every HEAL_REALERT_SECS."""
+    calls, state = _healing_harness(monkeypatch)
+    t = 10_000.0
+    end = t + 24 * 3600
+    while t <= end:
+        await gateway.check_and_alert({"state": "bad_credentials"}, state, now=t)
+        if state.last_heal_ts == t:   # a restart went out this poll
+            await gateway.check_and_alert({"state": "restarting"}, state, now=t + 20)
+            await gateway.check_and_alert({"state": "logging_in"}, state, now=t + 40)
+        t += 60
+    await asyncio.sleep(0)
+    # 4 fast (~2 h), then 1 h, then every 2 h for the rest of the day.
+    assert 13 <= len(calls["restart"]) <= 15
+    # first alert after the fast attempts, then one reminder per 6 h.
+    assert 4 <= len(calls["notify"]) <= 5
+    assert len(calls["slack"]) == len(calls["notify"])
+
+
+async def test_heal_state_after_alert_does_not_realert_on_transition(monkeypatch):
+    calls, state = _healing_harness(monkeypatch)
+    state.last_state = "logging_in"
+    state.stuck_since = 0.0
+    state.heal_attempts = gateway.HEAL_FAST_ATTEMPTS
+    state.last_heal_ts = 1.0
+    state.alerted_this_episode = True
+    state.last_alert_ts = 100.0
+    await gateway.check_and_alert({"state": "relogin_required"}, state, now=2000.0)
+    await asyncio.sleep(0)
+    assert calls["notify"] == []
+
+
+# ---------------------------------------------------------------------------
+# F432 — register IBKR once the Gateway is logged in
+# ---------------------------------------------------------------------------
+
+def _register_harness(monkeypatch):
+    calls = {"register": 0}
+
+    async def fake_register():
+        calls["register"] += 1
+        return True
+
+    async def fake_notify(**kwargs):
+        pass
+
+    monkeypatch.setattr("notifications.notify", fake_notify)
+    monkeypatch.setattr(gateway, "register_ibkr", fake_register)
+    return calls
+
+
+async def test_logged_in_without_api_registers_ibkr_rate_limited(monkeypatch):
+    calls = _register_harness(monkeypatch)
+    state = gateway.AlertState()
+    info = {"state": "logged_in", "api_connected": False}
+    await gateway.check_and_alert(info, state, now=10_000.0)
+    await gateway.check_and_alert(info, state, now=10_060.0)
+    await asyncio.sleep(0)
+    assert calls["register"] == 1          # second poll is inside the 5-min limit
+
+    await gateway.check_and_alert(info, state, now=10_000.0 + gateway.REGISTER_MIN_INTERVAL)
+    await asyncio.sleep(0)
+    assert calls["register"] == 2
+
+
+async def test_register_skipped_when_connected_or_not_logged_in(monkeypatch):
+    calls = _register_harness(monkeypatch)
+    state = gateway.AlertState()
+    await gateway.check_and_alert({"state": "logged_in", "api_connected": True}, state, now=10_000.0)
+    await gateway.check_and_alert({"state": "logged_in"}, state, now=20_000.0)
+    await gateway.check_and_alert({"state": "logging_in", "api_connected": False}, state, now=30_000.0)
+    await asyncio.sleep(0)
+    assert calls["register"] == 0
+
+
+async def test_register_ibkr_never_raises(monkeypatch):
+    async def boom():
+        raise RuntimeError("gateway gone")
+
+    monkeypatch.setattr("shared.init_ibkr", boom)
+    assert await gateway.register_ibkr() is False
 
 
 async def test_heal_success_is_silent_and_resets_episode(monkeypatch):
@@ -480,9 +577,34 @@ async def test_heal_disabled_by_env_alerts_as_before(monkeypatch):
 
 
 async def test_restart_gateway_service_runs_configured_command(monkeypatch, tmp_path):
+    calls = {"notify": [], "slack": []}
+
+    async def fake_notify(**kwargs):
+        calls["notify"].append(kwargs)
+
+    async def fake_slack(text):
+        calls["slack"].append(text)
+
+    monkeypatch.setattr("notifications.notify", fake_notify)
+    monkeypatch.setattr("notifications.slack", fake_slack)
     marker = tmp_path / "ran"
     monkeypatch.setenv("GATEWAY_RESTART_CMD", f"/usr/bin/touch {marker}")
     assert await gateway.restart_gateway_service("bad_credentials") is True
     assert marker.exists()
+    await asyncio.sleep(0)
+    assert calls["slack"] == []
+
+    # A restart that cannot run alerts at once (sudo under NoNewPrivileges, 2026-09-27).
     monkeypatch.setenv("GATEWAY_RESTART_CMD", "/usr/bin/false")
     assert await gateway.restart_gateway_service("down") is False
+    monkeypatch.setenv("GATEWAY_RESTART_CMD", str(tmp_path / "missing-binary"))
+    assert await gateway.restart_gateway_service("down") is False
+    await asyncio.sleep(0)
+    assert len(calls["slack"]) == 2
+    assert all(s.startswith("IB Gateway self-heal is broken") for s in calls["slack"])
+    assert calls["notify"][0]["title"] == "IB Gateway self-heal is broken"
+
+
+def test_default_restart_cmd_does_not_use_sudo():
+    # The backend unit runs with NoNewPrivileges=true; sudo refuses to run there.
+    assert "sudo" not in gateway.DEFAULT_RESTART_CMD.split()

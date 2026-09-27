@@ -8,14 +8,18 @@ protocol on 127.0.0.1:7462 by default) to trigger RESTART / RECONNECTACCOUNT
 / RECONNECTDATA / STOP.
 
 alert_loop() polls read_state() every 60s. States a restart cures
-(relogin_required / bad_credentials / down) are self-healed first: after
-HEAL_AFTER_SECS in such a state the Gateway unit is restarted via sudo
-(deploy/sudoers.d/strategylab-ibc), at most once per HEAL_MIN_INTERVAL and
-HEAL_MAX_ATTEMPTS times per episode. Only when those are used up, or for
-states a restart cannot fix (awaiting_2fa / locked_out), does it fire
-notify()/slack(), re-alerting every 30 min while stuck there. Origin: IBKR's
-Saturday reset left IBC at "Unrecognized Username or Password" for a whole
-weekend (2026-09-20) with an alert every 30 min. Per CLAUDE.md ("Key Bugs Fixed" — fire-and-forget notifications
+(relogin_required / bad_credentials / down) are self-healed: after
+HEAL_AFTER_SECS in such a state the Gateway unit is restarted via systemctl
+(polkit rule deploy/polkit/50-strategylab-ibc.rules), HEAL_FAST_ATTEMPTS times at
+HEAL_MIN_INTERVAL, then with a doubling gap up to HEAL_MAX_INTERVAL for as long
+as the state lasts. The first alert comes only after the fast attempts, then a
+reminder every HEAL_REALERT_SECS. States a restart cannot fix (awaiting_2fa /
+locked_out) fire notify()/slack() at once and re-alert every 30 min. Origin:
+IBKR's weekend reset left IBC at "Unrecognized Username or Password" for a
+whole weekend (2026-09-20, again 2026-09-27) with an alert every 30 min; one
+restart logs in again in seconds. The same loop re-registers IBKR when the
+Gateway is logged in but the backend has no API connection (F432). Per
+CLAUDE.md ("Key Bugs Fixed" — fire-and-forget notifications
 must use asyncio.create_task, never await, inside a polling loop), the
 notify/slack calls are scheduled via asyncio.create_task so a slow or down
 ntfy.sh/Slack webhook never stalls the loop.
@@ -248,8 +252,15 @@ REALERT_SECS = 30 * 60
 HEAL_STATES = {"relogin_required", "bad_credentials", "down"}
 HEAL_AFTER_SECS = 3 * 60        # be sure it is stuck, not a transient
 HEAL_MIN_INTERVAL = 30 * 60     # IBKR rate-limits logins ("Too many failed login attempts", 2026-09-09)
-HEAL_MAX_ATTEMPTS = 4           # per episode; then alert every REALERT_SECS as before
-DEFAULT_RESTART_CMD = "sudo -n /usr/bin/systemctl restart strategylab-ibc.service"
+HEAL_FAST_ATTEMPTS = 4          # restarts at HEAL_MIN_INTERVAL before the first alert
+HEAL_MAX_INTERVAL = 2 * 60 * 60 # then the gap doubles up to this; restarts never stop
+HEAL_REALERT_SECS = 6 * 60 * 60 # reminder while self-heal is still trying
+# No sudo: the backend unit has NoNewPrivileges=true, so sudo refuses to run.
+# deploy/polkit/50-strategylab-ibc.rules lets user strategylab restart this unit.
+DEFAULT_RESTART_CMD = "/usr/bin/systemctl restart strategylab-ibc.service"
+
+# F432: re-register IBKR at most this often while logged in without an API connection.
+REGISTER_MIN_INTERVAL = 5 * 60
 
 
 class AlertState:
@@ -275,6 +286,7 @@ class AlertState:
         self.heal_attempts: int = 0
         self.last_heal_ts: float = 0.0
         self.alerted_this_episode: bool = False
+        self.last_register_ts: float = 0.0
 
 
 _alert_state = AlertState()
@@ -285,8 +297,8 @@ def _self_heal_enabled() -> bool:
 
 
 async def restart_gateway_service(reason: str) -> bool:
-    """Restart the Gateway systemd unit (GATEWAY_RESTART_CMD, default sudo
-    systemctl). Fire-and-forget from the alert loop; never raises."""
+    """Restart the Gateway systemd unit (GATEWAY_RESTART_CMD, default plain
+    systemctl via polkit). Fire-and-forget from the alert loop; never raises."""
     cmd = os.environ.get("GATEWAY_RESTART_CMD", DEFAULT_RESTART_CMD)
     logger.warning("gateway: self-heal restart (state=%s): %s", reason, cmd)
     try:
@@ -298,30 +310,71 @@ async def restart_gateway_service(reason: str) -> bool:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=90)
     except Exception as exc:
         logger.error("gateway: self-heal restart failed to run: %s", exc)
+        _alert_restart_failed(str(exc))
         return False
     if proc.returncode != 0:
-        logger.error("gateway: self-heal restart exited %s: %s", proc.returncode,
-                     out.decode(errors="replace").strip()[:500])
+        detail = f"exit {proc.returncode}: {out.decode(errors='replace').strip()[:300]}"
+        logger.error("gateway: self-heal restart %s", detail)
+        _alert_restart_failed(detail)
         return False
     return True
+
+
+def _alert_restart_failed(detail: str) -> None:
+    """A restart that cannot run is a setup fault, not an IBKR outage: say so at
+    once. The first version (sudo under NoNewPrivileges) failed only in the log."""
+    from notifications import notify, slack
+    asyncio.create_task(
+        notify(title="IB Gateway self-heal is broken",
+               message=f"Restart command failed ({detail})", priority="high", tags="warning")
+    )
+    asyncio.create_task(slack(f"IB Gateway self-heal is broken: restart command failed ({detail})"))
+
+
+async def register_ibkr() -> bool:
+    """F432: register the IBKR providers when the Gateway is logged in but the
+    backend has none, because it started while the Gateway was down.
+    Fire-and-forget from the alert loop; never raises."""
+    from shared import init_ibkr
+    from broker import get_available_brokers
+    try:
+        await init_ibkr()
+    except Exception as exc:
+        logger.error("gateway: IBKR registration failed: %s", exc)
+        return False
+    ok = "ibkr" in get_available_brokers()
+    if ok:
+        logger.warning("gateway: IBKR registered after the Gateway logged in (F432)")
+    return ok
+
+
+def _heal_interval(attempts: int) -> float:
+    """Gap before the next restart after `attempts` restarts in this episode:
+    HEAL_MIN_INTERVAL for the fast attempts, then doubling up to
+    HEAL_MAX_INTERVAL. Every restart is one login, and failed logins count
+    toward IBKR's lockout, so the endless tail stays slow."""
+    if attempts < HEAL_FAST_ATTEMPTS:
+        return HEAL_MIN_INTERVAL
+    doublings = min(attempts - HEAL_FAST_ATTEMPTS + 1, 8)
+    return min(HEAL_MIN_INTERVAL * 2 ** doublings, HEAL_MAX_INTERVAL)
 
 
 def _try_self_heal(state: str, alert_state: AlertState, ts: float) -> bool:
-    """Bookkeeping for one poll in a HEAL_STATES state. Returns True while the
-    episode is still being handled automatically (alert suppressed), False
-    once the attempts are used up (caller alerts as before)."""
+    """Bookkeeping for one poll in a HEAL_STATES state: schedule a restart when
+    one is due. Restarts never stop while the state lasts. Returns True while
+    the alert stays suppressed: until HEAL_FAST_ATTEMPTS restarts are done and
+    the last one had HEAL_MIN_INTERVAL to work."""
     if alert_state.stuck_since is None:
         alert_state.stuck_since = ts
         alert_state.heal_attempts = 0
-    if alert_state.heal_attempts >= HEAL_MAX_ATTEMPTS:
-        return False
     stuck_for = ts - alert_state.stuck_since
     since_last = (ts - alert_state.last_heal_ts) if alert_state.last_heal_ts else float("inf")
-    if stuck_for >= HEAL_AFTER_SECS and since_last >= HEAL_MIN_INTERVAL:
+    if stuck_for >= HEAL_AFTER_SECS and since_last >= _heal_interval(alert_state.heal_attempts):
         alert_state.heal_attempts += 1
         alert_state.last_heal_ts = ts
+        since_last = 0.0
         asyncio.create_task(restart_gateway_service(state))
-    return True
+    return alert_state.heal_attempts < HEAL_FAST_ATTEMPTS or since_last < HEAL_MIN_INTERVAL
 
 
 async def check_and_alert(
@@ -347,25 +400,39 @@ async def check_and_alert(
         alert_state.stuck_since = None
         alert_state.heal_attempts = 0
         alert_state.alerted_this_episode = False
+        # F432: only an explicit False; callers without the field never register.
+        if (info.get("api_connected") is False
+                and ts - alert_state.last_register_ts >= REGISTER_MIN_INTERVAL):
+            alert_state.last_register_ts = ts
+            asyncio.create_task(register_ibkr())
     elif state in NEEDS_HUMAN:
+        healing = state in HEAL_STATES and _self_heal_enabled()
         if state == "down" and not alert_state.ever_logged_in:
             # Avoid alert storms on cold start (never seen logged_in yet).
             pass
-        elif state in HEAL_STATES and _self_heal_enabled() and _try_self_heal(state, alert_state, ts):
+        elif healing and _try_self_heal(state, alert_state, ts):
             # Healing in progress (or just scheduled): no alert this round.
             pass
         else:
-            transitioned = prev != state
-            due = (ts - alert_state.last_alert_ts) >= REALERT_SECS
-            if transitioned or due:
+            if healing:
+                # Each restart moves the state through restarting/logging_in,
+                # so a transition is not news here: one alert, then reminders.
+                fire = (not alert_state.alerted_this_episode
+                        or (ts - alert_state.last_alert_ts) >= HEAL_REALERT_SECS)
+                title = "IB Gateway still not logged in"
+                detail = (f"{state} after {alert_state.heal_attempts} automatic restarts. "
+                          f"Restarts continue every {HEAL_MAX_INTERVAL // 3600} h at most; "
+                          f"if this lasts, check the IBKR password.")
+            else:
+                fire = prev != state or (ts - alert_state.last_alert_ts) >= REALERT_SECS
+                title = "IB Gateway needs you"
                 detail = state
-                if alert_state.heal_attempts:
-                    detail += f" (after {alert_state.heal_attempts} automatic restarts)"
+            if fire:
                 asyncio.create_task(
-                    notify(title="IB Gateway needs you", message=f"IB Gateway state: {detail}",
+                    notify(title=title, message=f"IB Gateway state: {detail}",
                            priority="high", tags="warning")
                 )
-                asyncio.create_task(slack(f"IB Gateway needs you: {detail}"))
+                asyncio.create_task(slack(f"{title}: {detail}"))
                 alert_state.last_alert_ts = ts
                 alert_state.alerted_this_episode = True
 

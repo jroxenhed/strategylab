@@ -1,3 +1,0 @@
-# backend/gateway.py self-heal: restart the Gateway unit when IBC is stuck at a
-# dead login dialog (IBKR weekend reset). Exactly this one command, nothing else.
-strategylab ALL=(root) NOPASSWD: /usr/bin/systemctl restart strategylab-ibc.service

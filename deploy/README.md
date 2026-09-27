@@ -154,11 +154,23 @@ are usually not a human's problem. IBKR's weekend reset kicks the session,
 IBC clicks Re-login, the auth servers answer "Unrecognized Username or
 Password" while they are still down, and IBC stops there for good. The alert
 loop now waits 3 min in such a state, then runs
-`sudo systemctl restart strategylab-ibc.service` (sudoers drop-in
-`deploy/sudoers.d/strategylab-ibc`), at most once per 30 min and 4 times per
-episode. Alerts only start once those attempts are used up, or for
-`awaiting_2fa` / `locked_out`, which a restart cannot fix. Tune with
-`GATEWAY_SELF_HEAL=0`, `GATEWAY_RESTART_CMD` in `backend.env`.
+`systemctl restart strategylab-ibc.service` as user `strategylab`. The polkit
+rule `deploy/polkit/50-strategylab-ibc.rules` permits exactly that restart.
+Do not use sudo for this: the backend unit has `NoNewPrivileges=true`, and sudo
+refuses to run under it (the first sudoers version could never work on the
+VM). A restart makes IBC type the password
+again, and the login completes in seconds (2026-09-27: 6 s). The first 4
+restarts come 30 min apart. After that the gap doubles to 2 h, and the restarts
+continue until the Gateway logs in. Every restart is one login, and failed
+logins count toward IBKR's lockout, so do not make the gap shorter. The first
+alert ("IB Gateway still not logged in") comes 30 min after the fourth restart,
+then a reminder every 6 h. `awaiting_2fa` and `locked_out` get no restart: they
+alert at once and every 30 min. Tune with `GATEWAY_SELF_HEAL=0`,
+`GATEWAY_RESTART_CMD` in `backend.env`.
+
+The same loop fixes the API connection (F432). When the Gateway is logged in
+but the backend has no IBKR registration, it calls `init_ibkr()` again, at most
+once per 5 min.
 
 Commands (`RESTART` / `RECONNECTACCOUNT` / `RECONNECTDATA` / `STOP`) go to
 IBC's CommandServer over a loopback socket — `CommandServerPort=7462` /
@@ -178,7 +190,7 @@ other `/` route.
 
 ## Start order
 
-Restart the Gateway before the backend. The backend registers IBKR once, at startup. If it starts while the Gateway is still logging in, the panel shows "logged in" but the API stays disconnected until F432 lands.
+The order is not critical since F432. If the backend starts while the Gateway is still logging in, the gateway alert loop registers IBKR 1 to 5 min after "Login has completed". For an immediate connection, restart the Gateway first.
 
 ```sh
 systemctl restart strategylab-ibc

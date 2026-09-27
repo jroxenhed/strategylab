@@ -1,0 +1,14 @@
+// backend/gateway.py self-heal: let the backend (user strategylab) restart the
+// Gateway unit when IBC is stuck at a dead login dialog (IBKR weekend reset).
+// Exactly this one unit and this one verb, nothing else.
+// polkit, not sudo: strategylab-backend.service runs with NoNewPrivileges=true,
+// and sudo refuses to run under that flag. systemctl asks systemd over D-Bus,
+// and systemd asks polkit, so the flag does not apply.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "strategylab-ibc.service" &&
+        action.lookup("verb") == "restart" &&
+        subject.user == "strategylab") {
+        return polkit.Result.YES;
+    }
+});

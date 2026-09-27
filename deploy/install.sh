@@ -181,10 +181,12 @@ if [[ "${SL_SKIP_GATEWAY:-0}" != "1" ]]; then
   chown -R "$SL_USER:$SL_USER" "$IBC_DIR"
 fi
 
-# --- sudoers: backend self-heal restarts the Gateway unit ---------------------
-log "sudoers drop-in (backend may restart strategylab-ibc)"
-install -m 440 -o root -g root "$DEPLOY/sudoers.d/strategylab-ibc" /etc/sudoers.d/strategylab-ibc
-visudo -cf /etc/sudoers.d/strategylab-ibc >/dev/null || die "sudoers drop-in failed visudo check"
+# --- polkit: backend self-heal restarts the Gateway unit ----------------------
+# Not sudo: the backend unit has NoNewPrivileges=true, and sudo refuses to run
+# under it. polkitd reads rules.d again on its own when a file changes.
+log "polkit rule (backend may restart strategylab-ibc)"
+install -m 644 -o root -g root "$DEPLOY/polkit/50-strategylab-ibc.rules" /etc/polkit-1/rules.d/50-strategylab-ibc.rules
+rm -f /etc/sudoers.d/strategylab-ibc
 
 # --- systemd -----------------------------------------------------------------
 log "systemd units"
