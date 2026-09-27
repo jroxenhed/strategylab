@@ -30,7 +30,7 @@ store first and are copied to `/etc/strategylab/` from there.
 | `strategylab-xvfb.service` | `Xvfb :1` virtual display for the Gateway | — |
 | `strategylab-vnc.service` | `x0vncserver` mirror of `:1`, **localhost only** | 127.0.0.1:5901 |
 | `strategylab-ibc.service` | IBC → IB Gateway on `DISPLAY=:1` | 127.0.0.1:4002 (API) |
-| `strategylab-ibc-restart.timer` | restarts the Gateway daily at 05:00 America/New_York. The only scheduled restart: the Gateway's own auto-restart is off (`AutoRestartTime=` blank, `AutoRestart=0` forced in jts.ini by the unit) because it re-execs under systemd, loses the session and looped against its own zombie session for hours (2026-09-15..17) | — |
+| `strategylab-ibc-restart.timer` | restarts the Gateway daily at 05:00 America/New_York. The only scheduled restart: the Gateway's own auto-restart is off (`AutoRestartTime=` blank, `AutoRestart=0` forced in jts.ini by the unit) because it re-execs under systemd, loses the session and looped against its own zombie session for hours (2026-09-15..17). Not proven (F440): the Gateway writes `AutoRestart=1` back into jts.ini about 10 s after the unit sets it to 0 | — |
 
 The frontend is built with `VITE_API_URL=<public url>` so browser calls go to
 `http://strategylab01/api/...` and nginx proxies them same-origin. The backend
