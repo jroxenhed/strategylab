@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # StrategyLab installer for Rocky Linux 9. Idempotent; run as root.
 #
-#   SL_PUBLIC_URL=http://strategylab01 bash deploy/install.sh
+#   SL_PUBLIC_URL=https://strategylab.milford.se SL_HTTP_ALLOW="..." bash deploy/install.sh
 #
-# Env knobs (all optional):
-#   SL_PUBLIC_URL   URL the browser uses to reach nginx (baked into the frontend build). Default http://<hostname -s>
+# Required:
+#   SL_PUBLIC_URL   URL the browser uses to reach nginx (baked into the frontend build).
+#                   No default: a wrong value (e.g. the old http://<hostname -s>) makes
+#                   every API call fail from the public https page (2026-09-27).
+#
+# Env knobs (optional):
 #   SL_REPO_DIR     checkout to deploy from. Default /opt/strategylab
 #   SL_USER         service user. Default strategylab
 #   SL_SKIP_GATEWAY set to 1 to skip the IB Gateway / IBC download+install
@@ -22,7 +26,7 @@ set -euo pipefail
 
 SL_REPO_DIR="${SL_REPO_DIR:-/opt/strategylab}"
 SL_USER="${SL_USER:-strategylab}"
-SL_PUBLIC_URL="${SL_PUBLIC_URL:-http://$(hostname -s)}"
+SL_PUBLIC_URL="${SL_PUBLIC_URL:-}"
 GATEWAY_VRSN="${GATEWAY_VRSN:-1045}"
 IBC_VRSN="${IBC_VRSN:-3.23.0}"
 SL_HTTP_ALLOW="${SL_HTTP_ALLOW:-}"
@@ -37,6 +41,7 @@ log() { printf '\n==> %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "run as root"
+[[ -n "$SL_PUBLIC_URL" ]] || die "SL_PUBLIC_URL is empty. Set it to the URL the browser opens (e.g. SL_PUBLIC_URL=https://strategylab.milford.se); it is baked into the frontend build."
 [[ -d "$SL_REPO_DIR/backend" ]] || die "no checkout at $SL_REPO_DIR (git clone the repo there first)"
 [[ -f /etc/os-release ]] && grep -qiE 'rocky|rhel|almalinux' /etc/os-release || die "this installer targets Rocky/RHEL 9"
 

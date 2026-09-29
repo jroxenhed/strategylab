@@ -33,8 +33,10 @@ store first and are copied to `/etc/strategylab/` from there.
 | `strategylab-ibc-restart.timer` | restarts the Gateway daily at 05:00 America/New_York. The only scheduled restart: the Gateway's own auto-restart is off (`AutoRestartTime=` blank, `AutoRestart=0` forced in jts.ini by the unit) because it re-execs under systemd, loses the session and looped against its own zombie session for hours (2026-09-15..17). Not proven (F440): the Gateway writes `AutoRestart=1` back into jts.ini about 10 s after the unit sets it to 0 | — |
 
 The frontend is built with `VITE_API_URL=<public url>` so browser calls go to
-`http://strategylab01/api/...` and nginx proxies them same-origin. The backend
-itself is never exposed beyond localhost.
+`https://strategylab.milford.se/api/...` and nginx proxies them same-origin. The
+backend itself is never exposed beyond localhost. `SL_PUBLIC_URL` is required:
+install.sh refuses to run without it, because a wrong value makes every API call
+fail from the public page.
 
 ## Install
 
@@ -44,7 +46,7 @@ dnf -y install git
 git clone https://github.com/jroxenhed/strategylab /opt/strategylab
 # put the two secret files in place first (see env.example)
 install -d -m 750 -o root -g strategylab /etc/strategylab   # after the user exists; install.sh creates it too
-SL_PUBLIC_URL=http://strategylab01 SL_HTTP_ALLOW="172.16.17.115 192.168.216.0/24 172.16.16.175" \
+SL_PUBLIC_URL=https://strategylab.milford.se SL_HTTP_ALLOW="172.16.17.115 192.168.216.0/24 172.16.16.175" \
   bash /opt/strategylab/deploy/install.sh
 ```
 

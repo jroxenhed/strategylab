@@ -73,6 +73,33 @@ def test_start_failure_is_recorded_not_raised(tmp_path, monkeypatch):
     assert mgr.bots["x"][1].was_running is False
 
 
+async def test_shutdown_keeps_running_status_for_next_boot(tmp_path, monkeypatch):
+    """The runner's `finally` (status="stopped" + save) must not win over shutdown."""
+    import asyncio
+    mgr, _, f = _manager(tmp_path, monkeypatch, [_entry("live", "running"), _entry("off", "stopped")])
+    state = mgr.bots["live"][1]
+
+    async def fake_run():
+        state.status = "running"
+        try:
+            await asyncio.sleep(3600)
+        finally:
+            state.status = "stopped"
+            await asyncio.to_thread(mgr.save)
+
+    mgr.tasks["live"] = asyncio.create_task(fake_run())
+    await asyncio.sleep(0)
+    await mgr.shutdown()
+    # the event loop still runs cancelled runners' `finally` after the lifespan exits
+    await asyncio.gather(*mgr.tasks.values(), return_exceptions=True)
+
+    saved ={b["config"]["bot_id"]: b["state"] for b in json.loads(f.read_text())["bots"]}
+    assert saved["live"]["status"] == "running" and saved["off"]["status"] == "stopped"
+    reloaded, started, _ = _manager(tmp_path, monkeypatch, json.loads(f.read_text())["bots"])
+    reloaded.resume_was_running()
+    assert started == ["live"]
+
+
 def test_opt_out_env(tmp_path, monkeypatch):
     mgr, started, _ = _manager(tmp_path, monkeypatch, [_entry("a", "running")])
     monkeypatch.setenv("BOTS_AUTORESUME", "0")

@@ -692,6 +692,16 @@ class BotManager:
         return result
 
     async def shutdown(self):
-        for bot_id, task in list(self.tasks.items()):
+        # F430: a cancelled runner's `finally` sets status="stopped" and saves. That
+        # late save overwrote "running", so the next boot resumed nothing (2026-09-26
+        # office move). Record live statuses, let the runners finish, write them back.
+        live = {bid: self.bots[bid][1].status
+                for bid, task in self.tasks.items() if not task.done() and bid in self.bots}
+        tasks = list(self.tasks.values())
+        for task in tasks:
             task.cancel()
+        if tasks:
+            await asyncio.wait(tasks, timeout=10)
+        for bid, status in live.items():
+            self.bots[bid][1].status = status
         self.save()

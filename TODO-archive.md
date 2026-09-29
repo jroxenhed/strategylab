@@ -392,3 +392,5 @@ grouped by close month. Never reorder or rewrite previously archived sections.
 
 - [x] <a id="f432"></a> **F432** The gateway alert loop now registers IBKR when the Gateway is logged in and the backend has no API connection, at most once per 5 min. The same change makes the Gateway self-heal endless with a slow backoff, and replaces the sudo restart, which NoNewPrivileges blocked, with a polkit rule. [easy] [hardening]
 
+- [x] <a id="f444"></a> **F444** After the office move the Live Trading page was empty and every bot had stopped. The last redeploy baked http://strategylab01 into the frontend, and a shutdown race saved all bots as stopped, so auto-resume started none at the final boot. install.sh now refuses to run without SL_PUBLIC_URL, and BotManager.shutdown keeps each running status. [hardening]
+

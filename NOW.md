@@ -11,4 +11,4 @@ This is the four-item this-week view of TODO.md, two lines each, pointing back i
 
 ## Waiting on John
 
-None open. The ten questions from the 2026-09-12 rewrite were answered the same day; the decisions are in JOURNAL.md and the items moved in TODO.md.
+One open: Q1 in john-questions.md, the port-80 allowlist on strategylab01 after the co-lo move. The public URL works, so only the direct fallback path waits on it.

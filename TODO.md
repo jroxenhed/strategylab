@@ -27,6 +27,7 @@ This file holds open work only. Finished work lives in TODO-archive.md, half for
 - [ ] <a id="f422"></a> **F422** The page asks the server for a running check's status every three seconds without waiting for the previous answer. Two overlapping calls can both see the finish and write the same run twice in that idea's history, which is cosmetic because the results file ignores repeats. Fix by serialising polls per idea in poll_explore_status, with its own thread lock since the existing one is async. [hardening]
 - [ ] <a id="f431"></a> **F431** The Gateway alert loop keeps its cooldown and self-heal counters in memory only, so a backend restart resets them. After a restart the next poll can send one extra alert, or run one extra Gateway restart, for a problem that is already known. Save AlertState to a small JSON file in the data directory, the way bots.json works. The state lives in AlertState in backend/gateway.py. [next] [easy] [hardening]
 - [ ] <a id="f440"></a> **F440** Prove the Gateway restart fix on the VM. The Gateway writes AutoRestart=1 back into jts.ini about 10 s after the unit sets it to 0, so its own 05:00 restart is probably still on. After the next weekday, check the IBC log for Restart in progress lines, one clean login per day and no Existing session lines, then note the result in deploy/README.md. [next] [easy] [hardening] (added 2026-09-20)
+- [ ] <a id="f445"></a> **F445** Nobody noticed that every bot stood still for two trading sessions after the office move. Send one Slack line at the market open when a bot that ticked in the last five sessions is not running. The Gateway alert loop in backend/gateway.py already sends this kind of line. [medium] [hardening]
 
 ## Polish
 
@@ -36,6 +37,7 @@ This file holds open work only. Finished work lives in TODO-archive.md, half for
 ## Testing
 
 - [ ] <a id="f442"></a> **F442** 68 backend tests fail on the Mac on a clean checkout. 64 are research tests: the scipy binary in backend/venv does not load on the current macOS, so reinstall or upgrade scipy. The other 4 are test_tooling tests that still expect the Open Work index that the TODO rewrite removed. Fix both so a full local run passes again. [easy] [testing]
+- [ ] <a id="f446"></a> **F446** test_run_loop_survives_tick_exception in test_broker_health.py fails now and then in a full backend run, and passes alone. It sleeps 50 ms against a 10 ms heartbeat, which is too tight under load. Wait on an event or poll with a deadline instead of a fixed sleep. [easy] [testing]
 - [ ] <a id="d24b"></a> **D24b** A regime bot switches between long and short when the market trend flips. Run one in paper trading and check it closes the old side before it opens the new one, retries after a failed close, and shows the regime badge on the bot card. The code exists, but no test covers the retry, so only a live run can prove it. [testing]
 
 ## Infra
