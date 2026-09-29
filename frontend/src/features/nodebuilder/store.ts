@@ -22,6 +22,7 @@ import {
   MIN_SUPPORTED_VERSION,
   IncompatibleGraphVersionError,
 } from './operations'
+import { prepareEditableCopy } from './editNotices'
 
 // ---------------------------------------------------------------------------
 // Persistence key
@@ -73,6 +74,14 @@ export interface NodeBuilderState {
   // Cached hash for change detection
   graphHash: string | null
 
+  // Hash of the graph when this edit copy was created (Edit / New Empty
+  // Graph). graphHash !== baseHash means the user has made edits.
+  baseHash: string | null
+
+  // Regime node ids that "Edit this graph" took out of the copy (empty when
+  // none). NodeBuilder shows a banner while this is non-empty.
+  regimeRemoved: string[]
+
   // Pan / zoom
   viewport: { x: number; y: number; zoom: number }
 
@@ -107,6 +116,14 @@ export interface NodeBuilderState {
 
   /** Create a new, empty editable graph and enter edit mode. */
   newEmptyGraph(): void
+
+  /** Throw away the edit copy and go back to the read-only auto-render view. */
+  discardEdits(): void
+}
+
+/** True when the editable graph differs from how it looked when the edit copy was made. */
+export function hasEdits(s: Pick<NodeBuilderState, 'graph' | 'graphHash' | 'baseHash'>): boolean {
+  return s.graph != null && !s.graph.readOnly && s.graphHash !== s.baseHash
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +136,8 @@ export const useNodeBuilderStore = create<NodeBuilderState>()((set, get) => ({
   displayNodeId: null,
   bypassedNodeIds: new Set(),
   graphHash: null,
+  baseHash: null,
+  regimeRemoved: [],
   viewport: { x: 0, y: 0, zoom: 1 },
 
   // ── Setters ───────────────────────────────────────────────────────────────
@@ -220,7 +239,8 @@ export const useNodeBuilderStore = create<NodeBuilderState>()((set, get) => ({
     if (version < MIN_SUPPORTED_VERSION) {
       throw new IncompatibleGraphVersionError(version, MIN_SUPPORTED_VERSION)
     }
-    set({ graph: g, graphHash: hashGraph(g), selectedNodeId: null, displayNodeId: null })
+    const h = hashGraph(g)
+    set({ graph: g, graphHash: h, baseHash: h, regimeRemoved: [], selectedNodeId: null, displayNodeId: null })
   },
 
   loadFromAutoRender(graph) {
@@ -228,23 +248,15 @@ export const useNodeBuilderStore = create<NodeBuilderState>()((set, get) => ({
     // 400 on regime nodes ("Regime is not supported"), and WFA already strips
     // them at its boundary (see CLAUDE.md WFA §"Regime is unconditionally
     // stripped"). T1 read-only view still shows them; the editable copy must
-    // not, otherwise Run Backtest 400s every time.
-    const filteredNodes: Record<string, GraphNode> = {}
-    for (const [id, n] of Object.entries(graph.nodes)) {
-      if (!id.startsWith('/regime/')) filteredNodes[id] = n
-    }
-    const filteredWires = graph.wires.filter(
-      w => !w.from.startsWith('/regime/') && !w.to.startsWith('/regime/'),
-    )
-    const editable: Graph = {
-      ...graph,
-      readOnly: false,
-      nodes: filteredNodes,
-      wires: filteredWires,
-    }
+    // not, otherwise Run Backtest 400s every time. The removed ids are kept
+    // so NodeBuilder can tell the user. Rows are also spread apart (bug 8).
+    const { graph: editable, regimeRemoved } = prepareEditableCopy(graph)
+    const h = hashGraph(editable)
     set({
       graph: editable,
-      graphHash: hashGraph(editable),
+      graphHash: h,
+      baseHash: h,
+      regimeRemoved,
       selectedNodeId: null,
       displayNodeId: null,
       bypassedNodeIds: new Set(),
@@ -258,13 +270,28 @@ export const useNodeBuilderStore = create<NodeBuilderState>()((set, get) => ({
       nodes: {},
       wires: [],
     }
+    const h = hashGraph(empty)
     set({
       graph: empty,
-      graphHash: hashGraph(empty),
+      graphHash: h,
+      baseHash: h,
+      regimeRemoved: [],
       selectedNodeId: null,
       displayNodeId: null,
       bypassedNodeIds: new Set(),
       viewport: { x: 0, y: 0, zoom: 1 },
+    })
+  },
+
+  discardEdits() {
+    set({
+      graph: null,
+      graphHash: null,
+      baseHash: null,
+      regimeRemoved: [],
+      selectedNodeId: null,
+      displayNodeId: null,
+      bypassedNodeIds: new Set(),
     })
   },
 }))

@@ -4,6 +4,7 @@
  * Title = symbol. Subtitle = "{interval} · {source}".
  * Writes: @open @high @low @close @volume.
  * In edit mode, subtitle is hidden and params render as inline inputs.
+ * A Ticker is a data source, so it has no input handle.
  */
 
 import type { NodeProps } from '@xyflow/react'
@@ -33,6 +34,7 @@ export default function TickerNode({ id, data }: NodeProps) {
       display={d.display}
       bypass={d.bypass}
       editable={editable}
+      hasInput={false}
     >
       {editable && Object.keys(params).length > 0 && (
         <ParamRows nodeId={id} params={params} paramTypes={d.catalog?.paramTypes} />

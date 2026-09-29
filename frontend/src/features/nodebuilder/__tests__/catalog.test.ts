@@ -5,7 +5,16 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { NODE_CATALOG, getNode, catalogByCategory } from "../catalog";
+import {
+  NODE_CATALOG,
+  getNode,
+  catalogByCategory,
+  SOURCE_OPTIONS,
+  RSI_TYPE_OPTIONS,
+  TRAILING_STOP_DEFAULTS,
+  TRAILING_STOP_SOURCE_OPTIONS,
+  TRAILING_STOP_TYPE_OPTIONS,
+} from "../catalog";
 import { CATS } from "../categories";
 
 // Minimum required categories that the backend also asserts.
@@ -167,5 +176,97 @@ describe("NODE_CATALOG.paramTypes (F277 — drift guard)", () => {
         ).toBe('number');
       }
     }
+  });
+});
+
+describe("catalog honesty (F435 0.G)", () => {
+  it("offers only the data providers the backend registers (no polygon)", () => {
+    expect(SOURCE_OPTIONS).not.toContain("polygon");
+    expect([...SOURCE_OPTIONS]).toEqual(["yahoo", "alpaca", "alpaca-iex", "ibkr"]);
+    expect(getNode("ticker").paramTypes?.source?.options).not.toContain("polygon");
+  });
+
+  it("RSI type options are exactly what compute_rsi accepts", () => {
+    expect([...RSI_TYPE_OPTIONS]).toEqual(["sma", "wilder"]);
+    expect(getNode("rsi").paramTypes?.type?.options).toEqual(RSI_TYPE_OPTIONS);
+  });
+
+  it("RSI default type is wilder (the rule builder default) and is an offered option", () => {
+    const rsi = getNode("rsi");
+    expect(rsi.defaults.params.type).toBe("wilder");
+    expect(rsi.paramTypes?.type?.options).toContain(rsi.defaults.params.type);
+  });
+
+  it("every select default is one of its own options", () => {
+    // Compared as text: a select shows String(value), so a boolean default
+    // (trailing stop activate_on_profit) must match the "false"/"true" option.
+    for (const entry of NODE_CATALOG) {
+      for (const [key, spec] of Object.entries(entry.paramTypes ?? {})) {
+        if (spec.type !== "select") continue;
+        expect(
+          spec.options,
+          `node "${entry.name}" default for "${key}" is not an option`,
+        ).toContain(String(entry.defaults.params[key]));
+      }
+    }
+  });
+
+  it("the Size/Stop (T4) stubs are flagged not compile-active, so the Tab menu hides them", () => {
+    expect(getNode("size").compileActive).toBe(false);
+    expect(getNode("stop").compileActive).toBe(false);
+    const placeable = NODE_CATALOG.filter((e) => e.compileActive).map((e) => e.name);
+    expect(placeable).not.toContain("size");
+    expect(placeable).not.toContain("stop");
+  });
+
+  it("Position Size is labelled as a fraction, and its default fits the backend range (0, 1]", () => {
+    const ps = getNode("position_size");
+    expect(ps.paramTypes?.size?.unit).toBe("fraction");
+    const size = ps.defaults.params.size as number;
+    expect(size).toBeGreaterThan(0);
+    expect(size).toBeLessThanOrEqual(1);
+    // The chip text must show the stored value, not only a percent.
+    expect(ps.defaults.subtitle).toContain(String(size));
+  });
+
+  it("every numeric settings param declares a unit", () => {
+    // Choice params (a select such as trailing stop type) have no unit.
+    for (const entry of NODE_CATALOG.filter((e) => e.cat === "settings")) {
+      for (const [key, value] of Object.entries(entry.defaults.params)) {
+        if (typeof value !== "number") continue;
+        expect(
+          entry.paramTypes?.[key]?.unit,
+          `settings node "${entry.name}" param "${key}" has no unit`,
+        ).toBeTruthy();
+      }
+    }
+  });
+});
+
+describe("trailing_stop settings node (F435 0.A)", () => {
+  it("is a compile-active settings node with TrailingStopConfig's fields and defaults", () => {
+    const ts = getNode("trailing_stop");
+    expect(ts.cat).toBe("settings");
+    expect(ts.compileActive).toBe(true);
+    expect(ts.defaults.setting_key).toBe("trailing_stop");
+    expect(ts.defaults.params).toEqual({
+      type: "pct", value: 5, source: "high", activate_on_profit: false, activate_pct: 0,
+    });
+    expect(ts.defaults.params).toEqual({ ...TRAILING_STOP_DEFAULTS });
+  });
+
+  it("offers only the types and sources the simulator reads", () => {
+    const ts = getNode("trailing_stop");
+    expect([...TRAILING_STOP_TYPE_OPTIONS]).toEqual(["pct", "atr"]);
+    expect([...TRAILING_STOP_SOURCE_OPTIONS]).toEqual(["high", "close"]);
+    expect(ts.paramTypes?.type?.options).toEqual(TRAILING_STOP_TYPE_OPTIONS);
+    expect(ts.paramTypes?.source?.options).toEqual(TRAILING_STOP_SOURCE_OPTIONS);
+    expect(ts.paramTypes?.activate_on_profit?.options).toEqual(["false", "true"]);
+  });
+
+  it("labels its numbers with units", () => {
+    const ts = getNode("trailing_stop");
+    expect(ts.paramTypes?.value).toEqual({ type: "number", unit: "% or x ATR" });
+    expect(ts.paramTypes?.activate_pct).toEqual({ type: "number", unit: "%" });
   });
 });

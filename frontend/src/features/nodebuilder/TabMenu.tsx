@@ -10,13 +10,19 @@
  *   Enter          — create focused node (auto-wire if node selected)
  *   Shift+Enter    — create without auto-wire
  *   Esc / Tab      — close
+ *   Click outside  — close
+ *
+ * Rendered into document.body through a portal, so no panel of the app can
+ * sit on top of it or shift its fixed position. Only nodes that compile acts
+ * on are offered (catalog entries with compileActive: false are hidden).
  */
 
-import { useEffect, useRef, useState, useCallback } from 'react'
-import { NODE_CATALOG, catalogByCategory } from './catalog'
+import { useEffect, useId, useMemo, useRef, useState, useCallback } from 'react'
+import { createPortal } from 'react-dom'
+import type { NodeCatalogEntry } from './catalog'
 import { CATS, type CatKey } from './categories'
 import { rankCatalog, friendlyName, type MatchResult } from './search'
-import type { NodeCatalogEntry } from './catalog'
+import { clampMenuPosition, groupByCategory, menuCatalog } from './canvasHelpers'
 
 // ---------------------------------------------------------------------------
 // Props
@@ -28,8 +34,13 @@ export interface TabMenuProps {
   screenPosition: { x: number; y: number }
   /** Graph-coordinate position to place the new node. */
   graphPosition: { x: number; y: number }
-  /** Currently selected node id (for auto-wire hint). */
+  /**
+   * The node a new node would auto-wire from, or null for none (nothing
+   * selected, the selected node has no output, or a wire drop decides).
+   */
   selectedNodeId: string | null
+  /** Friendly name of that node for the hint (falls back to its id). */
+  wireFromLabel?: string
   /** Allow auto-wire hint; controlled by the session-level toggle. */
   autoWire: boolean
   onToggleAutoWire(): void
@@ -102,22 +113,42 @@ function CatPill({ cat, glyph }: CatPillProps) {
 // Category order for two-column mode
 // ---------------------------------------------------------------------------
 
-const CAT_ORDER: CatKey[] = ['ticker', 'indicator', 'comparison', 'logic', 'settings', 'output']
+// The catalog is static, so what the menu offers is worked out once at load.
+const MENU_CATALOG: NodeCatalogEntry[] = menuCatalog()
+const MENU_BY_CATEGORY: Record<string, NodeCatalogEntry[]> = groupByCategory(MENU_CATALOG)
+const MENU_BY_NAME: Map<string, NodeCatalogEntry> = new Map(MENU_CATALOG.map(e => [e.name, e]))
+
+// Categories with nothing to offer are left out.
+const CAT_ORDER: CatKey[] = (['ticker', 'indicator', 'comparison', 'logic', 'settings', 'output'] as CatKey[])
+  .filter(c => (MENU_BY_CATEGORY[c]?.length ?? 0) > 0)
+
+const MENU_HEIGHT = 420
+const NO_ENTRIES: NodeCatalogEntry[] = []
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export default function TabMenu({
+// While closed, render nothing and do no work. The panel below mounts fresh on
+// every open, so its search and focus state start clean each time.
+export default function TabMenu(props: TabMenuProps) {
+  if (!props.open) return null
+  return <TabMenuPanel {...props} />
+}
+
+function TabMenuPanel({
   open,
   screenPosition,
   selectedNodeId,
+  wireFromLabel,
   autoWire,
   onToggleAutoWire,
   onCreate,
   onClose,
 }: TabMenuProps) {
   const inputRef = useRef<HTMLInputElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const inputName = `nb-search-${useId()}`
   const [query, setQuery] = useState('')
 
   // Two-column state
@@ -130,30 +161,42 @@ export default function TabMenu({
   // Flat list state
   const [focusedFlatIndex, setFocusedFlatIndex] = useState(0)
 
-  // Reset state when menu opens
+  // Focus the search box on open. Also retried after a tick, because the key
+  // press that opened the menu may still be moving focus.
   useEffect(() => {
-    if (open) {
-      setQuery('')
-      setFocusedCat(CAT_ORDER[0])
-      setFocusedCatIndex(0)
-      setFocusedNodeIndex(0)
-      setActiveCol('cat')
-      setFocusedFlatIndex(0)
-      // Focus the input after a tick (React portal timing)
-      setTimeout(() => inputRef.current?.focus(), 0)
+    inputRef.current?.focus()
+    const t = setTimeout(() => inputRef.current?.focus(), 0)
+    return () => clearTimeout(t)
+  }, [])
+
+  // Close on a press anywhere outside the menu. Capture phase, so React Flow
+  // stopping the event on the pane can't hide it from us.
+  useEffect(() => {
+    const onDown = (e: Event) => {
+      const menu = menuRef.current
+      if (menu && e.target instanceof Node && menu.contains(e.target)) return
+      onClose()
     }
-  }, [open])
+    document.addEventListener('pointerdown', onDown, true)
+    document.addEventListener('mousedown', onDown, true)
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true)
+      document.removeEventListener('mousedown', onDown, true)
+    }
+  }, [onClose])
 
   // Derived data
-  const byCategory = catalogByCategory()
-  const isSearching = query.trim().length > 0
+  const byCategory = MENU_BY_CATEGORY
+  const trimmed = query.trim()
+  const isSearching = trimmed.length > 0
 
-  const flatResults: MatchResult[] = isSearching
-    ? rankCatalog(query.trim(), NODE_CATALOG)
-    : []
+  const flatResults: MatchResult[] = useMemo(
+    () => (trimmed ? rankCatalog(trimmed, MENU_CATALOG) : []),
+    [trimmed],
+  )
 
   // Nodes in focused category (two-col mode)
-  const catNodes: NodeCatalogEntry[] = byCategory[focusedCat] ?? []
+  const catNodes: NodeCatalogEntry[] = byCategory[focusedCat] ?? NO_ENTRIES
 
   // Clamp indices when data changes
   const clampedFlatIndex = Math.min(focusedFlatIndex, Math.max(0, flatResults.length - 1))
@@ -183,11 +226,18 @@ export default function TabMenu({
         if (isSearching) {
           const hit = flatResults[clampedFlatIndex]
           if (hit) {
-            const entry = NODE_CATALOG.find(n => n.name === hit.name)
+            const entry = MENU_BY_NAME.get(hit.name)
             if (entry) confirm(entry, autoWire && !e.shiftKey && !!selectedNodeId)
           }
         } else {
-          if (activeCol === 'node' || catNodes.length > 0) {
+          if (activeCol === 'cat') {
+            // Enter on a category moves into its nodes; it never creates a
+            // node the user has not seen highlighted.
+            if (catNodes.length > 0) {
+              setActiveCol('node')
+              setFocusedNodeIndex(0)
+            }
+          } else {
             const entry = catNodes[clampedNodeIndex]
             if (entry) confirm(entry, autoWire && !e.shiftKey && !!selectedNodeId)
           }
@@ -241,19 +291,24 @@ export default function TabMenu({
     ]
   )
 
-  if (!open) return null
-
-  // Clamp menu position to stay roughly within viewport
+  // Keep the menu inside the window.
   const menuWidth = isSearching ? 340 : 520
-  const left = Math.min(screenPosition.x, (typeof window !== 'undefined' ? window.innerWidth : 1200) - menuWidth - 16)
-  const top = Math.min(screenPosition.y, (typeof window !== 'undefined' ? window.innerHeight : 900) - 420)
+  const { x: left, y: top } = clampMenuPosition(
+    screenPosition,
+    { width: menuWidth, height: MENU_HEIGHT },
+    {
+      width: typeof window !== 'undefined' ? window.innerWidth : 1200,
+      height: typeof window !== 'undefined' ? window.innerHeight : 900,
+    },
+    16,
+  )
 
   const menuStyle: React.CSSProperties = {
     position: 'fixed',
-    left: Math.max(8, left),
-    top: Math.max(8, top),
+    left,
+    top,
     width: menuWidth,
-    maxHeight: 420,
+    maxHeight: MENU_HEIGHT,
     background: 'oklch(0.18 0.014 250)',
     border: '1px solid oklch(0.34 0.020 250)',
     borderRadius: 'var(--nb-radius-menu)',
@@ -265,8 +320,20 @@ export default function TabMenu({
     fontFamily: 'var(--nb-font-sans)',
   }
 
-  return (
-    <div className="nodebuilder-root" style={menuStyle} onKeyDown={handleKeyDown}>
+  const menu = (
+    <div
+      ref={menuRef}
+      className="nodebuilder-root"
+      role="dialog"
+      aria-label="Add node"
+      style={menuStyle}
+      onKeyDown={handleKeyDown}
+      // Clicking a row or header must not pull focus out of the search box,
+      // or the arrow keys and Enter stop working.
+      onMouseDown={e => {
+        if (e.target !== inputRef.current) e.preventDefault()
+      }}
+    >
       {/* Header: search input + auto-wire toggle */}
       <div style={{
         padding: '8px 10px 6px',
@@ -291,7 +358,7 @@ export default function TabMenu({
               background: 'oklch(0.22 0.012 250)',
               padding: '1px 4px',
               borderRadius: 3,
-            }}>{selectedNodeId}</code></span>
+            }}>{wireFromLabel ?? selectedNodeId}</code></span>
             <button
               onClick={onToggleAutoWire}
               style={{
@@ -315,7 +382,7 @@ export default function TabMenu({
           ref={inputRef}
           type="text"
           autoComplete="off"
-          name={`nb-search-${Math.random().toString(36).slice(2)}`}
+          name={inputName}
           data-1p-ignore=""
           data-lpignore="true"
           data-form-type="other"
@@ -343,8 +410,8 @@ export default function TabMenu({
         {/* Keyboard hint */}
         <div style={{ fontSize: 10, color: 'var(--nb-text-dim)', lineHeight: '14px' }}>
           {isSearching
-            ? '↑↓ navigate · Enter confirm · Shift+Enter no-wire · Esc close'
-            : '↑↓ category · →← switch col · Enter place · Esc close'}
+            ? `↑↓ navigate · Enter confirm${selectedNodeId ? ' · Shift+Enter no-wire' : ''} · Esc close`
+            : '↑↓ category · →← switch col · Enter open / place · Esc close'}
         </div>
       </div>
 
@@ -379,6 +446,8 @@ export default function TabMenu({
       )}
     </div>
   )
+
+  return typeof document !== 'undefined' ? createPortal(menu, document.body) : menu
 }
 
 // ---------------------------------------------------------------------------
@@ -411,7 +480,7 @@ function FlatList({ results, focusedIndex, onHover, onConfirm }: FlatListProps) 
       {results.map((r, i) => {
         const cat = r.cat as CatKey
         const catEntry = CATS[cat] ?? CATS.indicator
-        const entry = NODE_CATALOG.find(n => n.name === r.name)
+        const entry = MENU_BY_NAME.get(r.name)
         const isFocused = i === focusedIndex
 
         return (

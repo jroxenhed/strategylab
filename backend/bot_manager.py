@@ -27,7 +27,10 @@ from fileutil import atomic_write_text
 from slippage import slippage_cost_bps, fill_bias_bps
 
 from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig, TradingHoursConfig, StrategyRequest, RegimeConfig, LogicField, DirectionField, BoundedRuleList, OptionalBoundedRuleList, SymbolField, normalize_symbol, Interval, IntervalField
-from nodebuilder.models import Graph
+from nodebuilder.models import Graph, GraphValidationError
+from nodebuilder.api_models import GraphBacktestRequest
+from nodebuilder.run import run_graph_backtest
+from nodebuilder.sim_settings import apply_to_bot_config
 from routes.backtest import run_backtest
 from signal_engine import migrate_rule, Rule
 from shared import _fetch
@@ -35,7 +38,7 @@ from broker import get_trading_provider, OrderRequest as BrokerOrderRequest
 from journal import (_log_trade, _load_trades, compute_realized_pnl, first_bot_entry_time,
                      compute_bidirectional_pnl, first_bot_bidirectional_entry_time,
                      compute_bot_avg_cost_bps, DATA_DIR)
-from bot_runner import BotRunner
+from bot_runner import BotRunner, compile_bot_graph
 
 
 DATA_PATH = str(DATA_DIR / "bots.json")
@@ -286,7 +289,41 @@ class BotManager:
 
     # -- Bot lifecycle -------------------------------------------------------
 
+    @staticmethod
+    def _check_graph(config: BotConfig):
+        """Compile a graph bot's graph and return the program.
+
+        Raises a GraphValidationError (with node_id) for a bad graph, so the
+        route can answer 400 instead of the bot failing on its first tick.
+        Also runs the Settings overlay a tick applies, so a value the bot
+        config refuses fails here and not on every tick.  Returns None for a
+        rule bot.
+        """
+        if config.kind != "graph":
+            return None
+        if config.graph is None:
+            raise GraphValidationError("A graph bot needs a graph.", node_id=None)
+        # A live tick gates a regime bot, but the graph backtest has no regime,
+        # so the bot would trade differently from its backtest.  Refuse it.
+        if config.regime is not None and config.regime.enabled:
+            raise GraphValidationError(
+                "A graph bot cannot use a regime filter yet: its backtest runs "
+                "without one.  Turn the regime off.",
+                node_id=None,
+            )
+        program = compile_bot_graph(config.graph, config.bot_id)
+        try:
+            apply_to_bot_config(config, program.simulator_settings)
+        except (ValidationError, TypeError, ValueError) as exc:
+            raise GraphValidationError(
+                f"The graph's Settings nodes give a bot config value that is not "
+                f"allowed: {exc}",
+                node_id=None,
+            ) from exc
+        return program
+
     def add_bot(self, config: BotConfig) -> str:
+        self._check_graph(config)
         if self.bot_fund == 0:
             raise ValueError("Bot fund is not set. Set a bot fund before adding bots.")
         self._validate_allocation(config.allocated_capital)
@@ -321,6 +358,24 @@ class BotManager:
                         raise ValueError(
                             f"Bot {bid} is already running {config.direction} on {config.symbol}"
                         )
+        # A stored graph that no longer compiles (a node type since refused, a
+        # bad setting) would fail on every tick, before any exit check, and
+        # leave an open position unmanaged while the bot looks "running".
+        # Refuse to start instead, and say why on the card and in an alert.
+        try:
+            self._check_graph(config)
+        except GraphValidationError as exc:
+            state.status = "error"
+            state.pause_reason = f"Graph does not compile: {exc}"
+            state.error_message = state.pause_reason
+            self.save()
+            from notifications import notify_error
+            asyncio.create_task(notify_error(
+                symbol=config.symbol,
+                error_msg=state.pause_reason,
+                bot_id=bot_id,
+            ))
+            raise
         runner = BotRunner(config, state, self)
         task = asyncio.create_task(runner.run())
         self.tasks[bot_id] = task
@@ -360,6 +415,10 @@ class BotManager:
         from datetime import date, timedelta
         end = date.today().isoformat()
         start = (date.today() - timedelta(days=365)).isoformat()
+
+        if config.kind == "graph":
+            self._backtest_graph_bot(config, state, start, end)
+            return
 
         req = StrategyRequest(
             ticker=config.symbol,
@@ -409,6 +468,44 @@ class BotManager:
             state.status = "stopped"
             self.save()
 
+    def _backtest_graph_bot(self, config: BotConfig, state: BotState, start: str, end: str):
+        """Backtest a graph bot with the graph backtest, not the empty rule lists.
+
+        The request carries the bot config's plain fields.  The graph's Settings
+        nodes then win inside run_graph_backtest, the same overlay a live tick
+        applies (nodebuilder.sim_settings).  Per-direction fields are not sent:
+        the graph backtest never reads them, and a live graph bot clears them.
+        """
+        try:
+            if config.graph is None:
+                raise GraphValidationError("A graph bot needs a graph.", node_id=None)
+            req = GraphBacktestRequest(
+                graph=config.graph,
+                ticker=config.symbol,
+                start=start,
+                end=end,
+                interval=config.interval,
+                source=config.data_source,
+                initial_capital=config.allocated_capital,
+                position_size=config.position_size,
+                stop_loss_pct=config.stop_loss_pct,
+                trailing_stop=config.trailing_stop,
+                max_bars_held=config.max_bars_held,
+                slippage_bps=config.slippage_bps,
+                borrow_rate_annual=config.borrow_rate_annual,
+                dynamic_sizing=config.dynamic_sizing,
+                skip_after_stop=config.skip_after_stop,
+                trading_hours=config.trading_hours,
+                direction=config.direction,
+            )
+            result = run_graph_backtest(req)
+            state.backtest_summary = dict(result.summary)
+        except Exception as e:
+            state.backtest_summary = {"error": str(e)}
+        finally:
+            state.status = "stopped"
+            self.save()
+
     def get_bot(self, bot_id: str) -> tuple[BotConfig, BotState]:
         if bot_id not in self.bots:
             raise KeyError(f"Bot {bot_id} not found")
@@ -424,6 +521,10 @@ class BotManager:
         config_dict = config.model_dump()
         config_dict.update(updates)
         new_config = BotConfig(**config_dict)
+        if {"graph", "regime", "kind"} & updates.keys():
+            # Refuse a bad graph (or a regime on a graph bot) before it
+            # replaces the working config.
+            self._check_graph(new_config)
         self.bots[bot_id] = (new_config, state)
         self.save()
 
@@ -437,6 +538,10 @@ class BotManager:
             raise ValueError("Bot already has an open position")
         if state.status != "running":
             raise ValueError("Bot must be running to place a manual buy")
+
+        # A graph bot sizes from its graph's Position Size node, as its ticks do.
+        if config.kind == "graph" and config.graph is not None:
+            config = apply_to_bot_config(config, self._check_graph(config).simulator_settings)
 
         provider = get_trading_provider(config.broker)
 

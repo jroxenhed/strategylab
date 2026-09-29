@@ -419,3 +419,31 @@ describe('spliceNodeOntoWire — F7 cycle guard', () => {
     expect(out.wires.some(w => w.from === 'X' && w.to === 'B')).toBe(true)
   })
 })
+
+// ---------------------------------------------------------------------------
+// F435 wave 0 review (FC-1 / UXP-1): no wire where a node has no port
+// ---------------------------------------------------------------------------
+describe('addWire refuses a wire with no port at one end', () => {
+  function typed(id: string, type: string): GraphNode {
+    return { id, type, params: {}, position: [0, 0], display: false, bypass: false }
+  }
+
+  it.each([
+    ['out of Entry', 'entry', 'rsi'],
+    ['out of Exit', 'exit', 'above'],
+    ['into a Ticker', 'rsi', 'ticker'],
+    ['into a Settings node', 'above', 'stop_loss'],
+    ['out of a Settings node', 'stop_loss', 'exit'],
+  ])('%s', (_label, fromType, toType) => {
+    const g = makeGraph([typed('A', fromType), typed('B', toType)], [])
+    expect(() => addWire(g, makeWire('w1', 'A', 'B'))).toThrow(/no port/)
+  })
+
+  it('still adds Ticker -> RSI -> Above -> Entry', () => {
+    let g = makeGraph([typed('T', 'ticker'), typed('R', 'rsi'), typed('A', 'above'), typed('E', 'entry')], [])
+    g = addWire(g, makeWire('w1', 'T', 'R'))
+    g = addWire(g, makeWire('w2', 'R', 'A'))
+    g = addWire(g, makeWire('w3', 'A', 'E'))
+    expect(g.wires).toHaveLength(3)
+  })
+})

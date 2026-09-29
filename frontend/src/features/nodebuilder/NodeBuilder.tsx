@@ -10,16 +10,32 @@
  * 2. Edit mode: the Zustand store has a graph (graph.readOnly=false); Canvas uses it.
  *
  * The "New Empty Graph" button creates a blank editable graph in the store and
- * switches to edit mode. This is the minimum-viable entry point for Unit 5
- * validation. The full Tab-menu / port-drag entry point arrives in Unit 6.
+ * switches to edit mode. It asks first when there are unsaved edits.
+ * "Discard edits" throws the edit copy away and goes back to the view mode.
+ *
+ * The results strip names the symbol and interval it ran on, dims itself as
+ * "stale" once the graph changes, and flags an open position or an
+ * unconnected Exit. Text logic lives in resultsStrip.ts.
  */
 
-import { useState } from 'react'
+import { memo, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { StrategyRequest } from '../../shared/types/strategy'
 import { fetchAutoRender, fetchGraphBacktest, type GraphBacktestResult } from '../../api/nodebuilder'
+import { apiErrorDetail } from '../../shared/utils/errors'
 import Canvas from './Canvas'
-import { useNodeBuilderStore } from './store'
+import { hasEdits, useNodeBuilderStore } from './store'
+import {
+  buildResultsStrip,
+  describeBacktestError,
+  errorNodeId,
+  EXIT_NOT_CONNECTED_TITLE,
+  graphEvalKey,
+  STALE_LABEL,
+  STALE_REQUEST_TITLE,
+  STALE_TITLE,
+} from './resultsStrip'
+import { describeUnsupportedNodes, findUnsupportedNodes, REGIME_REMOVED_TEXT } from './editNotices'
 import './tokens.css'
 
 interface NodeBuilderProps {
@@ -27,7 +43,17 @@ interface NodeBuilderProps {
   graphViewActive: boolean
 }
 
-export default function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
+/** One finished run: its result, what it ran on, and the state it ran against. */
+interface GraphRun {
+  result: GraphBacktestResult
+  ticker: string
+  interval: string
+  /** What the graph computed and which request it ran with; a mismatch later means stale. */
+  graphKey: string
+  requestKey: string
+}
+
+function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
   // Stable cache key: JSON.stringify is deterministic within a session.
   const strategyHash = request != null ? JSON.stringify(request) : null
 
@@ -41,8 +67,12 @@ export default function NodeBuilder({ request, graphViewActive }: NodeBuilderPro
 
   // Store state
   const storeGraph = useNodeBuilderStore(s => s.graph)
+  const dirty = useNodeBuilderStore(hasEdits)
+  const regimeRemoved = useNodeBuilderStore(s => s.regimeRemoved)
   const newEmptyGraph = useNodeBuilderStore(s => s.newEmptyGraph)
   const loadFromAutoRender = useNodeBuilderStore(s => s.loadFromAutoRender)
+  const discardEdits = useNodeBuilderStore(s => s.discardEdits)
+  const selectNode = useNodeBuilderStore(s => s.select)
 
   // Edit mode = store has a graph (readOnly=false)
   const editMode = storeGraph !== null && !storeGraph.readOnly
@@ -52,16 +82,75 @@ export default function NodeBuilder({ request, graphViewActive }: NodeBuilderPro
 
   // Unit 8b: graph backtest state
   const [backtestRunning, setBacktestRunning] = useState(false)
-  const [backtestResult, setBacktestResult] = useState<GraphBacktestResult | null>(null)
+  const [lastRun, setLastRun] = useState<GraphRun | null>(null)
   const [backtestError, setBacktestError] = useState<string | null>(null)
+  // Bumped by every run and every clear, so a run still in flight after
+  // Discard / New Empty Graph (or a newer run) drops its late result.
+  const runIdRef = useRef(0)
 
   const hasNodes = storeGraph != null && Object.keys(storeGraph.nodes).length > 0
 
+  // Nodes the compiler cannot run yet. Recomputed on every edit, so the
+  // banner goes away once the user removes them.
+  const unsupportedText = useMemo(
+    () => (editMode ? describeUnsupportedNodes(findUnsupportedNodes(storeGraph)) : null),
+    [editMode, storeGraph],
+  )
+
+  // The run also depends on the request (dates, capital), so a new chart
+  // backtest makes the strip stale too. Moving a node does not: the graph
+  // key leaves out positions.
+  const graphKey = useMemo(() => graphEvalKey(storeGraph), [storeGraph])
+  const requestKey = strategyHash ?? ''
+  const graphStale = lastRun != null && lastRun.graphKey !== graphKey
+  const requestStale = lastRun != null && lastRun.requestKey !== requestKey
+  const strip = useMemo(
+    () =>
+      lastRun
+        ? buildResultsStrip(lastRun.result.summary, lastRun, graphStale || requestStale)
+        : null,
+    [lastRun, graphStale, requestStale],
+  )
+  const staleTitle = graphStale ? STALE_TITLE : STALE_REQUEST_TITLE
+
+  function clearRun() {
+    runIdRef.current += 1
+    setBacktestRunning(false)
+    setLastRun(null)
+    setBacktestError(null)
+  }
+
+  function confirmDropEdits(): boolean {
+    if (!dirty) return true
+    return window.confirm('You have unsaved edits to this graph. Throw them away?')
+  }
+
+  function handleNewEmptyGraph() {
+    if (!confirmDropEdits()) return
+    clearRun()
+    newEmptyGraph()
+  }
+
+  function handleDiscardEdits() {
+    if (!confirmDropEdits()) return
+    clearRun()
+    discardEdits()
+  }
+
+  function handleEditThisGraph() {
+    if (!autoGraph) return
+    clearRun()
+    loadFromAutoRender(autoGraph)
+  }
+
   async function handleRunBacktest() {
     if (storeGraph == null || !hasNodes) return
+    const runId = ++runIdRef.current
+    const graphKeyAtStart = graphKey
+    const requestKeyAtStart = requestKey
     setBacktestRunning(true)
     setBacktestError(null)
-    setBacktestResult(null)
+    setLastRun(null)
     try {
       // Derive ticker/interval/source from the graph's ticker node, falling back to the
       // loaded request when available.
@@ -84,25 +173,31 @@ export default function NodeBuilder({ request, graphViewActive }: NodeBuilderPro
         slippage_bps: request?.slippage_bps ?? 2.0,
         direction: request?.direction ?? 'long',
       })
-      setBacktestResult(result)
+      if (runId !== runIdRef.current) return  // superseded or cleared
+      setLastRun({ result, ticker, interval, graphKey: graphKeyAtStart, requestKey: requestKeyAtStart })
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e)
-      setBacktestError(msg)
+      if (runId !== runIdRef.current) return
+      setBacktestError(describeBacktestError(e, storeGraph))
+      // Select the node the server names, so its ring shows which one to fix.
+      const badNode = errorNodeId(e)
+      if (badNode && storeGraph.nodes[badNode]) selectNode(badNode)
     } finally {
-      setBacktestRunning(false)
+      if (runId === runIdRef.current) setBacktestRunning(false)
     }
   }
 
   if (request == null && !editMode) {
     return (
       <div className="nodebuilder-root" style={styles.root}>
-        <div style={styles.empty}>
-          Load a saved strategy first to view it as a graph.
-        </div>
         <div style={styles.toolbar}>
-          <button style={styles.btn} onClick={newEmptyGraph}>
+          <button style={styles.btn} onClick={handleNewEmptyGraph}>
             New Empty Graph
           </button>
+        </div>
+        <div style={styles.empty}>
+          No strategy to show yet. Go Back to Chart and run a backtest, then
+          come back here to see that strategy as a graph. Or start from a New
+          Empty Graph.
         </div>
       </div>
     )
@@ -115,9 +210,18 @@ export default function NodeBuilder({ request, graphViewActive }: NodeBuilderPro
         {editMode ? (
           <span style={styles.editBadge}>Editing</span>
         ) : null}
-        <button style={styles.btn} onClick={newEmptyGraph}>
+        <button style={styles.btn} onClick={handleNewEmptyGraph}>
           New Empty Graph
         </button>
+        {editMode && (
+          <button
+            style={styles.btn}
+            onClick={handleDiscardEdits}
+            title="Throw away this edited copy and go back to the read-only graph"
+          >
+            Discard edits
+          </button>
+        )}
         {!editMode && autoGraph && (
           <button
             style={{
@@ -126,7 +230,7 @@ export default function NodeBuilder({ request, graphViewActive }: NodeBuilderPro
               border: '1px solid oklch(0.45 0.10 230 / 0.6)',
               color: 'oklch(0.85 0.14 230)',
             }}
-            onClick={() => loadFromAutoRender(autoGraph)}
+            onClick={handleEditThisGraph}
             title="Copy the auto-rendered graph into the editor so you can modify it"
           >
             Edit this graph
@@ -160,40 +264,56 @@ export default function NodeBuilder({ request, graphViewActive }: NodeBuilderPro
       )}
       {error && !editMode && (
         <div style={styles.errorBanner}>
-          Failed to render graph: {(error as Error).message}
+          Failed to render graph: {apiErrorDetail(error, (error as Error).message)}
         </div>
       )}
-      {backtestError && (
+      {backtestError && editMode && (
         <div style={styles.errorBanner}>
           Backtest error: {backtestError}
         </div>
       )}
-      {backtestResult && (
-        <div style={styles.backtestHeadline}>
-          <span style={styles.backtestStat}>
-            {String(backtestResult.summary['num_trades'] ?? 0)} trades
-          </span>
+      {editMode && regimeRemoved.length > 0 && (
+        <div style={styles.warnBanner}>{REGIME_REMOVED_TEXT}</div>
+      )}
+      {unsupportedText && (
+        <div style={styles.warnBanner}>{unsupportedText}</div>
+      )}
+      {editMode && strip && (
+        <div
+          style={{ ...styles.backtestHeadline, opacity: strip.stale ? 0.5 : 1 }}
+          title={strip.stale ? staleTitle : undefined}
+        >
+          <span style={styles.backtestContext}>{strip.context}</span>
+          <span style={styles.backtestDivider}>·</span>
+          <span style={styles.backtestStat}>{strip.trades}</span>
           <span style={styles.backtestDivider}>·</span>
           <span
             style={{
               ...styles.backtestStat,
               color:
-                (backtestResult.summary['total_return_pct'] as number) >= 0
+                strip.returnSign === 'pos'
                   ? 'oklch(0.72 0.18 145)'
-                  : 'oklch(0.65 0.20 25)',
+                  : strip.returnSign === 'neg'
+                    ? 'oklch(0.65 0.20 25)'
+                    : styles.backtestStat.color,
             }}
           >
-            {typeof backtestResult.summary['total_return_pct'] === 'number'
-              ? `${backtestResult.summary['total_return_pct'] >= 0 ? '+' : ''}${(backtestResult.summary['total_return_pct'] as number).toFixed(2)}%`
-              : '—'}
+            {strip.returnText}
           </span>
           <span style={styles.backtestDivider}>·</span>
-          <span style={styles.backtestStat}>
-            Sharpe{' '}
-            {typeof backtestResult.summary['sharpe_ratio'] === 'number'
-              ? (backtestResult.summary['sharpe_ratio'] as number).toFixed(3)
-              : '—'}
-          </span>
+          <span style={styles.backtestStat}>{strip.sharpe}</span>
+          {strip.openPosition && (
+            <>
+              <span style={styles.backtestDivider}>·</span>
+              <span style={styles.backtestStat} title={strip.openPositionTitle ?? undefined}>
+                {strip.openPosition}
+              </span>
+            </>
+          )}
+          {strip.exitWarning && (
+            <span style={styles.backtestWarn} title={EXIT_NOT_CONNECTED_TITLE}>{strip.exitWarning}</span>
+          )}
+          {strip.stale && <span style={styles.staleBadge}>{STALE_LABEL}</span>}
         </div>
       )}
       {activeGraph && (
@@ -204,6 +324,10 @@ export default function NodeBuilder({ request, graphViewActive }: NodeBuilderPro
     </div>
   )
 }
+
+// Memoized so App re-renders don't re-render the hidden graph tree (perf P6).
+// Props are App state (lastRequest) and a boolean, so they are stable.
+export default memo(NodeBuilder)
 
 const styles: Record<string, React.CSSProperties> = {
   root: {
@@ -293,6 +417,36 @@ const styles: Record<string, React.CSSProperties> = {
   },
   backtestStat: {
     color: 'oklch(0.82 0.010 250)',
+  },
+  backtestContext: {
+    color: 'oklch(0.82 0.010 250)',
+    fontWeight: 600,
+  },
+  backtestWarn: {
+    marginLeft: 6,
+    color: 'oklch(0.80 0.14 75)',
+    fontWeight: 600,
+  },
+  staleBadge: {
+    marginLeft: 'auto',
+    fontSize: 10,
+    fontWeight: 600,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    color: 'oklch(0.80 0.010 250)',
+    border: '1px solid oklch(0.45 0.010 250)',
+    borderRadius: 4,
+    padding: '1px 6px',
+  },
+  warnBanner: {
+    background: 'oklch(0.30 0.08 75 / 0.18)',
+    border: '1px solid oklch(0.60 0.12 75 / 0.5)',
+    color: 'oklch(0.85 0.12 75)',
+    fontSize: 12,
+    padding: '6px 12px',
+    borderRadius: 4,
+    margin: '8px 8px 0',
+    flexShrink: 0,
   },
   backtestDivider: {
     color: 'oklch(0.45 0.010 250)',

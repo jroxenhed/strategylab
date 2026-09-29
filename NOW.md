@@ -11,4 +11,4 @@ This is the four-item this-week view of TODO.md, two lines each, pointing back i
 
 ## Waiting on John
 
-None open. The two questions from 2026-09-29 (port-80 allowlist, port 22 from the Mac) are answered, and the decisions are in JOURNAL.md.
+Two questions from 2026-09-30 are open in john-questions.md: deploy node builder Wave 0 and run the live paper gate G1, and a TODO slot for the IBKR stop-order defect.

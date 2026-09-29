@@ -24,7 +24,15 @@ MIN_SUPPORTED_VERSION: int = 1
 
 
 class GraphValidationError(Exception):
-    """Base class for all graph validation errors."""
+    """Base class for all graph validation errors.
+
+    node_id names the node the error is about, so the editor can highlight it.
+    It is None when the error is about the graph as a whole.
+    """
+
+    def __init__(self, message: str = "", node_id: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.node_id = node_id
 
 
 class CyclicGraphError(GraphValidationError):
@@ -124,8 +132,13 @@ class Graph(BaseModel):
             if wire.to_path not in node_paths:
                 missing.append(f"to_path={wire.to_path!r}")
             if missing:
+                # Point at the end of the wire that does exist, if any.
+                known_end = next(
+                    (p for p in (wire.from_path, wire.to_path) if p in node_paths), None
+                )
                 raise DanglingWireError(
-                    f"Wire {wire.id!r} references unknown node(s): {', '.join(missing)}"
+                    f"Wire {wire.id!r} references unknown node(s): {', '.join(missing)}",
+                    node_id=known_end,
                 )
 
         # 3. No cycles
@@ -177,8 +190,29 @@ def _assert_acyclic(graph: Graph) -> None:
     remaining = set(graph.nodes.keys()) - visited
     if remaining:
         raise CyclicGraphError(
-            f"Graph contains a cycle involving node(s): {sorted(remaining)}"
+            f"Graph contains a cycle involving node(s): {sorted(remaining)}",
+            node_id=_node_on_cycle(graph, remaining),
         )
+
+
+def _node_on_cycle(graph: Graph, remaining: set[str]) -> str:
+    """Return a node that sits on a cycle.
+
+    Kahn's leftover set also holds nodes that are only fed by a cycle (an
+    Entry below it, say).  Every leftover node has a leftover input, so
+    walking inputs backwards must come round to a node seen before, and that
+    node is on the cycle.
+    """
+    preds: dict[str, list[str]] = {p: [] for p in remaining}
+    for wire in graph.wires:
+        if wire.to_path in remaining and wire.from_path in remaining:
+            preds[wire.to_path].append(wire.from_path)
+    node = sorted(remaining)[0]
+    seen: set[str] = set()
+    while node not in seen:
+        seen.add(node)
+        node = sorted(preds[node])[0]
+    return node
 
 
 # ---------------------------------------------------------------------------

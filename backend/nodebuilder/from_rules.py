@@ -52,24 +52,29 @@ def _resolve_indicator(rule: Rule) -> tuple[str, dict[str, Any]]:
     ind = rule.indicator
     rp = rule.params or {}
 
+    # Every default below is the one signal_engine uses when the rule leaves
+    # the param out, so the graph reads the same series as the rule backtest.
     if ind == "rsi":
         return "rsi", {"period": rp.get("period", 14), "type": rp.get("type", "sma")}
     if ind == "macd":
-        return "macd", {
-            "fast": rp.get("fast", 12),
-            "slow": rp.get("slow", 26),
-            "signal": rp.get("signal", 9),
-        }
+        # The rule engine always computes MACD(12,26,9) and ignores rule
+        # params, so the node does too.
+        return "macd", dict(_RULE_MACD_PARAMS)
     if ind == "ma":
-        ma_type = rp.get("type", "sma")
+        # signal_engine.resolve_series defaults a missing type to ema.
+        ma_type = rp.get("type", "ema")
         node_name = "ema" if ma_type == "ema" else "sma"
         return node_name, {"period": rp.get("period", 20)}
     if ind == "bb":
-        return "bollinger", {"period": rp.get("period", 20), "stddev": rp.get("stddev", 2.0)}
+        # The rule builder and rule engine call the width "std"; the
+        # Bollinger node calls it "stddev".
+        return "bollinger", {"period": rp.get("period", 20), "stddev": float(rp.get("std", 2))}
     if ind == "atr":
         return "atr", {"period": rp.get("period", 14)}
     if ind == "atr_pct":
-        # Reuse atr node, condition side carries metadata
+        # There is no ATR% node yet.  The comparison gets a condition_extra
+        # marker (see _emit_rule_set), so compile refuses it out loud
+        # instead of comparing raw ATR with a percent threshold.
         return "atr", {"period": rp.get("period", 14)}
     if ind == "volume":
         # No indicator node — read from ticker @volume
@@ -79,6 +84,19 @@ def _resolve_indicator(rule: Rule) -> tuple[str, dict[str, Any]]:
         return "price", {}
     # Generic / unknown (stochastic, adx, etc.)
     return ind, dict(rp)
+
+
+# MACD params the rule engine always uses (signal_engine.compute_indicators).
+# Its "signal" series, which is_above_signal and param="signal" compare
+# against, is this MACD's signal line whatever the rule's indicator is.
+_RULE_MACD_PARAMS: dict[str, int] = {"fast": 12, "slow": 26, "signal": 9}
+
+# Bollinger bands a bb rule can read (rule.param), and the node output for each.
+_BB_BAND_ATTRS: dict[str, str] = {
+    "upper": "@bb_upper",
+    "middle": "@bb_middle",
+    "lower": "@bb_lower",
+}
 
 
 def _needs_indicator_node(indicator_name: str) -> bool:
@@ -154,6 +172,11 @@ def _parse_param_indicator(param: str) -> Optional[tuple[str, dict[str, Any]]]:
 # ---------------------------------------------------------------------------
 # Condition name resolution
 # ---------------------------------------------------------------------------
+
+# Comparison node types compile runs: a series against a second series or a
+# threshold.
+_TWO_SIDED_NODES = frozenset({"above", "below", "crosses_above", "crosses_below"})
+
 
 def _resolve_condition(condition: str) -> str:
     """Map RuleCondition → catalog node name."""
@@ -301,6 +324,14 @@ class _GraphBuilder:
             # --- Indicator node ------------------------------------------
             catalog_name, ind_params = _resolve_indicator(rule)
 
+            # Set when this rule cannot be drawn so that it runs the same as
+            # the rule backtest.  The comparison then carries it as
+            # condition_extra, and compile refuses the graph out loud.
+            unsupported: Optional[str] = None
+            # True when rule.param names the series to compare against.  For
+            # bb and volume it picks which series the rule itself reads.
+            param_is_ref = True
+
             if _needs_indicator_node(catalog_name):
                 ind_path = self.add_indicator(
                     catalog_name, ind_params, ticker_path, prefix=prefix
@@ -312,6 +343,23 @@ class _GraphBuilder:
                 left_attr = _ticker_attr_for(catalog_name, rule)
                 left_src_path = ticker_path
 
+            if rule.indicator == "atr_pct":
+                unsupported = "atr_pct"
+            elif rule.indicator == "bb":
+                param_is_ref = False
+                band = rule.param or "upper"
+                if band in _BB_BAND_ATTRS:
+                    left_attr = _BB_BAND_ATTRS[band]
+                else:
+                    unsupported = f"bb band {band}"
+            elif rule.indicator == "volume":
+                param_is_ref = False
+                if rule.param not in (None, "raw"):
+                    unsupported = f"volume {rule.param}"
+            elif rule.indicator in ("adx", "stochastic"):
+                # param picks a component; these nodes are refused anyway.
+                param_is_ref = False
+
             # --- Comparison node -----------------------------------------
             cmp_type = _resolve_condition(rule.condition)
             cmp_path = f"{prefix}/cmp_{side}_{idx}"
@@ -321,12 +369,23 @@ class _GraphBuilder:
             right_src_path: Optional[str] = None
             right_attr: Optional[str] = None
 
-            if rule.param == "signal" or rule.condition in ("is_above_signal", "is_below_signal"):
-                # MACD-signal comparison: left=@macd_line, right=@macd_signal
-                left_attr = "@macd_line"
+            if cmp_type not in _TWO_SIDED_NODES:
+                # Slope conditions compare the series with its own past, so
+                # there is no right side (their params are set below).
+                pass
+            elif rule.condition in ("is_above_signal", "is_below_signal") or (
+                param_is_ref and rule.param == "signal"
+            ):
+                # The rule engine compares the rule's series with the signal
+                # line of the default MACD, for every indicator (not only MACD).
+                right_src_path = self.add_indicator(
+                    "macd", dict(_RULE_MACD_PARAMS), ticker_path, prefix=prefix
+                )
                 right_attr = "@macd_signal"
-                right_src_path = ind_path if _needs_indicator_node(catalog_name) else ticker_path
-            elif rule.param and _parse_param_indicator(rule.param) is not None:
+            elif param_is_ref and rule.param == "close":
+                right_src_path = ticker_path
+                right_attr = "@close"
+            elif param_is_ref and rule.param and _parse_param_indicator(rule.param) is not None:
                 parsed = _parse_param_indicator(rule.param)
                 assert parsed is not None
                 param_cat, param_params = parsed
@@ -334,21 +393,48 @@ class _GraphBuilder:
                     param_cat, param_params, ticker_path, prefix=prefix
                 )
                 right_attr = _indicator_attr(param_cat)
-            elif rule.value is not None and rule.param is None:
+            elif param_is_ref and rule.param:
+                # A reference this renderer does not draw (bb:..., atr:...,
+                # volume_sma:..., stoch:...).  Comparing with the value
+                # instead would not be the same rule.
+                if unsupported is None:
+                    unsupported = f"param {rule.param}"
+            elif rule.value is not None:
                 # indicator-vs-scalar
                 cmp_params["threshold"] = rule.value
-                right_src_path = None
-            else:
-                # fallback: store value/threshold in params
+            elif cmp_type in _TWO_SIDED_NODES and unsupported is None:
+                # No value and no reference: the rule backtest never fires
+                # this rule, but compile would drop the comparison and the
+                # AND/OR would ignore it.  Refuse instead.
+                unsupported = "missing value"
+
+            # Slope conditions (rising, turns_up...) become node types compile
+            # does not run; their value and threshold ride along in params so
+            # the viewer can show them.
+            if cmp_type not in _TWO_SIDED_NODES:
                 if rule.value is not None:
                     cmp_params["threshold"] = rule.value
                 if rule.threshold is not None:
                     cmp_params["min_move_pct"] = rule.threshold
 
-            if rule.condition in ("atr_pct",) or catalog_name == "atr_pct":
-                cmp_params["condition_extra"] = "atr_pct"
+            # A rule comparing a series with itself (e.g. price above close)
+            # would need two identical wires.  Wires are de-duplicated, so
+            # compile would see one input and drop the comparison.  Refuse.
+            if (
+                unsupported is None
+                and right_src_path == left_src_path
+                and right_attr == left_attr
+            ):
+                unsupported = "compares a series with itself"
+
+            if unsupported is not None:
+                cmp_params["condition_extra"] = unsupported
 
             self._add_node(cmp_path, cmp_type, cmp_params, (row_y, _COL_COMPARISON))
+            # A muted rule is skipped by the rule engine.  Draw it bypassed so
+            # the viewer still shows it and compile leaves it out the same way.
+            if rule.muted:
+                self.nodes[cmp_path].bypass = True
 
             # Wire left input → comparison
             self._add_wire(left_src_path, cmp_path, left_attr)
@@ -361,6 +447,8 @@ class _GraphBuilder:
             if rule.negated:
                 not_path = f"{prefix}/not_{side}_{idx}"
                 self._add_node(not_path, "not", {}, (row_y, _COL_COMPARISON + 90.0))
+                if rule.muted:
+                    self.nodes[not_path].bypass = True
                 self._add_wire(cmp_path, not_path, "@bool")
                 logic_input_path = not_path
             else:

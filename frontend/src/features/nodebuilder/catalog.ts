@@ -14,6 +14,12 @@ export interface ParamTypeSpec {
   type: 'number' | 'string' | 'select';
   /** Required when type === 'select'. */
   options?: readonly string[];
+  /**
+   * Short unit label shown next to the input, e.g. "%", "bps", "fraction".
+   * It says how the stored value is read, so the edit field and the
+   * read-only chip can't be taken to mean different things.
+   */
+  unit?: string;
 }
 
 export interface NodeCatalogEntry {
@@ -49,8 +55,11 @@ export interface NodeCatalogEntry {
     setting_key?: string;
   };
   /**
-   * False for catalog-only nodes that render on canvas but whose compile
-   * step is a no-op at T2 (currently "size" and "stop" output terminals).
+   * False for catalog-only nodes that render on canvas but that the backtest
+   * cannot run yet (currently "size" and "stop" output terminals). Compile
+   * ignores an unwired one and refuses (400) a wired one. The Tab menu hides
+   * these so users can't place a node that does nothing. The read-only
+   * viewer still renders them if a graph contains one.
    */
   compileActive: boolean;
   /** Per-param input type overrides — drives ParamRow rendering. */
@@ -64,9 +73,27 @@ export interface NodeCatalogEntry {
 export const INTERVAL_OPTIONS = [
   '1m', '5m', '15m', '30m', '1h', '1d', '1wk', '1mo',
 ] as const;
+// Must match the providers registered in backend/shared.py.
 export const SOURCE_OPTIONS = [
-  'yahoo', 'alpaca', 'alpaca-iex', 'ibkr', 'polygon',
+  'yahoo', 'alpaca', 'alpaca-iex', 'ibkr',
 ] as const;
+// Must match the smoothing types backend/indicators.py compute_rsi accepts.
+// Any other value silently falls back to sma there, so offer only these two.
+export const RSI_TYPE_OPTIONS = ['sma', 'wilder'] as const;
+// Same default as the rule builder and the chart's RSI (shared/types/indicators.ts).
+export const RSI_DEFAULT_TYPE = 'wilder';
+// Trailing stop choices and defaults. Must match backend nodes.py
+// TRAILING_STOP_* (models.TrailingStopConfig): type pct or atr, and the price
+// (high or close) that moves the peak.
+export const TRAILING_STOP_TYPE_OPTIONS = ['pct', 'atr'] as const;
+export const TRAILING_STOP_SOURCE_OPTIONS = ['high', 'close'] as const;
+export const TRAILING_STOP_DEFAULTS = {
+  type: 'pct',
+  value: 5.0,
+  source: 'high',
+  activate_on_profit: false,
+  activate_pct: 0.0,
+} as const;
 
 export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
   // ── Ticker (source) ────────────────────────────────────────────────────
@@ -94,11 +121,11 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
   {
     name: "rsi",
     cat: "indicator",
-    desc: "Relative Strength Index. Default period=14, type=sma.",
+    desc: "Relative Strength Index. Default period=14, type=wilder (sma also available).",
     reads: ["@close"],
     writes: ["@rsi"],
     defaults: {
-      params: { period: 14, type: "sma" },
+      params: { period: 14, type: RSI_DEFAULT_TYPE },
       ins: 1,
       outs: 1,
       subtitle: "RSI(14)",
@@ -106,7 +133,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
     compileActive: true,
     paramTypes: {
       period: { type: 'number' },
-      type: { type: 'select', options: ['sma', 'ema', 'wma'] as const },
+      type: { type: 'select', options: RSI_TYPE_OPTIONS },
     },
   },
   {
@@ -302,18 +329,19 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
   {
     name: "position_size",
     cat: "settings",
-    desc: "Fraction of allocated capital deployed per trade (0–1). Default: 1.0 (100%).",
+    desc: "Fraction of allocated capital used per trade, from 0 to 1 (1 = 100%, 0.5 = 50%). Default: 1.",
     reads: [],
     writes: ["@setting"],
     defaults: {
       params: { size: 1.0 },
       ins: 0,
       outs: 1,
-      subtitle: "Size: 100%",
+      subtitle: "Size: 1 (100%)",
       setting_key: "position_size",
     },
     compileActive: true,
-    paramTypes: { size: { type: 'number' } },
+    // Backend reads size as a fraction in (0, 1] (nodes.py position_size_impl).
+    paramTypes: { size: { type: 'number', unit: 'fraction' } },
   },
   {
     name: "stop_loss",
@@ -329,7 +357,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
       setting_key: "stop_loss",
     },
     compileActive: true,
-    paramTypes: { pct: { type: 'number' } },
+    paramTypes: { pct: { type: 'number', unit: '%' } },
   },
   {
     name: "slippage",
@@ -345,7 +373,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
       setting_key: "slippage_bps",
     },
     compileActive: true,
-    paramTypes: { bps: { type: 'number' } },
+    paramTypes: { bps: { type: 'number', unit: 'bps' } },
   },
   {
     name: "commission",
@@ -362,8 +390,34 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
     },
     compileActive: true,
     paramTypes: {
-      per_share_rate: { type: 'number' },
-      min_per_order: { type: 'number' },
+      per_share_rate: { type: 'number', unit: '$/share' },
+      min_per_order: { type: 'number', unit: '$' },
+    },
+  },
+  // Same five fields as backend models.TrailingStopConfig, so a rule
+  // strategy's trailing stop renders as this node and runs the same.
+  {
+    name: "trailing_stop",
+    cat: "settings",
+    desc: "Trailing stop. type=pct trails value % from the peak; type=atr trails value x ATR(14). Optionally waits until the trade is activate_pct % in profit.",
+    reads: [],
+    writes: ["@setting"],
+    defaults: {
+      params: { ...TRAILING_STOP_DEFAULTS },
+      ins: 0,
+      outs: 1,
+      subtitle: "Trail: 5%",
+      setting_key: "trailing_stop",
+    },
+    compileActive: true,
+    paramTypes: {
+      type: { type: 'select', options: TRAILING_STOP_TYPE_OPTIONS },
+      // A percent when type=pct, a multiple of ATR when type=atr.
+      value: { type: 'number', unit: '% or x ATR' },
+      source: { type: 'select', options: TRAILING_STOP_SOURCE_OPTIONS },
+      // A select stores the text "true"/"false"; the backend reads both.
+      activate_on_profit: { type: 'select', options: ['false', 'true'] },
+      activate_pct: { type: 'number', unit: '%' },
     },
   },
 
@@ -401,7 +455,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
   {
     name: "size",
     cat: "output",
-    desc: "(T4) Size terminal. Placeholder — compile ignores at T2. Wire a scalar for dynamic sizing.",
+    desc: "(T4) Size terminal. Not run yet: an unwired one is ignored, a wired one is refused by the backtest.",
     reads: ["@bool"],
     writes: [],
     defaults: {
@@ -415,7 +469,7 @@ export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
   {
     name: "stop",
     cat: "output",
-    desc: "(T4) Stop terminal. Placeholder — compile ignores at T2. Wire a scalar for dynamic stops.",
+    desc: "(T4) Stop terminal. Not run yet: an unwired one is ignored, a wired one is refused by the backtest.",
     reads: ["@bool"],
     writes: [],
     defaults: {
@@ -455,4 +509,36 @@ export function catalogByCategory(): Record<string, NodeCatalogEntry[]> {
     result[entry.cat].push(entry);
   }
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Ports: which node types can take a wire in, or send one out
+// ---------------------------------------------------------------------------
+
+// A Ticker is a source and a Settings node sets a value, so neither takes a
+// wire in.  Entry/Exit/Size/Stop are terminals and Settings nodes feed
+// nothing, so neither sends a wire out.  compile refuses these wires, and
+// the canvas draws no handle for them.
+const NO_INPUT_CATS: ReadonlySet<string> = new Set(['ticker', 'settings']);
+const NO_OUTPUT_CATS: ReadonlySet<string> = new Set(['output', 'settings']);
+
+/** True when a node of this type has an input port.  Unknown types do. */
+export function hasInputPort(nodeType: string | undefined): boolean {
+  const entry = nodeType ? _index.get(nodeType) : undefined;
+  return !entry || !NO_INPUT_CATS.has(entry.cat);
+}
+
+/** True when a node of this type has an output port.  Unknown types do. */
+export function hasOutputPort(nodeType: string | undefined): boolean {
+  const entry = nodeType ? _index.get(nodeType) : undefined;
+  return !entry || !NO_OUTPUT_CATS.has(entry.cat);
+}
+
+/**
+ * True when a wire may go from a node of `fromType` to one of `toType`.
+ * A wire with no port at either end can't be drawn, so it would sit in the
+ * graph unseen, unselectable, and still count in cycle checks.
+ */
+export function canWire(fromType: string | undefined, toType: string | undefined): boolean {
+  return hasOutputPort(fromType) && hasInputPort(toType);
 }

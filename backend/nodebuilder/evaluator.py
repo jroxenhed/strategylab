@@ -52,6 +52,28 @@ class FamilyCapExceededError(GraphValidationError):
     indicator family are requested (mirrors signal_engine._INDICATOR_FAMILY_CAP)."""
 
 
+class GraphTypeError(GraphValidationError, TypeError):
+    """Raised by compile() when a wire carries the wrong kind of value, for
+    example a price wired straight into Entry, or a crossover that reads a
+    derived signal.  It is still a TypeError so older callers keep working."""
+
+
+class UnsupportedNodeError(GraphValidationError):
+    """Raised by compile() for a node type it cannot run yet.
+
+    The read-only viewer still shows these nodes.  Compile refuses them so a
+    graph never trades differently from what the canvas shows.
+    """
+
+    def __init__(self, node_id: str, node_type: str) -> None:
+        super().__init__(
+            f"Node {node_id!r} has type {node_type!r}, which the graph backtest "
+            f"cannot run yet. Remove it or replace it with a supported node.",
+            node_id=node_id,
+        )
+        self.node_type = node_type
+
+
 # ---------------------------------------------------------------------------
 # Public data types
 # ---------------------------------------------------------------------------
@@ -65,6 +87,10 @@ class IndicatorSpec:
     params: dict               # canonical {period:14, type:"sma"} etc.
     write_attr: str            # "@rsi" — the stream attribute name for main result
     node_path: str             # source node path (for debugging)
+    # "" for the first distinct spec of a node type, "_2", "_3"... for the
+    # next ones.  Keeps two RSIs (or two MACDs) with different params from
+    # writing the same attribute and overwriting each other.
+    attr_suffix: str = ""
 
 
 @dataclass
@@ -136,9 +162,15 @@ def compute_indicators_from_specs(
 
     for family, count in family_counts.items():
         if count > _INDICATOR_FAMILY_CAP:
+            # Point at the first node past the cap in this family.
+            over = [
+                s.node_path for s in indicator_specs
+                if _CATALOG_TO_REGISTRY.get(s.catalog_name, s.catalog_name) == family
+            ][_INDICATOR_FAMILY_CAP]
             raise FamilyCapExceededError(
                 f"Too many distinct {family!r} specs ({count}); "
-                f"max {_INDICATOR_FAMILY_CAP} per request"
+                f"max {_INDICATOR_FAMILY_CAP} per request",
+                node_id=over,
             )
 
     attrs: dict[str, pd.Series] = {}
@@ -171,14 +203,15 @@ def compute_indicators_from_specs(
                 cache[cache_key] = result
 
         # Spread multi-output results into attrs with canonical sub-attr names
+        sfx = spec.attr_suffix
         if catalog == "macd":
-            attrs["@macd_line"] = result["macd"]
-            attrs["@macd_signal"] = result["signal"]
-            attrs["@macd_histogram"] = result["histogram"]
+            attrs[f"@macd_line{sfx}"] = result["macd"]
+            attrs[f"@macd_signal{sfx}"] = result["signal"]
+            attrs[f"@macd_histogram{sfx}"] = result["histogram"]
         elif catalog in ("bollinger", "bb"):
-            attrs["@bb_upper"] = result["upper"]
-            attrs["@bb_middle"] = result["middle"]
-            attrs["@bb_lower"] = result["lower"]
+            attrs[f"@bb_upper{sfx}"] = result["upper"]
+            attrs[f"@bb_middle{sfx}"] = result["middle"]
+            attrs[f"@bb_lower{sfx}"] = result["lower"]
         else:
             # Single-output: rsi→"rsi", sma/ema→"ma", atr→"atr", ma→"ma"
             if catalog in ("sma", "ema"):
@@ -194,7 +227,7 @@ def compute_indicators_from_specs(
                 else:
                     # Unknown multi-output: store all sub-keys
                     for sub_key, series in result.items():
-                        attrs[f"@{sub_key}"] = series
+                        attrs[f"@{sub_key}{sfx}"] = series
 
     return attrs
 

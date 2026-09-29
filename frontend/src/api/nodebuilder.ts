@@ -3,6 +3,8 @@
  *
  * fetchAutoRender:      POST /api/nodebuilder/auto_render
  * fetchGraphBacktest:   POST /api/nodebuilder/backtest
+ *
+ * Graph errors come back as HTTP 400 with GraphErrorBody ({detail, node_id}).
  */
 
 import { api } from './client'
@@ -87,8 +89,36 @@ export interface CurvePoint {
   value: number
 }
 
-/** Summary statistics returned by the graph backtest. */
-export type BacktestSummary = Record<string, unknown>
+/** A position still open when the backtest window ended. */
+export interface OpenPosition {
+  direction: 'long' | 'short'
+  entry_price: number
+  /** Unrealized gain or loss in percent (4.2 means +4.2%). */
+  unrealized_pct: number
+}
+
+/**
+ * Summary statistics returned by the graph backtest. Known keys are typed;
+ * the rest stay loose because the rule backtester owns the full shape.
+ */
+export type BacktestSummary = Record<string, unknown> & {
+  num_trades?: number
+  total_return_pct?: number
+  sharpe_ratio?: number
+  /** Set when a position is still open at the end; the return includes it. */
+  open_position?: OpenPosition | null
+  /** False when nothing is wired into the Exit terminal. */
+  exit_connected?: boolean
+}
+
+/**
+ * Body of a graph error (HTTP 400). node_id names the node at fault, when
+ * the server knows it.
+ */
+export interface GraphErrorBody {
+  detail: string
+  node_id?: string | null
+}
 
 /** Trade record returned by the graph backtest. */
 export type TradeRecord = Record<string, unknown>

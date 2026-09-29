@@ -31,9 +31,11 @@ class NodeCatalogEntry:
                       "subtitle" – optional subtitle rendered in the node body.
                     Settings nodes include "setting_key" so Unit 7a knows which
                     simulator field to populate.
-    compile_active: False for catalog-only nodes that are renderable on the canvas
-                    but whose compile step produces no SimulatorSetting or signal.
-                    Currently only "size" and "stop" output terminals at T2.
+    compile_active: False for catalog-only nodes that render on the canvas but
+                    that compile cannot run yet.  Currently only the "size" and
+                    "stop" output terminals: compile ignores them while nothing is
+                    wired in, and raises UnsupportedNodeError once something is.
+                    Node types missing from the catalog are always refused.
     """
     name: str
     cat: str
@@ -44,8 +46,32 @@ class NodeCatalogEntry:
     compile_active: bool = True
 
 
+# RSI smoothing types.  Must match what indicators.compute_rsi accepts: it
+# uses Wilder smoothing for "wilder" and a plain rolling mean for anything
+# else, so only these two are real choices.  The default matches the rule
+# builder, which picks Wilder for a new RSI rule.  frontend catalog.ts
+# RSI_TYPE_OPTIONS / RSI_DEFAULT_TYPE mirror these (checked by
+# test_catalog_consistency.py).
+RSI_TYPE_OPTIONS: tuple[str, ...] = ("sma", "wilder")
+RSI_DEFAULT_TYPE: str = "wilder"
+
+# Trailing stop choices.  They match what the simulator reads from
+# models.TrailingStopConfig: type "pct" or "atr", and the price ("high" or
+# "close") that moves the peak.  The defaults are TrailingStopConfig's own.
+# frontend catalog.ts mirrors these (checked by test_catalog_consistency.py).
+TRAILING_STOP_TYPE_OPTIONS: tuple[str, ...] = ("pct", "atr")
+TRAILING_STOP_SOURCE_OPTIONS: tuple[str, ...] = ("high", "close")
+TRAILING_STOP_DEFAULTS: dict[str, Any] = {
+    "type": "pct",
+    "value": 5.0,
+    "source": "high",
+    "activate_on_profit": False,
+    "activate_pct": 0.0,
+}
+
+
 # ---------------------------------------------------------------------------
-# Catalog — Core 14 (compile-active) + Settings (4) + Output terminals (4)
+# Catalog — Core 14 (compile-active) + Settings (5) + Output terminals (4)
 # ---------------------------------------------------------------------------
 
 NODE_CATALOG: list[NodeCatalogEntry] = [
@@ -73,11 +99,12 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
     NodeCatalogEntry(
         name="rsi",
         cat="indicator",
-        desc="Relative Strength Index. Default period=14, type=sma.",
+        desc="Relative Strength Index. Default period=14, type=wilder (sma also available).",
         reads=("@close",),
         writes=("@rsi",),
         defaults={
-            "params": {"period": 14, "type": "sma"},
+            "params": {"period": 14, "type": RSI_DEFAULT_TYPE},
+            "param_options": {"type": RSI_TYPE_OPTIONS},
             "ins": 1,
             "outs": 1,
             "subtitle": "RSI(14)",
@@ -313,6 +340,29 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
             "setting_key": "commission",
         },
     ),
+    # Trailing stop: the same five fields as models.TrailingStopConfig, so a
+    # rule strategy's trailing stop renders as this node and runs the same.
+    NodeCatalogEntry(
+        name="trailing_stop",
+        cat="settings",
+        desc=(
+            "Trailing stop. type=pct trails value % from the peak; type=atr trails "
+            "value x ATR(14). Optionally waits until the trade is activate_pct % in profit."
+        ),
+        reads=(),
+        writes=("@setting",),
+        defaults={
+            "params": dict(TRAILING_STOP_DEFAULTS),
+            "param_options": {
+                "type": TRAILING_STOP_TYPE_OPTIONS,
+                "source": TRAILING_STOP_SOURCE_OPTIONS,
+            },
+            "ins": 0,
+            "outs": 1,
+            "subtitle": "Trail: 5%",
+            "setting_key": "trailing_stop",
+        },
+    ),
 
     # ------------------------------------------------------------------
     # Output terminals — compile-active (entry, exit)
@@ -348,13 +398,13 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
 
     # ------------------------------------------------------------------
     # Output terminals — catalog-only at T2 (size, stop)
-    # compile_active=False: compiler ignores these at T2.
-    # Wired to the simulator at T4.
+    # compile_active=False: compile ignores them while unwired and refuses
+    # them (UnsupportedNodeError) once wired.  Wired to the simulator at T4.
     # ------------------------------------------------------------------
     NodeCatalogEntry(
         name="size",
         cat="output",
-        desc="(T4) Size terminal. Placeholder — compile ignores at T2. Wire a scalar for dynamic sizing.",
+        desc="(T4) Size terminal. Not run yet: an unwired one is ignored, a wired one is refused by the backtest.",
         reads=("@bool",),
         writes=(),
         compile_active=False,
@@ -368,7 +418,7 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
     NodeCatalogEntry(
         name="stop",
         cat="output",
-        desc="(T4) Stop terminal. Placeholder — compile ignores at T2. Wire a scalar for dynamic stops.",
+        desc="(T4) Stop terminal. Not run yet: an unwired one is ignored, a wired one is refused by the backtest.",
         reads=("@bool",),
         writes=(),
         compile_active=False,
@@ -806,6 +856,26 @@ def commission_impl(params: dict) -> SimulatorSettingImplResult:
     )
 
 
+def trailing_stop_impl(params: dict) -> SimulatorSettingImplResult:
+    """Trailing stop as a TrailingStopConfig, the object the simulator reads.
+
+    Missing params take TrailingStopConfig's defaults.  Raises ValueError for
+    a type or source the simulator does not know, and for a bad field value.
+    """
+    from models import TrailingStopConfig  # local: keep this module import-light
+
+    config = TrailingStopConfig(**params)  # pydantic errors are ValueErrors
+    if config.type not in TRAILING_STOP_TYPE_OPTIONS:
+        raise ValueError(
+            f"trailing stop type must be one of {TRAILING_STOP_TYPE_OPTIONS}, got {config.type!r}"
+        )
+    if config.source not in TRAILING_STOP_SOURCE_OPTIONS:
+        raise ValueError(
+            f"trailing stop source must be one of {TRAILING_STOP_SOURCE_OPTIONS}, got {config.source!r}"
+        )
+    return SimulatorSettingImplResult(key="trailing_stop", value=config)
+
+
 # ---------------------------------------------------------------------------
 # NODE_IMPLS registry — maps catalog name → impl callable
 # ---------------------------------------------------------------------------
@@ -835,4 +905,5 @@ NODE_IMPLS: dict[str, Callable] = {
     "stop_loss": stop_loss_impl,
     "slippage": slippage_impl,
     "commission": commission_impl,
+    "trailing_stop": trailing_stop_impl,
 }

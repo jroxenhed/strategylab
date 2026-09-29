@@ -89,6 +89,20 @@ def test_cycle_detection_raises():
     assert "/b" in msg
 
 
+def test_cycle_error_names_a_node_on_the_cycle():
+    """BC-10: '/a_entry' is only fed by the /m <-> /n cycle and sorts first,
+    but the highlighted node must be on the cycle itself."""
+    nodes = {p: make_node(p) for p in ("/a_entry", "/m", "/n")}
+    wires = [
+        make_wire("w1", "/m", "/n"),
+        make_wire("w2", "/n", "/m"),
+        make_wire("w3", "/n", "/a_entry"),
+    ]
+    with pytest.raises(CyclicGraphError) as exc_info:
+        make_graph(nodes=nodes, wires=wires)
+    assert exc_info.value.node_id in ("/m", "/n")
+
+
 # ---------------------------------------------------------------------------
 # Dangling wire
 # ---------------------------------------------------------------------------

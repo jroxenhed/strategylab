@@ -206,3 +206,104 @@ class TestCrossLanguageParity:
             f"catalog.ts has {len(ts_names)} unique names, "
             f"nodes.py has {py_count}. They must match."
         )
+
+
+# ---------------------------------------------------------------------------
+# F435 0.G: catalog honesty (RSI smoothing types, data sources)
+# ---------------------------------------------------------------------------
+
+class TestRsiAndSourceOptions:
+    """The RSI type options must be exactly what indicators.compute_rsi
+    treats differently, with the rule builder's default, in both catalogs.
+    Data sources offered must be real providers (no polygon)."""
+
+    CATALOG_TS = TestCrossLanguageParity.CATALOG_TS
+
+    def _ts_const_list(self, name: str) -> list[str]:
+        text = self.CATALOG_TS.read_text(encoding="utf-8")
+        m = re.search(rf"export const {name}\s*=\s*\[(.*?)\]", text, re.DOTALL)
+        assert m, f"{name} not found in catalog.ts"
+        pairs = re.findall(r"'([^']+)'|\"([^\"]+)\"", m.group(1))
+        return [single or double for single, double in pairs]
+
+    def test_backend_rsi_options_match_compute_rsi(self):
+        """Each option gives its own RSI series; any other value is just sma."""
+        import numpy as np
+        import pandas as pd
+        from indicators import OHLCVSeries, compute_rsi
+        from nodebuilder.nodes import RSI_DEFAULT_TYPE, RSI_TYPE_OPTIONS
+
+        close = pd.Series(100 + np.cumsum(np.random.default_rng(1).normal(0, 1, 200)))
+        o = OHLCVSeries(close=close, high=close, low=close, volume=close * 0)
+        series = {t: compute_rsi(o, {"period": 14, "type": t})["rsi"] for t in RSI_TYPE_OPTIONS}
+        assert set(RSI_TYPE_OPTIONS) == {"sma", "wilder"}
+        assert not series["sma"].equals(series["wilder"])
+        # Unknown types fall back to sma, so offering them would be a lie.
+        assert compute_rsi(o, {"period": 14, "type": "ema"})["rsi"].equals(series["sma"])
+        assert RSI_DEFAULT_TYPE == "wilder"
+        entry = get_node("rsi")
+        assert entry.defaults["params"]["type"] == RSI_DEFAULT_TYPE
+        assert tuple(entry.defaults["param_options"]["type"]) == RSI_TYPE_OPTIONS
+
+    def test_ts_rsi_options_match_backend(self):
+        from nodebuilder.nodes import RSI_DEFAULT_TYPE, RSI_TYPE_OPTIONS
+        assert self._ts_const_list("RSI_TYPE_OPTIONS") == list(RSI_TYPE_OPTIONS)
+        text = self.CATALOG_TS.read_text(encoding="utf-8")
+        m = re.search(r"export const RSI_DEFAULT_TYPE\s*=\s*['\"]([^'\"]+)['\"]", text)
+        assert m and m.group(1) == RSI_DEFAULT_TYPE
+
+    def test_ts_sources_have_no_polygon(self):
+        assert "polygon" not in self._ts_const_list("SOURCE_OPTIONS")
+
+
+# ---------------------------------------------------------------------------
+# F435 0.A: the trailing_stop settings node
+# ---------------------------------------------------------------------------
+
+class TestTrailingStopCatalog:
+    """The trailing_stop node carries exactly TrailingStopConfig's fields and
+    defaults, and catalog.ts offers the same choices."""
+
+    CATALOG_TS = TestCrossLanguageParity.CATALOG_TS
+    _ts_const_list = TestRsiAndSourceOptions._ts_const_list
+
+    def test_backend_defaults_match_trailing_stop_config(self):
+        from models import TrailingStopConfig
+        from nodebuilder.nodes import (
+            TRAILING_STOP_DEFAULTS,
+            TRAILING_STOP_SOURCE_OPTIONS,
+            TRAILING_STOP_TYPE_OPTIONS,
+        )
+
+        assert TRAILING_STOP_DEFAULTS == TrailingStopConfig().model_dump()
+        entry = get_node("trailing_stop")
+        assert entry.cat == "settings" and entry.compile_active
+        assert entry.defaults["params"] == TRAILING_STOP_DEFAULTS
+        assert entry.defaults["setting_key"] == "trailing_stop"
+        assert tuple(entry.defaults["param_options"]["type"]) == TRAILING_STOP_TYPE_OPTIONS
+        assert tuple(entry.defaults["param_options"]["source"]) == TRAILING_STOP_SOURCE_OPTIONS
+        assert TrailingStopConfig().type in TRAILING_STOP_TYPE_OPTIONS
+        assert TrailingStopConfig().source in TRAILING_STOP_SOURCE_OPTIONS
+
+    def test_ts_options_and_defaults_match_backend(self):
+        from nodebuilder.nodes import (
+            TRAILING_STOP_DEFAULTS,
+            TRAILING_STOP_SOURCE_OPTIONS,
+            TRAILING_STOP_TYPE_OPTIONS,
+        )
+
+        assert self._ts_const_list("TRAILING_STOP_TYPE_OPTIONS") == list(TRAILING_STOP_TYPE_OPTIONS)
+        assert self._ts_const_list("TRAILING_STOP_SOURCE_OPTIONS") == list(TRAILING_STOP_SOURCE_OPTIONS)
+        text = self.CATALOG_TS.read_text(encoding="utf-8")
+        m = re.search(r"export const TRAILING_STOP_DEFAULTS\s*=\s*\{(.*?)\}", text, re.DOTALL)
+        assert m, "TRAILING_STOP_DEFAULTS not found in catalog.ts"
+        ts = {}
+        for key, raw in re.findall(r"(\w+):\s*([^,\n]+)", m.group(1)):
+            raw = raw.strip()
+            if raw in ("true", "false"):
+                ts[key] = raw == "true"
+            elif raw[0] in "'\"":
+                ts[key] = raw.strip("'\"")
+            else:
+                ts[key] = float(raw)
+        assert ts == TRAILING_STOP_DEFAULTS

@@ -10,9 +10,44 @@ const SAVED_GRAPHS_KEY = 'strategylab-saved-graphs'
 // INTERVALS is the set of deployable intraday intervals — shared source of truth in shared/constants.ts
 const INTERVALS = BOT_DEPLOYABLE_INTERVALS
 
-interface SavedGraph {
+export interface SavedGraph {
   name: string
   graph: object
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/**
+ * Turn the raw localStorage value for saved graphs into a list.
+ *
+ * The node builder store writes an object map `{ name: Graph }`. Older code
+ * expected an array `[{ name, graph }]`. Accept both. Anything else (a parse
+ * error, a number, a string, broken entries) counts as empty. Never throws,
+ * because a crash here blanks the whole app (the Live Trading tab is the
+ * landing tab).
+ */
+export function parseSavedGraphs(raw: string | null): SavedGraph[] {
+  if (!raw) return []
+  let data: unknown
+  try {
+    data = JSON.parse(raw)
+  } catch {
+    return []
+  }
+  if (Array.isArray(data)) {
+    return data.filter(
+      (g): g is SavedGraph =>
+        isPlainObject(g) && typeof g.name === 'string' && isPlainObject(g.graph),
+    )
+  }
+  if (isPlainObject(data)) {
+    return Object.entries(data)
+      .filter(([, graph]) => isPlainObject(graph))
+      .map(([name, graph]) => ({ name, graph: graph as object }))
+  }
+  return []
 }
 
 export const sectionStyle: React.CSSProperties = {
@@ -57,15 +92,23 @@ export default function AddBotBar({
   const loadStrategies = () => {
     try {
       const raw = localStorage.getItem(SAVED_KEY)
-      if (raw) setStrategies(JSON.parse(raw))
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        // A non-array here would crash strategies.map in render.
+        if (Array.isArray(parsed)) setStrategies(parsed)
+      }
     } catch {}
   }
 
   const loadGraphs = () => {
+    let raw: string | null = null
     try {
-      const raw = localStorage.getItem(SAVED_GRAPHS_KEY)
-      if (raw) setSavedGraphs(JSON.parse(raw))
+      raw = localStorage.getItem(SAVED_GRAPHS_KEY)
     } catch {}
+    const graphs = parseSavedGraphs(raw)
+    setSavedGraphs(graphs)
+    // The list can shrink between loads; drop a selection that no longer exists.
+    setSelectedGraphIdx(i => (i < graphs.length ? i : -1))
   }
 
   useEffect(() => {
@@ -117,6 +160,7 @@ export default function AddBotBar({
       if (source === 'graph') {
         // Graph mode: post kind=graph + graph payload; no buy/sell rules needed
         const g = savedGraphs[selectedGraphIdx]
+        if (!g) { setError('Select a saved graph'); return }
         await onAdd({
           strategy_name: g.name,
           symbol: symbol.toUpperCase(),

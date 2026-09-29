@@ -12,18 +12,24 @@ Endpoints:
   POST /api/bots/{id}/backtest — run backtest with bot's config
   DELETE /api/bots/{id}        — delete a stopped bot
 
+A graph bot's graph is compiled when it is added or replaced.  A bad graph
+returns HTTP 400 {"detail": <message>, "node_id": <id or null>}, the same
+shape as /api/nodebuilder/backtest, so the editor can highlight the node.
+
 NOTE: /api/bots/fund is registered before /{id} routes to prevent
 FastAPI treating "fund" as a bot_id.
 """
 
 import logging
-from typing import Optional
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel, Field
+from typing import Any, Optional
+from fastapi import APIRouter, Body, HTTPException, BackgroundTasks
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from bot_manager import BotConfig, BotManager
 from models import RegimeConfig, LogicField, DirectionField, OptionalBoundedRuleList
-from nodebuilder.models import Graph
+from nodebuilder.models import Graph, GraphValidationError
 
 router = APIRouter(prefix="/api/bots")
 logger = logging.getLogger(__name__)
@@ -38,6 +44,30 @@ def _get_manager() -> BotManager:
     return bot_manager
 
 
+def _graph_error(exc: GraphValidationError) -> JSONResponse:
+    """The 400 body for a bad graph: {detail, node_id}."""
+    return JSONResponse(status_code=400, content={"detail": str(exc), "node_id": exc.node_id})
+
+
+def _parse_body(model, payload: dict):
+    """Validate a request body against model.
+
+    The body is parsed here rather than by FastAPI, because a cycle or a
+    dangling wire in a graph is raised while the Graph model is built, and
+    under FastAPI's own parsing that became a bare 500.  Returns the model,
+    or a 400 JSONResponse for a bad graph.  Any other bad field keeps
+    FastAPI's usual 422 shape.
+    """
+    try:
+        return model.model_validate(payload)
+    except GraphValidationError as exc:
+        return _graph_error(exc)
+    except ValidationError as exc:
+        raise RequestValidationError(
+            [{**err, "loc": ("body", *err["loc"])} for err in exc.errors()]
+        )
+
+
 # ---------------------------------------------------------------------------
 # Request models
 # ---------------------------------------------------------------------------
@@ -47,6 +77,11 @@ class SetFundRequest(BaseModel):
 
 
 class UpdateBotRequest(BaseModel):
+    # Unknown fields are refused (422), not dropped: a PATCH of, say,
+    # stop_loss_pct used to answer ok and change nothing (Key Bugs Fixed:
+    # silent drop of bot config fields).
+    model_config = ConfigDict(extra="forbid")
+
     allocated_capital: Optional[float] = Field(default=None, gt=0)
     strategy_name: Optional[str] = None
     buy_rules: OptionalBoundedRuleList
@@ -168,14 +203,20 @@ def stop_and_close_all_bots():
 # Bot CRUD
 # ---------------------------------------------------------------------------
 
-@router.post("")
-def add_bot(config: BotConfig):
-    """Create a bot. Uses BotConfig directly as the request schema to avoid
-    field drift — any new BotConfig field is accepted automatically."""
+@router.post("", responses={400: {"description": "Bad config, or bad graph: {detail, node_id}"}})
+def add_bot(payload: dict[str, Any] = Body(...)):
+    """Create a bot. Validates the body with BotConfig directly to avoid
+    field drift — any new BotConfig field is accepted automatically.
+    A graph bot's graph is compiled first; a bad graph returns 400 with node_id."""
     mgr = _get_manager()
+    config = _parse_body(BotConfig, payload)
+    if isinstance(config, JSONResponse):
+        return config
     try:
         config.bot_id = ""  # server assigns the id
         bot_id = mgr.add_bot(config)
+    except GraphValidationError as e:
+        return _graph_error(e)
     except (ValueError, Exception) as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"bot_id": bot_id}
@@ -203,9 +244,12 @@ def get_bot(bot_id: str):
     }
 
 
-@router.patch("/{bot_id}")
-def update_bot(bot_id: str, req: UpdateBotRequest):
+@router.patch("/{bot_id}", responses={400: {"description": "Bad update, or bad graph: {detail, node_id}"}})
+def update_bot(bot_id: str, payload: dict[str, Any] = Body(...)):
     mgr = _get_manager()
+    req = _parse_body(UpdateBotRequest, payload)
+    if isinstance(req, JSONResponse):
+        return req
 
     # Mid-position graph-swap guard: only check when a graph is actually being supplied
     if req.graph is not None:
@@ -226,6 +270,8 @@ def update_bot(bot_id: str, req: UpdateBotRequest):
         mgr.update_bot(bot_id, req.model_dump(exclude_none=True))
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except GraphValidationError as e:
+        return _graph_error(e)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True}
@@ -254,6 +300,8 @@ async def start_bot(bot_id: str):
         mgr.start_bot(bot_id)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except GraphValidationError as e:
+        return _graph_error(e)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True, "status": "running"}
@@ -276,6 +324,8 @@ def manual_buy(bot_id: str):
         result = mgr.manual_buy(bot_id)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except GraphValidationError as e:
+        return _graph_error(e)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return result

@@ -4,7 +4,7 @@ This file holds open work only. Finished work lives in TODO-archive.md, half for
 
 ## Features
 
-- [ ] <a id="f435"></a> **F435** Plan richer nodes for the node-based strategy builder. John chose on 2026-09-12 to grow it past small nodes, so a Code node with a multi-line value becomes the first customer of a side panel that edits the selected node's parameters, the old F272. Start with a short design note on what a Code node computes and how it is sandboxed. [medium] [features]
+- [ ] <a id="f435"></a> **F435** Build the node builder in waves W0 to W7 from docs/plans/2026-09-29-node-builder-finish-plan.md, with code nodes that run real Python. Wave 0 is in: live stops match the backtest and the editor no longer crashes. Wave 1 is next. The live paper gate G1 waits on John. [medium] [features]
 ## Architecture
 
 - [ ] <a id="f438"></a> **F438** The Form 4 event filter keys transaction_codes, min_dollar_total and exclude_10b51 are validated in backend/research/streams/form4.py but never applied. The code comments blame F389, which is closed, and the module docstring still says the r1 wiring is missing when it shipped. Apply the keys at dose time and fix both stale comments. [easy] [arch]

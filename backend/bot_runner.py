@@ -24,6 +24,8 @@ from broker import get_trading_provider, OrderRequest as BrokerOrderRequest, Ord
 from journal import _log_trade, compute_realized_pnl, compute_bidirectional_pnl
 from post_loss import is_post_loss_trigger
 from notifications import notify_entry, notify_exit, notify_error
+from pydantic import ValidationError
+from nodebuilder.models import GraphValidationError
 from regime import RegimeMixin
 from exits import ExitsMixin
 
@@ -41,6 +43,64 @@ def get_poll_ms() -> int:
 def set_poll_ms(ms: int):
     global _POLL_MS
     _POLL_MS = ms
+
+
+def compile_bot_graph(graph, bot_id: str = ""):
+    """Compile a graph bot's graph into a CompiledProgram.
+
+    Used by the runner on each graph change and by BotManager when a graph
+    bot is added or its graph is replaced, so a bad graph is refused up front.
+    Raises a GraphValidationError subclass carrying node_id:
+    HTFGraphNotSupportedError for a node with a timeframe param, and whatever
+    compile() raises (RegimeUnsupportedError, MissingTerminalError, ...).
+    """
+    for node in graph.nodes.values():
+        if getattr(node, 'params', {}).get('timeframe'):
+            from nodebuilder.evaluator import HTFGraphNotSupportedError
+            raise HTFGraphNotSupportedError(
+                f"Graph bot {bot_id!r} uses HTF node {node.id!r} "
+                f"(timeframe={node.params['timeframe']!r}). "
+                "HTF intervals are not supported in graph-mode bots.",
+                node_id=node.id,
+            )
+    from nodebuilder.compile import compile as nb_compile
+    return nb_compile(graph)
+
+
+def build_graph_attrs(program, df, trailing_stop):
+    """Build the attrs dict a compiled graph reads, from the fetched bars.
+
+    Mirrors steps 5 to 7 of nodebuilder.run.run_graph_backtest, so a live
+    graph bot sees the same series as its backtest.  This is CPU work; the
+    runner calls it through _run_in_executor so it never blocks the loop.
+    """
+    import numpy as np
+    import pandas as _pd
+    from indicators import OHLCVSeries, compute_instance
+    from nodebuilder.evaluator import compute_indicators_from_specs
+
+    vol_series = df['Volume'] if 'Volume' in df.columns else _pd.Series(0, index=df.index)
+    ohlcv = OHLCVSeries(
+        close=df['Close'], high=df['High'], low=df['Low'], volume=vol_series
+    )
+    attrs = compute_indicators_from_specs(program.indicator_specs, ohlcv)
+    attrs['@close'] = df['Close']
+    attrs['@open'] = df['Open']
+    attrs['@high'] = df['High']
+    attrs['@low'] = df['Low']
+    attrs['@volume'] = vol_series
+    # The exit sentinel compile() uses when nothing is wired into Exit.
+    attrs['@always_false'] = _pd.Series(0.0, index=df.index, dtype='float64')
+    # An ATR trailing stop needs attrs["atr"], which the exit checks read.
+    # The backtest computes ATR(14) when the graph has none; do the same, or
+    # the live trailing stop would never be set.
+    if trailing_stop is not None and getattr(trailing_stop, 'type', None) == 'atr' and 'atr' not in attrs:
+        attrs['atr'] = compute_instance('atr', {'period': 14}, ohlcv)['atr']
+    # Pre-allocate op-output series
+    for op in program.per_bar_program:
+        if op.writes not in attrs:
+            attrs[op.writes] = _pd.Series(np.nan, index=df.index, dtype='float64')
+    return attrs
 
 
 class BotRunner(RegimeMixin, ExitsMixin):
@@ -202,19 +262,9 @@ class BotRunner(RegimeMixin, ExitsMixin):
 
         Raises HTFGraphNotSupportedError if any node has a non-base timeframe param.
         Raises RegimeUnsupportedError if /regime/ nodes are present (from compile()).
-        Called synchronously inside _tick(); errors propagate to the run() error handler.
+        _tick() runs it through _run_in_executor; errors propagate to the run() error handler.
         """
-        # HTF detection: check before compile() to surface a clear error
-        for node in cfg.graph.nodes.values():
-            if getattr(node, 'params', {}).get('timeframe'):
-                from nodebuilder.evaluator import HTFGraphNotSupportedError
-                raise HTFGraphNotSupportedError(
-                    f"Graph bot {cfg.bot_id!r} uses HTF node {node.id!r} "
-                    f"(timeframe={node.params['timeframe']!r}). "
-                    "HTF intervals are not supported in graph-mode bots."
-                )
-        from nodebuilder.compile import compile as nb_compile
-        return nb_compile(cfg.graph)
+        return compile_bot_graph(cfg.graph, cfg.bot_id)
 
     async def _tick(self):
         cfg = self.config
@@ -268,6 +318,7 @@ class BotRunner(RegimeMixin, ExitsMixin):
         last_bar = str(df.index[-1])
         if last_bar == state.last_bar_time:
             return  # same bar, nothing to do
+        prev_bar_time = state.last_bar_time
         state.last_bar_time = last_bar
         self._log("INFO", f"New bar: {last_bar} | close={df['Close'].iloc[-1]:.2f}")
 
@@ -299,27 +350,55 @@ class BotRunner(RegimeMixin, ExitsMixin):
             import hashlib, json as _json
             graph_dump = _json.dumps(cfg.graph.model_dump(mode='json'), sort_keys=True)
             current_hash = hashlib.sha256(graph_dump.encode()).hexdigest()
-            if current_hash != state.graph_hash or state.compiled_program is None:
-                state.compiled_program = await self._run_in_executor(
-                    lambda: self._compile_graph_program(cfg)
-                )
-                state.graph_hash = current_hash
-            program = state.compiled_program
+            # A graph that does not compile, or whose settings the bot config
+            # refuses, cannot recover by retrying.  Every later tick of this
+            # bar would return early as "same bar" and skip the exit checks
+            # without a word, so pause the bot and alert, as for graph=None.
+            from nodebuilder.sim_settings import apply_to_bot_config
+            try:
+                if current_hash != state.graph_hash or state.compiled_program is None:
+                    state.compiled_program = await self._run_in_executor(
+                        lambda: self._compile_graph_program(cfg)
+                    )
+                    state.graph_hash = current_hash
+                program = state.compiled_program
 
-            from indicators import OHLCVSeries
-            from nodebuilder.evaluator import compute_indicators_from_specs, evaluate_graph
-            import numpy as np
-            import pandas as _pd
+                # The graph wins: its Settings nodes (size, stop, trailing stop,
+                # slippage) replace the bot config's values for the rest of this
+                # tick, the same way the graph backtest applies them.  Rebuilt
+                # every tick so it always follows the compiled program.
+                cfg = apply_to_bot_config(cfg, program.simulator_settings)
+            except (GraphValidationError, ValidationError) as e:
+                state.compiled_program = None
+                state.graph_hash = None
+                self.state.status = "error"
+                self.state.pause_reason = f"Graph does not compile: {e}"
+                self.state.error_message = self.state.pause_reason
+                self._log("ERROR", self.state.pause_reason)
+                if state.entry_price is not None:
+                    self._log("WARN", "Bot paused with an open position: stops are not managed")
+                asyncio.create_task(notify_error(
+                    symbol=cfg.symbol,
+                    error_msg=self.state.pause_reason
+                    + (" (open position, stops not managed)" if state.entry_price is not None else ""),
+                    bot_id=cfg.bot_id,
+                ))
+                self.manager.save()
+                return
+            except Exception:
+                # Anything else (a compile bug, an executor error) may pass.
+                # Retry this bar on the next tick so repeated failures reach
+                # MAX_CONSEC_ERRORS and alert, instead of the next tick seeing
+                # "same bar" and skipping the exit checks without a word.
+                state.last_bar_time = prev_bar_time
+                raise
 
-            volume_missing = 'Volume' not in df.columns
-            vol_series = df['Volume'] if not volume_missing else _pd.Series(0, index=df.index)
-            ohlcv = OHLCVSeries(
-                close=df['Close'], high=df['High'], low=df['Low'], volume=vol_series
-            )
+            from nodebuilder.evaluator import evaluate_graph
+
             # F6: graph compares against @volume become silent zeros if the
             # provider didn't return a Volume column. Warn so the operator
             # notices instead of trading on bogus data.
-            if volume_missing:
+            if 'Volume' not in df.columns:
                 references_volume = any(
                     "@volume" in op.reads for op in program.per_bar_program
                 )
@@ -327,27 +406,23 @@ class BotRunner(RegimeMixin, ExitsMixin):
                     self._log(
                         "WARN",
                         f"Graph references @volume but DataFrame lacks Volume column "
-                        f"(provider={cfg.source}); zero-filling — comparisons against "
+                        f"(provider={cfg.data_source}); zero-filling — comparisons against "
                         f"@volume will be False.",
                     )
+            # Key Bugs Fixed: never block the polling loop.  Indicator work and
+            # the per-bar evaluation both run in the executor.
             try:
                 indicator_attrs = await self._run_in_executor(
-                    lambda: compute_indicators_from_specs(program.indicator_specs, ohlcv)
+                    build_graph_attrs, program, df, cfg.trailing_stop
                 )
             except Exception as e:
                 self._log("WARN", f"Graph indicator error: {e}")
+                # Retry this bar on the next tick instead of skipping it (and
+                # its exit checks) as "same bar".
+                state.last_bar_time = prev_bar_time
                 return
-            indicator_attrs['@close']  = df['Close']
-            indicator_attrs['@open']   = df['Open']
-            indicator_attrs['@high']   = df['High']
-            indicator_attrs['@low']    = df['Low']
-            indicator_attrs['@volume'] = vol_series
-            # Pre-allocate op-output series
-            for op in program.per_bar_program:
-                if op.writes not in indicator_attrs:
-                    indicator_attrs[op.writes] = _pd.Series(np.nan, index=df.index, dtype='float64')
 
-            sigs = evaluate_graph(program, indicator_attrs, i)
+            sigs = await self._run_in_executor(evaluate_graph, program, indicator_attrs, i)
             buy_signal  = sigs['entry']
             sell_signal = sigs['exit']
             indicators = indicator_attrs  # pass attrs dict to downstream helpers that expect it

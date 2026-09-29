@@ -427,9 +427,9 @@ W0 introduces the 400 shape with `detail` and `node_id`. From W1, every 400 from
 
 ---
 
-## 5. Wave 0: Unbreak (in progress)
+## 5. Wave 0: Unbreak (done 2026-09-30)
 
-**Status: in progress in another workflow. Do not redesign it here.** This section records the amended item list, so later waves know what exists. That workflow's own brief is authoritative for details.
+**Status: done.** A four-reviewer wave found 52 findings. Adversarial verification confirmed all seven P0/P1, and 45 findings are fixed. The seven deferred ones are listed in section 10. This section records the amended item list, so later waves know what exists.
 
 **Goal.** Nothing crashes. Nothing silently differs from its backtest. The editor is usable as it is.
 
@@ -1318,3 +1318,17 @@ Also ask after W2 and after W5: does the graph now beat the rule builder for the
 - **Candle-pattern selector** widget, once pattern nodes exist.
 - **Nodes for dynamic sizing, skip-after-stop and trading hours,** which stay sidebar-owned for now (D11).
 - **Regime in walk-forward analysis** and graph strategies in the optimizer, WFA and sensitivity panels.
+
+**Deferred from the Wave 0 review (2026-09-30).** Full notes: `.run/F435/w0/fix-report.md` (local only).
+
+- **Deploy step for Wave 0.** Live stops now match the backtest: a long bot with a trailing stop also gets its fixed stop, and the trail starts at entry. List production bots with an open position before the deploy. A position already past its fixed stop exits on its first tick. A graph bot whose stored graph no longer compiles now refuses to start.
+- **Graph bot mid-position at deploy.** On its first tick after the deploy, the bot uses its graph's Settings nodes. An Alpaca stop leg placed before the deploy stays at its old level.
+- **IBKR entry with a stop.** The IBKR provider sends an entry-with-stop as a bare BUY STOP below market. It needs a parent market order and a child stop order, with SMART routing. This defect is older than Wave 0. The polling stop still covers a filled entry.
+- **Broker stop leg with a trailing stop.** The Alpaca OTO stop leg goes out only when there is no trailing stop. To add it, the trailing exit must first cancel the leg.
+- **Save has no UI (W1).** `saveCurrentGraph` has no caller, and AddBotBar lists only graphs put in localStorage by hand. The Wave 1 Save button fixes this.
+- **Multi-delete rewire and batch store actions (W1).** A box delete rewires node by node and can leave wires of the wrong type. Build one `removeNodesWithRewire`, and `moveNodes` / `removeNodes` batch actions, together with Wave 1 undo.
+- **Canvas jumps on Run and when banners change.** This needs a layout decision: keep the old results strip dimmed while it runs, and give banners a fixed slot.
+- **Comparison input order.** Left and right inputs follow wire order, so a redrawn wire can flip "RSI above SMA". It needs a target-port field on Wire, which changes the graph contract.
+- **New Empty Graph keeps the old viewport.** It needs a store "layout epoch" to refit.
+- **Render-count tests.** Nothing checks the "one node render per change" claims. Build the counting harness with the next performance pass.
+- **Browser check for Cmd-click.** Confirm that Cmd-click removes a node from a group selection and keeps the rest. jsdom cannot press the React Flow multi-select key.

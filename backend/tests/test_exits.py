@@ -140,7 +140,8 @@ def test_stop_loss_short_circuits_when_disabled():
 # ---------------------------------------------------------------------------
 
 def test_trailing_stop_long_activates_only_when_pct_threshold_crossed():
-    """activate_on_profit=True, activate_pct=1: trail inactive below threshold."""
+    """activate_on_profit=True, activate_pct=1: the peak stays at entry below the
+    threshold, but the trail is still set from entry, as in the backtest (LT-2)."""
     harness = _ExitHarness()
     ts = TrailingStopConfig(
         type="pct",
@@ -163,12 +164,12 @@ def test_trailing_stop_long_activates_only_when_pct_threshold_crossed():
         cfg, state, price=100.5, df=df, i=1,
         pos_is_short=False, indicators={}, sell_rules=[], is_regime=False,
     ))
-    assert state.trail_peak is None, (
-        f"trail_peak should be None when activation threshold not crossed, "
+    assert state.trail_peak == 100.0, (
+        f"trail_peak should stay at entry when activation threshold not crossed, "
         f"got {state.trail_peak}"
     )
-    assert state.trail_stop_price is None, (
-        f"trail_stop_price should be None when not activated, "
+    assert state.trail_stop_price == pytest.approx(98.0), (
+        f"trail_stop_price should trail from entry before activation, "
         f"got {state.trail_stop_price}"
     )
 
@@ -252,3 +253,98 @@ def test_trailing_stop_short_tracks_trough():
         pos_is_short=True, indicators={}, sell_rules=[], is_regime=False,
     ))
     assert reason == "trailing_stop", f"Expected 'trailing_stop', got {reason!r}"
+
+
+# ---------------------------------------------------------------------------
+# F435 wave 0 review: live stops match the backtest (LT-1, LT-2)
+# ---------------------------------------------------------------------------
+
+def _dated_atr(values, n=None):
+    """An ATR series on a date index, like the one a live tick builds."""
+    idx = pd.date_range("2024-01-01", periods=len(values), freq="D", tz="UTC")
+    return pd.Series(values, index=idx, dtype="float64")
+
+
+def test_atr_trailing_stop_reads_atr_by_position_on_a_date_index():
+    """LT-1: Series.get(i) on a date index gave 0, so the ATR trail was never set."""
+    harness = _ExitHarness()
+    ts = TrailingStopConfig(type="atr", value=2.0, source="close")
+    cfg = _make_config(trailing_stop=ts)
+    state = _make_state(entry_price=100.0, entry_bar_count=0, trail_peak=100.0,
+                        position_direction="long")
+    df = _make_df(high=100.0, low=100.0, close=100.0)
+    _run(harness._evaluate_exit_reason(
+        cfg, state, price=100.0, df=df, i=1,
+        pos_is_short=False, indicators={"atr": _dated_atr([1.0, 1.5])},
+        sell_rules=[], is_regime=False,
+    ))
+    assert state.trail_stop_price == pytest.approx(100.0 - 2.0 * 1.5)
+
+
+def test_atr_warmup_nan_leaves_the_trail_unset():
+    harness = _ExitHarness()
+    ts = TrailingStopConfig(type="atr", value=2.0, source="close")
+    cfg = _make_config(trailing_stop=ts)
+    state = _make_state(entry_price=100.0, entry_bar_count=0, trail_peak=100.0,
+                        position_direction="long")
+    _run(harness._evaluate_exit_reason(
+        cfg, state, price=100.0, df=_make_df(), i=1,
+        pos_is_short=False, indicators={"atr": _dated_atr([np.nan, np.nan])},
+        sell_rules=[], is_regime=False,
+    ))
+    assert state.trail_stop_price is None
+
+
+@pytest.mark.parametrize("ts", [
+    TrailingStopConfig(type="atr", value=2.0, source="close"),
+    TrailingStopConfig(type="pct", value=15.0, source="close"),
+    TrailingStopConfig(type="pct", value=15.0, source="close", activate_on_profit=True, activate_pct=5.0),
+])
+def test_long_fixed_stop_fires_with_a_trailing_stop_set(ts):
+    """LT-1: a long with stop 3% and a trailing stop fell 10% with no exit.
+    The backtest checks the fixed stop first, whatever the trailing stop."""
+    harness = _ExitHarness()
+    cfg = _make_config(stop_loss_pct=3.0, trailing_stop=ts)
+    state = _make_state(entry_price=100.0, entry_bar_count=0, trail_peak=100.0,
+                        position_direction="long")
+    df = _make_df(high=90.0, low=90.0, close=90.0)
+    reason = _run(harness._evaluate_exit_reason(
+        cfg, state, price=90.0, df=df, i=1,
+        pos_is_short=False, indicators={"atr": _dated_atr([1.0, 1.0])},
+        sell_rules=[], is_regime=False,
+    ))
+    assert reason == "stop_loss"
+
+
+def test_activate_on_profit_long_is_protected_from_entry():
+    """LT-2: before activation the backtest trails from entry; live had no stop."""
+    harness = _ExitHarness()
+    ts = TrailingStopConfig(type="pct", value=3.0, source="close",
+                            activate_on_profit=True, activate_pct=5.0)
+    cfg = _make_config(stop_loss_pct=None, trailing_stop=ts)
+    state = _make_state(entry_price=100.0, entry_bar_count=0, trail_peak=100.0,
+                        position_direction="long")
+    df = _make_df(high=96.0, low=96.0, close=96.0)
+    reason = _run(harness._evaluate_exit_reason(
+        cfg, state, price=96.0, df=df, i=1,
+        pos_is_short=False, indicators={}, sell_rules=[], is_regime=False,
+    ))
+    assert state.trail_peak == 100.0
+    assert state.trail_stop_price == pytest.approx(97.0)
+    assert reason == "trailing_stop"
+
+
+def test_activate_on_profit_short_is_protected_from_entry():
+    harness = _ExitHarness()
+    ts = TrailingStopConfig(type="pct", value=3.0, source="close",
+                            activate_on_profit=True, activate_pct=5.0)
+    cfg = _make_config(stop_loss_pct=None, trailing_stop=ts, direction="short")
+    state = _make_state(entry_price=100.0, entry_bar_count=0, trail_peak=100.0,
+                        position_direction="short")
+    df = _make_df(high=104.0, low=104.0, close=104.0)
+    reason = _run(harness._evaluate_exit_reason(
+        cfg, state, price=104.0, df=df, i=1,
+        pos_is_short=True, indicators={}, sell_rules=[], is_regime=False,
+    ))
+    assert state.trail_stop_price == pytest.approx(103.0)
+    assert reason == "trailing_stop"

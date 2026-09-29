@@ -4,6 +4,11 @@
  * Renders: 3px left stripe, 16×16 icon chip, title, subtitle, attribute pills,
  * display-flag glow, bypass-flag dim+dot, invisible handles.
  *
+ * Handles: a node gets a target (input) handle unless `hasInput` is false,
+ * and a source (output) handle unless `hasOutput` is false. Terminals (Entry,
+ * Exit, ...) have no output and the Ticker has no input, so a user can never
+ * drag a wire from or to a port that means nothing.
+ *
  * All color references use CSS custom properties from tokens.css
  * scoped to .nodebuilder-root.
  */
@@ -78,6 +83,10 @@ interface BaseNodeProps {
   children?: React.ReactNode
   /** When true, handles render as visible colored dots (editable mode). */
   editable?: boolean
+  /** Render the target (input) handle. False for source nodes like Ticker. */
+  hasInput?: boolean
+  /** Render the source (output) handle. False for terminals like Entry/Exit. */
+  hasOutput?: boolean
 }
 
 export function BaseNode({
@@ -91,6 +100,8 @@ export function BaseNode({
   width = 158,
   children,
   editable = false,
+  hasInput = true,
+  hasOutput = true,
 }: BaseNodeProps) {
   const catEntry = CATS[cat] ?? CATS.indicator
   const catColor = catEntry.color
@@ -132,11 +143,13 @@ export function BaseNode({
   return (
     <>
       {/* Target handle (top) */}
-      <Handle
-        type="target"
-        position={Position.Top}
-        style={{ ...handleVisibleStyle, top: editable ? -4 : 0 }}
-      />
+      {hasInput && (
+        <Handle
+          type="target"
+          position={Position.Top}
+          style={{ ...handleVisibleStyle, top: editable ? -4 : 0 }}
+        />
+      )}
 
       <div style={containerStyle}>
         {/* 3px left stripe */}
@@ -248,11 +261,13 @@ export function BaseNode({
       </div>
 
       {/* Source handle (bottom) */}
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        style={{ ...handleVisibleStyle, bottom: editable ? -4 : 0 }}
-      />
+      {hasOutput && (
+        <Handle
+          type="source"
+          position={Position.Bottom}
+          style={{ ...handleVisibleStyle, bottom: editable ? -4 : 0 }}
+        />
+      )}
     </>
   )
 }

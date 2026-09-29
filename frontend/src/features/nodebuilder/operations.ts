@@ -6,6 +6,7 @@
  */
 
 import type { Graph, GraphNode, GraphWire } from '../../api/nodebuilder'
+import { canWire } from './catalog'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -113,10 +114,16 @@ export function removeWire(graph: Graph, wireId: string): Graph {
 }
 
 /**
- * Add a wire. Rejects if the wire would create a cycle.
+ * Add a wire. Rejects a wire into a node with no input port (a Ticker, a
+ * Settings node) or out of one with no output port (Entry, Exit, a Settings
+ * node): the canvas can't draw it, so it could never be seen or deleted.
+ * Also rejects a wire that would create a cycle.
  */
 export function addWire(graph: Graph, wire: GraphWire): Graph {
   assertEditable(graph, 'addWire')
+  if (!canWire(graph.nodes[wire.from]?.type, graph.nodes[wire.to]?.type)) {
+    throw new Error(`Cannot add wire: "${wire.from}" → "${wire.to}" has no port at one end.`)
+  }
   if (wouldCreateCycle(graph, wire.from, wire.to)) {
     throw new Error(`Cannot add wire: "${wire.from}" → "${wire.to}" would create a cycle.`)
   }

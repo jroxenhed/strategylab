@@ -38,6 +38,7 @@ from nodebuilder.evaluator import (
 )
 from nodebuilder.from_rules import auto_render
 from nodebuilder.models import Graph, Node, Wire
+from nodebuilder.run import GRAPH_ONLY_SUMMARY_KEYS
 from routes.backtest import _run_simulation, run_backtest
 from routes.nodebuilder import (
     _apply_settings_overrides,
@@ -239,10 +240,12 @@ def _compare_results(rule_result: dict, graph_result: dict, name: str) -> None:
     The rule path (run_backtest) adds extra keys that the graph path intentionally
     omits (beta, r_squared from SPY correlation; session_analytics).  We compare
     only the keys present in the graph result's summary — it must be a subset of
-    the rule result.  Keys present in graph but absent from rule are an error.
+    the rule result.  Keys present in graph but absent from rule are an error,
+    except the documented graph-only keys (open_position, exit_connected).
     """
     # summary — compare keys present in the graph result against the rule result
-    rs, gs = rule_result["summary"], graph_result["summary"]
+    rs = rule_result["summary"]
+    gs = {k: v for k, v in graph_result["summary"].items() if k not in GRAPH_ONLY_SUMMARY_KEYS}
     missing_from_rule = set(gs.keys()) - set(rs.keys())
     assert not missing_from_rule, (
         f"{name}: summary keys in graph but absent from rule: {missing_from_rule}"
@@ -522,3 +525,59 @@ def test_bypassed_node_skipped():
     assert len(bypassed_sells) <= len(unmodified_sells), (
         f"Bypassed sell should have fewer sells: {len(bypassed_sells)} vs {len(unmodified_sells)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# F435 0.A: the trailing_stop node drives the trailing stop on its own
+# ---------------------------------------------------------------------------
+
+def _graph_only_result(graph: Graph, req: StrategyRequest, df: pd.DataFrame, **overrides) -> dict:
+    """Run a graph with a request that carries NO strategy settings of its own
+    (no trailing stop), so anything the result shows came from the graph."""
+    graph_req = GraphBacktestRequest(
+        graph=graph, ticker=req.ticker, start=req.start, end=req.end,
+        interval=req.interval, source=req.source, **overrides,
+    )
+    result = run_graph_backtest(graph_req, df=df)
+    return {
+        "summary": result.summary, "trades": result.trades,
+        "equity_curve": result.equity_curve, "baseline_curve": result.baseline_curve,
+    }
+
+
+@pytest.mark.parametrize("name", ["trailing_stop_pct", "atr_trailing_stop"])
+def test_trailing_stop_node_alone_matches_rule_backtest(name):
+    req = next(r for n, r in _STRATEGIES if n == name)
+    df = _load_df(name)
+    rule_result = _run_rule_path(req, df)
+    graph = auto_render(req)
+    assert graph.nodes["/setting_trailing_stop"].type == "trailing_stop"
+
+    # The request has trailing_stop=None: the graph node must supply it.
+    _compare_results(rule_result, _graph_only_result(graph, req, df), name)
+
+    # Control: without the node the same request gives a different result,
+    # so the match above really comes from the node.
+    nodes = {k: v.model_dump(by_alias=False) for k, v in graph.nodes.items()
+             if k != "/setting_trailing_stop"}
+    bare = Graph.model_validate({
+        "_version": 1, "readOnly": True, "nodes": nodes,
+        "wires": [w.model_dump(by_alias=False) for w in graph.wires],
+    })
+    bare_result = _graph_only_result(bare, req, df)
+    assert [(t["type"], t["date"]) for t in bare_result["trades"]] != [
+        (t["type"], t["date"]) for t in rule_result["trades"]
+    ], f"{name}: fixture never hits its trailing stop, so it proves nothing"
+
+
+def test_trailing_stop_node_wins_over_request():
+    """The graph wins: a different trailing stop on the request is replaced."""
+    name = "trailing_stop_pct"
+    req = next(r for n, r in _STRATEGIES if n == name)
+    df = _load_df(name)
+    rule_result = _run_rule_path(req, df)
+    graph_result = _graph_only_result(
+        auto_render(req), req, df,
+        trailing_stop=TrailingStopConfig(type="pct", value=40.0),
+    )
+    _compare_results(rule_result, graph_result, name)

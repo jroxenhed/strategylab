@@ -3,7 +3,7 @@
  *
  * Title = Entry / Exit / Size / Stop.
  * Reads @bool (for Entry/Exit) or @scalar (for Size/Stop).
- * No writes (terminal node).
+ * No writes (terminal node), so no output handle is rendered.
  *
  * Icon chip must be darker to contrast against near-white stripe.
  * The BaseNode already handles this since --nb-bg is very dark.
@@ -53,6 +53,7 @@ export default function OutputNode({ data }: NodeProps) {
       display={d.display}
       bypass={d.bypass}
       editable={d.editable === true}
+      hasOutput={false}
     />
   )
 }
