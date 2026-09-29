@@ -15,7 +15,8 @@
 #   GATEWAY_VRSN    Gateway major version dir, no dot. Default 1045
 #   IBC_VRSN        IBC release. Default 3.23.0
 #   SL_HTTP_ALLOW   space-separated IPv4 addresses/CIDRs allowed to reach port 80
-#                   (e.g. the edge proxy + the WireGuard NAT address, "172.16.17.115 192.168.216.0/24 172.16.16.175").
+#                   (the edge proxy + John's yett WireGuard devices, "172.16.17.115 10.79.0.10 10.79.0.11").
+#                   It is the whole allowlist: port-80 rules for other sources are removed.
 #                   Required whenever firewalld is active — port 80 fronts /vnc/,
 #                   /websockify, and /api/gateway/command/{cmd}, none of which have
 #                   their own auth, so it must never be opened to the whole network.
@@ -128,20 +129,33 @@ systemctl enable --now nginx
 systemctl reload nginx
 if command -v firewall-cmd >/dev/null && systemctl is-active -q firewalld; then
   if [[ -z "$SL_HTTP_ALLOW" && "$SL_HTTP_ALLOW_ANY" != "1" ]]; then
-    die "SL_HTTP_ALLOW is empty. Port 80 fronts /vnc/, /websockify, and /api/gateway/command/{cmd} — none of which have their own auth — so it must be limited to the edge proxy and trusted tunnel sources (e.g. SL_HTTP_ALLOW=\"172.16.17.115 192.168.216.0/24 172.16.16.175\"). Set SL_HTTP_ALLOW_ANY=1 to open it network-wide instead (not the normal path)."
+    die "SL_HTTP_ALLOW is empty. Port 80 fronts /vnc/, /websockify, and /api/gateway/command/{cmd} — none of which have their own auth — so it must be limited to the edge proxy and trusted tunnel sources (e.g. SL_HTTP_ALLOW=\"172.16.17.115 10.79.0.10 10.79.0.11\"). Set SL_HTTP_ALLOW_ANY=1 to open it network-wide instead (not the normal path)."
   fi
   # Remove the generic http service (opens 80 to the whole zone) — tolerant of it not being present.
   firewall-cmd -q --permanent --remove-service=http 2>/dev/null || true
   if [[ "$SL_HTTP_ALLOW_ANY" == "1" ]]; then
     firewall-cmd -q --permanent --add-service=http
   else
+    want=" "
     for src in $SL_HTTP_ALLOW; do
       # bare IPv4 → /32: firewalld treats "a.b.c.d" and "a.b.c.d/32" as different rules (duplicates seen 2026-09-12)
       [[ "$src" == */* ]] || src="${src}/32"
+      want+="$src "
       rule="rule family=\"ipv4\" source address=\"$src\" port port=\"80\" protocol=\"tcp\" accept"
       firewall-cmd -q --permanent --query-rich-rule="$rule" >/dev/null 2>&1 || \
         firewall-cmd -q --permanent --add-rich-rule="$rule"
     done
+    # SL_HTTP_ALLOW is the whole port-80 allowlist: remove port-80 rules for sources
+    # not in it, and bare-address duplicates. Before this, a source dropped from the
+    # list stayed open (172.16.16.175 let every Back To Home VPN user in after the
+    # 2026-09 co-lo move).
+    while IFS= read -r rule; do
+      [[ "$rule" == *'port port="80"'* ]] || continue
+      src="${rule#*source address=\"}"; src="${src%%\"*}"
+      [[ "$src" == */* && "$want" == *" $src "* ]] && continue
+      log "firewall: removing port-80 rule for $src (not in SL_HTTP_ALLOW, or a bare duplicate)"
+      firewall-cmd -q --permanent --remove-rich-rule="$rule"
+    done < <(firewall-cmd --permanent --list-rich-rules)
   fi
   firewall-cmd -q --reload
 fi

@@ -99,9 +99,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("F430 auto-resume failed (non-fatal): %s", e)
 
+    # F445: once per weekday in the session, alert on bots that ran in the last
+    # 7 days but stand still (the 2026-09-26 office move left all bots off for
+    # two sessions unnoticed). Created after auto-resume; the loop sleeps first.
+    import bot_watch
+    bot_watch_task = asyncio.create_task(bot_watch.watch_loop(manager))
+
     try:
         yield
     finally:
+        bot_watch_task.cancel()
+        try:
+            await bot_watch_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning("F445: bot_watch shutdown raised: %s", e)
         gateway_alert_task.cancel()
         try:
             await gateway_alert_task

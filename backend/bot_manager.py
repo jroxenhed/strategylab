@@ -162,6 +162,7 @@ class BotState:
     position_direction: Optional[str] = None  # direction of current open position (None when flat)
     pending_regime_flip: bool = False          # True = close failed last tick, retry next tick
     was_running: bool = False                  # True if bot was running when server last restarted
+    user_stopped: bool = False                 # F445: set by an explicit Stop; bot_watch skips these
 
     # U9: graph-mode runtime cache (NOT persisted to bots.json)
     graph_hash: Optional[str] = None          # SHA-256 of last compiled graph; triggers recompile on change
@@ -220,6 +221,7 @@ class BotState:
             "position_direction": self.position_direction,
             "pending_regime_flip": self.pending_regime_flip,
             "was_running": self.was_running,
+            "user_stopped": self.user_stopped,
         }
 
     @classmethod
@@ -331,6 +333,7 @@ class BotManager:
             del self.tasks[bot_id]
         config, state = self.bots[bot_id]
         state.status = "stopped"
+        state.user_stopped = True
         state.entry_price = None
         state.trail_peak = None
         state.trail_stop_price = None
@@ -657,6 +660,10 @@ class BotManager:
                     continue
                 state = BotState.from_dict(entry.get("state", {}))
                 state.was_running = state.status == "running"
+                # F445: a row saved before user_stopped existed and not running was
+                # most likely stopped by hand; keep bot_watch from alerting on it.
+                if "user_stopped" not in entry.get("state", {}) and not state.was_running:
+                    state.user_stopped = True
                 state.status = "stopped"  # always start stopped after server restart
                 self.bots[config.bot_id] = (config, state)
             if self.bots:

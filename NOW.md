@@ -11,4 +11,4 @@ This is the four-item this-week view of TODO.md, two lines each, pointing back i
 
 ## Waiting on John
 
-One open: Q1 in john-questions.md, the port-80 allowlist on strategylab01 after the co-lo move. The public URL works, so only the direct fallback path waits on it.
+One open: Q2 in john-questions.md, port 22 from the Mac on wg-yett. The recommendation is to leave it, because ssh through bastion01 already works.

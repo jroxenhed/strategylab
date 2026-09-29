@@ -620,11 +620,11 @@ class BotRunner(RegimeMixin, ExitsMixin):
         self._loop = asyncio.get_running_loop()
         self.state.status = "running"
         self.state.was_running = False
+        self.state.user_stopped = False
         self.state.pause_reason = None
+        self.state.error_message = None
         self.state.started_at = datetime.now(timezone.utc).isoformat()
         self._log("INFO", f"Bot started: {self.config.symbol} {self.config.interval}")
-        self._register_error_listener()
-        await asyncio.to_thread(self.manager.save)
 
         if _POLL_MS > 0:
             interval_secs = _POLL_MS / 1000.0
@@ -634,6 +634,11 @@ class BotRunner(RegimeMixin, ExitsMixin):
         MAX_CONSEC_ERRORS = 5
         RECOVERY_WAIT = 30  # seconds to wait before retrying after transient failures
         try:
+            # Inside the try (F445): with IBKR not registered yet (Gateway still
+            # logging in after a reboot) this raises, and the task used to die
+            # with status "running", invisible to bot_watch.
+            self._register_error_listener()
+            await asyncio.to_thread(self.manager.save)
             while True:
                 # Check if paused by IBKR structural error — permanent stop
                 if self.state.status == "error" and self.state.pause_reason:
@@ -666,6 +671,10 @@ class BotRunner(RegimeMixin, ExitsMixin):
                         await asyncio.to_thread(self.manager.save)
                         continue
                 await asyncio.sleep(interval_secs)
+        except Exception as e:
+            # Keep the reason on the card and in the bot_watch alert.
+            self.state.error_message = f"Runner stopped: {e}"
+            self._log("WARN", f"Runner stopped by an unexpected error: {e}")
         finally:
             self._unregister_error_listener()
             self.state.status = "stopped"

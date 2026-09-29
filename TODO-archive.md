@@ -394,3 +394,6 @@ grouped by close month. Never reorder or rewrite previously archived sections.
 
 - [x] <a id="f444"></a> **F444** After the office move the Live Trading page was empty and every bot had stopped. The last redeploy baked http://strategylab01 into the frontend, and a shutdown race saved all bots as stopped, so auto-resume started none at the final boot. install.sh now refuses to run without SL_PUBLIC_URL, and BotManager.shutdown keeps each running status. [hardening]
 
+- [x] <a id="f445"></a> **F445** Nobody noticed that every bot stood still for two trading sessions after the office move. Send one Slack line at the market open when a bot that ticked in the last five sessions is not running. The Gateway alert loop in backend/gateway.py already sends this kind of line. [medium] [hardening]
+- [x] <a id="f446"></a> **F446** test_run_loop_survives_tick_exception in test_broker_health.py fails now and then in a full backend run, and passes alone. It sleeps 50 ms against a 10 ms heartbeat, which is too tight under load. Wait on an event or poll with a deadline instead of a fixed sleep. [easy] [testing]
+

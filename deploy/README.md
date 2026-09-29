@@ -46,22 +46,23 @@ dnf -y install git
 git clone https://github.com/jroxenhed/strategylab /opt/strategylab
 # put the two secret files in place first (see env.example)
 install -d -m 750 -o root -g strategylab /etc/strategylab   # after the user exists; install.sh creates it too
-SL_PUBLIC_URL=https://strategylab.milford.se SL_HTTP_ALLOW="172.16.17.115 192.168.216.0/24 172.16.16.175" \
+SL_PUBLIC_URL=https://strategylab.milford.se SL_HTTP_ALLOW="172.16.17.115 10.79.0.10 10.79.0.11" \
   bash /opt/strategylab/deploy/install.sh
 ```
 
 `SL_HTTP_ALLOW` is a space-separated list of IPv4 addresses/CIDRs allowed to
-reach port 80 (the edge proxy plus the WireGuard NAT address — see the trust
-model note below). If firewalld is active, install.sh refuses to run with it
-empty, unless `SL_HTTP_ALLOW_ANY=1` is set to explicitly open the port
+reach port 80 (the edge proxy plus John's WireGuard devices — see the trust
+model note below). It is the whole allowlist: install.sh removes port-80 rules
+for any source not in it. If firewalld is active, install.sh refuses to run
+with it empty, unless `SL_HTTP_ALLOW_ANY=1` is set to explicitly open the port
 network-wide instead.
 
 ### Trust model
 
 Google sign-in lives on the edge proxy, not on this VM — nginx and the
 backend do not authenticate anyone themselves. The VM's port 80 is scoped by
-firewalld rich rules (`SL_HTTP_ALLOW`) to accept only the edge proxy and the
-WireGuard NAT address. Anyone who can reach port 80 directly is, by
+firewalld rich rules (`SL_HTTP_ALLOW`) to accept only the edge proxy and
+John's own WireGuard devices (see the WireGuard note below). Anyone who can reach port 80 directly is, by
 construction, already inside the trusted network (past the edge or on the
 tunnel) — they can use the Gateway screen ("Open screen" / VNC) and the
 Gateway commands (`RESTART` / `RECONNECTACCOUNT` / `RECONNECTDATA` / `STOP`)
@@ -112,9 +113,13 @@ curl -s 127.0.0.1:8000/api/bots | grep -o '"bot_id"' | wc -l   # expect the bot 
 
 Bots are restored in `stopped` state; start them from the UI.
 
-WireGuard note: the VM sees tunnel clients as the MikroTik's NAT address
-(172.16.16.175), not 192.168.216.x — firewall rules for "reach from WireGuard"
-must allow that address.
+WireGuard note (after the 2026-09 co-lo move): John's devices on the yett
+tunnel (wg0 10.79.0.0/24) arrive with their own address, no NAT: 10.79.0.10
+(Mac) and 10.79.0.11 (phone). Do not allow 172.16.16.175: the MikroTik
+masquerades every Back To Home VPN client (25 peers, guests included) and the
+wg-rack tunnel to it. 192.168.216.0/24 never reaches the VM (masqueraded first).
+Without yett, use the public URL or `ssh -L` over wg-rack (port 22 allows
+172.16.16.0/23).
 
 ## Sizing
 

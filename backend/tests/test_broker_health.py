@@ -142,6 +142,11 @@ async def test_run_loop_survives_tick_exception(monkeypatch):
 
     monkeypatch.setattr(mon, "_tick", boom)
     mon.start()
-    await asyncio.sleep(0.05)
+    # Poll to a deadline: a fixed 50 ms sleep sometimes ended before the second
+    # tick in a loaded full-suite run (F446).
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 2.0
+    while calls["n"] < 2 and loop.time() < deadline:
+        await asyncio.sleep(0.01)
     await mon.stop()
     assert calls["n"] >= 2
