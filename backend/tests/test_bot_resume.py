@@ -100,6 +100,30 @@ async def test_shutdown_keeps_running_status_for_next_boot(tmp_path, monkeypatch
     assert started == ["live"]
 
 
+def test_overlapping_saves_keep_newest_state(tmp_path, monkeypatch):
+    """Runners save via asyncio.to_thread; an older snapshot must not land last."""
+    import threading
+    import time
+    mgr, _, f = _manager(tmp_path, monkeypatch, [_entry("a", "stopped")])
+    real_write = _bot_manager_mod.atomic_write_text
+    first = threading.Event()
+
+    def slow_first(path, content, **kw):
+        if not first.is_set():
+            first.set()
+            time.sleep(0.2)  # the older snapshot is slow to land
+        real_write(path, content, **kw)
+
+    monkeypatch.setattr(_bot_manager_mod, "atomic_write_text", slow_first)
+    older = threading.Thread(target=mgr.save)
+    older.start()
+    first.wait(1)
+    mgr.bots["a"][1].status = "running"
+    mgr.save()
+    older.join()
+    assert json.loads(f.read_text())["bots"][0]["state"]["status"] == "running"
+
+
 def test_opt_out_env(tmp_path, monkeypatch):
     mgr, started, _ = _manager(tmp_path, monkeypatch, [_entry("a", "running")])
     monkeypatch.setenv("BOTS_AUTORESUME", "0")

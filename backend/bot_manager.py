@@ -12,6 +12,7 @@ import json
 import logging
 import math
 import os
+import threading
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -249,6 +250,7 @@ class BotManager:
         self.bot_fund: float = 0.0
         self.bots: dict[str, tuple[BotConfig, BotState]] = {}  # bot_id → (config, state)
         self.tasks: dict[str, asyncio.Task] = {}               # bot_id → running Task
+        self._save_lock = threading.Lock()                     # see save()
 
     # -- Fund management ----------------------------------------------------
 
@@ -593,16 +595,20 @@ class BotManager:
     # -- Persistence ---------------------------------------------------------
 
     def save(self):
-        data = {
-            "bot_fund": self.bot_fund,
-            "bots": [
-                {"config": config.model_dump(), "state": state.to_dict()}
-                for config, state in self.bots.values()
-            ],
-        }
-        # DI-06: explicit depth=1 — bots.json is high-value config; one backup
-        # is worth the per-save shutil.copy2 at current file sizes.
-        atomic_write_text(DATA_PATH, json.dumps(data, indent=2, default=str), backup_depth=1)
+        # F444: runners call save via asyncio.to_thread, so saves overlap (11 at
+        # once on boot). Without the lock an older snapshot could land last and
+        # leave running bots saved as stopped. Snapshot + write under one lock.
+        with self._save_lock:
+            data = {
+                "bot_fund": self.bot_fund,
+                "bots": [
+                    {"config": config.model_dump(), "state": state.to_dict()}
+                    for config, state in list(self.bots.values())
+                ],
+            }
+            # DI-06: explicit depth=1 — bots.json is high-value config; one backup
+            # is worth the per-save shutil.copy2 at current file sizes.
+            atomic_write_text(DATA_PATH, json.dumps(data, indent=2, default=str), backup_depth=1)
 
     def load(self):
         if not os.path.exists(DATA_PATH):
