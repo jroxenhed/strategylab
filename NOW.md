@@ -11,4 +11,4 @@ This is the four-item this-week view of TODO.md, two lines each, pointing back i
 
 ## Waiting on John
 
-One open: Q2 in john-questions.md, port 22 from the Mac on wg-yett. The recommendation is to leave it, because ssh through bastion01 already works.
+None open. The two questions from 2026-09-29 (port-80 allowlist, port 22 from the Mac) are answered, and the decisions are in JOURNAL.md.
