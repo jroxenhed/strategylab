@@ -53,6 +53,9 @@ def compile_bot_graph(graph, bot_id: str = ""):
     Raises a GraphValidationError subclass carrying node_id:
     HTFGraphNotSupportedError for a node with a timeframe param, and whatever
     compile() raises (RegimeUnsupportedError, MissingTerminalError, ...).
+    Since W1 that includes FamilyCapExceededError (too many distinct specs of
+    one indicator family, which used to fail only at Run) and indicator params
+    outside their catalog limits, so such a graph is refused at deploy.
     """
     for node in graph.nodes.values():
         if getattr(node, 'params', {}).get('timeframe'):

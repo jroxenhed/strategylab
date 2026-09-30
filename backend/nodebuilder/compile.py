@@ -1,15 +1,18 @@
 """Graph -> (indicator_specs, per_bar_program, simulator_settings) compile step.
 
-Unit 7a — pure functions, no I/O, no side effects.
+Unit 7a — pure functions, no I/O, no side effects.  compile() raises the
+first problem; compile_with_diagnostics() lists every problem (W1 item 1.C).
 """
 from __future__ import annotations
 
+import contextvars
+import logging
 import math
 from typing import Any
 
 import pandas as pd
 
-from nodebuilder.models import Graph, GraphValidationError, topological_sort
+from nodebuilder.models import Graph, GraphValidationError, port_index, topological_sort
 from nodebuilder.nodes import (
     NODE_CATALOG,
     RSI_TYPE_OPTIONS,
@@ -17,7 +20,11 @@ from nodebuilder.nodes import (
     get_node,
     trailing_stop_impl,
 )
+from nodebuilder.diagnostics import Diagnostic, from_error
+from nodebuilder.diagnostics import make as make_diagnostic
 from nodebuilder.evaluator import (
+    _CATALOG_TO_REGISTRY,
+    _INDICATOR_FAMILY_CAP,
     CompiledProgram,
     FamilyCapExceededError,
     GraphTypeError,
@@ -27,6 +34,7 @@ from nodebuilder.evaluator import (
     PerBarOp,
     RegimeUnsupportedError,
     SimulatorSetting,
+    UnknownNodeTypeError,
     UnsupportedNodeError,
 )
 
@@ -34,12 +42,70 @@ from nodebuilder.evaluator import (
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+logger = logging.getLogger(__name__)
+
 _CATALOG_INDEX: dict[str, NodeCatalogEntry] = {e.name: e for e in NODE_CATALOG}
 
 
 def _indicator_spec_key(catalog_name: str, params: dict) -> tuple:
-    """Stable dedup key for an indicator (catalog_name, params) pair."""
+    """Stable dedup key for an indicator (catalog_name, params) pair.
+
+    _check_indicator_params has made sure every value is a plain scalar, so
+    the key is hashable.
+    """
     return (catalog_name, frozenset(params.items()))
+
+
+def _is_scalar(value: Any) -> bool:
+    return value is None or isinstance(value, (str, int, float, bool))
+
+
+def _check_indicator_params(node_path: str, entry: NodeCatalogEntry, params: dict) -> None:
+    """Check an indicator's params against its ParamSpecs before Run.
+
+    int params must be whole numbers, number params finite numbers, both
+    within min..max.  Any other param must be a plain value.  The Run-time
+    impls refuse the same values, but without naming the node or param.
+    Raises param_invalid or param_out_of_range with ``param`` set.
+    """
+    specs = {p.name: p for p in entry.params}
+    for name, value in params.items():
+        spec = specs.get(name)
+        if spec is None or spec.type not in ("int", "number"):
+            if not _is_scalar(value):
+                raise _coded(GraphValidationError(
+                    f"{entry.name} {node_path!r} param {name!r} must be a plain value, "
+                    f"got {value!r}.",
+                    node_id=node_path,
+                ), "param_invalid", param=name)
+            continue
+        number: float | None = None
+        if not isinstance(value, bool):
+            try:
+                if spec.type == "int" and isinstance(value, str):
+                    number = float(int(value.strip()))  # Run reads it with int()
+                elif isinstance(value, (str, int, float)):
+                    number = float(value)
+            except (TypeError, ValueError):
+                number = None
+        if number is None or not math.isfinite(number) or (
+            spec.type == "int" and number != int(number)
+        ):
+            kind = "a whole number" if spec.type == "int" else "a number"
+            raise _coded(GraphValidationError(
+                f"{entry.name} {node_path!r} {name} needs {kind}, got {value!r}.",
+                node_id=node_path,
+            ), "param_invalid", param=name)
+        lo, hi = spec.min, spec.max
+        if (lo is not None and number < lo) or (hi is not None and number > hi):
+            bounds = (
+                f"between {lo:g} and {hi:g}" if lo is not None and hi is not None
+                else f">= {lo:g}" if lo is not None else f"<= {hi:g}"
+            )
+            raise _coded(GraphValidationError(
+                f"{entry.name} {node_path!r} {name} must be {bounds}, got {value!r}.",
+                node_id=node_path,
+            ), "param_out_of_range", param=name)
 
 
 def _make_comparison_fn(condition: str, left_attr: str, right_attr: str | None, threshold: float | None):
@@ -154,9 +220,66 @@ _SETTINGS_TYPES = frozenset({
 _NO_OUTPUT_TYPES = _SETTINGS_TYPES | {"entry", "exit", "size", "stop"}
 
 
+def _coded(exc: GraphValidationError, code: str, *, param: str | None = None,
+           port: str | None = None) -> GraphValidationError:
+    """Tag an error with its diagnostic code (plan 4.2) and the param or
+    input port it is about, so /validate can point at the exact field."""
+    exc.code = code
+    exc.param = param
+    exc.port = port
+    return exc
+
+
+def _port_index(port: str | None) -> int | None:
+    """``in3`` -> 3.  None for a missing or non-numbered port."""
+    return port_index(port)
+
+
+def _wires_into(graph: Graph, node_path: str) -> list:
+    """The wires into *node_path*, ordered by input port (in0, in1, ...).
+
+    The port, not the wire's place in the list, decides which input is the
+    left one of a comparison.  Redrawing the left wire appends it to the end
+    of the list, and that must not flip "RSI above SMA".  Wires without a
+    numbered port come last, in list order.
+    """
+    indexed = _indexed_wires_into(graph, node_path)
+
+    def _key(item: tuple) -> tuple:
+        i, w = item
+        k = _port_index(w.to_port)
+        return (k is None, k if k is not None else 0, i)
+
+    return [w for _i, w in sorted(indexed, key=_key)]
+
+
 def _wire_count(graph: Graph, node_path: str) -> int:
     """How many wires go into *node_path* (bypassed sources included)."""
-    return sum(1 for w in graph.wires if w.to_path == node_path)
+    return len(_indexed_wires_into(graph, node_path))
+
+
+# While _compile runs, the wires into each node are looked up in an index
+# built once for that graph, instead of scanning every wire for every node
+# (quadratic on a big graph).  A ContextVar keeps it per thread, and it is
+# only used for the very graph object it was built from.
+_INBOUND_INDEX: contextvars.ContextVar = contextvars.ContextVar(
+    "nodebuilder_inbound_index", default=None
+)
+
+
+def _indexed_wires_into(graph: Graph, node_path: str) -> list[tuple[int, Any]]:
+    """(list index, wire) for each wire into *node_path*, in list order."""
+    current = _INBOUND_INDEX.get()
+    if current is not None and current[0] is graph:
+        return current[1].get(node_path, [])
+    return [(i, w) for i, w in enumerate(graph.wires) if w.to_path == node_path]
+
+
+def _build_inbound_index(graph: Graph) -> dict[str, list[tuple[int, Any]]]:
+    index: dict[str, list[tuple[int, Any]]] = {}
+    for i, w in enumerate(graph.wires):
+        index.setdefault(w.to_path, []).append((i, w))
+    return index
 
 
 def _inbound_attrs(
@@ -165,7 +288,7 @@ def _inbound_attrs(
     attr_written_by: dict[str, str],
     attr_suffix_by_node: dict[str, str] | None = None,
 ) -> list[str]:
-    """Return the @-attr names flowing INTO *node_path*."""
+    """Return the @-attr names flowing INTO *node_path*, in input-port order."""
     return [attr for _src, attr in _inbound_pairs(
         graph, node_path, attr_written_by, attr_suffix_by_node
     )]
@@ -178,6 +301,8 @@ def _inbound_pairs(
     attr_suffix_by_node: dict[str, str] | None = None,
 ) -> list[tuple[str, str]]:
     """Return (source node, @-attr) for each wire flowing INTO *node_path*.
+
+    Inputs come in port order (in0 first), see _wires_into.
 
     Wires whose ``wire.attr`` selects a specific sub-output of a multi-output
     indicator (e.g. ``@macd_signal``, ``@bb_upper``) honor that selection so
@@ -201,38 +326,54 @@ def _inbound_pairs(
     the exception: indicators read its bars directly, so bypassing it has no
     meaning and its wires always resolve.
     """
+    return [
+        (wire.from_path, attr)
+        for wire, attr in _resolve_inbound(graph, node_path, attr_written_by, attr_suffix_by_node)
+        if attr is not None
+    ]
+
+
+def _resolve_inbound(
+    graph: Graph,
+    node_path: str,
+    attr_written_by: dict[str, str],
+    attr_suffix_by_node: dict[str, str] | None = None,
+) -> list[tuple[Any, str | None]]:
+    """(wire, @-attr or None) for each wire into *node_path*, in port order.
+
+    The attr is None when the wire gives nothing (a bypassed source, or a
+    source with no recorded output).  See _inbound_pairs for the rules.
+    """
     suffixes = attr_suffix_by_node or {}
-    result: list[tuple[str, str]] = []
-    for wire in graph.wires:
-        if wire.to_path == node_path:
-            src = wire.from_path
-            src_node = graph.nodes.get(src)
-            if src_node is None:
-                continue
-            if src_node.type in _NO_OUTPUT_TYPES:
-                raise GraphTypeError(
-                    f"Wire {wire.id!r} comes out of {src!r} (type={src_node.type!r}), "
-                    f"which has no output.  Delete the wire.",
-                    node_id=src,
-                )
-            if src_node.bypass and src_node.type != "ticker":
-                continue
-            if wire.attr in _MULTI_OUTPUT_SUBATTRS:
-                if src_node.type != _SUBATTR_PRODUCER[wire.attr]:
-                    raise GraphTypeError(
-                        f"Wire {wire.id!r} reads {wire.attr!r} from {src!r}, but a "
-                        f"{src_node.type!r} node does not produce {wire.attr!r}.",
-                        node_id=node_path,
-                    )
-                result.append((src, wire.attr + suffixes.get(src, "")))
-            elif src_node.type == "ticker" and wire.attr in _TICKER_ATTRS:
-                # A Ticker writes several fields; honour the one the wire
-                # names (e.g. @volume) instead of always reading @close.
-                result.append((src, wire.attr))
-            else:
-                written = attr_written_by.get(src)
-                if written:
-                    result.append((src, written))
+    result: list[tuple[Any, str | None]] = []
+    for wire in _wires_into(graph, node_path):
+        src = wire.from_path
+        src_node = graph.nodes.get(src)
+        if src_node is None:
+            continue
+        if src_node.type in _NO_OUTPUT_TYPES:
+            raise _coded(GraphTypeError(
+                f"Wire {wire.id!r} comes out of {src!r} (type={src_node.type!r}), "
+                f"which has no output.  Delete the wire.",
+                node_id=src,
+            ), "port_unknown")
+        if src_node.bypass and src_node.type != "ticker":
+            result.append((wire, None))
+            continue
+        if wire.attr in _MULTI_OUTPUT_SUBATTRS:
+            if src_node.type != _SUBATTR_PRODUCER[wire.attr]:
+                raise _coded(GraphTypeError(
+                    f"Wire {wire.id!r} reads {wire.attr!r} from {src!r}, but a "
+                    f"{src_node.type!r} node does not produce {wire.attr!r}.",
+                    node_id=node_path,
+                ), "attr_type", port=wire.to_port)
+            result.append((wire, wire.attr + suffixes.get(src, "")))
+        elif src_node.type == "ticker" and wire.attr in _TICKER_ATTRS:
+            # A Ticker writes several fields; honour the one the wire
+            # names (e.g. @volume) instead of always reading @close.
+            result.append((wire, wire.attr))
+        else:
+            result.append((wire, attr_written_by.get(src) or None))
     return result
 
 
@@ -251,17 +392,19 @@ def _require_bool_input(graph: Graph, label: str, terminal: str, attr: str) -> N
     """Raise GraphTypeError unless *attr* is a boolean signal (@bool_N)."""
     if attr.startswith("@bool_"):
         return
-    src = next((w.from_path for w in graph.wires if w.to_path == terminal), None)
+    first = next(iter(_wires_into(graph, terminal)), None)
+    src = first.from_path if first is not None else None
     src_node = graph.nodes.get(src) if src else None
     src_type = src_node.type if src_node else None
-    raise GraphTypeError(
+    raise _coded(GraphTypeError(
         f"{label} terminal expects a boolean input, but the wired node "
         f"{src!r} (type={src_type!r}) gives {attr!r}, not '@bool'.",
         node_id=src or terminal,
-    )
+    ), "attr_type")
 
 
-def _number(node_path: str, label: str, value: Any, *, minimum: float, allow_min: bool) -> float:
+def _number(node_path: str, label: str, value: Any, *, minimum: float, allow_min: bool,
+            param: str | None = None) -> float:
     """Read a Settings param as a finite number no lower than *minimum*.
 
     Raises GraphValidationError naming the node for a blank, non-numeric,
@@ -273,17 +416,17 @@ def _number(node_path: str, label: str, value: Any, *, minimum: float, allow_min
             raise ValueError
         number = float(value)
     except (TypeError, ValueError):
-        raise GraphValidationError(
+        raise _coded(GraphValidationError(
             f"{label} on {node_path!r} needs a number, got {value!r}.",
             node_id=node_path,
-        ) from None
+        ), "param_invalid", param=param) from None
     too_small = number < minimum if allow_min else number <= minimum
     if not math.isfinite(number) or too_small:
         bound = f">= {minimum:g}" if allow_min else f"> {minimum:g}"
-        raise GraphValidationError(
+        raise _coded(GraphValidationError(
             f"{label} on {node_path!r} must be {bound}, got {value!r}.",
             node_id=node_path,
-        )
+        ), "param_out_of_range" if math.isfinite(number) else "param_invalid", param=param)
     return number
 
 
@@ -296,11 +439,37 @@ def _optional_threshold(node_path: str, value: Any) -> float | None:
     except (TypeError, ValueError):
         number = math.nan
     if not math.isfinite(number):
-        raise GraphValidationError(
+        raise _coded(GraphValidationError(
             f"Threshold on {node_path!r} needs a number, got {value!r}.",
             node_id=node_path,
-        )
+        ), "param_invalid", param="threshold")
     return number
+
+
+def _is_rule_type(node_type: str) -> bool:
+    """True for a rule indicator or condition name (stochastic, rising...).
+
+    auto_render turns rules into nodes of these types.  They are known
+    ideas the graph backtest cannot run yet (unsupported_node), not typos
+    (unknown_node_type).  Imported here so compile only loads the rule
+    engine when it meets such a node.
+    """
+    from typing import get_args
+
+    from signal_engine import RuleCondition, RuleIndicator
+
+    return node_type in get_args(RuleIndicator) or node_type in get_args(RuleCondition)
+
+
+# Node types that read their inputs.  When one of their inputs comes from a
+# node that already has an error, they are skipped without a diagnostic of
+# their own, so one mistake does not show up as a chain of errors below it.
+# Ticker and Settings nodes are always checked: any wire into them is wrong.
+_READS_INPUTS = frozenset({
+    "rsi", "macd", "sma", "ema", "bollinger", "atr",
+    "above", "below", "crosses_above", "crosses_below",
+    "and", "or", "not", "entry", "exit", "size", "stop",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -310,15 +479,64 @@ def _optional_threshold(node_path: str, value: Any) -> float | None:
 def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "compile" intentionally)
     """Compile a Graph into a CompiledProgram.
 
+    Raises the first error compile finds, in this order: a /regime/ node
+    first, then a second wire on one input port, then nodes in topological
+    order, then the Entry and Exit checks, then the indicator family cap.
+    Every raised error carries ``.code`` (plan 4.2).  Use
+    compile_with_diagnostics to get every problem at once.
+
+    Since W1, compile also refuses some graphs it used to accept and that
+    only failed at Run: a graph over the indicator family cap
+    (FamilyCapExceededError, which Run raised before), and an indicator param
+    outside its catalog limits (param_invalid / param_out_of_range).  So
+    add_bot and the bot runner refuse those graphs up front too.
+    """
+    program, found = _compile(graph)
+    for _diag, exc in found:
+        if exc is not None:
+            raise exc
+    assert program is not None
+    return program
+
+
+def compile_with_diagnostics(graph: Graph):
+    """Compile and collect every problem instead of stopping at the first.
+
+    Returns ``(program or None, diagnostics)``.  The program is None when any
+    diagnostic is an error.  Warnings (exit_unconnected, size_unit_suspect)
+    do not stop the compile.  Pure: no data is fetched.
+    """
+    program, found = _compile(graph)
+    return program, [diag for diag, _exc in found]
+
+
+def _compile(graph: Graph):
+    """_compile_walk with the inbound-wire index set for this graph."""
+    token = _INBOUND_INDEX.set((graph, _build_inbound_index(graph)))
+    try:
+        return _compile_walk(graph)
+    finally:
+        _INBOUND_INDEX.reset(token)
+
+
+def _compile_walk(graph: Graph):
+    """The compile walk.  Returns (program or None, [(Diagnostic, error or None)]).
+
     Steps:
     1. Detect /regime/ nodes → RegimeUnsupportedError
-    2. Topological sort (already validated at Graph construction)
+    2. Topological sort (the caller makes sure there is no cycle)
     3. Walk nodes in topo order, emitting IndicatorSpecs, PerBarOps, SimulatorSettings.
        A node compile cannot run raises UnsupportedNodeError (node types that
        are not compile-active, per-direction settings, a wired size/stop
        terminal, a comparison carrying condition_extra).
     4. Require Entry terminal → MissingTerminalError if absent
     5. Verify Entry's input attr is @bool → TypeError if not
+    6. Indicator family cap → FamilyCapExceededError
+
+    An error on one node is recorded and the walk goes on.  Nodes that read
+    from a node with an error are skipped (see _READS_INPUTS).  An error has
+    its exception kept next to its diagnostic, so compile() can raise the
+    first one exactly as before.
 
     Bypassed nodes: node.bypass=True causes the PerBarOp to be skipped, and
     wires out of a bypassed node are left out of the reader's inputs.  A
@@ -327,16 +545,42 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
     does not apply.  This is a documented trade-off: bypass is a "soft
     disable" with no explicit pass-through value.
     """
+    found: list[tuple[Diagnostic, GraphValidationError | None]] = []
+    broken: set[str] = set()
+
+    def _record(exc: GraphValidationError) -> None:
+        found.append((from_error(exc), exc))
+
+    def _warn(code: str, message: str, node_id: str | None, param: str | None = None) -> None:
+        found.append((make_diagnostic(code, message, node_id=node_id, param=param), None))
+
     # 1. Regime check
     for node_path in graph.nodes:
         if node_path.startswith("/regime/"):
-            raise RegimeUnsupportedError(
+            _record(RegimeUnsupportedError(
                 f"Graph contains a /regime/ node ({node_path!r}). "
                 "Regime is not supported in the graph evaluator at T2.",
                 node_id=node_path,
-            )
+            ))
+            broken.add(node_path)
 
-    # 2. Topo sort (Graph.__init__ already ran _assert_acyclic, so no cycles)
+    # 1b. One wire per input port.  The Graph model refuses a second wire on
+    # a port, so this only fires for a graph built without validation
+    # (/validate's fallback).  It keeps compile, storage, Run and bot deploy
+    # agreeing with /validate on which graphs are valid.
+    seen_ports: set[tuple[str, str]] = set()
+    for wire in graph.wires:
+        if not wire.to_port:
+            continue
+        key = (wire.to_path, wire.to_port)
+        if key in seen_ports:
+            _record(_coded(GraphValidationError(
+                f"Input {wire.to_port} of {wire.to_path!r} has more than one wire.",
+                node_id=wire.to_path,
+            ), "port_duplicate", port=wire.to_port))
+        seen_ports.add(key)
+
+    # 2. Topo sort (the Graph model or /validate made sure there is no cycle)
     ordered_nodes = topological_sort(graph)
 
     indicator_specs: list[IndicatorSpec] = []
@@ -361,6 +605,10 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
     entry_node_id: str | None = None
     entry_wired = False
     exit_node_id: str | None = None
+    # True when a terminal's input has an error of its own; the terminal
+    # checks then stay quiet (that error already says what is wrong).
+    entry_blocked = False
+    exit_blocked = False
     # The terminal whose wire supplied entry_attr / exit_attr.
     entry_terminal: str = ""
     exit_terminal: str = ""
@@ -372,7 +620,11 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
         _op_counter[base] = _op_counter.get(base, 0) + 1
         return f"@{base}_{_op_counter[base]}"
 
-    for node in ordered_nodes:
+    def _compile_node(node) -> None:
+        """Compile one node.  Raises GraphValidationError on a problem."""
+        nonlocal entry_attr, exit_attr, entry_node_id, entry_wired, exit_node_id
+        nonlocal entry_terminal, exit_terminal
+
         node_type = node.type
         node_path = node.id
 
@@ -383,38 +635,36 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
             # A Ticker is a source: a wire into it carries nothing.
             inbound_wire = next((w for w in graph.wires if w.to_path == node_path), None)
             if inbound_wire is not None:
-                raise GraphTypeError(
+                raise _coded(GraphTypeError(
                     f"Ticker {node_path!r} takes no input, but {inbound_wire.from_path!r} "
                     f"is wired into it.  Delete the wire.",
                     node_id=node_path,
-                )
+                ), "port_unknown", port=inbound_wire.to_port)
             # Record what attrs this node writes so downstream wires resolve
             # correctly.  We mark the primary "close" output as the wire attr.
             # In practice the caller seeds these, but we record @close so that
             # a wire from ticker → rsi resolves to "@close".
             attr_written_by[node_path] = "@close"
-            continue
+            return
 
         # --- Indicator nodes ---
         if node_type in ("rsi", "macd", "sma", "ema", "bollinger", "atr"):
             catalog_entry = _CATALOG_INDEX.get(node_type)
             if catalog_entry is None:
-                continue
+                return
 
             # Indicators are computed from the Ticker's bars.  A wire from any
             # other node (say RSI into SMA) would be ignored, so the SMA would
             # quietly run on the close.  Refuse it.
-            for w in graph.wires:
-                if w.to_path != node_path:
-                    continue
+            for w in _wires_into(graph, node_path):
                 src_node = graph.nodes.get(w.from_path)
                 if src_node is not None and src_node.type != "ticker":
-                    raise GraphTypeError(
+                    raise _coded(GraphTypeError(
                         f"{node_type} node {node_path!r} reads the Ticker's bars, but "
                         f"{w.from_path!r} (type={src_node.type!r}) is wired into it.  "
                         f"Indicators of indicators are not supported yet.",
                         node_id=node_path,
-                    )
+                    ), "attr_type", port=w.to_port)
 
             params = dict(node.params) if node.params else {}
             # Fill in defaults for any missing params
@@ -425,11 +675,16 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
             # The RSI indicator runs any unknown type as a plain rolling mean,
             # so a typo would quietly change the strategy.  Refuse it.
             if node_type == "rsi" and params.get("type") not in RSI_TYPE_OPTIONS:
-                raise GraphValidationError(
+                raise _coded(GraphValidationError(
                     f"RSI {node_path!r} has type {params.get('type')!r}; "
                     f"use one of {list(RSI_TYPE_OPTIONS)}.",
                     node_id=node_path,
-                )
+                ), "param_invalid", param="type")
+
+            # Period and friends: a bad value would pass here and fail at
+            # Run with no node named.  Check them now so the editor can show
+            # the problem on the param before Run.
+            _check_indicator_params(node_path, catalog_entry, params)
 
             spec_key = _indicator_spec_key(node_type, params)
             if spec_key not in indicator_key_to_attr:
@@ -461,19 +716,21 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
             if node.bypass:
                 attr_written_by.pop(node_path, None)
 
-            continue
+            return
 
         # --- Comparison nodes ---
         if node_type in ("above", "below", "crosses_above", "crosses_below"):
             if node.bypass:
-                continue
+                return
 
             # Collect the two inbound attrs through the shared wire resolver:
             # multi-output sub-attrs (e.g. @macd_signal, @bb_upper) and Ticker
             # fields (e.g. @volume) are honored as port selectors; other labels
             # fall back to attr_written_by so per-bar op outputs (numbered
-            # @bool_N keys) resolve correctly.
-            inbound = _inbound_attrs(graph, node_path, attr_written_by, attr_suffix_by_node)
+            # @bool_N keys) resolve correctly.  in0 is the left side, in1 the
+            # right side, whatever order the wires were drawn in.
+            resolved = _resolve_inbound(graph, node_path, attr_written_by, attr_suffix_by_node)
+            inbound = [attr for _w, attr in resolved if attr is not None]
 
             params = dict(node.params) if node.params else {}
 
@@ -483,7 +740,10 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
             # compare the wrong series.  Refuse instead.
             extra = params.get("condition_extra")
             if extra is not None:
-                raise UnsupportedNodeError(node_path, f"{node_type} ({extra})")
+                raise _coded(
+                    UnsupportedNodeError(node_path, f"{node_type} ({extra})"),
+                    "unsupported_node", param="condition_extra",
+                )
 
             # A comparison reads two series, or one series and a threshold.
             # Too few inputs used to drop the node quietly (and the AND above
@@ -492,17 +752,37 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
             threshold = _optional_threshold(node_path, params.get("threshold"))
             n_wires = _wire_count(graph, node_path)
             if n_wires > 2:
-                raise GraphValidationError(
+                raise _coded(GraphValidationError(
                     f"{node_type} node {node_path!r} has {n_wires} inputs; it takes "
                     f"two, or one and a threshold.",
                     node_id=node_path,
-                )
-            if n_wires == 0 or (n_wires == 1 and threshold is None):
-                raise GraphValidationError(
+                ), "port_unknown", port=_wires_into(graph, node_path)[2].to_port)
+            # The port decides the side: in0 is a (left), in1 is b (right).
+            # A wire on any other port has no side to go to.
+            ports = set()
+            for w in _wires_into(graph, node_path):
+                k = _port_index(w.to_port)
+                if k not in (0, 1):
+                    raise _coded(GraphValidationError(
+                        f"{node_type} node {node_path!r} has no input {w.to_port!r}; "
+                        f"it takes in0 (a) and in1 (b).",
+                        node_id=node_path,
+                    ), "port_unknown", port=w.to_port)
+                ports.add(k)
+            if n_wires == 0 or (0 in ports and 1 not in ports and threshold is None):
+                raise _coded(GraphValidationError(
                     f"{node_type} node {node_path!r} needs two inputs, or one input "
                     f"and a threshold.",
                     node_id=node_path,
-                )
+                ), "missing_input", port="in0" if n_wires == 0 else "in1")
+            if 0 not in ports:
+                # Only b is wired.  Reading it as a would compare the wrong
+                # side, so ask for a.
+                raise _coded(GraphValidationError(
+                    f"{node_type} node {node_path!r} has nothing on in0 (a), the "
+                    f"left side.  Wire a, or move the wire from in1 to in0.",
+                    node_id=node_path,
+                ), "missing_input", port="in0")
 
             # T2 constraint: crossover comparisons need history (iloc[i-1]).
             # Indicator/raw attrs (@close, @rsi, @macd_line ...) are full-length
@@ -512,27 +792,29 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
             if node_type in ("crosses_above", "crosses_below"):
                 for a in inbound:
                     if a.startswith("@bool_"):
-                        raise GraphTypeError(
+                        raise _coded(GraphTypeError(
                             f"Crossover node {node_path!r} reads from a derived "
                             f"signal ({a!r}). Crossovers require indicator or raw "
                             f"OHLCV inputs at T2; comparing per-bar derived booleans "
                             f"is unsupported (no history). Use AND/OR over plain "
                             f"comparisons, or land Signal Processing nodes in T3.",
                             node_id=node_path,
-                        )
+                        ), "attr_type")
 
-            if len(inbound) >= 2:
-                left_attr, right_attr = inbound[0], inbound[1]
-                fn = _make_comparison_fn(node_type, left_attr, right_attr, None)
-                reads = (left_attr, right_attr)
-            elif len(inbound) == 1 and threshold is not None:
-                left_attr = inbound[0]
-                fn = _make_comparison_fn(node_type, left_attr, None, threshold)
-                reads = (left_attr,)
+            a_attr = next((a for w, a in resolved if _port_index(w.to_port) == 0), None)
+            b_attr = next((a for w, a in resolved if _port_index(w.to_port) == 1), None)
+            if a_attr is not None and b_attr is not None:
+                fn = _make_comparison_fn(node_type, a_attr, b_attr, None)
+                reads = (a_attr, b_attr)
+            elif a_attr is not None and threshold is not None:
+                # b is unwired or bypassed: compare a to the threshold.
+                fn = _make_comparison_fn(node_type, a_attr, None, threshold)
+                reads = (a_attr,)
             else:
                 # The wires are there, but a bypassed input gives nothing, so
-                # this comparison is off too (bypass flows downstream).
-                continue
+                # this comparison is off too (bypass flows downstream).  A
+                # bypassed a is never replaced by b.
+                return
 
             write_attr = _next_attr("bool")
             attr_written_by[node_path] = write_attr
@@ -544,24 +826,24 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
                     fn=fn,
                 )
             )
-            continue
+            return
 
         # --- Logic nodes ---
         if node_type in ("and", "or", "not"):
             if node.bypass:
-                continue
+                return
 
             n_wires = _wire_count(graph, node_path)
             if n_wires == 0:
-                raise GraphValidationError(
+                raise _coded(GraphValidationError(
                     f"{node_type.upper()} node {node_path!r} has no inputs.",
                     node_id=node_path,
-                )
+                ), "missing_input", port="in0")
             if node_type == "not" and n_wires > 1:
-                raise GraphValidationError(
+                raise _coded(GraphValidationError(
                     f"NOT node {node_path!r} has {n_wires} inputs; it takes one.",
                     node_id=node_path,
-                )
+                ), "port_unknown", port=_wires_into(graph, node_path)[1].to_port)
 
             pairs = _inbound_pairs(graph, node_path, attr_written_by, attr_suffix_by_node)
             # AND/OR/NOT combine signals.  An indicator or price fed in here
@@ -570,17 +852,17 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
             for src, attr in pairs:
                 if not attr.startswith("@bool_"):
                     src_node = graph.nodes.get(src)
-                    raise GraphTypeError(
+                    raise _coded(GraphTypeError(
                         f"{node_type.upper()} node {node_path!r} expects boolean "
                         f"inputs, but {src!r} (type={src_node.type if src_node else None!r}) "
                         f"gives {attr!r}, not '@bool'.",
                         node_id=src,
-                    )
+                    ), "attr_type")
             inbound = [attr for _src, attr in pairs]
 
             if not inbound:
                 # Every input is bypassed, so this node is off too.
-                continue
+                return
 
             if node_type == "not":
                 fn = _make_not_fn(inbound[0])
@@ -602,7 +884,7 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
                     fn=fn,
                 )
             )
-            continue
+            return
 
         # --- Settings nodes ---
         if node_type in _SETTINGS_TYPES:
@@ -612,56 +894,73 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
             # or size, but the setting always applies.  Refuse it.
             inbound_wire = next((w for w in graph.wires if w.to_path == node_path), None)
             if inbound_wire is not None:
-                raise GraphTypeError(
+                raise _coded(GraphTypeError(
                     f"{node_type} node {node_path!r} takes no input, but "
                     f"{inbound_wire.from_path!r} is wired into it.  A setting always "
                     f"applies; delete the wire.",
                     node_id=node_path,
-                )
+                ), "port_unknown", port=inbound_wire.to_port)
 
             # A bypassed Settings node is off: the bot config's value stays.
             if node.bypass:
-                continue
+                return
 
             # A per-direction stop or trailing stop (from a b23 long/short
             # strategy) cannot be expressed yet: the simulator settings have
             # one value for both sides.  Applying it to both would trade
             # differently from the strategy, so refuse it.
             if "direction" in params:
-                raise UnsupportedNodeError(
-                    node_path, f"{node_type} (direction={params['direction']})"
+                raise _coded(
+                    UnsupportedNodeError(node_path, f"{node_type} (direction={params['direction']})"),
+                    "unsupported_node", param="direction",
                 )
 
             if node_type == "trailing_stop":
                 try:
                     result = trailing_stop_impl(params)
                 except ValueError as exc:
-                    raise GraphValidationError(
+                    raise _coded(GraphValidationError(
                         f"Trailing stop {node_path!r} has invalid params: {exc}",
                         node_id=node_path,
-                    ) from exc
+                    ), "param_invalid") from exc
                 ts_cfg = result.value
-                _number(node_path, "Trailing stop value", ts_cfg.value, minimum=0.0, allow_min=False)
-                _number(node_path, "Trailing stop activate_pct", ts_cfg.activate_pct, minimum=0.0, allow_min=True)
+                _number(node_path, "Trailing stop value", ts_cfg.value, minimum=0.0,
+                        allow_min=False, param="value")
+                _number(node_path, "Trailing stop activate_pct", ts_cfg.activate_pct, minimum=0.0,
+                        allow_min=True, param="activate_pct")
                 simulator_settings.append(SimulatorSetting(key="trailing_stop", value=ts_cfg))
             # Values are checked here, with the node named, so a bad one is a
             # 400 on Run or on deploy rather than a failure on every bot tick.
             # A stop of 0 means "no stop" on both backtest and live.
             elif node_type == "position_size":
-                size = _number(node_path, "Size", params.get("size", 1.0), minimum=0.0, allow_min=False)
+                size = _number(node_path, "Size", params.get("size", 1.0), minimum=0.0,
+                               allow_min=False, param="size")
+                if size > 1.0:
+                    # Size is a fraction of capital (1 = 100%).  A value like
+                    # 50 was most likely meant as 50%.
+                    _warn(
+                        "size_unit_suspect",
+                        f"Size on {node_path!r} is {size:g}, but size is a fraction "
+                        f"of capital (1 = 100%, 0.5 = 50%).",
+                        node_path, param="size",
+                    )
                 simulator_settings.append(SimulatorSetting(key="position_size", value=size))
             elif node_type == "stop_loss":
-                pct = _number(node_path, "Stop loss pct", params.get("pct", 5.0), minimum=0.0, allow_min=True)
+                pct = _number(node_path, "Stop loss pct", params.get("pct", 5.0), minimum=0.0,
+                              allow_min=True, param="pct")
                 simulator_settings.append(SimulatorSetting(key="stop_loss", value=pct))
             elif node_type == "slippage":
-                bps = _number(node_path, "Slippage bps", params.get("bps", 2.0), minimum=0.0, allow_min=True)
+                bps = _number(node_path, "Slippage bps", params.get("bps", 2.0), minimum=0.0,
+                              allow_min=True, param="bps")
                 simulator_settings.append(SimulatorSetting(key="slippage_bps", value=bps))
             elif node_type == "commission":
-                rate = _number(node_path, "Per-share rate", params.get("per_share_rate", 0.0), minimum=0.0, allow_min=True)
-                min_order = _number(node_path, "Min per order", params.get("min_per_order", 0.0), minimum=0.0, allow_min=True)
+                rate = _number(node_path, "Per-share rate", params.get("per_share_rate", 0.0),
+                               minimum=0.0, allow_min=True, param="per_share_rate")
+                min_order = _number(node_path, "Min per order", params.get("min_per_order", 0.0),
+                                    minimum=0.0, allow_min=True, param="min_per_order")
                 simulator_settings.append(SimulatorSetting(key="per_share_rate", value=rate))
                 simulator_settings.append(SimulatorSetting(key="min_per_order", value=min_order))
-            continue
+            return
 
         # --- Output terminals ---
         if node_type in ("entry", "exit"):
@@ -669,37 +968,39 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
             # One Entry and one Exit, each with one input.  A second terminal
             # or a second wire used to be dropped without a word.
             if node_type == "entry" and entry_node_id is not None:
-                raise GraphValidationError(
+                raise _coded(GraphValidationError(
                     f"The graph has more than one Entry ({entry_node_id!r} and "
                     f"{node_path!r}).  Join the signals with OR into one Entry.",
                     node_id=node_path,
-                )
+                ), "duplicate_terminal")
             if node_type == "exit" and exit_node_id is not None:
-                raise GraphValidationError(
+                raise _coded(GraphValidationError(
                     f"The graph has more than one Exit ({exit_node_id!r} and "
                     f"{node_path!r}).  Join the signals with OR into one Exit.",
                     node_id=node_path,
-                )
+                ), "duplicate_terminal")
+            if node_type == "entry":
+                entry_node_id = node_path
+            else:
+                exit_node_id = node_path
             n_wires = _wire_count(graph, node_path)
             if n_wires > 1:
-                raise GraphValidationError(
+                raise _coded(GraphValidationError(
                     f"{label} {node_path!r} has {n_wires} inputs; it takes one.  "
                     f"Join the signals with AND or OR first.",
                     node_id=node_path,
-                )
+                ), "port_unknown", port=_wires_into(graph, node_path)[1].to_port)
             src_attr = _primary_inbound_attr(graph, node_path, attr_written_by, attr_suffix_by_node)
             if node_type == "entry":
-                entry_node_id = node_path
                 entry_wired = n_wires > 0
                 if src_attr is not None:
                     entry_attr = src_attr
                     entry_terminal = node_path
             else:
-                exit_node_id = node_path
                 if src_attr is not None:
                     exit_attr = src_attr
                     exit_terminal = node_path
-            continue
+            return
 
         # size / stop terminals are not run yet (compile_active=False).  An
         # unwired one carries nothing, so it cannot change the result and is
@@ -707,37 +1008,115 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
         # doing nothing, so refuse it.
         if node_type in ("size", "stop"):
             if any(w.to_path == node_path for w in graph.wires):
-                raise UnsupportedNodeError(node_path, f"{node_type} (wired)")
-            continue
+                raise _coded(UnsupportedNodeError(node_path, f"{node_type} (wired)"), "unsupported_node")
+            return
 
         # Any other node type is one compile cannot run (slope conditions,
         # stochastic, adx, a type missing from the catalog...).  Skipping it
         # would silently drop part of the strategy, for example an Exit that
         # never fires.  Refuse instead, even when the node is bypassed.  The
         # read-only viewer still shows these nodes.
+        if node_type not in _CATALOG_INDEX and not _is_rule_type(node_type):
+            raise UnknownNodeTypeError(node_path, node_type)
         raise UnsupportedNodeError(node_path, node_type)
 
+    for node in ordered_nodes:
+        if node.id in broken:
+            continue
+        if node.type in _READS_INPUTS and any(
+            w.from_path in broken for _i, w in _indexed_wires_into(graph, node.id)
+        ):
+            # An input already has an error.  Remember the terminal so the
+            # checks below do not add a second, misleading error.
+            broken.add(node.id)
+            if node.type == "entry":
+                entry_node_id = entry_node_id or node.id
+                entry_blocked = True
+            elif node.type == "exit":
+                exit_node_id = exit_node_id or node.id
+                exit_blocked = True
+            continue
+        try:
+            try:
+                _compile_node(node)
+            except GraphValidationError:
+                raise  # GraphTypeError is a TypeError too; keep its own code
+            except (TypeError, ValueError) as raw:
+                # A value compile could not read (a list where a number goes,
+                # say).  Name the node instead of failing the whole request
+                # with a 500.
+                logger.warning("compile: node %r raised %r", node.id, raw, exc_info=True)
+                raise _coded(GraphValidationError(
+                    f"{node.type} node {node.id!r} has a param compile cannot read: {raw}",
+                    node_id=node.id,
+                ), "param_invalid") from raw
+        except GraphValidationError as exc:
+            _record(exc)
+            broken.add(node.id)
+            if node.type == "entry":
+                entry_blocked = True
+            elif node.type == "exit":
+                exit_blocked = True
+
     # 3. Require Entry terminal
-    if entry_attr is None:
+    if entry_attr is None and not entry_blocked:
         if entry_node_id is not None and entry_wired:
-            raise MissingTerminalError(
+            _record(_coded(MissingTerminalError(
                 f"Entry terminal {entry_node_id!r} gets no signal: its input is bypassed.",
                 node_id=entry_node_id,
-            )
-        if entry_node_id is not None:
-            raise MissingTerminalError(
+            ), "missing_input", port="in0"))
+        elif entry_node_id is not None:
+            _record(_coded(MissingTerminalError(
                 f"Entry terminal {entry_node_id!r} is not wired to a signal.",
                 node_id=entry_node_id,
-            )
-        raise MissingTerminalError("Graph has no Entry terminal (no 'entry' node found).")
+            ), "missing_input", port="in0"))
+        else:
+            _record(MissingTerminalError("Graph has no Entry terminal (no 'entry' node found)."))
 
     # 4. Verify the terminals get a boolean.  Every comparison and logic op
     # writes an @bool_N attr and nothing else does, so any other attr (an
     # indicator, a Ticker field, a MACD sub-output) is not a signal.  Without
     # this, Exit fed by RSI would read "RSI is non-zero" as always true.
-    _require_bool_input(graph, "Entry", entry_terminal, entry_attr)
+    if entry_attr is not None:
+        try:
+            _require_bool_input(graph, "Entry", entry_terminal, entry_attr)
+        except GraphValidationError as exc:
+            _record(exc)
     if exit_attr is not None:
-        _require_bool_input(graph, "Exit", exit_terminal, exit_attr)
+        try:
+            _require_bool_input(graph, "Exit", exit_terminal, exit_attr)
+        except GraphValidationError as exc:
+            _record(exc)
+    elif not exit_blocked:
+        # Not an error: stops, trailing stops or the end of the data close
+        # the trade.  But a strategy with no exit signal is often a mistake.
+        if exit_node_id is None:
+            _warn("exit_unconnected", "The graph has no Exit, so only a stop or "
+                  "the end of the data closes a trade.", None)
+        else:
+            _warn("exit_unconnected", f"Exit {exit_node_id!r} gets no signal, so only "
+                  "a stop or the end of the data closes a trade.", exit_node_id, None)
+
+    # 6. Indicator family cap, checked here so /validate reports it too.  Run
+    # would raise the same error from compute_indicators_from_specs.
+    family_counts: dict[str, int] = {}
+    for spec in indicator_specs:
+        family = _CATALOG_TO_REGISTRY.get(spec.catalog_name, spec.catalog_name)
+        family_counts[family] = family_counts.get(family, 0) + 1
+    for family, count in family_counts.items():
+        if count > _INDICATOR_FAMILY_CAP:
+            over = [
+                s.node_path for s in indicator_specs
+                if _CATALOG_TO_REGISTRY.get(s.catalog_name, s.catalog_name) == family
+            ][_INDICATOR_FAMILY_CAP]
+            _record(FamilyCapExceededError(
+                f"Too many distinct {family!r} specs ({count}); "
+                f"max {_INDICATOR_FAMILY_CAP} per request",
+                node_id=over,
+            ))
+
+    if any(exc is not None for _diag, exc in found):
+        return None, found
 
     # 5. Default exit attr
     if exit_attr is None:
@@ -749,4 +1128,4 @@ def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "co
         simulator_settings=simulator_settings,
         entry_attr=entry_attr,
         exit_attr=exit_attr,
-    )
+    ), found

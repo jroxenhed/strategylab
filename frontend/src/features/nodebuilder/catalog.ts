@@ -1,14 +1,46 @@
 /**
- * Core 14 node catalog — TypeScript mirror of backend/nodebuilder/nodes.py.
+ * Node catalog for the frontend.
  *
- * Unit 2: static metadata only. No runtime logic, no React imports.
- * Implementations land in Unit 7b on the Python side; this file stays pure data.
+ * The backend catalog (backend/nodebuilder/nodes.py) is the one source of
+ * truth (plan decision D9). backend/scripts/export_nodebuilder_catalog.py
+ * writes it out as catalog.generated.ts, and this file builds NODE_CATALOG
+ * from that. Only UI extras live here: how a unit is shown on a node row, the
+ * older `paramTypes` shape that ParamRow reads, and the port helpers. Names,
+ * descriptions, params, defaults, options and ports all come from the backend,
+ * so the two catalogs cannot drift.
+ *
+ * Pure data and helpers. No runtime logic, no React imports.
  */
 
+import {
+  GENERATED_CATALOG,
+  type GeneratedCatalogEntry,
+  type ParamSpec,
+  type PortsSpec,
+} from './catalog.generated';
+
+export {
+  INTERVAL_OPTIONS,
+  SOURCE_OPTIONS,
+  RSI_TYPE_OPTIONS,
+  RSI_DEFAULT_TYPE,
+  TRAILING_STOP_TYPE_OPTIONS,
+  TRAILING_STOP_SOURCE_OPTIONS,
+  TRAILING_STOP_DEFAULTS,
+} from './catalog.generated';
+export type {
+  ParamSpec,
+  ParamType,
+  ParamUnit,
+  ParamDtype,
+  PortSpec,
+  PortsSpec,
+} from './catalog.generated';
+
 /**
- * Optional per-param schema override. Used by the inline editor (ParamRow) so
- * enum-style params render as `<select>` instead of free-text inputs.
- * If a key is missing here, ParamRow falls back to inferring from `typeof value`.
+ * Per-param input type for the inline editor (ParamRow), so enum-style params
+ * render as `<select>` instead of free-text inputs. Built from the catalog
+ * ParamSpec. If a key is missing, ParamRow infers the type from `typeof value`.
  */
 export interface ParamTypeSpec {
   type: 'number' | 'string' | 'select';
@@ -41,7 +73,7 @@ export interface NodeCatalogEntry {
   writes: readonly string[];
   /**
    * Node-instance defaults:
-   *   params      — indicator / comparison param defaults (may be empty).
+   *   params      — param defaults, one per ParamSpec (may be empty).
    *   ins         — expected inbound wire count.
    *   outs        — expected outbound wire count.
    *   subtitle    — optional subtitle rendered in the node body.
@@ -64,423 +96,74 @@ export interface NodeCatalogEntry {
   compileActive: boolean;
   /** Per-param input type overrides — drives ParamRow rendering. */
   paramTypes?: Record<string, ParamTypeSpec>;
+  /**
+   * The full param specs from the backend (plan section 4.3), in display
+   * order. Always set on NODE_CATALOG entries; optional only so small
+   * hand-built test entries stay valid.
+   */
+  params?: readonly ParamSpec[];
+  /** The input ports from the backend (section 4.3). Always set on NODE_CATALOG entries. */
+  inputs?: PortsSpec;
 }
 
 // ---------------------------------------------------------------------------
-// Shared option lists — central so adding a provider / interval updates every
-// node that exposes it (currently only ticker, but more could follow).
+// UI extras: how units show on a node row
 // ---------------------------------------------------------------------------
-export const INTERVAL_OPTIONS = [
-  '1m', '5m', '15m', '30m', '1h', '1d', '1wk', '1mo',
-] as const;
-// Must match the providers registered in backend/shared.py.
-export const SOURCE_OPTIONS = [
-  'yahoo', 'alpaca', 'alpaca-iex', 'ibkr',
-] as const;
-// Must match the smoothing types backend/indicators.py compute_rsi accepts.
-// Any other value silently falls back to sma there, so offer only these two.
-export const RSI_TYPE_OPTIONS = ['sma', 'wilder'] as const;
-// Same default as the rule builder and the chart's RSI (shared/types/indicators.ts).
-export const RSI_DEFAULT_TYPE = 'wilder';
-// Trailing stop choices and defaults. Must match backend nodes.py
-// TRAILING_STOP_* (models.TrailingStopConfig): type pct or atr, and the price
-// (high or close) that moves the peak.
-export const TRAILING_STOP_TYPE_OPTIONS = ['pct', 'atr'] as const;
-export const TRAILING_STOP_SOURCE_OPTIONS = ['high', 'close'] as const;
-export const TRAILING_STOP_DEFAULTS = {
-  type: 'pct',
-  value: 5.0,
-  source: 'high',
-  activate_on_profit: false,
-  activate_pct: 0.0,
-} as const;
 
-export const NODE_CATALOG: readonly NodeCatalogEntry[] = [
-  // ── Ticker (source) ────────────────────────────────────────────────────
-  {
-    name: "ticker",
-    cat: "ticker",
-    desc: "Market data source: OHLCV price series for a symbol.",
-    reads: [],
-    writes: ["@open", "@high", "@low", "@close", "@volume"],
-    defaults: {
-      params: { symbol: "AAPL", interval: "1d", source: "yahoo" },
-      ins: 0,
-      outs: 5,
-      subtitle: null,
-    },
-    compileActive: true,
-    paramTypes: {
-      symbol: { type: 'string' },
-      interval: { type: 'select', options: INTERVAL_OPTIONS },
-      source: { type: 'select', options: SOURCE_OPTIONS },
-    },
-  },
+// The catalog says "frac"; the node row says "fraction" and adds the percent
+// (see nodes/paramFormat.ts unitLabel).
+const UNIT_DISPLAY: Record<string, string> = { frac: 'fraction' };
 
-  // ── Indicators ─────────────────────────────────────────────────────────
-  {
-    name: "rsi",
-    cat: "indicator",
-    desc: "Relative Strength Index. Default period=14, type=wilder (sma also available).",
-    reads: ["@close"],
-    writes: ["@rsi"],
-    defaults: {
-      params: { period: 14, type: RSI_DEFAULT_TYPE },
-      ins: 1,
-      outs: 1,
-      subtitle: "RSI(14)",
-    },
-    compileActive: true,
-    paramTypes: {
-      period: { type: 'number' },
-      type: { type: 'select', options: RSI_TYPE_OPTIONS },
-    },
-  },
-  {
-    name: "macd",
-    cat: "indicator",
-    desc: "MACD: line, signal, and histogram series. Defaults: fast=12, slow=26, signal=9.",
-    reads: ["@close"],
-    writes: ["@macd_line", "@macd_signal", "@macd_histogram"],
-    defaults: {
-      params: { fast: 12, slow: 26, signal: 9 },
-      ins: 1,
-      outs: 3,
-      subtitle: "MACD(12,26,9)",
-    },
-    compileActive: true,
-    paramTypes: {
-      fast: { type: 'number' },
-      slow: { type: 'number' },
-      signal: { type: 'number' },
-    },
-  },
-  {
-    name: "sma",
-    cat: "indicator",
-    desc: "Simple Moving Average. Default period=20.",
-    reads: ["@close"],
-    writes: ["@sma"],
-    defaults: {
-      params: { period: 20 },
-      ins: 1,
-      outs: 1,
-      subtitle: "SMA(20)",
-    },
-    compileActive: true,
-    paramTypes: { period: { type: 'number' } },
-  },
-  {
-    name: "ema",
-    cat: "indicator",
-    desc: "Exponential Moving Average. Default period=20.",
-    reads: ["@close"],
-    writes: ["@ema"],
-    defaults: {
-      params: { period: 20 },
-      ins: 1,
-      outs: 1,
-      subtitle: "EMA(20)",
-    },
-    compileActive: true,
-    paramTypes: { period: { type: 'number' } },
-  },
-  {
-    name: "bollinger",
-    cat: "indicator",
-    desc: "Bollinger Bands: upper, middle, lower. Default period=20, stddev=2.",
-    reads: ["@close"],
-    writes: ["@bb_upper", "@bb_middle", "@bb_lower"],
-    defaults: {
-      params: { period: 20, stddev: 2.0 },
-      ins: 1,
-      outs: 3,
-      subtitle: "BB(20,2)",
-    },
-    compileActive: true,
-    paramTypes: {
-      period: { type: 'number' },
-      stddev: { type: 'number' },
-    },
-  },
-  {
-    name: "atr",
-    cat: "indicator",
-    desc: "Average True Range. Default period=14.",
-    reads: ["@high", "@low", "@close"],
-    writes: ["@atr"],
-    defaults: {
-      params: { period: 14 },
-      ins: 3,
-      outs: 1,
-      subtitle: "ATR(14)",
-    },
-    compileActive: true,
-    paramTypes: { period: { type: 'number' } },
-  },
+// Lookback periods are always in bars, so the node row leaves "bars" off to
+// stay short. The full unit is still in ParamSpec.unit for the Inspector.
+const UNITS_HIDDEN_ON_ROW: ReadonlySet<string> = new Set(['bars']);
 
-  // ── Comparisons ────────────────────────────────────────────────────────
-  {
-    name: "crosses_above",
-    cat: "comparison",
-    desc: "True on the bar where the left series crosses above the right series.",
-    reads: ["@series"],
-    writes: ["@bool"],
-    defaults: {
-      params: { threshold: null },
-      ins: 2,
-      outs: 1,
-      subtitle: "crosses above",
-    },
-    compileActive: true,
-    paramTypes: { threshold: { type: 'number' } },
-  },
-  {
-    name: "crosses_below",
-    cat: "comparison",
-    desc: "True on the bar where the left series crosses below the right series.",
-    reads: ["@series"],
-    writes: ["@bool"],
-    defaults: {
-      params: { threshold: null },
-      ins: 2,
-      outs: 1,
-      subtitle: "crosses below",
-    },
-    compileActive: true,
-    paramTypes: { threshold: { type: 'number' } },
-  },
-  {
-    name: "above",
-    cat: "comparison",
-    desc: "True when the left series is above the right series (or a scalar threshold).",
-    reads: ["@series"],
-    writes: ["@bool"],
-    defaults: {
-      params: { threshold: null },
-      ins: 2,
-      outs: 1,
-      subtitle: "above",
-    },
-    compileActive: true,
-    paramTypes: { threshold: { type: 'number' } },
-  },
-  {
-    name: "below",
-    cat: "comparison",
-    desc: "True when the left series is below the right series (or a scalar threshold).",
-    reads: ["@series"],
-    writes: ["@bool"],
-    defaults: {
-      params: { threshold: null },
-      ins: 2,
-      outs: 1,
-      subtitle: "below",
-    },
-    compileActive: true,
-    paramTypes: { threshold: { type: 'number' } },
-  },
+/** The ParamRow type for one ParamSpec. */
+function toParamTypeSpec(spec: ParamSpec): ParamTypeSpec {
+  let out: ParamTypeSpec;
+  if (spec.type === 'number' || spec.type === 'int') {
+    out = { type: 'number' };
+  } else if (spec.type === 'select') {
+    out = { type: 'select', options: spec.options ?? [] };
+  } else if (spec.type === 'bool') {
+    // A select stores the text "true"/"false"; the backend reads both.
+    out = { type: 'select', options: ['false', 'true'] };
+  } else {
+    out = { type: 'string' };
+  }
+  if (spec.unit && !UNITS_HIDDEN_ON_ROW.has(spec.unit)) {
+    out.unit = UNIT_DISPLAY[spec.unit] ?? spec.unit;
+  }
+  return out;
+}
 
-  // ── Logic ──────────────────────────────────────────────────────────────
-  {
-    name: "and",
-    cat: "logic",
-    desc: "True when ALL incoming boolean signals are true.",
-    reads: ["@bool"],
-    writes: ["@bool"],
-    defaults: {
-      params: {},
-      ins: 2,
-      outs: 1,
-      subtitle: "AND",
-    },
-    compileActive: true,
-  },
-  {
-    name: "or",
-    cat: "logic",
-    desc: "True when ANY incoming boolean signal is true.",
-    reads: ["@bool"],
-    writes: ["@bool"],
-    defaults: {
-      params: {},
-      ins: 2,
-      outs: 1,
-      subtitle: "OR",
-    },
-    compileActive: true,
-  },
-  {
-    name: "not",
-    cat: "logic",
-    desc: "Inverts the incoming boolean signal.",
-    reads: ["@bool"],
-    writes: ["@bool"],
-    defaults: {
-      params: {},
-      ins: 1,
-      outs: 1,
-      subtitle: "NOT",
-    },
-    compileActive: true,
-  },
+/** One frontend catalog entry from its generated backend entry. */
+function toEntry(g: GeneratedCatalogEntry): NodeCatalogEntry {
+  const defaults: NodeCatalogEntry['defaults'] = {
+    params: Object.fromEntries(g.params.map((p) => [p.name, p.default])),
+    ins: g.ins,
+    outs: g.outs,
+    subtitle: g.subtitle,
+  };
+  if (g.setting_key !== null) defaults.setting_key = g.setting_key;
+  const entry: NodeCatalogEntry = {
+    name: g.name,
+    cat: g.cat,
+    desc: g.desc,
+    reads: g.reads,
+    writes: g.writes,
+    defaults,
+    compileActive: g.compile_active,
+    params: g.params,
+    inputs: g.inputs,
+  };
+  if (g.params.length > 0) {
+    entry.paramTypes = Object.fromEntries(g.params.map((p) => [p.name, toParamTypeSpec(p)]));
+  }
+  return entry;
+}
 
-  // ── Settings ───────────────────────────────────────────────────────────
-  {
-    name: "position_size",
-    cat: "settings",
-    desc: "Fraction of allocated capital used per trade, from 0 to 1 (1 = 100%, 0.5 = 50%). Default: 1.",
-    reads: [],
-    writes: ["@setting"],
-    defaults: {
-      params: { size: 1.0 },
-      ins: 0,
-      outs: 1,
-      subtitle: "Size: 1 (100%)",
-      setting_key: "position_size",
-    },
-    compileActive: true,
-    // Backend reads size as a fraction in (0, 1] (nodes.py position_size_impl).
-    paramTypes: { size: { type: 'number', unit: 'fraction' } },
-  },
-  {
-    name: "stop_loss",
-    cat: "settings",
-    desc: "Fixed stop-loss as a percentage below/above entry. Default: 5.0%.",
-    reads: [],
-    writes: ["@setting"],
-    defaults: {
-      params: { pct: 5.0 },
-      ins: 0,
-      outs: 1,
-      subtitle: "Stop: 5%",
-      setting_key: "stop_loss",
-    },
-    compileActive: true,
-    paramTypes: { pct: { type: 'number', unit: '%' } },
-  },
-  {
-    name: "slippage",
-    cat: "settings",
-    desc: "Modeled slippage cost per leg in basis points. Default: 2.0 bps.",
-    reads: [],
-    writes: ["@setting"],
-    defaults: {
-      params: { bps: 2.0 },
-      ins: 0,
-      outs: 1,
-      subtitle: "Slippage: 2 bps",
-      setting_key: "slippage_bps",
-    },
-    compileActive: true,
-    paramTypes: { bps: { type: 'number', unit: 'bps' } },
-  },
-  {
-    name: "commission",
-    cat: "settings",
-    desc: "Per-share commission rate and minimum per order. Defaults match Alpaca (free).",
-    reads: [],
-    writes: ["@setting"],
-    defaults: {
-      params: { per_share_rate: 0.0, min_per_order: 0.0 },
-      ins: 0,
-      outs: 1,
-      subtitle: "Commission: free",
-      setting_key: "commission",
-    },
-    compileActive: true,
-    paramTypes: {
-      per_share_rate: { type: 'number', unit: '$/share' },
-      min_per_order: { type: 'number', unit: '$' },
-    },
-  },
-  // Same five fields as backend models.TrailingStopConfig, so a rule
-  // strategy's trailing stop renders as this node and runs the same.
-  {
-    name: "trailing_stop",
-    cat: "settings",
-    desc: "Trailing stop. type=pct trails value % from the peak; type=atr trails value x ATR(14). Optionally waits until the trade is activate_pct % in profit.",
-    reads: [],
-    writes: ["@setting"],
-    defaults: {
-      params: { ...TRAILING_STOP_DEFAULTS },
-      ins: 0,
-      outs: 1,
-      subtitle: "Trail: 5%",
-      setting_key: "trailing_stop",
-    },
-    compileActive: true,
-    paramTypes: {
-      type: { type: 'select', options: TRAILING_STOP_TYPE_OPTIONS },
-      // A percent when type=pct, a multiple of ATR when type=atr.
-      value: { type: 'number', unit: '% or x ATR' },
-      source: { type: 'select', options: TRAILING_STOP_SOURCE_OPTIONS },
-      // A select stores the text "true"/"false"; the backend reads both.
-      activate_on_profit: { type: 'select', options: ['false', 'true'] },
-      activate_pct: { type: 'number', unit: '%' },
-    },
-  },
-
-  // ── Output terminals — compile-active ──────────────────────────────────
-  {
-    name: "entry",
-    cat: "output",
-    desc: "Entry terminal. Wire the buy-signal boolean here to trigger long entries.",
-    reads: ["@bool"],
-    writes: [],
-    defaults: {
-      params: {},
-      ins: 1,
-      outs: 0,
-      subtitle: "Entry",
-    },
-    compileActive: true,
-  },
-  {
-    name: "exit",
-    cat: "output",
-    desc: "Exit terminal. Wire the sell-signal boolean here to trigger exits.",
-    reads: ["@bool"],
-    writes: [],
-    defaults: {
-      params: {},
-      ins: 1,
-      outs: 0,
-      subtitle: "Exit",
-    },
-    compileActive: true,
-  },
-
-  // ── Output terminals — catalog-only at T2 ─────────────────────────────
-  {
-    name: "size",
-    cat: "output",
-    desc: "(T4) Size terminal. Not run yet: an unwired one is ignored, a wired one is refused by the backtest.",
-    reads: ["@bool"],
-    writes: [],
-    defaults: {
-      params: {},
-      ins: 1,
-      outs: 0,
-      subtitle: "Size (T4)",
-    },
-    compileActive: false,
-  },
-  {
-    name: "stop",
-    cat: "output",
-    desc: "(T4) Stop terminal. Not run yet: an unwired one is ignored, a wired one is refused by the backtest.",
-    reads: ["@bool"],
-    writes: [],
-    defaults: {
-      params: {},
-      ins: 1,
-      outs: 0,
-      subtitle: "Stop (T4)",
-    },
-    compileActive: false,
-  },
-] as const;
+export const NODE_CATALOG: readonly NodeCatalogEntry[] = GENERATED_CATALOG.map(toEntry);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -516,16 +199,15 @@ export function catalogByCategory(): Record<string, NodeCatalogEntry[]> {
 // ---------------------------------------------------------------------------
 
 // A Ticker is a source and a Settings node sets a value, so neither takes a
-// wire in.  Entry/Exit/Size/Stop are terminals and Settings nodes feed
-// nothing, so neither sends a wire out.  compile refuses these wires, and
-// the canvas draws no handle for them.
-const NO_INPUT_CATS: ReadonlySet<string> = new Set(['ticker', 'settings']);
+// wire in (their PortsSpec has max 0).  Entry/Exit/Size/Stop are terminals
+// and Settings nodes feed nothing, so neither sends a wire out.  compile
+// refuses these wires, and the canvas draws no handle for them.
 const NO_OUTPUT_CATS: ReadonlySet<string> = new Set(['output', 'settings']);
 
 /** True when a node of this type has an input port.  Unknown types do. */
 export function hasInputPort(nodeType: string | undefined): boolean {
   const entry = nodeType ? _index.get(nodeType) : undefined;
-  return !entry || !NO_INPUT_CATS.has(entry.cat);
+  return !entry || (entry.inputs?.max ?? 1) > 0;
 }
 
 /** True when a node of this type has an output port.  Unknown types do. */

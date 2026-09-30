@@ -2,7 +2,9 @@
 
 Unit 3 — public surface is `auto_render(req: StrategyRequest) -> Graph`.
 
-The returned graph always has readOnly=True and _version=1.
+The returned graph always has readOnly=True, _version=2 and the current
+stream_schema.  Each consumer's input wires get in0, in1... in the order
+they are wired.
 """
 from __future__ import annotations
 
@@ -11,7 +13,8 @@ from typing import Any, Optional
 
 from models import StrategyRequest, RegimeConfig
 from signal_engine import Rule, migrate_rule
-from nodebuilder.models import Graph, Node, Wire
+from nodebuilder.migrate import default_name, unique_name
+from nodebuilder.models import STREAM_SCHEMA_VERSION, Graph, Node, Wire
 
 
 # ---------------------------------------------------------------------------
@@ -227,24 +230,31 @@ class _GraphBuilder:
 
     def _add_node(self, path: str, node_type: str, params: dict[str, Any],
                   position: tuple[float, float]) -> None:
-        """Add a node; silently skip if path already registered (idempotent)."""
+        """Add a node; silently skip if path already registered (idempotent).
+
+        The name follows the same rule as the v1 -> v2 migration, so an old
+        auto-rendered graph and a new one come out identical.
+        """
         if path in self.nodes:
             return
-        self.nodes[path] = Node(id=path, type=node_type, params=params, position=position)
+        name = unique_name(default_name(path, node_type), (n.name for n in self.nodes.values()))
+        self.nodes[path] = Node(id=path, type=node_type, name=name, params=params, position=position)
 
     def _add_wire(self, from_path: str, to_path: str, attr: Optional[str] = None) -> None:
-        wire = Wire(**{
-            "id": _wire_id(from_path, to_path, attr),
-            "from": from_path,
-            "to": to_path,
-            "attr": attr,
-        })
         # Deduplicate wires by content (same from/to/attr)
         key = (from_path, to_path, attr)
         for w in self.wires:
             if (w.from_path, w.to_path, w.attr) == key:
                 return
-        self.wires.append(wire)
+        # Inputs are numbered in the order they are wired: in0, in1, ...
+        k = sum(1 for w in self.wires if w.to_path == to_path)
+        self.wires.append(Wire(**{
+            "id": _wire_id(from_path, to_path, attr),
+            "from": from_path,
+            "to": to_path,
+            "to_port": f"in{k}",
+            "attr": attr,
+        }))
 
     # ------------------------------------------------------------------
     # Ticker node
@@ -665,7 +675,7 @@ def auto_render(req: StrategyRequest) -> Graph:
 
     The returned graph has:
       - readOnly=True
-      - _version=1
+      - _version=2 (with stream_schema, node names and wire ports)
       - Deterministic node paths for stable test snapshots
       - No dangling wires (Pydantic model_validator enforces this)
       - No cycles (Pydantic model_validator enforces this)
@@ -806,7 +816,8 @@ def auto_render(req: StrategyRequest) -> Graph:
         )
 
     return Graph.model_validate({
-        "_version": 1,
+        "_version": 2,
+        "stream_schema": STREAM_SCHEMA_VERSION,
         "readOnly": True,
         "nodes": {path: node.model_dump(by_alias=False) for path, node in builder.nodes.items()},
         "wires": [w.model_dump(by_alias=False) for w in builder.wires],

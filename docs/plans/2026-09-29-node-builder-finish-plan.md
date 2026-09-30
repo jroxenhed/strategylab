@@ -376,7 +376,8 @@ Diagnostic codes (the backend enum in `backend/nodebuilder/diagnostics.py`, crea
 |---|---|---|
 | `missing_terminal`, `unsupported_node`, `unknown_node_type`, `dangling_wire`, `cycle`, `missing_input`, `param_invalid`, `param_out_of_range`, `family_cap`, `name_invalid`, `name_duplicate`, `regime_unsupported` (removed in W5) | error | W1 |
 | `exit_unconnected`, `size_unit_suspect` (a size above 1.0 on a fraction field) | warning | W1 |
-| `attr_missing`, `attr_type`, `attr_clash`, `prims_no_producer`, `port_unknown` | error | W2 |
+| `graph_invalid`, `parent_missing`, `parent_cycle`, `port_duplicate`, `duplicate_terminal`, `request_invalid` (added by 1.C) | error | W1 |
+| `attr_missing`, `attr_type`, `attr_clash`, `prims_no_producer`, `port_unknown` (`attr_type` and `port_unknown` are emitted from W1) | error | W2 |
 | `attr_shadowed` | warning | W2 |
 | `group_invalid`, `group_terminal_outside`, `group_duplicate_terminal`, `ticker_missing`, `wire_crosses_network`, `boundary_invalid` | error | W5 |
 | `setting_shadowed` | warning | W5 |
@@ -469,6 +470,8 @@ Each wave lists: goal, order, items with exact file ownership, contracts, tests,
 ---
 
 ### Wave 1: Foundations (persistence, schema v2, undo, validate, catalog codegen)
+
+**Status: done (2026-09-30).** Items 1.A to 1.G plus 1.S (shared UI parts, the orchestrator's addition) are in. A four-reviewer wave found 50 findings; the one P1 was confirmed and fixed, and 46 findings are fixed in total. The deferred ones are in section 10.
 
 **Goal.** Graphs are durable, named server objects. Every edit can be undone. Errors show before Run. The model has names, parents, ports and a stream schema version.
 
@@ -1332,3 +1335,15 @@ Also ask after W2 and after W5: does the graph now beat the rule builder for the
 - **New Empty Graph keeps the old viewport.** It needs a store "layout epoch" to refit.
 - **Render-count tests.** Nothing checks the "one node render per change" claims. Build the counting harness with the next performance pass.
 - **Browser check for Cmd-click.** Confirm that Cmd-click removes a node from a group selection and keeps the rest. jsdom cannot press the React Flow multi-select key.
+
+**Deferred from the Wave 1 review (2026-09-30).** Full notes: `.run/F435/w1/fix-backend.md`, `fix-frontend.md` and `integration.md` (local only).
+
+- **Frame the node from a diagnostics click (W3).** A popover row, a badge or a banner link selects the node, but the view does not move to it. Framing needs the F command, which W3 builds.
+- **Wire diagnostics select the wire (W2).** `onSelectNode` takes only a node id; the S11 wire stroke comes in W2.
+- **Badge opens the Inspector Diagnostics section, and Inspector rename wraps `renameNode` (W3).**
+- **Required `params` and `inputs` on `NodeCatalogEntry` (W3).** They stay optional until the owner of `search.test.ts` builds entries from the catalog.
+- **AddBotBar sends `graph_id` and `graph_rev` (W5).** BotConfig gets those fields in W5.
+- **`add_bot` error shape.** `routes/bots.py` still returns its own 400 for a bad graph. Plan 4.4 covers only the nodebuilder and graphs routes.
+- **One error can hide another in compile.** Only checks that depend on a broken input should be skipped. That reshapes the compile walk and the diagnostics lists.
+- **Two migration-parity cases compare error names.** The per-direction and regime-mode strategies end in RegimeUnsupportedError; they become real signal checks when W5 adds regime.
+- **Rollback note.** Wave 0 code loads a v2 graph: it ignores the new fields, accepts `_version: 2`, and reads wires in list order, which W1 writes in port order. So no `bots.json.pre-v2` copy is written.

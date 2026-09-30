@@ -109,14 +109,26 @@ export function findUnsupportedNodes(
   return out
 }
 
-/** Banner text for the unsupported-node list, or null when there is nothing to warn about. */
-export function describeUnsupportedNodes(list: UnsupportedNode[]): string | null {
-  if (list.length === 0) return null
-  const items = list
-    .map(u => `${u.type}${u.detail ? ` [${u.detail}]` : ''} (${u.id})`)
-    .join(', ')
-  const noun = list.length === 1 ? 'This node cannot' : 'These nodes cannot'
-  return `${noun} run yet, so Run Backtest will fail until you remove ${list.length === 1 ? 'it' : 'them'}: ${items}`
+/** S07 `unsupported_nodes` copy, around the list of types. */
+export const UNSUPPORTED_PREFIX = 'Unsupported in graphs: '
+export const UNSUPPORTED_SUFFIX = '. The graph cannot run until these are replaced.'
+
+/** How one unsupported node is listed: its type, plus the detail that makes it unsupported. */
+export function unsupportedLabel(u: UnsupportedNode): string {
+  return `${u.type}${u.detail ? ` [${u.detail}]` : ''}`
 }
 
-export const REGIME_REMOVED_TEXT = 'Regime removed: this copy trades without the regime filter'
+/**
+ * S07 banner text for the unsupported-node list, or null when there is
+ * nothing to warn about. The banner itself renders each entry as a link that
+ * selects the node; this is the plain form of the same sentence.
+ */
+export function describeUnsupportedNodes(list: UnsupportedNode[]): string | null {
+  if (list.length === 0) return null
+  return `${UNSUPPORTED_PREFIX}${list.map(unsupportedLabel).join(', ')}${UNSUPPORTED_SUFFIX}`
+}
+
+/** S07 `regime_removed` copy, and the text its `Learn more` action shows. */
+export const REGIME_REMOVED_TEXT =
+  "Regime moved out of this graph: the rule strategy's regime filter is not part of the graph yet. Results may differ."
+export const REGIME_LEARN_MORE_TEXT = 'Wave 5 brings regime into the graph.'

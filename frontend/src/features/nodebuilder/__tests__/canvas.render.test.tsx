@@ -7,23 +7,32 @@
 
 import { describe, it, expect, afterEach, beforeAll } from 'vitest'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
+import { useRef } from 'react'
 import Canvas from '../Canvas'
+import { useGlobalKeys } from '../commands/useGlobalKeys'
 import { useNodeBuilderStore } from '../store'
 import type { Graph } from '../../../api/nodebuilder'
 
 function makeGraph(): Graph {
+  const node = (id: string, type: string, params: Record<string, string | number>, y: number) => ({
+    id, type, name: id, parent: null, params, position: [0, y] as [number, number], display: false, bypass: false,
+  })
   return {
+    _version: 2,
+    stream_schema: 1,
+    readOnly: false,
+    meta: {},
     nodes: {
-      t: { id: 't', type: 'ticker', params: { symbol: 'AAPL', interval: '1d', source: 'yahoo' }, position: [0, 0], display: false, bypass: false },
-      r: { id: 'r', type: 'rsi', params: { period: 14 }, position: [0, 150], display: false, bypass: false },
-      e: { id: 'e', type: 'entry', params: {}, position: [0, 300], display: false, bypass: false },
+      t: node('t', 'ticker', { symbol: 'AAPL', interval: '1d', source: 'yahoo' }, 0),
+      r: node('r', 'rsi', { period: 14 }, 150),
+      e: node('e', 'entry', {}, 300),
     },
     wires: [
-      { id: 'w1', from: 't', to: 'r', attr: '@close' },
-      { id: 'w2', from: 'r', to: 'e', attr: '@rsi' },
+      { id: 'w1', from: 't', to: 'r', from_port: 'out', to_port: 'in0', attr: '@close' },
+      { id: 'w2', from: 'r', to: 'e', from_port: 'out', to_port: 'in0', attr: '@rsi' },
     ],
-    readOnly: false,
-  } as unknown as Graph
+    annotations: { boxes: [], notes: [] },
+  }
 }
 
 beforeAll(() => {
@@ -38,21 +47,34 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanup()
-  useNodeBuilderStore.setState({ graph: null, selectedNodeId: null })
+  useNodeBuilderStore.getState().discardEdits()
 })
+
+/** The builder root as NodeBuilder has it: global keys (Cmd+Z) are dispatched here. */
+function BuilderRoot({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useGlobalKeys(ref)
+  return (
+    <div ref={ref} className="nodebuilder-root" style={{ width: 800, height: 600 }}>
+      {children}
+    </div>
+  )
+}
 
 function mount() {
   const g = makeGraph()
-  useNodeBuilderStore.setState({ graph: g, selectedNodeId: null })
+  useNodeBuilderStore.getState().openGraph(g, { id: null, rev: 0, name: 'test' })
   const utils = render(
-    <div className="nodebuilder-root" style={{ width: 800, height: 600 }}>
+    <BuilderRoot>
       <Canvas graph={g} />
-    </div>,
+    </BuilderRoot>,
   )
-  // jsdom has no layout, so give the canvas a client rect to count as "in view".
+  // jsdom has no layout, so give the root and the canvas a client rect to count as "in view".
+  const root = utils.container.querySelector('.nodebuilder-root') as HTMLElement
+  root.getClientRects = () => ({ length: 1 }) as unknown as DOMRectList
   const canvas = utils.container.querySelector('.nodebuilder-root .nodebuilder-root') as HTMLElement
   canvas.getClientRects = () => ({ length: 1 }) as unknown as DOMRectList
-  return { ...utils, canvas }
+  return { ...utils, canvas, root }
 }
 
 describe('Canvas (editable)', () => {
@@ -133,5 +155,86 @@ describe('Canvas (editable)', () => {
     ;(document.activeElement as HTMLElement | null)?.blur()
     act(() => { fireEvent.keyDown(document.body, { key: 'Tab', shiftKey: true }) })
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  // ── Wave 1: history keys go through the command registry ────────────────
+
+  it('Cmd+Z undoes a Delete and Cmd+Shift+Z redoes it', () => {
+    mount()
+    act(() => { useNodeBuilderStore.getState().select('r') })
+    act(() => { fireEvent.keyDown(document.body, { key: 'Delete' }) })
+    expect(useNodeBuilderStore.getState().graph!.nodes.r).toBeUndefined()
+    act(() => { fireEvent.keyDown(document.body, { key: 'z', metaKey: true }) })
+    expect(useNodeBuilderStore.getState().graph!.nodes.r).toBeDefined()
+    act(() => { fireEvent.keyDown(document.body, { key: 'z', metaKey: true, shiftKey: true }) })
+    expect(useNodeBuilderStore.getState().graph!.nodes.r).toBeUndefined()
+  })
+
+  it("a press in one of the builder's portals (a dialog) keeps keys with the canvas; a press outside does not (UX-03)", () => {
+    mount()
+    act(() => { useNodeBuilderStore.getState().select('r') })
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    act(() => { fireEvent.pointerDown(outside) })
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    act(() => { fireEvent.keyDown(document.body, { key: 'Delete' }) })
+    expect(useNodeBuilderStore.getState().graph!.nodes.r).toBeDefined()
+    // Now a press inside a dialog portal (it carries the nodebuilder-root class).
+    const portal = document.createElement('div')
+    portal.className = 'nodebuilder-root nb-dialog-backdrop'
+    const inDialog = document.createElement('button')
+    portal.appendChild(inDialog)
+    document.body.appendChild(portal)
+    act(() => { fireEvent.pointerDown(inDialog) })
+    portal.remove()
+    outside.remove()
+    act(() => { fireEvent.keyDown(document.body, { key: 'Delete' }) })
+    expect(useNodeBuilderStore.getState().graph!.nodes.r).toBeUndefined()
+  })
+
+  it('Shift+Delete deletes without reconnecting', () => {
+    mount()
+    act(() => { useNodeBuilderStore.getState().select('r') })
+    act(() => { fireEvent.keyDown(document.body, { key: 'Delete', shiftKey: true }) })
+    const graph = useNodeBuilderStore.getState().graph!
+    expect(graph.nodes.r).toBeUndefined()
+    expect(graph.wires).toHaveLength(0)
+  })
+
+  it('a Tab create with its auto-wire is one undo step', () => {
+    mount()
+    act(() => { useNodeBuilderStore.getState().select('r') })
+    const before = useNodeBuilderStore.getState().graph
+    tabCreate('above')
+    const s = useNodeBuilderStore.getState()
+    expect(s.past).toHaveLength(1)
+    const above = Object.values(s.graph!.nodes).find(n => n.type === 'above')!
+    expect(above.id).toMatch(/^n_[a-z0-9]{8}$/)
+    expect(above.name).toBe('above')
+    expect(s.graph!.wires.find(w => w.to === above.id)?.to_port).toBe('in0')
+    act(() => { fireEvent.keyDown(document.body, { key: 'z', metaKey: true }) })
+    expect(useNodeBuilderStore.getState().graph).toBe(before)
+  })
+
+  it('leaves Cmd+Z in a text field to the field', () => {
+    mount()
+    act(() => { useNodeBuilderStore.getState().moveNode('t', [5, 5]) })
+    const input = document.createElement('input')
+    document.querySelector('.nodebuilder-root')!.appendChild(input)
+    input.focus()
+    act(() => { fireEvent.keyDown(input, { key: 'z', metaKey: true }) })
+    expect(useNodeBuilderStore.getState().graph!.nodes.t.position).toEqual([5, 5])
+    input.remove()
+  })
+
+  it('a press inside the canvas focuses the canvas root (spec 0.8)', () => {
+    const { canvas } = mount()
+    const button = document.createElement('button')
+    document.body.appendChild(button)
+    button.focus()
+    const pane = canvas.querySelector('.react-flow__pane') as HTMLElement
+    act(() => { fireEvent.pointerDown(pane) })
+    expect(document.activeElement).toBe(canvas)
+    button.remove()
   })
 })

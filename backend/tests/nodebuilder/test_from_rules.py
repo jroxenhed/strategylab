@@ -404,3 +404,71 @@ def test_post_auto_render_endpoint():
     parsed = AutoRenderResponse.model_validate(body)
     assert parsed.graph.readOnly is True
     assert len(parsed.graph.nodes) > 0
+
+
+# ---------------------------------------------------------------------------
+# Schema v2 (W1 item 1.A): names, ports, version
+# ---------------------------------------------------------------------------
+
+
+def _v2_req() -> StrategyRequest:
+    return StrategyRequest(
+        ticker="AAPL", start="2022-01-01", end="2024-01-01", interval="1d", source="yahoo",
+        buy_rules=[
+            Rule(indicator="rsi", condition="below", value=30),
+            Rule(indicator="rsi", condition="above", value=10, negated=True),
+        ],
+        sell_rules=[Rule(indicator="macd", condition="crosses_below", param="signal")],
+        regime=RegimeConfig(
+            enabled=True,
+            rules=[Rule(indicator="ma", condition="above", param="ma:200:sma")],
+            on_flip="close_only",
+        ),
+        long_buy_rules=[Rule(indicator="rsi", condition="below", value=35)],
+        long_sell_rules=[Rule(indicator="rsi", condition="above", value=65)],
+    )
+
+
+def test_auto_render_emits_v2():
+    g = auto_render(_v2_req())
+    assert g.version == 2
+    assert g.stream_schema == 1
+    dumped = g.model_dump(by_alias=True)
+    assert dumped["_version"] == 2
+    assert dumped["meta"] == {} and dumped["annotations"] == {"boxes": [], "notes": []}
+
+
+def test_auto_render_names_every_node_uniquely():
+    from nodebuilder.migrate import is_valid_name, sanitize_name
+
+    g = auto_render(_v2_req())
+    names = [n.name for n in g.nodes.values()]
+    assert all(is_valid_name(n) for n in names)
+    assert len(names) == len(set(names))
+    for node_id, node in g.nodes.items():
+        assert node.parent is None
+        assert node.name == sanitize_name(node_id.lstrip("/"))
+
+
+def test_auto_render_ports_follow_wire_order():
+    g = auto_render(_v2_req())
+    count: dict[str, int] = {}
+    for w in g.wires:
+        k = count.get(w.to_path, 0)
+        assert (w.from_port, w.to_port) == ("out", f"in{k}")
+        count[w.to_path] = k + 1
+    # at least one node takes more than one input, so in1 is exercised
+    assert max(count.values()) >= 2
+
+
+def test_auto_render_route_returns_v2_fields():
+    from main import app
+
+    client = TestClient(app)
+    resp = client.post("/api/nodebuilder/auto_render", json=_v2_req().model_dump())
+    assert resp.status_code == 200, resp.text
+    graph = resp.json()["graph"]
+    assert graph["_version"] == 2
+    node = next(iter(graph["nodes"].values()))
+    assert node["name"] and "parent" in node and "subgraph" not in node
+    assert all(w["to_port"].startswith("in") and w["from_port"] == "out" for w in graph["wires"])

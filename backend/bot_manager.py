@@ -8,6 +8,7 @@ Classes:
 """
 
 import asyncio
+import copy
 import json
 import logging
 import math
@@ -256,6 +257,9 @@ class BotManager:
         self.bots: dict[str, tuple[BotConfig, BotState]] = {}  # bot_id → (config, state)
         self.tasks: dict[str, asyncio.Task] = {}               # bot_id → running Task
         self._save_lock = threading.Lock()                     # see save()
+        # bots.json rows load() could not read: (bot_id of the loaded bot
+        # they followed, or None, raw row).  save() writes them back as is.
+        self._unloaded: list[tuple[Optional[str], dict]] = []
 
     # -- Fund management ----------------------------------------------------
 
@@ -709,72 +713,91 @@ class BotManager:
         with self._save_lock:
             data = {
                 "bot_fund": self.bot_fund,
-                "bots": [
-                    {"config": config.model_dump(), "state": state.to_dict()}
-                    for config, state in list(self.bots.values())
-                ],
+                "bots": self._rows_to_save(),
             }
             # DI-06: explicit depth=1 — bots.json is high-value config; one backup
             # is worth the per-save shutil.copy2 at current file sizes.
             atomic_write_text(DATA_PATH, json.dumps(data, indent=2, default=str), backup_depth=1)
 
+    def _rows_to_save(self) -> list[dict]:
+        """The bots.json rows: every loaded bot, plus every row load() could
+        not read, written back unchanged in its old place (after the loaded
+        bot it followed; at the end when that bot has since been deleted)."""
+        pending: dict[Optional[str], list[dict]] = {}
+        for anchor, raw in self._unloaded:
+            pending.setdefault(anchor, []).append(raw)
+        rows: list[dict] = list(pending.pop(None, []))
+        for bot_id, (config, state) in list(self.bots.items()):
+            rows.append({"config": config.model_dump(), "state": state.to_dict()})
+            rows.extend(pending.pop(bot_id, []))
+        for leftover in pending.values():
+            rows.extend(leftover)
+        return rows
+
     def load(self):
+        """Load bots.json.  Every bot starts stopped.
+
+        A row that does not load (a graph that fails migration or
+        validation, a bad symbol, any other error) is logged at ERROR and
+        kept: its raw row is written back unchanged by every save(), in its
+        old place, so a bad row never leaves bots.json.  It is not in
+        self.bots, so it never starts.
+        """
         if not os.path.exists(DATA_PATH):
             return
         try:
             with open(DATA_PATH) as f:
                 data = json.load(f)
             self.bot_fund = data.get("bot_fund", 0.0)
+            self._unloaded = []
+            previous: Optional[str] = None  # the last bot that loaded
             for entry in data.get("bots", []):
-                cfg_dict = entry["config"]
-                # Lazy migration: old key 'slippage_pct' (percent) → 'slippage_bps' (bps).
-                # max(0, ...) retroactively applies the "cost >= 0" rule.
-                if "slippage_pct" in cfg_dict and "slippage_bps" not in cfg_dict:
-                    cfg_dict = {**cfg_dict, "slippage_bps": max(0.0, cfg_dict["slippage_pct"]) * 100}
-                    cfg_dict.pop("slippage_pct", None)
-                raw_symbol = cfg_dict.get("symbol")
-                bot_id = cfg_dict.get("bot_id", "unknown")
+                raw_entry = copy.deepcopy(entry)
                 try:
-                    if raw_symbol is not None:
-                        cfg_dict["symbol"] = normalize_symbol(raw_symbol)
-                    for key in ("buy_rules", "sell_rules"):
-                        if key in cfg_dict and cfg_dict[key]:
-                            cfg_dict[key] = [migrate_rule(Rule(**r)).model_dump() for r in cfg_dict[key]]
-                except (ValueError, ValidationError) as e:
-                    logger.warning(
-                        "skipped bot %r: invalid config (%s)",
-                        bot_id,
-                        e,
+                    config, state = self._load_entry(entry)
+                except Exception as e:
+                    cfg = entry.get("config") if isinstance(entry, dict) else None
+                    bot_id = cfg.get("bot_id", "unknown") if isinstance(cfg, dict) else "unknown"
+                    expected = isinstance(e, (ValueError, GraphValidationError))  # incl. ValidationError
+                    logger.error(
+                        "skipped bot %r: invalid config (%s: %s); row kept in bots.json "
+                        "unchanged, bot not started",
+                        bot_id, type(e).__name__, e,
+                        exc_info=not expected,
                     )
+                    self._unloaded.append((previous, raw_entry))
                     continue
-
-                try:
-                    config = BotConfig(**cfg_dict)
-                except ValidationError as e:
-                    logger.warning(
-                        "skipped bot %r: invalid config (%s)",
-                        bot_id,
-                        e,
-                    )
-                    continue
-                except Exception:
-                    logger.exception(
-                        "skipped bot %r: unexpected error constructing BotConfig",
-                        bot_id,
-                    )
-                    continue
-                state = BotState.from_dict(entry.get("state", {}))
-                state.was_running = state.status == "running"
-                # F445: a row saved before user_stopped existed and not running was
-                # most likely stopped by hand; keep bot_watch from alerting on it.
-                if "user_stopped" not in entry.get("state", {}) and not state.was_running:
-                    state.user_stopped = True
-                state.status = "stopped"  # always start stopped after server restart
                 self.bots[config.bot_id] = (config, state)
+                previous = config.bot_id
             if self.bots:
                 self.save()
         except Exception:
             logger.exception("Failed to load bots.json")
+
+    @staticmethod
+    def _load_entry(entry: dict) -> tuple["BotConfig", "BotState"]:
+        """One bots.json row -> (config, state).  Raises on a row that does not load."""
+        cfg_dict = entry["config"]
+        # Lazy migration: old key 'slippage_pct' (percent) → 'slippage_bps' (bps).
+        # max(0, ...) retroactively applies the "cost >= 0" rule.
+        if "slippage_pct" in cfg_dict and "slippage_bps" not in cfg_dict:
+            cfg_dict = {**cfg_dict, "slippage_bps": max(0.0, cfg_dict["slippage_pct"]) * 100}
+            cfg_dict.pop("slippage_pct", None)
+        raw_symbol = cfg_dict.get("symbol")
+        if raw_symbol is not None:
+            cfg_dict["symbol"] = normalize_symbol(raw_symbol)
+        for key in ("buy_rules", "sell_rules"):
+            if key in cfg_dict and cfg_dict[key]:
+                cfg_dict[key] = [migrate_rule(Rule(**r)).model_dump() for r in cfg_dict[key]]
+        config = BotConfig(**cfg_dict)
+        state = BotState.from_dict(entry.get("state", {}))
+        state.was_running = state.status == "running"
+        # F445: a row saved before user_stopped existed and not running was
+        # most likely stopped by hand; keep bot_watch from alerting on it.
+        if "user_stopped" not in entry.get("state", {}) and not state.was_running:
+            state.user_stopped = True
+        state.status = "stopped"  # always start stopped after server restart
+        return config, state
 
     def resume_was_running(self) -> dict[str, list]:
         """F430: auto-resume bots that were running when the server last went away.

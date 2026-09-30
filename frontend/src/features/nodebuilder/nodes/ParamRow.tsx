@@ -24,10 +24,18 @@
  * shows its percent.
  * Numeric inputs stay type="text" inputMode="decimal" (F278). Never switch them
  * to type="number".
+ *
+ * Invalid state (spec S05): the field turns red with `aria-invalid="true"`
+ * when its text is not a number (checked on every keystroke, no request),
+ * or when the server's diagnostics name this param. The message goes in
+ * `title` and in a hidden element the field points at. A local problem is
+ * also reported to the diagnostics store, so the node badge, the error count
+ * and Run agree with the red field.
  */
 
 import { useState, useEffect, useRef } from 'react'
 import { useNodeBuilderStore } from '../store'
+import { useParamDiagnostic, setLocalParamInvalid, LOCAL_NUMBER_MESSAGE } from '../useDiagnostics'
 import type { ParamTypeSpec } from '../catalog'
 import { unitLabel } from './paramFormat'
 
@@ -66,16 +74,14 @@ const labelStyle: React.CSSProperties = {
   lineHeight: '14px',
 }
 
-// Border is spelled out as longhands (width/style/color) so the invalid state
-// can override borderColor alone. Mixing the `border` shorthand with
-// `borderColor` makes React warn on re-render (bug 22).
+// Both states set `border` as one shorthand and never touch borderColor.
+// Mixing the shorthand with `borderColor` makes React warn on re-render
+// (bug 22, spec S05).
 const fieldStyle: React.CSSProperties = {
   flex: 1,
   minWidth: 0,
   background: 'var(--nb-bg-elevated)',
-  borderWidth: 1,
-  borderStyle: 'solid',
-  borderColor: 'var(--nb-border)',
+  border: '1px solid var(--nb-border)',
   borderRadius: 'var(--nb-radius-pill)',
   color: 'var(--nb-text)',
   fontFamily: 'var(--nb-font-mono)',
@@ -86,8 +92,29 @@ const fieldStyle: React.CSSProperties = {
 
 const invalidFieldStyle: React.CSSProperties = {
   ...fieldStyle,
-  borderColor: 'var(--nb-cat-rules)',
-  boxShadow: '0 0 0 1px var(--nb-cat-rules)',
+  border: '1px solid var(--nb-error)',
+  borderRadius: 3,
+  color: 'var(--nb-error)',
+}
+
+// Visually hidden, still read by screen readers (aria-describedby target).
+const srOnlyStyle: React.CSSProperties = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: 'hidden',
+  clip: 'rect(0 0 0 0)',
+  whiteSpace: 'nowrap',
+  border: 0,
+}
+
+/** True when a number field's text would not parse. Empty is not invalid
+ * (it reverts on blur, F275). */
+export function isUnparseableNumber(text: string): boolean {
+  const t = text.trim()
+  return t !== '' && !Number.isFinite(Number(t))
 }
 
 const unitStyle: React.CSSProperties = {
@@ -112,7 +139,6 @@ export function ParamRow({
   const isSelect = resolvedType === 'select'
   const initial = value === null || value === undefined ? '' : String(value)
   const [draft, setDraft] = useState(initial)
-  const [invalid, setInvalid] = useState<string | null>(null)
   // Refs, not state: these are read inside event handlers and the sync effect
   // and must never trigger a render on their own.
   const focusedRef = useRef(false)
@@ -124,15 +150,33 @@ export function ParamRow({
   useEffect(() => {
     if (focusedRef.current) return
     setDraft(initial)
-    setInvalid(null)
     dirtyRef.current = false
   }, [initial])
 
   const resync = () => {
     setDraft(initial)
-    setInvalid(null)
     dirtyRef.current = false
   }
+
+  // Invalid state: local parse first (it is newer than any server answer),
+  // then the server's diagnostic for this param.
+  const serverDiag = useParamDiagnostic(nodeId, paramKey)
+  const localInvalid = isNumber && !isSelect && isUnparseableNumber(draft)
+  const invalidMessage = localInvalid ? LOCAL_NUMBER_MESSAGE : serverDiag?.message ?? null
+  const testId = `nb-param-${nodeId}-${paramKey}`
+  const messageId = `${testId}-msg`
+
+  // Report the local problem to the shared store (no request), and take it
+  // back when the field is fixed or goes away.
+  useEffect(() => {
+    if (!localInvalid) return
+    setLocalParamInvalid(nodeId, paramKey, LOCAL_NUMBER_MESSAGE)
+    return () => setLocalParamInvalid(nodeId, paramKey, null)
+  }, [localInvalid, nodeId, paramKey])
+
+  const message = invalidMessage
+    ? <span id={messageId} style={srOnlyStyle}>{invalidMessage}</span>
+    : null
 
   const commit = (raw: string) => {
     if (raw === initial) { resync(); return }
@@ -146,17 +190,14 @@ export function ParamRow({
       }
       const n = Number(trimmed)
       if (Number.isFinite(n)) {
-        setInvalid(null)
         // Show the value the store will hold ("20.0" becomes "20") so the
         // field and the store agree even if the number did not change.
         setDraft(String(n))
         dirtyRef.current = false
         updateNodeParams(nodeId, { [paramKey]: n })
-      } else {
-        setInvalid('Must be a number')
       }
+      // Otherwise the text stays on screen, red, until the user fixes it.
     } else {
-      setInvalid(null)
       dirtyRef.current = false
       updateNodeParams(nodeId, { [paramKey]: raw })
     }
@@ -169,32 +210,43 @@ export function ParamRow({
     const allOptions = options.includes(initial as never) ? options : [initial, ...options]
     // A select has no typing to protect, so it always shows the store value.
     return (
+      <>
       <label style={labelStyle}>
         <span style={{ flexShrink: 0 }}>{paramKey}</span>
         <select
           value={initial}
+          data-testid={testId}
+          aria-invalid={invalidMessage ? true : undefined}
+          aria-describedby={invalidMessage ? messageId : undefined}
+          title={invalidMessage ?? undefined}
           onChange={e => { if (e.target.value !== initial) updateNodeParams(nodeId, { [paramKey]: e.target.value }) }}
           onPointerDown={e => e.stopPropagation()}
-          style={fieldStyle}
+          style={invalidMessage ? invalidFieldStyle : fieldStyle}
         >
           {allOptions.map(opt => (
             <option key={opt} value={opt}>{opt}</option>
           ))}
         </select>
       </label>
+      {message}
+      </>
     )
   }
 
   const unitText = unitLabel(typeSpec?.unit, initial)
 
   return (
+    <>
     <label style={labelStyle}>
       <span style={{ flexShrink: 0 }}>{paramKey}</span>
       <input
         type="text"
         inputMode={isNumber ? 'decimal' : 'text'}
         value={draft}
-        title={invalid ?? undefined}
+        data-testid={testId}
+        aria-invalid={invalidMessage ? true : undefined}
+        aria-describedby={invalidMessage ? messageId : undefined}
+        title={invalidMessage ?? undefined}
         onFocus={() => { focusedRef.current = true }}
         onChange={e => {
           // A native undo (Cmd+Z) can edit a field that does not have focus.
@@ -203,7 +255,6 @@ export function ParamRow({
           if (!focusedRef.current || document.activeElement !== e.currentTarget) return
           dirtyRef.current = true
           setDraft(e.target.value)
-          if (invalid) setInvalid(null)
         }}
         onBlur={e => {
           focusedRef.current = false
@@ -222,9 +273,11 @@ export function ParamRow({
           }
         }}
         onPointerDown={e => e.stopPropagation()}
-        style={invalid ? invalidFieldStyle : fieldStyle}
+        style={invalidMessage ? invalidFieldStyle : fieldStyle}
       />
       {unitText && <span data-testid="param-unit" style={unitStyle}>{unitText}</span>}
     </label>
+    {message}
+    </>
   )
 }

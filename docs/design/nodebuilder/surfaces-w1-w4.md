@@ -131,8 +131,8 @@ At toolbar width < 1440: `Save` and `Spawn bots…` and `Reset view` show icons 
 - `Import JSON…`: hidden `<input type="file" accept="application/json,.json">`. Accepts a `GraphEnvelope`, a bare `Graph`, or a legacy `{name: Graph}` map (one entry imported per name, each through `createGraph`). Names that clash get ` (imported)`. Errors show as an S07 error banner with the server `detail` and, when present, the diagnostics count: `Import failed: <detail> (3 problems)`. A successful import opens the imported graph and shows an S07 ok banner `Imported "<name>".`
 - `Delete…`: confirm dialog (0.3, width 400): title `Delete <name>?`, body `This removes the graph from the server for everyone. Bots already spawned keep their own copy of the graph.`, buttons `Cancel`, `Delete` (danger). On 409: banner `Could not delete: the graph changed on the server. Reload and try again.`
 - `▶ Run backtest` / `Cmd+Enter`: the backtest cook (A4). Disabled rules above. Click while running: cancels the in-flight request (AbortController) and returns to idle; the status bar reads `cancelled` in `--nb-text-muted` for 3 s.
-- Name crumb click: inline rename; same validation as the dialog; `Enter` commits through the same save path used by `Rename…`; `Esc` reverts.
-- The one-time seed (`persistence.ts`): on first mount, if `localStorage['strategylab-saved-graphs']` parses to at least one graph and `nb.seeded` is unset, call `seedLegacyGraphs(raw)` once. On success: rename the legacy key to `strategylab-saved-graphs.migrated` (do not delete), set `nb.seeded = '1'`, and show an S07 info banner: `Imported N saved graphs from this browser to the server. Open one from ⋯ › Open.` with a `Open…` action; if `skipped` is non-empty append ` · M skipped (duplicates)`. On failure: no banner (retry next mount), console warning only.
+- Name crumb click: inline rename; same validation as the dialog; `Enter`, `Cmd+S` and blur commit through the same save path used by `Rename…`; `Esc` reverts.
+- The one-time seed (`persistence.ts`): on first mount, if `localStorage['strategylab-saved-graphs']` parses to at least one graph and `nb.seeded` is unset, call `seedLegacyGraphs(raw)` once. On success: rename the legacy key to `strategylab-saved-graphs.migrated` (do not delete), set `nb.seeded = '1'`, and show an S07 info banner: `Imported N saved graphs from this browser to the server. Open one from ⋯ › Open.` with a `Open…` action; append ` · M skipped (duplicates)` for duplicate skips and ` · K could not be read (kept in this browser)` for unreadable ones. If the server answers 413 (the legacy value is larger than the request limit), show a warning banner: `The saved graphs in this browser are too large to import in one request. They are kept in this browser.` The legacy key is renamed only after the server accepted the seed. On any other failure: no banner (retry next mount), console warning only.
 - `beforeunload` prompts while dirty.
 
 **Copy.** All strings above, plus tooltips: `Save (⌘S)`, `Run backtest (⌘↵)`, `Stop`, `More`, `Reset view (H)`, `Inspector (P)`, `Data sheet (S)`, `Edit this graph`.
@@ -243,7 +243,7 @@ At toolbar width < 1440: `Save` and `Spawn bots…` and `Reset view` show icons 
 - Do not compare by `rev` alone; compare content, or a saved-then-reloaded graph would prompt forever.
 
 **Acceptance.**
-- Edit a graph, wait 5 s (fake timers), reload the store with the same graph id: the banner `nb-banner-draft` appears with `Restore draft`; clicking it makes the store graph equal the draft and `dirty` true.
+- Edit a graph, wait 5 s (fake timers), reload the store with the same graph id: the banner `nb-banner-draft_found` appears (S07 key rule) with `Restore draft`; clicking it makes the store graph equal the draft and `dirty` true.
 - `Discard` removes the key.
 - After a successful save the key is gone and no banner shows on reload.
 - Content-equal draft: no banner.
@@ -393,6 +393,7 @@ Stack: newest on top, at most 3 visible; a fourth collapses the oldest into a 22
 | `seed_imported` | info | S01 seed text | `Open…` |
 | `import_ok` | ok | `Imported "<name>".` | none |
 | `server_error` | error | `<detail>` then ` · ` then the node name link when `node_id` is set | `Retry` (repeats the failed call) |
+| `run_error` | error | the Run error `<detail>` then ` · ` then the node name link when `node_id` is set; a separate key so a pushed `server_error` never hides it | `Retry` (runs again) |
 | `validate_offline` | error | `Could not reach the server to validate. <detail>` | `Retry` |
 | `cook_expired` | warn | `The cached data for this cook expired. Cooking again…` (auto-resolves when the re-cook succeeds) | none |
 | `rev_conflict_pending` | warn | `This graph has a save conflict. Save (⌘S) to resolve it.` | `Resolve` (opens S04) |

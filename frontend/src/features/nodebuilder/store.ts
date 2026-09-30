@@ -1,62 +1,61 @@
 /**
- * store.ts — Zustand store for the Node Strategy Builder (Unit 5).
+ * store.ts — Zustand store for the Node Strategy Builder (Unit 5, Wave 1).
  *
- * Manages the editable graph state, selection, viewport, and persistence.
+ * Manages the editable graph state, selection, viewport and edit history.
  * All mutation operations delegate to pure functions in operations.ts and
  * throw ReadOnlyGraphError when graph.readOnly is true.
+ *
+ * Every graph edit goes through `commit(label, recipe)`: it runs the recipe
+ * on the current graph and records the old graph in `past`, so the edit can
+ * be undone. Graphs are immutable, so a history entry is just a reference
+ * to the old graph (unchanged nodes are shared, nothing is copied).
+ *
+ * `beginBatch()` / `endBatch()` fold every commit between them into ONE
+ * undo step (a drag, or a create-and-wire from the Tab menu).
  *
  * Viewing auto-render results uses TanStack Query, NOT this store.
  * The store is only populated when the user explicitly enters edit mode.
  */
 
 import { create } from 'zustand'
-import type { Graph, GraphNode, GraphWire } from '../../api/nodebuilder'
+import { emptyGraph, type Graph, type GraphNode } from '../../api/nodebuilder'
 import {
   addNode as opAddNode,
-  removeNodeWithRewire as opRemoveNodeWithRewire,
+  removeNodes as opRemoveNodes,
+  removeNodesWithRewire as opRemoveNodesWithRewire,
   addWire as opAddWire,
   removeWire as opRemoveWire,
   moveNode as opMoveNode,
+  moveNodes as opMoveNodes,
   updateNodeParams as opUpdateNodeParams,
   spliceNodeOntoWire as opSpliceNodeOntoWire,
-  MIN_SUPPORTED_VERSION,
-  IncompatibleGraphVersionError,
+  type NewWire,
 } from './operations'
 import { prepareEditableCopy } from './editNotices'
 
 // ---------------------------------------------------------------------------
-// Persistence key
+// History
 // ---------------------------------------------------------------------------
 
-const SAVED_GRAPHS_KEY = 'strategylab-saved-graphs'
+/** Most undo steps kept. The oldest step is dropped past this. */
+export const HISTORY_CAP = 100
 
-function loadSavedGraphs(): Record<string, Graph> {
-  try {
-    const raw = localStorage.getItem(SAVED_GRAPHS_KEY)
-    if (!raw) return {}
-    return JSON.parse(raw) as Record<string, Graph>
-  } catch {
-    return {}
-  }
+/** One undo (or redo) step: the graph to go back to, and what the edit was. */
+export interface HistoryEntry {
+  label: string
+  graph: Graph
 }
 
-function saveSavedGraphs(graphs: Record<string, Graph>): void {
-  localStorage.setItem(SAVED_GRAPHS_KEY, JSON.stringify(graphs))
+/** The saved graph on the server this edit copy belongs to. */
+export interface GraphMeta {
+  /** Server id (g_...), or null for a graph not saved yet. */
+  id: string | null
+  rev: number
+  name: string
 }
 
-// ---------------------------------------------------------------------------
-// Simple hash for change detection (djb2 over JSON string)
-// ---------------------------------------------------------------------------
-
-function hashGraph(g: Graph | null): string | null {
-  if (g === null) return null
-  const s = JSON.stringify(g)
-  let h = 5381
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) + h) ^ s.charCodeAt(i)
-  }
-  return (h >>> 0).toString(16)
-}
+/** Recipe for a commit: takes the current graph, returns the next one. */
+export type GraphRecipe = (graph: Graph) => Graph
 
 // ---------------------------------------------------------------------------
 // State shape
@@ -66,17 +65,9 @@ export interface NodeBuilderState {
   // Current editable graph (null = no graph loaded; view auto-render via TanStack Query)
   graph: Graph | null
 
-  // Selection / display / bypass per-node UI state
+  // Selection / display per-node UI state
   selectedNodeId: string | null
   displayNodeId: string | null
-  bypassedNodeIds: Set<string>
-
-  // Cached hash for change detection
-  graphHash: string | null
-
-  // Hash of the graph when this edit copy was created (Edit / New Empty
-  // Graph). graphHash !== baseHash means the user has made edits.
-  baseHash: string | null
 
   // Regime node ids that "Edit this graph" took out of the copy (empty when
   // none). NodeBuilder shows a banner while this is non-empty.
@@ -85,45 +76,121 @@ export interface NodeBuilderState {
   // Pan / zoom
   viewport: { x: number; y: number; zoom: number }
 
+  // ── History ──────────────────────────────────────────────────────────────
+
+  /** Undo steps, oldest first. */
+  past: HistoryEntry[]
+  /** Redo steps, the next one to redo last. */
+  future: HistoryEntry[]
+  canUndo: boolean
+  canRedo: boolean
+
+  /**
+   * Goes up by one on every commit, undo, redo and graph load. Watchers
+   * (diagnostics, draft autosave) key off it instead of diffing graphs.
+   */
+  commitSeq: number
+
+  /** True when the graph differs from the last saved or loaded version. */
+  dirty: boolean
+
+  /** The server graph being edited, or null for a new or auto-render copy. */
+  graphMeta: GraphMeta | null
+
+  /** Goes up when a different graph is loaded, so the canvas refits the view. */
+  layoutEpoch: number
+
+  /** Open batch: nesting depth, and whether it already pushed its undo step. */
+  batch: { depth: number; pushed: boolean; label: string } | null
+
+  /** The graph as last saved or loaded; `dirty` compares against it. */
+  savedGraph: Graph | null
+
   // ── Setters ──────────────────────────────────────────────────────────────
 
-  setGraph(g: Graph | null): void
   select(id: string | null): void
   setDisplay(id: string | null): void
-  toggleBypass(id: string): void
   setViewport(v: { x: number; y: number; zoom: number }): void
+
+  // ── History operations ───────────────────────────────────────────────────
+
+  /**
+   * Apply one edit as one undo step. The recipe runs on the current graph;
+   * if it throws, nothing changes and the error reaches the caller. A recipe
+   * that returns the same graph records nothing.
+   */
+  commit(label: string, recipe: GraphRecipe): void
+  /** Fold every commit until the matching endBatch into one undo step. */
+  beginBatch(label?: string): void
+  endBatch(): void
+  undo(): void
+  redo(): void
 
   // ── Mutation operations (reject when graph.readOnly is true) ─────────────
 
   addNode(node: GraphNode): void
-  removeNodeWithRewire(nodeId: string): void
-  addWire(wire: GraphWire): void
+  /** Delete nodes and reconnect around them (Houdini rule, see operations.ts). */
+  removeNodesWithRewire(nodeIds: string[]): void
+  /** Delete nodes and their wires with no rewire. */
+  removeNodes(nodeIds: string[]): void
+  addWire(wire: NewWire): void
   removeWire(wireId: string): void
   moveNode(nodeId: string, position: [number, number]): void
+  /** Move several nodes in one step: one [dx, dy] for all, or one per id. */
+  moveNodes(ids: string[], deltas: [number, number] | Array<[number, number]>): void
   updateNodeParams(nodeId: string, partial: Record<string, unknown>): void
   spliceNodeOntoWire(nodeId: string, wireId: string): void
 
-  // ── Persistence ──────────────────────────────────────────────────────────
+  // ── Loading ──────────────────────────────────────────────────────────────
 
-  /** Write current graph to localStorage under its name (graph._version ensured). */
-  saveCurrentGraph(): void
+  /** Load a server graph for editing. Clears history; not dirty. */
+  openGraph(graph: Graph, meta: GraphMeta): void
 
-  /** Load a named graph from localStorage. Throws IncompatibleGraphVersionError if too old. */
-  loadGraph(name: string): void
+  /** Start a new, empty, unsaved graph. Clears history; graphMeta is null. */
+  newGraph(): void
+
+  /** Record a successful save: graphMeta updates and the graph is clean. */
+  markSaved(meta: GraphMeta): void
 
   /** Copy an auto-render graph into the store as editable (readOnly=false). */
   loadFromAutoRender(graph: Graph): void
-
-  /** Create a new, empty editable graph and enter edit mode. */
-  newEmptyGraph(): void
 
   /** Throw away the edit copy and go back to the read-only auto-render view. */
   discardEdits(): void
 }
 
-/** True when the editable graph differs from how it looked when the edit copy was made. */
-export function hasEdits(s: Pick<NodeBuilderState, 'graph' | 'graphHash' | 'baseHash'>): boolean {
-  return s.graph != null && !s.graph.readOnly && s.graphHash !== s.baseHash
+/** True when the editable graph has edits that are not saved. */
+export function hasEdits(s: Pick<NodeBuilderState, 'graph' | 'dirty'>): boolean {
+  return s.graph != null && !s.graph.readOnly && s.dirty
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Push onto a history stack, dropping the oldest step past the cap. */
+function pushCapped(stack: HistoryEntry[], entry: HistoryEntry): HistoryEntry[] {
+  const next = [...stack, entry]
+  return next.length > HISTORY_CAP ? next.slice(next.length - HISTORY_CAP) : next
+}
+
+/** Selection ids that still point at a node in `graph` (else null). */
+function keepIfPresent(id: string | null, graph: Graph | null): string | null {
+  return id && graph && id in graph.nodes ? id : null
+}
+
+/** Fields reset whenever a different graph is loaded (or none). */
+function freshHistory() {
+  return {
+    past: [] as HistoryEntry[],
+    future: [] as HistoryEntry[],
+    canUndo: false,
+    canRedo: false,
+    batch: null,
+    dirty: false,
+    selectedNodeId: null,
+    displayNodeId: null,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -134,113 +201,194 @@ export const useNodeBuilderStore = create<NodeBuilderState>()((set, get) => ({
   graph: null,
   selectedNodeId: null,
   displayNodeId: null,
-  bypassedNodeIds: new Set(),
-  graphHash: null,
-  baseHash: null,
   regimeRemoved: [],
   viewport: { x: 0, y: 0, zoom: 1 },
+  past: [],
+  future: [],
+  canUndo: false,
+  canRedo: false,
+  commitSeq: 0,
+  dirty: false,
+  graphMeta: null,
+  layoutEpoch: 0,
+  batch: null,
+  savedGraph: null,
 
   // ── Setters ───────────────────────────────────────────────────────────────
 
-  setGraph(g) {
-    set({ graph: g, graphHash: hashGraph(g) })
-  },
-
   select(id) {
-    set({ selectedNodeId: id })
+    // An id from a late answer (a failed Run, an old diagnostics row) may name
+    // a node that is gone; never leave the selection pointing at it. With no
+    // store graph (the read-only view) the id belongs to that view's graph.
+    const { graph } = get()
+    set({ selectedNodeId: graph ? keepIfPresent(id, graph) : id })
   },
 
   setDisplay(id) {
     set({ displayNodeId: id })
   },
 
-  toggleBypass(id) {
-    set(state => {
-      const next = new Set(state.bypassedNodeIds)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return { bypassedNodeIds: next }
+  setViewport(v) {
+    set({ viewport: v })
+  },
+
+  // ── History ───────────────────────────────────────────────────────────────
+
+  commit(label, recipe) {
+    const s = get()
+    const { graph } = s
+    if (!graph) return
+    const next = recipe(graph)
+    if (next === graph) return
+    const batch = s.batch
+    // Inside a batch only the first commit records the "before" graph.
+    const record = !batch || !batch.pushed
+    const past = record
+      ? pushCapped(s.past, { label: batch ? batch.label || label : label, graph })
+      : s.past
+    set({
+      graph: next,
+      past,
+      future: [],
+      canUndo: past.length > 0,
+      canRedo: false,
+      batch: batch ? { ...batch, pushed: true } : null,
+      commitSeq: s.commitSeq + 1,
+      dirty: next !== s.savedGraph,
+      selectedNodeId: keepIfPresent(s.selectedNodeId, next),
+      displayNodeId: keepIfPresent(s.displayNodeId, next),
     })
   },
 
-  setViewport(v) {
-    set({ viewport: v })
+  beginBatch(label = '') {
+    const { batch } = get()
+    set({ batch: batch ? { ...batch, depth: batch.depth + 1 } : { depth: 1, pushed: false, label } })
+  },
+
+  endBatch() {
+    const { batch } = get()
+    if (!batch) return
+    set({ batch: batch.depth > 1 ? { ...batch, depth: batch.depth - 1 } : null })
+  },
+
+  undo() {
+    const s = get()
+    if (!s.graph || s.past.length === 0) return
+    const entry = s.past[s.past.length - 1]
+    const past = s.past.slice(0, -1)
+    const future = pushCapped(s.future, { label: entry.label, graph: s.graph })
+    set({
+      graph: entry.graph,
+      past,
+      future,
+      canUndo: past.length > 0,
+      canRedo: true,
+      // An undo in the middle of a batch closes it: later commits are a new step.
+      batch: null,
+      commitSeq: s.commitSeq + 1,
+      dirty: entry.graph !== s.savedGraph,
+      selectedNodeId: keepIfPresent(s.selectedNodeId, entry.graph),
+      displayNodeId: keepIfPresent(s.displayNodeId, entry.graph),
+    })
+  },
+
+  redo() {
+    const s = get()
+    if (!s.graph || s.future.length === 0) return
+    const entry = s.future[s.future.length - 1]
+    const future = s.future.slice(0, -1)
+    const past = pushCapped(s.past, { label: entry.label, graph: s.graph })
+    set({
+      graph: entry.graph,
+      past,
+      future,
+      canUndo: true,
+      canRedo: future.length > 0,
+      batch: null,
+      commitSeq: s.commitSeq + 1,
+      dirty: entry.graph !== s.savedGraph,
+      selectedNodeId: keepIfPresent(s.selectedNodeId, entry.graph),
+      displayNodeId: keepIfPresent(s.displayNodeId, entry.graph),
+    })
   },
 
   // ── Mutation operations ───────────────────────────────────────────────────
 
   addNode(node) {
-    const { graph } = get()
-    if (!graph) return
-    const next = opAddNode(graph, node)
-    set({ graph: next, graphHash: hashGraph(next) })
+    get().commit(`add ${node.name || node.type}`, g => opAddNode(g, node))
   },
 
-  removeNodeWithRewire(nodeId) {
-    const { graph } = get()
-    if (!graph) return
-    const next = opRemoveNodeWithRewire(graph, nodeId)
-    set({ graph: next, graphHash: hashGraph(next) })
+  removeNodesWithRewire(nodeIds) {
+    const label = nodeIds.length === 1 ? 'delete node' : `delete ${nodeIds.length} nodes`
+    get().commit(label, g => opRemoveNodesWithRewire(g, nodeIds))
+  },
+
+  removeNodes(nodeIds) {
+    const label = nodeIds.length === 1 ? 'delete node' : `delete ${nodeIds.length} nodes`
+    get().commit(label, g => opRemoveNodes(g, nodeIds))
   },
 
   addWire(wire) {
-    const { graph } = get()
-    if (!graph) return
-    const next = opAddWire(graph, wire)
-    set({ graph: next, graphHash: hashGraph(next) })
+    get().commit('add wire', g => opAddWire(g, wire))
   },
 
   removeWire(wireId) {
-    const { graph } = get()
-    if (!graph) return
-    const next = opRemoveWire(graph, wireId)
-    set({ graph: next, graphHash: hashGraph(next) })
+    get().commit('delete wire', g => opRemoveWire(g, wireId))
   },
 
   moveNode(nodeId, position) {
-    const { graph } = get()
-    if (!graph) return
-    const next = opMoveNode(graph, nodeId, position)
-    set({ graph: next, graphHash: hashGraph(next) })
+    get().commit('move node', g => opMoveNode(g, nodeId, position))
   },
 
+  moveNodes(ids, deltas) {
+    const label = ids.length === 1 ? 'move node' : `move ${ids.length} nodes`
+    get().commit(label, g => opMoveNodes(g, ids, deltas))
+  },
+
+  // Kept as a named action: browser verification looks it up by name.
   updateNodeParams(nodeId, partial) {
-    const { graph } = get()
-    if (!graph) return
-    const next = opUpdateNodeParams(graph, nodeId, partial)
-    set({ graph: next, graphHash: hashGraph(next) })
+    const keys = Object.keys(partial)
+    const label = keys.length === 1 ? `edit ${keys[0]}` : 'edit params'
+    get().commit(label, g => opUpdateNodeParams(g, nodeId, partial))
   },
 
   spliceNodeOntoWire(nodeId, wireId) {
-    const { graph } = get()
-    if (!graph) return
-    const next = opSpliceNodeOntoWire(graph, nodeId, wireId)
-    set({ graph: next, graphHash: hashGraph(next) })
+    get().commit('splice node', g => opSpliceNodeOntoWire(g, nodeId, wireId))
   },
 
-  // ── Persistence ───────────────────────────────────────────────────────────
+  // ── Loading ───────────────────────────────────────────────────────────────
 
-  saveCurrentGraph() {
-    const { graph } = get()
-    if (!graph) return
-    const graphName = (graph.nodes['output'] as GraphNode | undefined)?.params?.name as string
-      ?? 'unnamed'
-    const withVersion: Graph = { ...graph, _version: graph._version || 1 }
-    const saved = loadSavedGraphs()
-    saved[graphName] = withVersion
-    saveSavedGraphs(saved)
+  openGraph(graph, meta) {
+    const editable = graph.readOnly ? { ...graph, readOnly: false } : graph
+    const s = get()
+    set({
+      ...freshHistory(),
+      graph: editable,
+      savedGraph: editable,
+      graphMeta: meta,
+      regimeRemoved: [],
+      commitSeq: s.commitSeq + 1,
+      layoutEpoch: s.layoutEpoch + 1,
+    })
   },
 
-  loadGraph(name) {
-    const saved = loadSavedGraphs()
-    const g = saved[name]
-    if (!g) throw new Error(`Graph "${name}" not found in saved graphs.`)
-    const version = g._version ?? 0
-    if (version < MIN_SUPPORTED_VERSION) {
-      throw new IncompatibleGraphVersionError(version, MIN_SUPPORTED_VERSION)
-    }
-    const h = hashGraph(g)
-    set({ graph: g, graphHash: h, baseHash: h, regimeRemoved: [], selectedNodeId: null, displayNodeId: null })
+  newGraph() {
+    const empty = emptyGraph()
+    const s = get()
+    set({
+      ...freshHistory(),
+      graph: empty,
+      savedGraph: empty,
+      graphMeta: null,
+      regimeRemoved: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+      commitSeq: s.commitSeq + 1,
+      layoutEpoch: s.layoutEpoch + 1,
+    })
+  },
+
+  markSaved(meta) {
+    set(s => ({ graphMeta: meta, savedGraph: s.graph, dirty: false }))
   },
 
   loadFromAutoRender(graph) {
@@ -251,47 +399,27 @@ export const useNodeBuilderStore = create<NodeBuilderState>()((set, get) => ({
     // not, otherwise Run Backtest 400s every time. The removed ids are kept
     // so NodeBuilder can tell the user. Rows are also spread apart (bug 8).
     const { graph: editable, regimeRemoved } = prepareEditableCopy(graph)
-    const h = hashGraph(editable)
+    const s = get()
     set({
+      ...freshHistory(),
       graph: editable,
-      graphHash: h,
-      baseHash: h,
+      savedGraph: editable,
+      graphMeta: null,
       regimeRemoved,
-      selectedNodeId: null,
-      displayNodeId: null,
-      bypassedNodeIds: new Set(),
-    })
-  },
-
-  newEmptyGraph() {
-    const empty: Graph = {
-      _version: 1,
-      readOnly: false,
-      nodes: {},
-      wires: [],
-    }
-    const h = hashGraph(empty)
-    set({
-      graph: empty,
-      graphHash: h,
-      baseHash: h,
-      regimeRemoved: [],
-      selectedNodeId: null,
-      displayNodeId: null,
-      bypassedNodeIds: new Set(),
-      viewport: { x: 0, y: 0, zoom: 1 },
+      commitSeq: s.commitSeq + 1,
+      layoutEpoch: s.layoutEpoch + 1,
     })
   },
 
   discardEdits() {
+    const s = get()
     set({
+      ...freshHistory(),
       graph: null,
-      graphHash: null,
-      baseHash: null,
+      savedGraph: null,
+      graphMeta: null,
       regimeRemoved: [],
-      selectedNodeId: null,
-      displayNodeId: null,
-      bypassedNodeIds: new Set(),
+      commitSeq: s.commitSeq + 1,
     })
   },
 }))

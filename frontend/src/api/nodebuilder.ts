@@ -10,34 +10,94 @@
 import { api } from './client'
 import type { StrategyRequest } from '../shared/types/strategy'
 
-/** Wire between two nodes in the graph. */
-export interface GraphWire {
-  id: string
-  /** Source node path. */
-  from: string
-  /** Destination node path. */
-  to: string
-  /** Attribute label on the wire (e.g. "@rsi", "@bool"). */
-  attr?: string | null
-}
+// ---------------------------------------------------------------------------
+// Graph JSON v2 (plan section 4.1). The server migrates older graphs to this
+// shape on every load path, so the frontend only ever sees v2 (v3 from W2).
+// ---------------------------------------------------------------------------
+
+/**
+ * A node parameter value. W7 adds `{ expr: string }` for code expressions;
+ * until then every value is a plain scalar or null.
+ */
+export type ParamValue = number | string | boolean | null
 
 /** A single node in the graph. */
 export interface GraphNode {
+  /** Stable, opaque id. Wires point at ids, so a rename never breaks a wire. */
   id: string
   type: string
-  params: Record<string, unknown>
+  /** Leaf name, unique among siblings, matching ^[a-z_][a-z0-9_]{0,63}$. */
+  name: string
+  /** Id of the containing network node, or null at the root. */
+  parent: string | null
+  params: Record<string, ParamValue>
   position: [number, number]
   display: boolean
   bypass: boolean
-  subgraph?: string | null
 }
 
-/** Top-level graph returned by the auto_render endpoint. */
+/** Wire between two nodes in the graph. */
+export interface GraphWire {
+  id: string
+  /** Source node id. */
+  from: string
+  /** Destination node id. */
+  to: string
+  /** Every node has one output port, always 'out'. */
+  from_port: 'out'
+  /** Input port on the destination: 'in0', 'in1', ... */
+  to_port: string
+  /** Attribute label on the wire (e.g. "@rsi"). v1/v2 only; W2's v3 migration removes it. */
+  attr?: string | null
+}
+
+/** A labelled, colored box drawn around a group of nodes (W3 draws them). */
+export interface NetworkBox {
+  id: string
+  label: string
+  color: string
+  rect: [number, number, number, number]
+  members: string[]
+  parent: string | null
+}
+
+/** A free-text note on the canvas (W3 draws them). */
+export interface StickyNote {
+  id: string
+  text: string
+  rect: [number, number, number, number]
+  color: string
+  parent: string | null
+}
+
+/** Top-level graph. */
 export interface Graph {
-  _version: number
+  _version: 2 | 3
+  /** Version of the stream schema (plan section 3). */
+  stream_schema: number
   readOnly: boolean
+  /** Free map, at most 32 keys, string/number/bool values. */
+  meta: Record<string, string | number | boolean>
   nodes: Record<string, GraphNode>
   wires: GraphWire[]
+  annotations: { boxes: NetworkBox[]; notes: StickyNote[] }
+}
+
+/** Graph version and stream schema the frontend writes for new graphs. */
+export const GRAPH_VERSION = 2
+export const STREAM_SCHEMA_VERSION = 1
+
+/** A new, empty, editable v2 graph. */
+export function emptyGraph(): Graph {
+  return {
+    _version: GRAPH_VERSION,
+    stream_schema: STREAM_SCHEMA_VERSION,
+    readOnly: false,
+    meta: {},
+    nodes: {},
+    wires: [],
+    annotations: { boxes: [], notes: [] },
+  }
 }
 
 export interface AutoRenderResponse {
@@ -134,10 +194,14 @@ export interface GraphBacktestResult {
 /**
  * Run a backtest using a compiled node graph.
  *
- * @param req - GraphBacktestRequest with the graph + simulator settings.
- * @returns   - GraphBacktestResult with summary, trades, equity_curve, baseline_curve.
+ * @param req    - GraphBacktestRequest with the graph + simulator settings.
+ * @param signal - Optional AbortSignal; Stop in the toolbar aborts the request (S01).
+ * @returns      - GraphBacktestResult with summary, trades, equity_curve, baseline_curve.
  */
-export async function fetchGraphBacktest(req: GraphBacktestRequest): Promise<GraphBacktestResult> {
-  const { data } = await api.post<GraphBacktestResult>('/api/nodebuilder/backtest', req)
+export async function fetchGraphBacktest(
+  req: GraphBacktestRequest,
+  signal?: AbortSignal,
+): Promise<GraphBacktestResult> {
+  const { data } = await api.post<GraphBacktestResult>('/api/nodebuilder/backtest', req, { signal })
   return data
 }

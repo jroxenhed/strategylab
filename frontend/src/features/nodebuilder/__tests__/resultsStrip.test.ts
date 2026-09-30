@@ -91,12 +91,18 @@ function axiosError(status: number, data: unknown) {
 }
 
 const GRAPH: Graph = {
-  _version: 1,
+  _version: 2,
+  stream_schema: 1,
   readOnly: false,
+  meta: {},
   nodes: {
-    '/entry': { id: '/entry', type: 'entry', params: {}, position: [0, 0], display: false, bypass: false },
+    '/entry': {
+      id: '/entry', type: 'entry', name: 'entry', parent: null,
+      params: {}, position: [0, 0], display: false, bypass: false,
+    },
   },
   wires: [],
+  annotations: { boxes: [], notes: [] },
 }
 
 describe('describeBacktestError', () => {

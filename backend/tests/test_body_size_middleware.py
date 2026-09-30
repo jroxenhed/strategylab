@@ -362,3 +362,128 @@ def test_parse_max_body_env_raises_on_nonpositive():
         parse_max_body_env("0")
     with pytest.raises(ValueError):
         parse_max_body_env("-100")
+
+
+# ---------------------------------------------------------------------------
+# F435: per-path allowance (/api/graphs takes 2 MB, everything else 1 MB)
+# ---------------------------------------------------------------------------
+
+
+def _build_path_limit_app() -> FastAPI:
+    app = FastAPI()
+    app.add_middleware(
+        BodySizeLimitMiddleware, max_bytes=128, path_limits={"/api/graphs": 1024},
+    )
+
+    @app.post("/api/graphs")
+    async def create(payload: dict):
+        return {"len": len(json.dumps(payload))}
+
+    @app.put("/api/graphs/{gid}")
+    async def save(gid: str, payload: dict):
+        return {"len": len(json.dumps(payload))}
+
+    @app.post("/api/graphsX")
+    async def lookalike(payload: dict):
+        return {"len": len(json.dumps(payload))}
+
+    @app.post("/echo")
+    async def echo(payload: dict):
+        return {"len": len(json.dumps(payload))}
+
+    return app
+
+
+def test_path_limit_raises_cap_for_prefix_and_children():
+    client = TestClient(_build_path_limit_app())
+    mid = {"k": "x" * 500}  # over the 128 global cap, under the 1024 path cap
+    assert client.post("/api/graphs", json=mid).status_code == 200
+    assert client.put("/api/graphs/abc", json=mid).status_code == 200
+
+
+def test_path_limit_still_caps_the_prefix():
+    client = TestClient(_build_path_limit_app())
+    big = {"k": "x" * 2000}
+    resp = client.post("/api/graphs", json=big)
+    assert resp.status_code == 413
+    assert "max 1024 bytes" in resp.json()["detail"]
+
+
+def test_path_limit_does_not_leak_to_other_paths():
+    client = TestClient(_build_path_limit_app())
+    mid = {"k": "x" * 500}
+    assert client.post("/echo", json=mid).status_code == 413
+    # A lookalike prefix is not a child path.
+    resp = client.post("/api/graphsX", json=mid)
+    assert resp.status_code == 413
+    assert "max 128 bytes" in resp.json()["detail"]
+
+
+def test_path_limit_applies_on_chunked_slow_path():
+    """No Content-Length: the slow path counts bytes against the path's cap."""
+    downstream: list[bytes] = []
+    sent: list[dict] = []
+
+    async def app(scope, receive, send):
+        msg = await receive()
+        downstream.append(msg["body"])
+
+    mw = BodySizeLimitMiddleware(app, max_bytes=128, path_limits={"/api/graphs": 1024})
+
+    def drive(path: str, size: int) -> None:
+        chunks = [b"x" * (size // 2), b"x" * (size - size // 2)]
+
+        async def receive():
+            body = chunks.pop(0)
+            return {"type": "http.request", "body": body, "more_body": bool(chunks)}
+
+        async def send(message):
+            sent.append(message)
+
+        scope = {"type": "http", "method": "POST", "path": path,
+                 "headers": [(b"transfer-encoding", b"chunked")]}
+        asyncio.run(mw(scope, receive, send))
+
+    drive("/api/graphs/abc", 600)
+    assert downstream == [b"x" * 600]
+    drive("/echo", 600)
+    assert downstream == [b"x" * 600]  # not forwarded
+    assert sent[0]["status"] == 413
+
+
+def test_path_limit_constructor_validation():
+    noop = lambda scope, r, s: None  # noqa: E731
+    with pytest.raises(ValueError):
+        BodySizeLimitMiddleware(noop, max_bytes=10, path_limits={"/api/graphs": 0})
+    with pytest.raises(ValueError):
+        BodySizeLimitMiddleware(noop, max_bytes=10, path_limits={"/": 100})
+    mw = BodySizeLimitMiddleware(
+        noop, max_bytes=10, path_limits={"/api": 50, "/api/graphs/": 100},
+    )
+    assert mw.limit_for("/api/graphs/x") == 100  # longest prefix wins; trailing / ignored
+    assert mw.limit_for("/api/other") == 50
+    assert mw.limit_for("/other") == 10
+
+
+def test_real_app_allows_2mb_on_graphs_and_1mb_elsewhere():
+    """The wired app: a 1.5 MB body reaches the /api/graphs route (which answers
+    422 for the unknown field, so nothing is written) but is 413 elsewhere;
+    over 2 MB is 413 on /api/graphs too."""
+    from main import app as real_app, BODY_PATH_LIMITS
+    from routes.graphs import MAX_BODY_BYTES as GRAPHS_MAX
+
+    assert GRAPHS_MAX == 2 * 1024 * 1024
+    assert BODY_PATH_LIMITS == {"/api/graphs": GRAPHS_MAX}
+    client = TestClient(real_app)
+    mid = json.dumps({"name": "x", "junk": "x" * 1_500_000})
+    headers = {"content-type": "application/json"}
+
+    r = client.post("/api/graphs", content=mid, headers=headers)
+    assert r.status_code == 422, r.text[:200]
+    r = client.post("/api/backtest", content=mid, headers=headers)
+    assert r.status_code == 413
+    assert f"max {DEFAULT_MAX_BYTES} bytes" in r.json()["detail"]
+
+    big = json.dumps({"name": "x", "junk": "x" * (GRAPHS_MAX + 10)})
+    r = client.post("/api/graphs", content=big, headers=headers)
+    assert r.status_code == 413

@@ -250,6 +250,31 @@ export function shouldHandleCanvasKey(opts: {
   return !!root && root.contains(el)
 }
 
+/**
+ * Does a key press belong to the node builder, for `global` commands
+ * (foundation 6.2)? Yes when the builder is on screen and the press is inside
+ * it, inside one of its portals (dialogs, popovers, menus carry the
+ * `nodebuilder-root` class), or on the page body right after a press inside
+ * it. Text fields count too; which commands run from a field is up to the
+ * command (`inFields`).
+ */
+export function belongsToBuilder(opts: {
+  target: EventTarget | null
+  root: Element | null
+  inView: boolean
+  bodyActive: boolean
+}): boolean {
+  const { target, root, inView, bodyActive } = opts
+  if (!inView || !root) return false
+  const el = target as Node | null
+  if (!el) return bodyActive
+  if (typeof document !== 'undefined' && (el === document.body || el === document.documentElement || el === document)) {
+    return bodyActive
+  }
+  if (root.contains(el)) return true
+  return el instanceof Element && el.closest('.nodebuilder-root') != null
+}
+
 /** The outermost `.nodebuilder-root` around an element (the whole node builder view). */
 export function outermostRoot(el: Element | null): Element | null {
   let found: Element | null = null

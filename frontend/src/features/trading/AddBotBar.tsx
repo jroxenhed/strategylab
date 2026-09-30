@@ -1,53 +1,36 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { BotFundStatus, SavedStrategy } from '../../shared/types'
 import { fmtUsd } from '../../shared/utils/format'
 import { apiErrorDetail } from '../../shared/utils/errors'
 import { btnStyle } from './ui'
 import { BOT_DEPLOYABLE_INTERVALS } from '../../shared/constants'
+import { getGraph, graphErrorDetail, listGraphs, type GraphListItem } from '../../api/graphs'
+import { formatFullTimestamp, useRelativeTime } from '../nodebuilder/ui/relativeTime'
 
 const SAVED_KEY = 'strategylab-saved-strategies'
-const SAVED_GRAPHS_KEY = 'strategylab-saved-graphs'
 // INTERVALS is the set of deployable intraday intervals — shared source of truth in shared/constants.ts
 const INTERVALS = BOT_DEPLOYABLE_INTERVALS
 
-export interface SavedGraph {
-  name: string
-  graph: object
+/** Graph list state for the picker (S06). Graphs come from the server only. */
+type GraphList =
+  | { state: 'idle' }
+  | { state: 'loading' }
+  | { state: 'error'; detail: string }
+  | { state: 'ready'; graphs: GraphListItem[] }
+
+/** Newest first, as the picker shows them. */
+function sortByUpdated(graphs: GraphListItem[]): GraphListItem[] {
+  return [...graphs].sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''))
 }
 
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
-}
-
-/**
- * Turn the raw localStorage value for saved graphs into a list.
- *
- * The node builder store writes an object map `{ name: Graph }`. Older code
- * expected an array `[{ name, graph }]`. Accept both. Anything else (a parse
- * error, a number, a string, broken entries) counts as empty. Never throws,
- * because a crash here blanks the whole app (the Live Trading tab is the
- * landing tab).
- */
-export function parseSavedGraphs(raw: string | null): SavedGraph[] {
-  if (!raw) return []
-  let data: unknown
-  try {
-    data = JSON.parse(raw)
-  } catch {
-    return []
-  }
-  if (Array.isArray(data)) {
-    return data.filter(
-      (g): g is SavedGraph =>
-        isPlainObject(g) && typeof g.name === 'string' && isPlainObject(g.graph),
-    )
-  }
-  if (isPlainObject(data)) {
-    return Object.entries(data)
-      .filter(([, graph]) => isPlainObject(graph))
-      .map(([name, graph]) => ({ name, graph: graph as object }))
-  }
-  return []
+/** `rev 4 · updated 5 min ago` under the picker for the chosen graph. */
+function SelectedGraphLine({ graph }: { graph: GraphListItem }) {
+  const rel = useRelativeTime(graph.updated_at)
+  return (
+    <span title={formatFullTimestamp(graph.updated_at)}>
+      rev {graph.rev} · updated {rel}
+    </span>
+  )
 }
 
 export const sectionStyle: React.CSSProperties = {
@@ -86,8 +69,10 @@ export default function AddBotBar({
   const [adding, setAdding] = useState(false)
   // Source: "rule" (strategy rules) or "graph" (node graph)
   const [source, setSource] = useState<'rule' | 'graph'>('rule')
-  const [savedGraphs, setSavedGraphs] = useState<SavedGraph[]>([])
-  const [selectedGraphIdx, setSelectedGraphIdx] = useState(-1)
+  const [graphList, setGraphList] = useState<GraphList>({ state: 'idle' })
+  const [selectedGraphId, setSelectedGraphId] = useState('')
+  // Only the newest list request may land (a slow old one must not win).
+  const listReq = useRef(0)
 
   const loadStrategies = () => {
     try {
@@ -100,20 +85,31 @@ export default function AddBotBar({
     } catch {}
   }
 
-  const loadGraphs = () => {
-    let raw: string | null = null
+  const loadGraphs = useCallback(async () => {
+    const req = ++listReq.current
+    setGraphList({ state: 'loading' })
     try {
-      raw = localStorage.getItem(SAVED_GRAPHS_KEY)
-    } catch {}
-    const graphs = parseSavedGraphs(raw)
-    setSavedGraphs(graphs)
-    // The list can shrink between loads; drop a selection that no longer exists.
-    setSelectedGraphIdx(i => (i < graphs.length ? i : -1))
-  }
+      const graphs = sortByUpdated(await listGraphs())
+      if (req !== listReq.current) return
+      setGraphList({ state: 'ready', graphs })
+      // The list can change between loads; drop a selection that no longer exists.
+      setSelectedGraphId(id => (graphs.some(g => g.id === id) ? id : ''))
+    } catch (e) {
+      if (req !== listReq.current) return
+      setGraphList({ state: 'error', detail: graphErrorDetail(e) })
+    }
+  }, [])
+
+  // Fetch the list when the Graph source is picked (and on ↻), never per render.
+  useEffect(() => {
+    if (source === 'graph') void loadGraphs()
+  }, [source, loadGraphs])
+
+  const graphs = graphList.state === 'ready' ? graphList.graphs : []
+  const selectedGraph = graphs.find(g => g.id === selectedGraphId) ?? null
 
   useEffect(() => {
     loadStrategies()
-    loadGraphs()
     // Check for pending spawn from Discovery tab
     try {
       const pending = localStorage.getItem('strategylab-pending-spawn')
@@ -147,7 +143,7 @@ export default function AddBotBar({
 
   const available = fund?.available ?? 0
   const canAdd = fund && fund.bot_fund > 0 && available > 0 && symbol && allocation &&
-    (source === 'rule' ? selectedIdx >= 0 : selectedGraphIdx >= 0)
+    (source === 'rule' ? selectedIdx >= 0 : selectedGraph != null)
 
   const handleAdd = async () => {
     if (adding) return
@@ -158,15 +154,23 @@ export default function AddBotBar({
     setAdding(true)
     try {
       if (source === 'graph') {
-        // Graph mode: post kind=graph + graph payload; no buy/sell rules needed
-        const g = savedGraphs[selectedGraphIdx]
-        if (!g) { setError('Select a saved graph'); return }
+        // Graph mode: fetch the saved graph, then post kind=graph + the graph
+        // payload; no buy/sell rules needed. The bot keeps its own copy.
+        const item = selectedGraph
+        if (!item) { setError('Select a graph'); return }
+        let env
+        try {
+          env = await getGraph(item.id)
+        } catch (e) {
+          setError(`Could not load "${item.name}": ${graphErrorDetail(e)}`)
+          return
+        }
         await onAdd({
-          strategy_name: g.name,
+          strategy_name: env.name,
           symbol: symbol.toUpperCase(),
           interval,
           kind: 'graph',
-          graph: g.graph,
+          graph: env.graph,
           // Stub rule arrays required by BotConfig schema (empty)
           buy_rules: [],
           sell_rules: [],
@@ -256,17 +260,45 @@ export default function AddBotBar({
             ))}
           </select>
         ) : (
-          <select
-            value={selectedGraphIdx}
-            onChange={e => setSelectedGraphIdx(Number(e.target.value))}
-            onFocus={loadGraphs}
-            style={{ ...inputStyle, minWidth: 160 }}
-          >
-            <option value={-1}>Select graph…</option>
-            {savedGraphs.map((g, i) => (
-              <option key={i} value={i}>{g.name}</option>
-            ))}
-          </select>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 12, color: 'var(--gh-text-muted, #888)' }}>Graph</span>
+            <select
+              aria-label="Graph"
+              value={graphList.state === 'ready' && graphs.length > 0 ? selectedGraphId : ''}
+              onChange={e => setSelectedGraphId(e.target.value)}
+              disabled={graphList.state !== 'ready' || graphs.length === 0}
+              data-testid="addbot-graph-select"
+              style={{ ...inputStyle, minWidth: 180 }}
+            >
+              {graphList.state === 'ready' && graphs.length > 0 ? (
+                <>
+                  <option value="" disabled>Select a graph…</option>
+                  {graphs.map(g => (
+                    <option key={g.id} value={g.id}>
+                      {g.name} · {g.node_count} node{g.node_count === 1 ? '' : 's'}
+                    </option>
+                  ))}
+                </>
+              ) : graphList.state === 'error' ? (
+                <option value="">Could not load graphs</option>
+              ) : graphList.state === 'ready' ? (
+                <option value="">No saved graphs</option>
+              ) : (
+                <option value="">Loading graphs…</option>
+              )}
+            </select>
+            <button
+              type="button"
+              title="Refresh graphs"
+              aria-label="Refresh graphs"
+              data-testid="addbot-graph-refresh"
+              onClick={() => void loadGraphs()}
+              disabled={graphList.state === 'loading'}
+              style={{ ...btnStyle('#1e2530', graphList.state === 'loading'), width: 24, height: 24, padding: 0 }}
+            >
+              ↻
+            </button>
+          </span>
         )}
 
         {/* Ticker */}
@@ -355,11 +387,44 @@ export default function AddBotBar({
         <button
           onClick={handleAdd}
           disabled={!canAdd || adding}
+          title={source === 'graph' && graphList.state === 'ready' && graphs.length > 0 && !selectedGraph ? 'Select a graph' : undefined}
+          data-testid="addbot-add"
           style={btnStyle('#1e3a5f', !canAdd || adding)}
         >
           {adding ? 'Adding…' : '+ Add Bot'}
         </button>
       </div>
+
+      {source === 'graph' && (
+        <div
+          data-testid="addbot-graph-help"
+          style={{
+            fontSize: 11,
+            color: graphList.state === 'error' ? 'var(--gh-red, #ef5350)' : 'var(--gh-text-muted, #888)',
+            minHeight: 16,
+          }}
+        >
+          {/* Only the error and empty texts are live: the selected graph's
+              "updated N min ago" ticks every minute and must not be re-read. */}
+          <span aria-live="polite">
+            {graphList.state === 'error' ? (
+              <>
+                {graphList.detail} ·{' '}
+                <button
+                  type="button"
+                  onClick={() => void loadGraphs()}
+                  style={{ background: 'none', border: 'none', padding: 0, color: 'inherit', font: 'inherit', textDecoration: 'underline', cursor: 'pointer' }}
+                >
+                  Retry
+                </button>
+              </>
+            ) : graphList.state === 'ready' && graphs.length === 0 ? (
+              'Build one in the Node Editor and save it.'
+            ) : null}
+          </span>
+          {graphList.state !== 'error' && graphs.length > 0 && selectedGraph && <SelectedGraphLine graph={selectedGraph} />}
+        </div>
+      )}
 
       {error && <span style={{ color: '#ef5350', fontSize: 12 }}>{error}</span>}
     </div>

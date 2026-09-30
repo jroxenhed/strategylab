@@ -5,13 +5,16 @@
  * Unit 5: wires to Zustand store when graph.readOnly === false.
  * Unit 6: Tab key opens TabMenu; Delete/Backspace deletes the selection;
  *          onConnect creates wires via store.addWire; handles visible in edit mode.
+ * Wave 1: every key goes through the command registry (commands/index.ts);
+ *          the canvas registers its own commands (Tab, Delete) while editing.
+ *          A group drag or a box delete is one store commit, so one undo step.
  *
  * Translates the Graph into React Flow nodes + edges, dispatching each
  * backend node to the correct custom renderer by category.
  *
  * Read-only (auto-render): pan/zoom only; nodes are not draggable/connectable.
- * Editable (store-backed): nodesDraggable=true; drag-end calls store.moveNode
- * for every node that moved.
+ * Editable (store-backed): nodesDraggable=true; drag-end calls store.moveNodes
+ * once with every node that moved.
  *
  * Selection lives in React Flow's local node state (so box selection with
  * Shift-drag and Cmd/Ctrl-click to add or remove a node work). The store
@@ -41,11 +44,22 @@ import type { Graph, GraphNode } from '../../api/nodebuilder'
 import { NODE_CATALOG, canWire, hasOutputPort, type NodeCatalogEntry } from './catalog'
 import type { BaseNodeData } from './nodes/BaseNode'
 import { useNodeBuilderStore } from './store'
-import { wouldCreateCycle } from './operations'
+import {
+  newNodeId,
+  newWireId,
+  removeNodes as opRemoveNodes,
+  removeNodesWithRewire as opRemoveNodesWithRewire,
+  removeWires as opRemoveWires,
+  uniqueName,
+  wouldCreateCycle,
+} from './operations'
+import { dispatchKey, registerCommands, type CommandScope } from './commands'
+import { closeActivePopover, isPopoverOpen } from './ui/Popover'
 import TabMenu from './TabMenu'
 import {
   alignSelection,
   dragStopMoves,
+  isTypingTarget,
   menuScreenPoint,
   mergeLocalNodes,
   newNodePosition,
@@ -101,6 +115,11 @@ const edgeTypes: EdgeTypes = {
 // Props passed as objects are hoisted so they keep one identity: React Flow
 // compares them by reference and would write its store on every render.
 const FIT_VIEW_OPTIONS = { padding: 0.2 }
+const HOME_VIEWPORT = { x: 0, y: 0, zoom: 1 }
+// While the canvas is the active area both scopes may act on a key.
+// Global commands (Cmd+S, Cmd+Z...) are dispatched by NodeBuilder's
+// useGlobalKeys, in every mode; the canvas only runs its own.
+const CANVAS_SCOPES: ReadonlySet<CommandScope> = new Set<CommandScope>(['canvas'])
 const MINIMAP_STYLE = { background: 'oklch(0.18 0.014 250)', border: '1px solid oklch(0.30 0.018 250)' }
 
 // ---------------------------------------------------------------------------
@@ -140,15 +159,20 @@ interface CanvasInnerProps {
 }
 
 function CanvasInner({ graph, editable }: CanvasInnerProps) {
-  const { screenToFlowPosition, fitView } = useReactFlow()
-  const storeMoveNode = useNodeBuilderStore(s => s.moveNode)
+  const { screenToFlowPosition, fitView, setViewport: rfSetViewport } = useReactFlow()
+  const storeMoveNodes = useNodeBuilderStore(s => s.moveNodes)
   const storeSetViewport = useNodeBuilderStore(s => s.setViewport)
   const storeAddNode = useNodeBuilderStore(s => s.addNode)
   const storeAddWire = useNodeBuilderStore(s => s.addWire)
-  const storeRemoveNodeWithRewire = useNodeBuilderStore(s => s.removeNodeWithRewire)
+  const storeRemoveNodesWithRewire = useNodeBuilderStore(s => s.removeNodesWithRewire)
+  const storeRemoveNodes = useNodeBuilderStore(s => s.removeNodes)
   const storeRemoveWire = useNodeBuilderStore(s => s.removeWire)
+  const storeCommit = useNodeBuilderStore(s => s.commit)
+  const storeBeginBatch = useNodeBuilderStore(s => s.beginBatch)
+  const storeEndBatch = useNodeBuilderStore(s => s.endBatch)
   const storeSelect = useNodeBuilderStore(s => s.select)
   const selectedNodeId = useNodeBuilderStore(s => s.selectedNodeId)
+  const layoutEpoch = useNodeBuilderStore(s => s.layoutEpoch)
 
   // Tab menu state
   const [tabMenuOpen, setTabMenuOpen] = useState(false)
@@ -342,14 +366,20 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
     if (editable) focusPane()
   }, [editable, focusPane])
 
-  // Re-fit when editing starts: the editable copy spreads the rows out, and
-  // the first fit (made for the read-only view) can leave Entry/Exit below
-  // the fold. Waits a frame so React Flow has the new nodes.
+  // Re-fit when editing starts, and whenever the store loads a different
+  // graph (layoutEpoch: New, Open, Edit this graph). The editable copy spreads
+  // the rows out, and the first fit (made for the read-only view) can leave
+  // Entry/Exit below the fold. An empty graph goes back to the home view
+  // instead, so New does not keep the old graph's pan and zoom. Waits a
+  // frame so React Flow has the new nodes.
   useEffect(() => {
     if (!editable) return
-    const frame = requestAnimationFrame(() => { void fitView(FIT_VIEW_OPTIONS) })
+    const frame = requestAnimationFrame(() => {
+      if (Object.keys(graphRef.current.nodes).length === 0) void rfSetViewport(HOME_VIEWPORT)
+      else void fitView(FIT_VIEW_OPTIONS)
+    })
     return () => cancelAnimationFrame(frame)
-  }, [editable, fitView])
+  }, [editable, layoutEpoch, fitView, rfSetViewport])
 
   // Re-fit when a new read-only graph arrives (another chart request, or back
   // from editing): the fitView prop only fits the first graph React Flow
@@ -370,18 +400,30 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
     const onPointerDown = (e: PointerEvent) => {
       const container = containerRef.current
       const root = container ? outermostRoot(container) : null
-      canvasActiveRef.current = !!root && root.contains(e.target as Node | null)
+      const t = e.target as Node | null
+      // Presses in the builder's own portals (a dialog, a popover menu) count
+      // as inside: after closing one, keys still belong to the canvas.
+      canvasActiveRef.current =
+        (!!root && root.contains(t)) || (t instanceof Element && t.closest('.nodebuilder-root') != null)
     }
     document.addEventListener('pointerdown', onPointerDown, true)
     return () => document.removeEventListener('pointerdown', onPointerDown, true)
   }, [editable])
 
   // ── Key handlers ──────────────────────────────────────────────────────────
+  // Every key goes through the command registry. The canvas decides WHETHER
+  // the press belongs to the node builder (shouldHandleCanvasKey); the
+  // registry decides WHAT it does. Modifier chords (Cmd+Z) are matched by the
+  // registry, so the modifier check is off here.
 
   const handleKeyDown = (e: KeyboardEvent) => {
     if (!editable) return
     // Don't interfere with the TabMenu's own keydown (it handles its own input)
     if (tabMenuOpen) return
+    // An open popover (toolbar menu, diagnostics, browser row menu) owns plain
+    // keys: Delete or arrows there must not reach the canvas selection.
+    // (Global chords such as Cmd+S go through useGlobalKeys, not here.)
+    if (isPopoverOpen() && !e.metaKey && !e.ctrlKey) return
     const container = containerRef.current
     if (!container) return
     const ok = shouldHandleCanvasKey({
@@ -389,55 +431,75 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
       root: outermostRoot(container),
       // display:none (another app tab is showing) gives no client rects.
       inView: container.getClientRects().length > 0,
-      modifier: e.metaKey || e.ctrlKey || e.altKey,
+      modifier: false,
       defaultPrevented: e.defaultPrevented,
       bodyActive: canvasActiveRef.current,
     })
     if (!ok) return
-
-    if (e.key === 'Tab') {
-      // Shift+Tab, and Tab on a toolbar button, keep normal focus movement.
-      if (e.shiftKey) return
-      const t = e.target as Node | null
-      const onBody = !t || t === document.body || t === document.documentElement
-      if (!onBody && !container.contains(t)) return
-      e.preventDefault()
-      const rect = container.getBoundingClientRect()
-      const screen = menuScreenPoint(lastPointerRef.current, rect)
-      const primary = selectedNodeId
-        ? localNodesRef.current.find(n => n.id === selectedNodeId) ?? null
-        : null
-      const topLeft = screenToFlowPosition({ x: rect.left, y: rect.top })
-      const bottomRight = screenToFlowPosition({ x: rect.right, y: rect.bottom })
-      setTabMenuScreen(screen)
-      setTabMenuGraph(newNodePosition({
-        openedBy: 'keyboard',
-        pointFlow: screenToFlowPosition(screen),
-        selected: primary,
-        visible: { minX: topLeft.x, minY: topLeft.y, maxX: bottomRight.x, maxY: bottomRight.y },
-      }))
-      pendingWireRef.current = null
-      setTabMenuFromWire(false)
-      setTabMenuOpen(true)
-      return
-    }
-
-    if (e.key === 'Delete' || e.key === 'Backspace') {
-      const plan = planDeletion(localNodesRef.current, localEdgesRef.current, selectedNodeId, selectedWireId)
-      if (plan.nodeIds.length === 0 && plan.wireIds.length === 0) return
-      e.preventDefault()
-      for (const id of plan.wireIds) storeRemoveWire(id)
-      for (const id of plan.nodeIds) storeRemoveNodeWithRewire(id)
-      storeSelect(null)
-      setSelectedWireId(null)
-    }
+    dispatchKey(e, { scopes: CANVAS_SCOPES })
   }
+
+  // Tab: open the Tab menu at the pointer. Returns false (not handled) when
+  // focus is on a toolbar button, so Tab keeps moving focus there.
+  const openTabMenuFromKey = (e: KeyboardEvent): boolean => {
+    const container = containerRef.current
+    if (!container) return false
+    const t = e.target as Node | null
+    const onBody = !t || t === document.body || t === document.documentElement
+    if (!onBody && !container.contains(t)) return false
+    const rect = container.getBoundingClientRect()
+    const screen = menuScreenPoint(lastPointerRef.current, rect)
+    const primary = selectedNodeId
+      ? localNodesRef.current.find(n => n.id === selectedNodeId) ?? null
+      : null
+    const topLeft = screenToFlowPosition({ x: rect.left, y: rect.top })
+    const bottomRight = screenToFlowPosition({ x: rect.right, y: rect.bottom })
+    setTabMenuScreen(screen)
+    setTabMenuGraph(newNodePosition({
+      openedBy: 'keyboard',
+      pointFlow: screenToFlowPosition(screen),
+      selected: primary,
+      visible: { minX: topLeft.x, minY: topLeft.y, maxX: bottomRight.x, maxY: bottomRight.y },
+    }))
+    pendingWireRef.current = null
+    setTabMenuFromWire(false)
+    setTabMenuOpen(true)
+    return true
+  }
+
+  // Delete / Backspace: remove the selection as ONE undo step. Nodes are
+  // removed with the Houdini rewire rule unless `rewire` is false
+  // (Shift+Delete).
+  const deleteSelection = (rewire: boolean): boolean => {
+    const plan = planDeletion(localNodesRef.current, localEdgesRef.current, selectedNodeId, selectedWireId)
+    if (plan.nodeIds.length === 0 && plan.wireIds.length === 0) return false
+    if (plan.wireIds.length === 0 && rewire) {
+      storeRemoveNodesWithRewire(plan.nodeIds)
+    } else if (plan.wireIds.length === 0) {
+      storeRemoveNodes(plan.nodeIds)
+    } else {
+      const label = plan.nodeIds.length > 0 ? 'delete selection' : 'delete wire'
+      storeCommit(label, g => {
+        const withoutWires = opRemoveWires(g, plan.wireIds)
+        if (plan.nodeIds.length === 0) return withoutWires
+        return rewire
+          ? opRemoveNodesWithRewire(withoutWires, plan.nodeIds)
+          : opRemoveNodes(withoutWires, plan.nodeIds)
+      })
+    }
+    storeSelect(null)
+    setSelectedWireId(null)
+    return true
+  }
+
   // Listen on the document, not the canvas div: after a toolbar click or a
   // closed menu, focus is on a button or the page body and a listener on the
   // div never heard the key. shouldHandleCanvasKey limits it to the node
   // builder while it is on screen. The ref keeps one listener for the
   // component's life while always calling the latest handler.
   const handleKeyDownRef = useRef(handleKeyDown)
+  const openTabMenuRef = useRef(openTabMenuFromKey)
+  const deleteSelectionRef = useRef(deleteSelection)
   // Refresh the "latest value" refs after each render, before any event can
   // read them. Callbacks read these instead of taking the values as deps.
   useLayoutEffect(() => {
@@ -445,6 +507,8 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
     localNodesRef.current = localNodes
     localEdgesRef.current = localEdges
     handleKeyDownRef.current = handleKeyDown
+    openTabMenuRef.current = openTabMenuFromKey
+    deleteSelectionRef.current = deleteSelection
   })
   useEffect(() => {
     if (!editable) return
@@ -452,6 +516,47 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
     document.addEventListener('keydown', listener)
     return () => document.removeEventListener('keydown', listener)
   }, [editable])
+
+  // The canvas's own commands, registered while editing. They read the
+  // latest handlers through refs, so they are registered once.
+  useEffect(() => {
+    if (!editable) return
+    return registerCommands([
+      {
+        id: 'canvas.tabMenu',
+        label: 'Add node',
+        keys: ['tab'],
+        scope: 'canvas',
+        run: e => openTabMenuRef.current(e),
+      },
+      {
+        id: 'canvas.delete',
+        label: 'Delete selection',
+        keys: ['delete', 'backspace'],
+        scope: 'canvas',
+        run: () => deleteSelectionRef.current(true),
+      },
+      {
+        id: 'canvas.deleteNoRewire',
+        label: 'Delete without reconnecting',
+        keys: ['shift+delete', 'shift+backspace'],
+        scope: 'canvas',
+        run: () => deleteSelectionRef.current(false),
+      },
+    ])
+  }, [editable])
+
+  // Spec 0.8: a press anywhere in the canvas (pane, node, wire, minimap)
+  // gives the canvas root keyboard focus, so keys work after a wire click.
+  // Text fields keep their focus; the portalled Tab menu is not inside the
+  // container in the DOM, so it is skipped too.
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    const container = containerRef.current
+    const target = e.target as Node | null
+    if (!container || !target || !container.contains(target)) return
+    if (isTypingTarget(e.target)) return
+    if (document.activeElement !== container) focusPane()
+  }, [focusPane])
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     lastPointerRef.current = { x: e.clientX, y: e.clientY }
@@ -464,23 +569,40 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
 
   // ── Drag-end: persist positions ───────────────────────────────────────────
   // React Flow passes every node that moved with the grabbed one; save them
-  // all, or the rest snap back on the next sync from the store.
+  // all, or the rest snap back on the next sync from the store. All of them
+  // go in one moveNodes call: one store write and one undo step.
+
+  const commitDrag = useCallback(
+    (moves: Array<{ id: string; position: [number, number] }>) => {
+      const nodes = graphRef.current.nodes
+      const ids: string[] = []
+      const deltas: Array<[number, number]> = []
+      for (const m of moves) {
+        const n = nodes[m.id]
+        if (!n) continue
+        ids.push(m.id)
+        deltas.push([m.position[0] - n.position[0], m.position[1] - n.position[1]])
+      }
+      if (ids.length > 0) storeMoveNodes(ids, deltas)
+    },
+    [storeMoveNodes],
+  )
 
   const handleNodeDragStop = useCallback(
     (_event: React.MouseEvent, node: RFNode, nodes: RFNode[]) => {
       if (!editable) return
-      for (const m of dragStopMoves(node, nodes)) storeMoveNode(m.id, m.position)
+      commitDrag(dragStopMoves(node, nodes))
     },
-    [editable, storeMoveNode],
+    [editable, commitDrag],
   )
 
   // Dragging the box around a selection (not a node) ends here instead.
   const handleSelectionDragStop = useCallback(
     (_event: React.MouseEvent, nodes: RFNode[]) => {
       if (!editable) return
-      for (const m of dragStopMoves(null, nodes)) storeMoveNode(m.id, m.position)
+      commitDrag(dragStopMoves(null, nodes))
     },
-    [editable, storeMoveNode],
+    [editable, commitDrag],
   )
 
   // ── Viewport persist ──────────────────────────────────────────────────────
@@ -496,6 +618,14 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
     [editable, storeSetViewport],
   )
 
+  // 0.4: a pan or zoom closes the open popover (menu, diagnostics, ...), in
+  // view mode too. Only user gestures carry an event; a programmatic move
+  // (fitView, framing a node from a diagnostics row) passes null and leaves
+  // the popover open.
+  const handleMoveStart = useCallback((event: MouseEvent | TouchEvent | null) => {
+    if (event) closeActivePopover()
+  }, [])
+
   // ── onConnect: wire drag creates a wire ───────────────────────────────────
 
   const handleConnect = useCallback(
@@ -504,8 +634,9 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
       // The wire carries the source node's default attribute (@close for a Ticker).
       const attr = primaryAttrFor(graphRef.current.nodes[params.source]?.type)
       try {
+        // The store picks the lowest free input port on the target.
         storeAddWire({
-          id: crypto.randomUUID(),
+          id: newWireId(),
           from: params.source,
           to: params.target,
           attr,
@@ -620,7 +751,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   const handleTabMenuCreate = useCallback(
     (catalogEntry: NodeCatalogEntry, withWire: boolean) => {
       const nodes = graphRef.current.nodes
-      const id = crypto.randomUUID()
+      const id = newNodeId()
       // Step down past any node already on this spot, so repeated creates
       // don't stack exactly on top of each other.
       const pos = nudgeFree(
@@ -630,59 +761,64 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
       const newNode: GraphNode = {
         id,
         type: catalogEntry.name,
-        params: { ...catalogEntry.defaults.params },
+        name: uniqueName(graphRef.current, catalogEntry.name, null),
+        parent: null,
+        params: { ...catalogEntry.defaults.params } as GraphNode['params'],
         position: [pos.x, pos.y],
         display: false,
         bypass: false,
       }
-      storeAddNode(newNode)
 
-      // Priority 1: port-drag → empty-space wire takes precedence over
-      // the autoWire-from-selection hint. Direction follows the dragged
-      // handle: source-handle drag → new node is the target; target-handle
-      // drag → new node is the source.
-      const pending = pendingWireRef.current
-      pendingWireRef.current = null
-      if (pending && pending.fromNodeId !== id) {
-        const isFromSource = pending.handleType === 'source'
-        const fromId = isFromSource ? pending.fromNodeId : id
-        const toId = isFromSource ? id : pending.fromNodeId
-        const sourceType = fromId === id ? newNode.type : nodes[fromId]?.type
-        const targetType = toId === id ? newNode.type : nodes[toId]?.type
-        // Skip the wire when the new node has no port on that side (a Ticker
-        // has no input, Entry/Exit and Settings nodes no output).
-        if (canWire(sourceType, targetType)) {
+      // The node and its auto-wire are one undo step.
+      storeBeginBatch(`add ${newNode.name}`)
+      try {
+        storeAddNode(newNode)
+
+        // Priority 1: port-drag → empty-space wire takes precedence over
+        // the autoWire-from-selection hint. Direction follows the dragged
+        // handle: source-handle drag → new node is the target; target-handle
+        // drag → new node is the source.
+        const pending = pendingWireRef.current
+        pendingWireRef.current = null
+        if (pending && pending.fromNodeId !== id) {
+          const isFromSource = pending.handleType === 'source'
+          const fromId = isFromSource ? pending.fromNodeId : id
+          const toId = isFromSource ? id : pending.fromNodeId
+          const sourceType = fromId === id ? newNode.type : nodes[fromId]?.type
+          const targetType = toId === id ? newNode.type : nodes[toId]?.type
+          // Skip the wire when the new node has no port on that side (a Ticker
+          // has no input, Entry/Exit and Settings nodes no output).
+          if (canWire(sourceType, targetType)) {
+            try {
+              storeAddWire({ id: newWireId(), from: fromId, to: toId, attr: primaryAttrFor(sourceType) })
+            } catch {
+              // Cycle — skip auto-wire silently
+            }
+          }
+        } else if (
+          // Auto-wire: source.out → new.in (from selected node), only when the
+          // selected node has an output and the new node an input.
+          withWire && selectedNodeId && selectedNodeId !== id
+          && canWire(nodes[selectedNodeId]?.type, newNode.type)
+        ) {
           try {
-            storeAddWire({ id: crypto.randomUUID(), from: fromId, to: toId, attr: primaryAttrFor(sourceType) })
+            storeAddWire({
+              id: newWireId(),
+              from: selectedNodeId,
+              to: id,
+              attr: primaryAttrFor(nodes[selectedNodeId]?.type),
+            })
           } catch {
             // Cycle — skip auto-wire silently
           }
         }
-        storeSelect(id)
-        return
-      }
-
-      // Auto-wire: source.out → new.in (from selected node), only when the
-      // selected node has an output and the new node an input.
-      if (
-        withWire && selectedNodeId && selectedNodeId !== id
-        && canWire(nodes[selectedNodeId]?.type, newNode.type)
-      ) {
-        try {
-          storeAddWire({
-            id: crypto.randomUUID(),
-            from: selectedNodeId,
-            to: id,
-            attr: primaryAttrFor(nodes[selectedNodeId]?.type),
-          })
-        } catch {
-          // Cycle — skip auto-wire silently
-        }
+      } finally {
+        storeEndBatch()
       }
 
       storeSelect(id)
     },
-    [tabMenuGraph, storeAddNode, storeAddWire, storeSelect, selectedNodeId],
+    [tabMenuGraph, storeAddNode, storeAddWire, storeBeginBatch, storeEndBatch, storeSelect, selectedNodeId],
   )
 
   const handleTabMenuClose = useCallback(() => {
@@ -700,12 +836,10 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
 
   const handleNodesDelete = useCallback(
     (nodes: RFNode[]) => {
-      for (const n of nodes) {
-        storeRemoveNodeWithRewire(n.id)
-      }
+      storeRemoveNodesWithRewire(nodes.map(n => n.id))
       storeSelect(null)
     },
-    [storeRemoveNodeWithRewire, storeSelect],
+    [storeRemoveNodesWithRewire, storeSelect],
   )
 
   const handleEdgesDelete = useCallback(
@@ -729,6 +863,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
       ref={containerRef}
       className="nodebuilder-root"
       tabIndex={0}
+      onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerLeave={handlePointerLeave}
       style={{ width: '100%', height: '100%', background: 'var(--nb-bg)', outline: 'none' }}
@@ -747,6 +882,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
         deleteKeyCode={null}  // We handle Delete ourselves to run rewire logic
         onNodeDragStop={editable ? handleNodeDragStop : undefined}
         onSelectionDragStop={editable ? handleSelectionDragStop : undefined}
+        onMoveStart={handleMoveStart}
         onMoveEnd={editable ? handleMoveEnd : undefined}
         onConnect={editable ? handleConnect : undefined}
         onConnectStart={editable ? handleConnectStart : undefined}

@@ -4,7 +4,11 @@ Runs with: pytest backend/tests/nodebuilder/test_catalog_consistency.py -v
 """
 from __future__ import annotations
 
+import difflib
+import importlib.util
+import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -158,54 +162,93 @@ class TestHelperFunctions:
         assert not missing, f"catalog_by_category() is missing categories: {missing}"
 
 
-class TestCrossLanguageParity:
-    """Parse catalog.ts as text and assert name sets match exactly.
+REPO_ROOT = Path(__file__).parents[3]  # repo root: strategylab/
+NODEBUILDER_TS_DIR = REPO_ROOT / "frontend" / "src" / "features" / "nodebuilder"
+EXPORT_SCRIPT = REPO_ROOT / "backend" / "scripts" / "export_nodebuilder_catalog.py"
 
-    No TypeScript evaluation — we extract `name: "..."` patterns via regex.
+
+def _load_export_script():
+    """Import backend/scripts/export_nodebuilder_catalog.py by path."""
+    spec = importlib.util.spec_from_file_location("export_nodebuilder_catalog", EXPORT_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestCrossLanguageParity:
+    """F435 1.D (D9): the frontend catalog is generated from this one.
+
+    The drift check renders catalog.generated.ts again in memory and diffs it
+    against the committed file.  catalog.ts must read from the generated file
+    and never list nodes or option lists of its own.
     """
 
-    CATALOG_TS = (
-        Path(__file__).parents[3]  # repo root: strategylab/
-        / "frontend"
-        / "src"
-        / "features"
-        / "nodebuilder"
-        / "catalog.ts"
-    )
+    CATALOG_TS = NODEBUILDER_TS_DIR / "catalog.ts"
+    GENERATED_TS = NODEBUILDER_TS_DIR / "catalog.generated.ts"
 
-    def _extract_ts_names(self) -> set[str]:
+    def test_files_exist(self):
+        assert self.CATALOG_TS.exists(), f"catalog.ts not found at {self.CATALOG_TS}"
+        assert self.GENERATED_TS.exists(), (
+            f"catalog.generated.ts not found at {self.GENERATED_TS}. "
+            f"Run: backend/venv/bin/python backend/scripts/export_nodebuilder_catalog.py"
+        )
+
+    def test_generated_ts_matches_backend_catalog(self):
+        """The committed catalog.generated.ts is exactly what the script writes now."""
+        expected = _load_export_script().render_catalog_ts()
+        committed = self.GENERATED_TS.read_text(encoding="utf-8")
+        if committed != expected:
+            diff = "".join(difflib.unified_diff(
+                committed.splitlines(keepends=True), expected.splitlines(keepends=True),
+                fromfile="catalog.generated.ts (committed)", tofile="catalog.generated.ts (from nodes.py)",
+                n=2,
+            ))
+            pytest.fail(
+                "catalog.generated.ts is stale. Regenerate it with:\n"
+                "  backend/venv/bin/python backend/scripts/export_nodebuilder_catalog.py\n\n"
+                + diff[:4000]
+            )
+
+    def test_script_writes_and_checks_a_file(self, tmp_path):
+        """The script's own write and --check paths agree with the in-memory render."""
+        script = _load_export_script()
+        out = tmp_path / "catalog.generated.ts"
+        assert script.main(["--check", "--out", str(out)]) == 1  # missing file is stale
+        assert script.main(["--out", str(out)]) == 0
+        assert out.read_text(encoding="utf-8") == script.render_catalog_ts()
+        assert script.main(["--check", "--out", str(out)]) == 0
+        out.write_text(out.read_text(encoding="utf-8") + "// hand edit\n", encoding="utf-8")
+        assert script.main(["--check", "--out", str(out)]) == 1
+
+    def test_generated_ts_says_it_is_generated(self):
+        head = self.GENERATED_TS.read_text(encoding="utf-8")[:600]
+        assert "GENERATED FILE" in head
+        assert "export_nodebuilder_catalog.py" in head
+
+    def test_generated_names_match_python_names(self):
+        text = self.GENERATED_TS.read_text(encoding="utf-8")
+        body = text[text.index("export const GENERATED_CATALOG"):]
+        ts_names = re.findall(r'^    "name":\s*"([^"]+)"', body, re.MULTILINE)
+        assert ts_names == [e.name for e in NODE_CATALOG]
+
+    def test_catalog_ts_reads_the_generated_file_only(self):
+        """catalog.ts may add UI extras but must not define nodes or options itself."""
         text = self.CATALOG_TS.read_text(encoding="utf-8")
-        # Match:  name: "rsi",  or  name: "rsi"  (with optional trailing comma/space)
-        # inside the NODE_CATALOG array block. We rely on the convention that every
-        # NodeCatalogEntry object has a `name:` field — match with any leading whitespace.
-        matches = re.findall(r'^\s+name:\s*"([^"]+)"', text, re.MULTILINE)
-        return set(matches)
-
-    def test_catalog_ts_exists(self):
-        assert self.CATALOG_TS.exists(), (
-            f"catalog.ts not found at expected path: {self.CATALOG_TS}"
+        assert "from './catalog.generated'" in text
+        assert "GENERATED_CATALOG.map(" in text
+        assert not re.search(r'^\s+name:\s*["\']', text, re.MULTILINE), (
+            "catalog.ts lists a node of its own; add it to backend nodes.py instead"
         )
-
-    def test_ts_names_match_python_names(self):
-        ts_names = self._extract_ts_names()
-        py_names = set(e.name for e in NODE_CATALOG)
-
-        only_in_ts = ts_names - py_names
-        only_in_py = py_names - ts_names
-
-        assert not only_in_ts and not only_in_py, (
-            f"Cross-language catalog mismatch.\n"
-            f"  Only in catalog.ts: {sorted(only_in_ts)}\n"
-            f"  Only in nodes.py:   {sorted(only_in_py)}"
-        )
-
-    def test_ts_name_count_matches_python(self):
-        ts_names = self._extract_ts_names()
-        py_count = len(NODE_CATALOG)
-        assert len(ts_names) == py_count, (
-            f"catalog.ts has {len(ts_names)} unique names, "
-            f"nodes.py has {py_count}. They must match."
-        )
+        for const in ("INTERVAL_OPTIONS", "SOURCE_OPTIONS", "RSI_TYPE_OPTIONS", "RSI_DEFAULT_TYPE",
+                      "TRAILING_STOP_TYPE_OPTIONS", "TRAILING_STOP_SOURCE_OPTIONS",
+                      "TRAILING_STOP_DEFAULTS"):
+            assert not re.search(rf"export const {const}\b", text), (
+                f"catalog.ts defines {const}; it must re-export it from catalog.generated.ts"
+            )
+            assert re.search(rf"^\s+{const},$", text, re.MULTILINE), (
+                f"catalog.ts no longer re-exports {const}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -215,14 +258,15 @@ class TestCrossLanguageParity:
 class TestRsiAndSourceOptions:
     """The RSI type options must be exactly what indicators.compute_rsi
     treats differently, with the rule builder's default, in both catalogs.
-    Data sources offered must be real providers (no polygon)."""
+    Data sources offered must be real providers (no polygon).  The frontend
+    reads these lists from catalog.generated.ts (catalog.ts re-exports them)."""
 
-    CATALOG_TS = TestCrossLanguageParity.CATALOG_TS
+    CATALOG_TS = TestCrossLanguageParity.GENERATED_TS
 
     def _ts_const_list(self, name: str) -> list[str]:
         text = self.CATALOG_TS.read_text(encoding="utf-8")
         m = re.search(rf"export const {name}\s*=\s*\[(.*?)\]", text, re.DOTALL)
-        assert m, f"{name} not found in catalog.ts"
+        assert m, f"{name} not found in catalog.generated.ts"
         pairs = re.findall(r"'([^']+)'|\"([^\"]+)\"", m.group(1))
         return [single or double for single, double in pairs]
 
@@ -255,6 +299,21 @@ class TestRsiAndSourceOptions:
     def test_ts_sources_have_no_polygon(self):
         assert "polygon" not in self._ts_const_list("SOURCE_OPTIONS")
 
+    def test_backend_sources_are_real_providers(self):
+        """Every offered source is a provider name backend/shared.py registers."""
+        from nodebuilder.nodes import SOURCE_OPTIONS
+        shared_py = (REPO_ROOT / "backend" / "shared.py").read_text(encoding="utf-8")
+        registered = set(re.findall(r'_providers\["([^"]+)"\]', shared_py))
+        registered |= set(re.findall(r"_providers\['([^']+)'\]", shared_py))
+        # Yahoo is registered in the dict literal that creates _providers.
+        registered |= set(re.findall(r'_providers[^=\n]*=\s*\{"([^"]+)"', shared_py))
+        assert "polygon" not in SOURCE_OPTIONS
+        assert set(SOURCE_OPTIONS) <= registered, (
+            f"sources not registered in shared.py: {set(SOURCE_OPTIONS) - registered}"
+        )
+        ticker_source = next(p for p in get_node("ticker").params if p.name == "source")
+        assert ticker_source.options == SOURCE_OPTIONS
+
 
 # ---------------------------------------------------------------------------
 # F435 0.A: the trailing_stop settings node
@@ -262,9 +321,9 @@ class TestRsiAndSourceOptions:
 
 class TestTrailingStopCatalog:
     """The trailing_stop node carries exactly TrailingStopConfig's fields and
-    defaults, and catalog.ts offers the same choices."""
+    defaults, and catalog.generated.ts offers the same choices."""
 
-    CATALOG_TS = TestCrossLanguageParity.CATALOG_TS
+    CATALOG_TS = TestCrossLanguageParity.GENERATED_TS
     _ts_const_list = TestRsiAndSourceOptions._ts_const_list
 
     def test_backend_defaults_match_trailing_stop_config(self):
@@ -295,15 +354,163 @@ class TestTrailingStopCatalog:
         assert self._ts_const_list("TRAILING_STOP_TYPE_OPTIONS") == list(TRAILING_STOP_TYPE_OPTIONS)
         assert self._ts_const_list("TRAILING_STOP_SOURCE_OPTIONS") == list(TRAILING_STOP_SOURCE_OPTIONS)
         text = self.CATALOG_TS.read_text(encoding="utf-8")
-        m = re.search(r"export const TRAILING_STOP_DEFAULTS\s*=\s*\{(.*?)\}", text, re.DOTALL)
-        assert m, "TRAILING_STOP_DEFAULTS not found in catalog.ts"
-        ts = {}
-        for key, raw in re.findall(r"(\w+):\s*([^,\n]+)", m.group(1)):
-            raw = raw.strip()
-            if raw in ("true", "false"):
-                ts[key] = raw == "true"
-            elif raw[0] in "'\"":
-                ts[key] = raw.strip("'\"")
+        m = re.search(r"export const TRAILING_STOP_DEFAULTS\s*=\s*(\{.*?\})\s*as const;", text, re.DOTALL)
+        assert m, "TRAILING_STOP_DEFAULTS not found in catalog.generated.ts"
+        assert json.loads(m.group(1)) == TRAILING_STOP_DEFAULTS
+
+
+# ---------------------------------------------------------------------------
+# F435 1.D: ParamSpec and PortsSpec on every entry (plan section 4.3)
+# ---------------------------------------------------------------------------
+
+class TestParamAndPortSpecs:
+    """Every entry describes its params and ports, and the specs tell the truth."""
+
+    def test_every_entry_has_specs(self):
+        from nodebuilder.nodes import ParamSpec, PortsSpec
+        for entry in NODE_CATALOG:
+            assert isinstance(entry.inputs, PortsSpec), entry.name
+            assert all(isinstance(p, ParamSpec) for p in entry.params), entry.name
+
+    def test_param_kinds_units_and_names_are_valid(self):
+        from nodebuilder.nodes import PARAM_DTYPES, PARAM_TYPES, PARAM_UNITS
+        for entry in NODE_CATALOG:
+            names = [p.name for p in entry.params]
+            assert len(names) == len(set(names)), f"{entry.name}: duplicate param names"
+            for p in entry.params:
+                where = f"{entry.name}.{p.name}"
+                assert p.type in PARAM_TYPES, where
+                assert p.unit is None or p.unit in PARAM_UNITS, where
+                assert p.dtype is None or p.dtype in PARAM_DTYPES, where
+                assert p.label, where
+                if p.type == "select":
+                    assert p.options, f"{where}: a select needs options"
+                    assert p.default in p.options, f"{where}: default is not an option"
+                else:
+                    assert p.options is None, f"{where}: only a select has options"
+                if p.min is not None and p.max is not None:
+                    assert p.min <= p.max, where
+                if p.default is not None and p.type in ("number", "int"):
+                    assert p.min is None or p.default >= p.min, where
+                    assert p.max is None or p.default <= p.max, where
+                if p.type == "int" and p.default is not None:
+                    assert isinstance(p.default, int), where
+                if p.default is None:
+                    assert p.optional, f"{where}: a param with no default must be optional"
+
+    def test_defaults_params_come_from_specs(self):
+        """compile reads defaults['params']; it must equal the spec defaults, in order."""
+        for entry in NODE_CATALOG:
+            assert list(entry.defaults["params"].items()) == [(p.name, p.default) for p in entry.params]
+            selects = {p.name: p.options for p in entry.params if p.type == "select"}
+            assert entry.defaults.get("param_options", {}) == selects, entry.name
+
+    def test_params_cannot_also_be_written_in_defaults(self):
+        from nodebuilder.nodes import NodeCatalogEntry, ParamSpec
+        with pytest.raises(ValueError, match="ParamSpec"):
+            NodeCatalogEntry(
+                name="x", cat="indicator", desc="", reads=(), writes=("@x",),
+                defaults={"params": {"period": 3}, "ins": 1, "outs": 1, "subtitle": None},
+                params=(ParamSpec("period", "int", "period", 3),),
+            )
+
+    def test_ports_are_coherent(self):
+        for entry in NODE_CATALOG:
+            spec = entry.inputs
+            required = sum(1 for p in spec.ports if not p.optional)
+            assert 0 <= spec.min <= spec.max, entry.name
+            assert required == spec.min, f"{entry.name}: required ports must equal min"
+            if not spec.dynamic:
+                assert len(spec.ports) == spec.max, entry.name
             else:
-                ts[key] = float(raw)
-        assert ts == TRAILING_STOP_DEFAULTS
+                assert len(spec.ports) <= spec.max, entry.name
+
+    def test_ports_match_what_compile_accepts(self):
+        """Sources and settings take no wire; terminals take one; comparisons a and b."""
+        for entry in NODE_CATALOG:
+            if entry.cat in ("ticker", "settings"):
+                assert entry.inputs.max == 0, entry.name
+            if entry.cat == "output":
+                assert entry.inputs.max == 1, entry.name
+            if entry.cat == "comparison":
+                assert [p.label for p in entry.inputs.ports] == ["a", "b"], entry.name
+                assert (entry.inputs.min, entry.inputs.max) == (1, 2), entry.name
+        assert get_node("entry").inputs.min == 1
+        assert get_node("exit").inputs.min == 0  # an unwired Exit is a warning, not an error
+        assert get_node("and").inputs.dynamic and get_node("or").inputs.dynamic
+        assert not get_node("not").inputs.dynamic and get_node("not").inputs.max == 1
+
+    def test_ticker_symbol_and_interval_are_not_code_able(self):
+        """Plan D1: a Ticker's symbol and interval may never hold code."""
+        specs = {p.name: p for p in get_node("ticker").params}
+        assert not specs["symbol"].code_able
+        assert not specs["interval"].code_able
+        for entry in NODE_CATALOG:
+            if entry.name != "ticker":
+                assert all(p.code_able for p in entry.params), entry.name
+
+    def test_int_limits_match_the_impls(self):
+        """A period at min and max is accepted; one step outside is refused."""
+        from nodebuilder.nodes import NODE_IMPLS
+        for entry in NODE_CATALOG:
+            for p in entry.params:
+                if p.type != "int" or p.min is None or p.max is None:
+                    continue
+                impl = NODE_IMPLS[entry.name]
+                base = dict(entry.defaults["params"])
+                impl({**base, p.name: int(p.min)})
+                impl({**base, p.name: int(p.max)})
+                with pytest.raises(ValueError):
+                    impl({**base, p.name: int(p.min) - 1})
+                with pytest.raises(ValueError):
+                    impl({**base, p.name: int(p.max) + 1})
+
+    def test_setting_limits_match_the_impls(self):
+        from nodebuilder.nodes import NODE_IMPLS
+        size = NODE_IMPLS["position_size"]
+        size({"size": 1.0})
+        with pytest.raises(ValueError):
+            size({"size": 1.01})
+        with pytest.raises(ValueError):
+            size({"size": 0.0})  # spec min 0 is the bound; 0 itself is refused
+        with pytest.raises(ValueError):
+            NODE_IMPLS["slippage"]({"bps": -0.1})
+        with pytest.raises(ValueError):
+            NODE_IMPLS["commission"]({"per_share_rate": -0.01})
+        with pytest.raises(ValueError):
+            NODE_IMPLS["bollinger"]({"period": 20, "stddev": 5.1})
+        # An empty stop-loss turns the stop off, so pct is optional.
+        assert NODE_IMPLS["stop_loss"]({"pct": None}).value is None
+        assert next(p for p in get_node("stop_loss").params if p.name == "pct").optional
+
+    def test_every_numeric_settings_param_has_a_unit(self):
+        """Wave 0 honesty: a settings number always says how it is read."""
+        for entry in NODE_CATALOG:
+            if entry.cat != "settings":
+                continue
+            for p in entry.params:
+                if p.type in ("number", "int"):
+                    assert p.unit, f"{entry.name}.{p.name} has no unit"
+        size = get_node("position_size").params[0]
+        assert (size.unit, size.min, size.max) == ("frac", 0.0, 1.0)
+
+    def test_to_json_has_the_section_4_3_shape(self):
+        rsi = get_node("rsi").to_json()
+        assert list(rsi) == [
+            "name", "cat", "desc", "compile_active", "inputs", "params", "reads", "writes",
+            "subtitle", "setting_key", "ins", "outs",
+        ]
+        assert rsi["params"][0] == {
+            "name": "period", "type": "int", "label": "period", "default": 14,
+            "min": 2, "max": 500, "unit": "bars",
+        }
+        assert rsi["params"][1]["options"] == ["sma", "wilder"]
+        cmp = get_node("crosses_above").to_json()
+        assert cmp["inputs"] == {
+            "ports": [{"label": "a"}, {"label": "b", "optional": True}],
+            "dynamic": False, "min": 1, "max": 2,
+        }
+        assert cmp["params"] == [
+            {"name": "threshold", "type": "number", "label": "threshold", "default": None, "optional": True},
+        ]
+        json.dumps([e.to_json() for e in NODE_CATALOG])  # plain JSON all the way down

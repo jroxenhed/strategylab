@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
-import type { Graph, GraphNode } from '../../../api/nodebuilder'
+import type { Graph, GraphNode, GraphWire } from '../../../api/nodebuilder'
 import {
   EDIT_VERTICAL_SPACING,
   describeUnsupportedNodes,
@@ -14,13 +14,21 @@ import {
 import { hasEdits, useNodeBuilderStore } from '../store'
 
 function node(id: string, type: string, y = 100): GraphNode {
-  return { id, type, params: {}, position: [10, y], display: false, bypass: false }
+  const name = id.split('/').pop() || type
+  return { id, type, name, parent: null, params: {}, position: [10, y], display: false, bypass: false }
+}
+
+function wire(id: string, from: string, to: string, to_port = 'in0'): GraphWire {
+  return { id, from, to, from_port: 'out', to_port }
 }
 
 function autoGraph(): Graph {
   return {
-    _version: 1,
+    _version: 2,
+    stream_schema: 1,
     readOnly: true,
+    meta: {},
+    annotations: { boxes: [], notes: [] },
     nodes: {
       '/ticker': node('/ticker', 'ticker', 0),
       '/entry/rsi': node('/entry/rsi', 'rsi', 100),
@@ -29,9 +37,9 @@ function autoGraph(): Graph {
       '/regime/ma': node('/regime/ma', 'sma', 50),
     },
     wires: [
-      { id: 'w1', from: '/ticker', to: '/entry/rsi' },
-      { id: 'w2', from: '/entry/rsi', to: '/entry' },
-      { id: 'w3', from: '/ticker', to: '/regime/ma' },
+      wire('w1', '/ticker', '/entry/rsi'),
+      wire('w2', '/entry/rsi', '/entry'),
+      wire('w3', '/ticker', '/regime/ma'),
     ],
   }
 }
@@ -71,7 +79,7 @@ describe('findUnsupportedNodes', () => {
   it('lists unknown types and catalog entries marked not compile-active', () => {
     const g = autoGraph()
     g.nodes['/size'] = node('/size', 'size')
-    g.wires.push({ id: 'ws', from: '/entry/rsi', to: '/size' })
+    g.wires.push(wire('ws', '/entry/rsi', '/size'))
     const list = findUnsupportedNodes(g)
     expect(list).toEqual([
       { id: '/entry/rising', type: 'rising', reason: 'unknown' },
@@ -96,7 +104,7 @@ describe('findUnsupportedNodes', () => {
       { id: '/sl_long', type: 'stop_loss', reason: 'direction', detail: 'long' },
       { id: '/cmp', type: 'above', reason: 'rule', detail: 'atr_pct' },
     ])
-    expect(describeUnsupportedNodes(findUnsupportedNodes(g))).toContain('stop_loss [long] (/sl_long)')
+    expect(describeUnsupportedNodes(findUnsupportedNodes(g))).toContain('stop_loss [long], above [atr_pct]')
   })
 
   it('skips a bypassed per-direction setting (compile skips it too)', () => {
@@ -113,16 +121,15 @@ describe('findUnsupportedNodes', () => {
     expect(findUnsupportedNodes(g)).toEqual([])
   })
 
-  it('describes the list for the banner', () => {
+  it('describes the list for the banner with the S07 copy', () => {
     expect(describeUnsupportedNodes([])).toBeNull()
     const one = describeUnsupportedNodes([{ id: '/a', type: 'rising', reason: 'unknown' }])
-    expect(one).toBe('This node cannot run yet, so Run Backtest will fail until you remove it: rising (/a)')
+    expect(one).toBe('Unsupported in graphs: rising. The graph cannot run until these are replaced.')
     const two = describeUnsupportedNodes([
       { id: '/a', type: 'rising', reason: 'unknown' },
       { id: '/b', type: 'stop', reason: 'inactive' },
     ])
-    expect(two).toContain('These nodes cannot run yet')
-    expect(two).toContain('rising (/a), stop (/b)')
+    expect(two).toBe('Unsupported in graphs: rising, stop. The graph cannot run until these are replaced.')
   })
 })
 
@@ -145,9 +152,9 @@ describe('store edit copy', () => {
     expect(hasEdits(useNodeBuilderStore.getState())).toBe(true)
   })
 
-  it('newEmptyGraph starts clean and clears the regime notice', () => {
+  it('newGraph starts clean and clears the regime notice', () => {
     useNodeBuilderStore.getState().loadFromAutoRender(autoGraph())
-    useNodeBuilderStore.getState().newEmptyGraph()
+    useNodeBuilderStore.getState().newGraph()
     const s = useNodeBuilderStore.getState()
     expect(s.regimeRemoved).toEqual([])
     expect(hasEdits(s)).toBe(false)

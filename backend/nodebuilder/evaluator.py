@@ -38,24 +38,40 @@ class RegimeUnsupportedError(GraphValidationError):
     """Raised when a graph contains a /regime/ node, which is not supported
     by the graph evaluator at T2."""
 
+    code = "regime_unsupported"
+
 
 class MissingTerminalError(GraphValidationError):
-    """Raised when compile() finds no Entry terminal in the graph."""
+    """Raised when compile() finds no Entry terminal in the graph.
+
+    Compile sets code "missing_input" on it when the Entry exists but gets
+    no signal."""
+
+    code = "missing_terminal"
 
 
 class HTFGraphNotSupportedError(GraphValidationError):
     """Placeholder — raised by Unit 9 when a graph bot uses HTF intervals."""
+
+    code = "unsupported_node"
 
 
 class FamilyCapExceededError(GraphValidationError):
     """Raised by compute_indicators_from_specs when too many specs of a single
     indicator family are requested (mirrors signal_engine._INDICATOR_FAMILY_CAP)."""
 
+    code = "family_cap"
+
 
 class GraphTypeError(GraphValidationError, TypeError):
     """Raised by compile() when a wire carries the wrong kind of value, for
     example a price wired straight into Entry, or a crossover that reads a
-    derived signal.  It is still a TypeError so older callers keep working."""
+    derived signal.  It is still a TypeError so older callers keep working.
+
+    Compile sets code "port_unknown" on it for a wire into a node that takes
+    no input (or out of one with no output)."""
+
+    code = "attr_type"
 
 
 class UnsupportedNodeError(GraphValidationError):
@@ -65,6 +81,8 @@ class UnsupportedNodeError(GraphValidationError):
     graph never trades differently from what the canvas shows.
     """
 
+    code = "unsupported_node"
+
     def __init__(self, node_id: str, node_type: str) -> None:
         super().__init__(
             f"Node {node_id!r} has type {node_type!r}, which the graph backtest "
@@ -72,6 +90,13 @@ class UnsupportedNodeError(GraphValidationError):
             node_id=node_id,
         )
         self.node_type = node_type
+
+
+class UnknownNodeTypeError(UnsupportedNodeError):
+    """A node type that is not in the catalog at all (a typo, or a node from
+    a newer version).  Still an UnsupportedNodeError for older callers."""
+
+    code = "unknown_node_type"
 
 
 # ---------------------------------------------------------------------------

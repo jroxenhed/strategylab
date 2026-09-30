@@ -44,15 +44,39 @@ class BodySizeLimitMiddleware:
     """Limits HTTP request body size via Content-Length fast path with chunked-body slow path fallback.
 
     Pure ASGI (not BaseHTTPMiddleware) to avoid lifespan interaction issues.
+
+    ``path_limits`` maps a path prefix to its own cap (F435: /api/graphs takes
+    up to 2 MB while everything else keeps the global cap). A prefix matches
+    the path itself and anything below it (``/api/graphs`` matches
+    ``/api/graphs/abc`` but not ``/api/graphsX``); the longest match wins.
     """
 
     BODY_METHODS = frozenset(("POST", "PUT", "PATCH"))
 
-    def __init__(self, app: ASGIApp, max_bytes: int = DEFAULT_MAX_BYTES) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        max_bytes: int = DEFAULT_MAX_BYTES,
+        path_limits: dict[str, int] | None = None,
+    ) -> None:
         if max_bytes <= 0:
             raise ValueError("max_bytes must be positive")
+        limits = {p.rstrip("/"): n for p, n in (path_limits or {}).items()}
+        if any(n <= 0 for n in limits.values()):
+            raise ValueError("path_limits values must be positive")
+        if any(not p for p in limits):
+            raise ValueError("path_limits prefixes must be non-root paths")
         self.app = app
         self.max_bytes = max_bytes
+        # Longest prefix first so the most specific allowance wins.
+        self._path_limits = sorted(limits.items(), key=lambda kv: len(kv[0]), reverse=True)
+
+    def limit_for(self, path: str) -> int:
+        """The body cap for ``path``: the longest matching prefix, else the global cap."""
+        for prefix, limit in self._path_limits:
+            if path == prefix or path.startswith(prefix + "/"):
+                return limit
+        return self.max_bytes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         # Non-HTTP scopes (WebSocket, lifespan) bypass the body cap — they don't
@@ -66,6 +90,8 @@ class BodySizeLimitMiddleware:
         if method not in self.BODY_METHODS:
             await self.app(scope, receive, send)
             return
+
+        max_bytes = self.limit_for(scope.get("path", ""))
 
         # Walk headers once, collecting every Content-Length value and noting
         # whether Transfer-Encoding is present. ASGI lowercases header names.
@@ -109,10 +135,10 @@ class BodySizeLimitMiddleware:
             if declared < 0:
                 await _reply(send, 400, "Invalid Content-Length")
                 return
-            if declared > self.max_bytes:
+            if declared > max_bytes:
                 await _reply(
                     send, 413,
-                    f"Request body too large (max {self.max_bytes} bytes)",
+                    f"Request body too large (max {max_bytes} bytes)",
                 )
                 return
             await self.app(scope, receive, send)
@@ -134,10 +160,10 @@ class BodySizeLimitMiddleware:
                 continue
             body = message.get("body", b"") or b""
             total += len(body)
-            if total > self.max_bytes:
+            if total > max_bytes:
                 await _reply(
                     send, 413,
-                    f"Request body too large (max {self.max_bytes} bytes)",
+                    f"Request body too large (max {max_bytes} bytes)",
                 )
                 return
             chunks.append(body)

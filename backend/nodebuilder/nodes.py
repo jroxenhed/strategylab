@@ -3,12 +3,144 @@
 Unit 2: NODE_CATALOG + helpers (metadata only, no runtime impls).
 Unit 7b: adds impl functions (rsi_impl, macd_impl, etc.) + result dataclasses
          + NODE_IMPLS registry.
+F435 1.D: every entry carries ParamSpec and PortsSpec (plan section 4.3).
+         This file is the one source of truth for the node catalog:
+         backend/scripts/export_nodebuilder_catalog.py writes it out as
+         frontend/src/features/nodebuilder/catalog.generated.ts.
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
+
+
+# ---------------------------------------------------------------------------
+# Param and port specs (plan section 4.3)
+# ---------------------------------------------------------------------------
+
+# Every kind of param a node can have.  "attr", "attr_list", "write", "path"
+# and "time_range" are used from Wave 2 on; they are listed now so the
+# frontend type is complete.
+PARAM_TYPES: tuple[str, ...] = (
+    "number", "int", "string", "select", "bool",
+    "attr", "attr_list", "write", "path", "time_range",
+)
+
+# Units a number param can be read in.  "frac" is a fraction (1 = 100%).
+# "$" and "$/share" are commission amounts, and "% or x ATR" is the trailing
+# stop value, which is a percent or an ATR multiple depending on its type.
+PARAM_UNITS: tuple[str, ...] = ("%", "bps", "bars", "frac", "$", "$/share", "% or x ATR")
+
+PARAM_DTYPES: tuple[str, ...] = ("float", "bool", "any")
+
+
+@dataclass(frozen=True)
+class ParamSpec:
+    """One param of a node type: its kind, label, default and limits.
+
+    min/max are the limits the impl function enforces (for example a period
+    of 2 to 500 bars).  code_able is False for params that may never hold
+    code (the Ticker's symbol and interval, plan D1).
+    """
+    name: str
+    type: str
+    label: str
+    default: Any
+    min: Optional[float] = None
+    max: Optional[float] = None
+    step: Optional[float] = None
+    unit: Optional[str] = None
+    options: Optional[tuple[str, ...]] = None
+    dtype: Optional[str] = None
+    optional: bool = False
+    code_able: bool = True
+
+    def to_json(self) -> dict[str, Any]:
+        """The JSON shape of section 4.3.  Unset optional fields are left out."""
+        out: dict[str, Any] = {
+            "name": self.name, "type": self.type, "label": self.label, "default": self.default,
+        }
+        for key in ("min", "max", "step", "unit", "dtype"):
+            value = getattr(self, key)
+            if value is not None:
+                out[key] = value
+        if self.options is not None:
+            out["options"] = list(self.options)
+        if self.optional:
+            out["optional"] = True
+        if not self.code_able:
+            out["code_able"] = False
+        return out
+
+
+@dataclass(frozen=True)
+class PortSpec:
+    """One input port.  Its id is in<k> by position; label is what the canvas shows."""
+    label: str
+    optional: bool = False
+
+    def to_json(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"label": self.label}
+        if self.optional:
+            out["optional"] = True
+        return out
+
+
+@dataclass(frozen=True)
+class PortsSpec:
+    """The input ports of a node type.
+
+    ports   : the ports drawn by default, in order (in0, in1, ...).
+    dynamic : True when more ports can be added (AND, OR).  Each extra port
+              is labeled by its id.
+    min/max : how many wired ports the node needs, and how many it can take.
+    """
+    ports: tuple[PortSpec, ...]
+    dynamic: bool
+    min: int
+    max: int
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "ports": [p.to_json() for p in self.ports],
+            "dynamic": self.dynamic,
+            "min": self.min,
+            "max": self.max,
+        }
+
+
+# Nodes that take no wire in: the Ticker (a source) and Settings nodes.
+NO_INPUTS = PortsSpec(ports=(), dynamic=False, min=0, max=0)
+
+# An indicator reads the Ticker's bars.  The wire is optional: compile reads
+# the Ticker's bars even when nothing is wired in.
+_SOURCE_INPUT = PortsSpec(ports=(PortSpec("source", optional=True),), dynamic=False, min=0, max=1)
+
+# A comparison takes a (the left side) and b (the right side).  With b empty
+# it compares a to its threshold param.
+_COMPARISON_INPUTS = PortsSpec(
+    ports=(PortSpec("a"), PortSpec("b", optional=True)), dynamic=False, min=1, max=2,
+)
+
+# AND/OR take one or more signals.  Compile accepts any count, so max is a
+# generous cap for the canvas, not a real limit of the engine.
+_LOGIC_INPUTS = PortsSpec(ports=(PortSpec("in0"), PortSpec("in1", optional=True)), dynamic=True, min=1, max=16)
+
+_ONE_SIGNAL = PortsSpec(ports=(PortSpec("signal"),), dynamic=False, min=1, max=1)
+# Exit may stay unwired (the strategy then only leaves by stops), and the T4
+# Size/Stop terminals are ignored while unwired.
+_OPTIONAL_SIGNAL = PortsSpec(ports=(PortSpec("signal", optional=True),), dynamic=False, min=0, max=1)
+
+
+def _period(default: int, name: str = "period") -> ParamSpec:
+    """An indicator lookback in bars.  The impls accept 2 to 500."""
+    return ParamSpec(name, "int", name, default, min=2, max=500, unit="bars")
+
+
+def _threshold() -> ParamSpec:
+    """A comparison's threshold, used when b is not wired."""
+    return ParamSpec("threshold", "number", "threshold", None, optional=True)
 
 
 @dataclass(frozen=True)
@@ -25,7 +157,10 @@ class NodeCatalogEntry:
     writes        : Stream attributes this node produces, e.g. ("@rsi",).
                     Empty tuple for terminal nodes (entry, exit).
     defaults      : Node-instance defaults dict:
-                      "params"   – indicator/comparison param defaults (may be empty).
+                      "params"   – param defaults (may be empty).  Filled in
+                                   from `params`; never written by hand.
+                      "param_options" – the options of each select param,
+                                   also filled in from `params`.
                       "ins"      – expected number of inbound wires.
                       "outs"     – expected number of outbound wires.
                       "subtitle" – optional subtitle rendered in the node body.
@@ -36,6 +171,8 @@ class NodeCatalogEntry:
                     "stop" output terminals: compile ignores them while nothing is
                     wired in, and raises UnsupportedNodeError once something is.
                     Node types missing from the catalog are always refused.
+    params        : One ParamSpec per param, in display order (section 4.3).
+    inputs        : The input ports (section 4.3).
     """
     name: str
     cat: str
@@ -44,21 +181,56 @@ class NodeCatalogEntry:
     writes: tuple[str, ...]
     defaults: dict
     compile_active: bool = True
+    params: tuple[ParamSpec, ...] = ()
+    inputs: PortsSpec = NO_INPUTS
 
+    def __post_init__(self) -> None:
+        # The param specs are the only place defaults are written, so the
+        # "params" dict that compile reads can never disagree with them.
+        if "params" in self.defaults or "param_options" in self.defaults:
+            raise ValueError(
+                f"catalog entry {self.name!r}: give params as ParamSpec, not in defaults"
+            )
+        self.defaults["params"] = {p.name: p.default for p in self.params}
+        options = {p.name: p.options for p in self.params if p.type == "select"}
+        if options:
+            self.defaults["param_options"] = options
+
+    def to_json(self) -> dict[str, Any]:
+        """The entry as plain JSON, for the frontend codegen."""
+        return {
+            "name": self.name,
+            "cat": self.cat,
+            "desc": self.desc,
+            "compile_active": self.compile_active,
+            "inputs": self.inputs.to_json(),
+            "params": [p.to_json() for p in self.params],
+            "reads": list(self.reads),
+            "writes": list(self.writes),
+            "subtitle": self.defaults.get("subtitle"),
+            "setting_key": self.defaults.get("setting_key"),
+            "ins": self.defaults["ins"],
+            "outs": self.defaults["outs"],
+        }
+
+
+# Ticker choices.  The sources are the data providers backend/shared.py
+# can register (no polygon: there is no such provider).
+INTERVAL_OPTIONS: tuple[str, ...] = ("1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo")
+SOURCE_OPTIONS: tuple[str, ...] = ("yahoo", "alpaca", "alpaca-iex", "ibkr")
 
 # RSI smoothing types.  Must match what indicators.compute_rsi accepts: it
 # uses Wilder smoothing for "wilder" and a plain rolling mean for anything
 # else, so only these two are real choices.  The default matches the rule
-# builder, which picks Wilder for a new RSI rule.  frontend catalog.ts
-# RSI_TYPE_OPTIONS / RSI_DEFAULT_TYPE mirror these (checked by
-# test_catalog_consistency.py).
+# builder, which picks Wilder for a new RSI rule.  The frontend gets these
+# through catalog.generated.ts (checked by test_catalog_consistency.py).
 RSI_TYPE_OPTIONS: tuple[str, ...] = ("sma", "wilder")
 RSI_DEFAULT_TYPE: str = "wilder"
 
 # Trailing stop choices.  They match what the simulator reads from
 # models.TrailingStopConfig: type "pct" or "atr", and the price ("high" or
 # "close") that moves the peak.  The defaults are TrailingStopConfig's own.
-# frontend catalog.ts mirrors these (checked by test_catalog_consistency.py).
+# The frontend gets these through catalog.generated.ts.
 TRAILING_STOP_TYPE_OPTIONS: tuple[str, ...] = ("pct", "atr")
 TRAILING_STOP_SOURCE_OPTIONS: tuple[str, ...] = ("high", "close")
 TRAILING_STOP_DEFAULTS: dict[str, Any] = {
@@ -86,11 +258,16 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=(),
         writes=("@open", "@high", "@low", "@close", "@volume"),
         defaults={
-            "params": {"symbol": "AAPL", "interval": "1d", "source": "yahoo"},
             "ins": 0,
             "outs": 5,
             "subtitle": None,
         },
+        params=(
+            ParamSpec("symbol", "string", "symbol", "AAPL", code_able=False),
+            ParamSpec("interval", "select", "interval", "1d", options=INTERVAL_OPTIONS, code_able=False),
+            ParamSpec("source", "select", "source", "yahoo", options=SOURCE_OPTIONS),
+        ),
+        inputs=NO_INPUTS,
     ),
 
     # ------------------------------------------------------------------
@@ -103,12 +280,15 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=("@close",),
         writes=("@rsi",),
         defaults={
-            "params": {"period": 14, "type": RSI_DEFAULT_TYPE},
-            "param_options": {"type": RSI_TYPE_OPTIONS},
             "ins": 1,
             "outs": 1,
             "subtitle": "RSI(14)",
         },
+        params=(
+            _period(14),
+            ParamSpec("type", "select", "type", RSI_DEFAULT_TYPE, options=RSI_TYPE_OPTIONS),
+        ),
+        inputs=_SOURCE_INPUT,
     ),
     NodeCatalogEntry(
         name="macd",
@@ -117,11 +297,12 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=("@close",),
         writes=("@macd_line", "@macd_signal", "@macd_histogram"),
         defaults={
-            "params": {"fast": 12, "slow": 26, "signal": 9},
             "ins": 1,
             "outs": 3,
             "subtitle": "MACD(12,26,9)",
         },
+        params=(_period(12, "fast"), _period(26, "slow"), _period(9, "signal")),
+        inputs=_SOURCE_INPUT,
     ),
     NodeCatalogEntry(
         name="sma",
@@ -130,11 +311,12 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=("@close",),
         writes=("@sma",),
         defaults={
-            "params": {"period": 20},
             "ins": 1,
             "outs": 1,
             "subtitle": "SMA(20)",
         },
+        params=(_period(20),),
+        inputs=_SOURCE_INPUT,
     ),
     NodeCatalogEntry(
         name="ema",
@@ -143,11 +325,12 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=("@close",),
         writes=("@ema",),
         defaults={
-            "params": {"period": 20},
             "ins": 1,
             "outs": 1,
             "subtitle": "EMA(20)",
         },
+        params=(_period(20),),
+        inputs=_SOURCE_INPUT,
     ),
     NodeCatalogEntry(
         name="bollinger",
@@ -156,11 +339,16 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=("@close",),
         writes=("@bb_upper", "@bb_middle", "@bb_lower"),
         defaults={
-            "params": {"period": 20, "stddev": 2.0},
             "ins": 1,
             "outs": 3,
             "subtitle": "BB(20,2)",
         },
+        params=(
+            _period(20),
+            # How many standard deviations the bands sit from the middle.
+            ParamSpec("stddev", "number", "stddev", 2.0, min=0.5, max=5.0),
+        ),
+        inputs=_SOURCE_INPUT,
     ),
     NodeCatalogEntry(
         name="atr",
@@ -169,11 +357,12 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=("@high", "@low", "@close"),
         writes=("@atr",),
         defaults={
-            "params": {"period": 14},
             "ins": 3,
             "outs": 1,
             "subtitle": "ATR(14)",
         },
+        params=(_period(14),),
+        inputs=_SOURCE_INPUT,
     ),
 
     # ------------------------------------------------------------------
@@ -186,11 +375,12 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=("@series",),  # placeholder; actual wires carry typed attrs
         writes=("@bool",),
         defaults={
-            "params": {"threshold": None},
             "ins": 2,
             "outs": 1,
             "subtitle": "crosses above",
         },
+        params=(_threshold(),),
+        inputs=_COMPARISON_INPUTS,
     ),
     NodeCatalogEntry(
         name="crosses_below",
@@ -199,11 +389,12 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=("@series",),
         writes=("@bool",),
         defaults={
-            "params": {"threshold": None},
             "ins": 2,
             "outs": 1,
             "subtitle": "crosses below",
         },
+        params=(_threshold(),),
+        inputs=_COMPARISON_INPUTS,
     ),
     NodeCatalogEntry(
         name="above",
@@ -212,11 +403,12 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=("@series",),
         writes=("@bool",),
         defaults={
-            "params": {"threshold": None},
             "ins": 2,
             "outs": 1,
             "subtitle": "above",
         },
+        params=(_threshold(),),
+        inputs=_COMPARISON_INPUTS,
     ),
     NodeCatalogEntry(
         name="below",
@@ -225,11 +417,12 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=("@series",),
         writes=("@bool",),
         defaults={
-            "params": {"threshold": None},
             "ins": 2,
             "outs": 1,
             "subtitle": "below",
         },
+        params=(_threshold(),),
+        inputs=_COMPARISON_INPUTS,
     ),
 
     # ------------------------------------------------------------------
@@ -242,11 +435,11 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=("@bool",),
         writes=("@bool",),
         defaults={
-            "params": {},
             "ins": 2,
             "outs": 1,
             "subtitle": "AND",
         },
+        inputs=_LOGIC_INPUTS,
     ),
     NodeCatalogEntry(
         name="or",
@@ -255,11 +448,11 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=("@bool",),
         writes=("@bool",),
         defaults={
-            "params": {},
             "ins": 2,
             "outs": 1,
             "subtitle": "OR",
         },
+        inputs=_LOGIC_INPUTS,
     ),
     # NOT — single-input boolean inverter. In the plan NOT was listed as T3 scope,
     # but Unit 3 (auto_render) requires a NOT node to render rule.negated correctly.
@@ -271,11 +464,11 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=("@bool",),
         writes=("@bool",),
         defaults={
-            "params": {},
             "ins": 1,
             "outs": 1,
             "subtitle": "NOT",
         },
+        inputs=_ONE_SIGNAL,
     ),
 
     # ------------------------------------------------------------------
@@ -287,16 +480,18 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
     NodeCatalogEntry(
         name="position_size",
         cat="settings",
-        desc="Fraction of allocated capital deployed per trade (0–1). Default: 1.0 (100%).",
+        desc="Fraction of allocated capital used per trade, from 0 to 1 (1 = 100%, 0.5 = 50%). Default: 1.",
         reads=(),
         writes=("@setting",),
         defaults={
-            "params": {"size": 1.0},
             "ins": 0,
             "outs": 1,
-            "subtitle": "Size: 100%",
+            # Shows the stored value too, so 1 is not read as 1%.
+            "subtitle": "Size: 1 (100%)",
             "setting_key": "position_size",
         },
+        # position_size_impl accepts (0, 1]; 0 itself is refused there.
+        params=(ParamSpec("size", "number", "size", 1.0, min=0.0, max=1.0, unit="frac"),),
     ),
     NodeCatalogEntry(
         name="stop_loss",
@@ -305,12 +500,13 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=(),
         writes=("@setting",),
         defaults={
-            "params": {"pct": 5.0},
             "ins": 0,
             "outs": 1,
             "subtitle": "Stop: 5%",
             "setting_key": "stop_loss",
         },
+        # Empty turns the stop off (stop_loss_impl); a value must be above 0.
+        params=(ParamSpec("pct", "number", "pct", 5.0, min=0.0, unit="%", optional=True),),
     ),
     NodeCatalogEntry(
         name="slippage",
@@ -319,12 +515,12 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=(),
         writes=("@setting",),
         defaults={
-            "params": {"bps": 2.0},
             "ins": 0,
             "outs": 1,
             "subtitle": "Slippage: 2 bps",
             "setting_key": "slippage_bps",
         },
+        params=(ParamSpec("bps", "number", "bps", 2.0, min=0.0, unit="bps"),),
     ),
     NodeCatalogEntry(
         name="commission",
@@ -333,12 +529,15 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=(),
         writes=("@setting",),
         defaults={
-            "params": {"per_share_rate": 0.0, "min_per_order": 0.0},
             "ins": 0,
             "outs": 1,
             "subtitle": "Commission: free",
             "setting_key": "commission",
         },
+        params=(
+            ParamSpec("per_share_rate", "number", "per share", 0.0, min=0.0, unit="$/share"),
+            ParamSpec("min_per_order", "number", "min per order", 0.0, min=0.0, unit="$"),
+        ),
     ),
     # Trailing stop: the same five fields as models.TrailingStopConfig, so a
     # rule strategy's trailing stop renders as this node and runs the same.
@@ -352,16 +551,24 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=(),
         writes=("@setting",),
         defaults={
-            "params": dict(TRAILING_STOP_DEFAULTS),
-            "param_options": {
-                "type": TRAILING_STOP_TYPE_OPTIONS,
-                "source": TRAILING_STOP_SOURCE_OPTIONS,
-            },
             "ins": 0,
             "outs": 1,
             "subtitle": "Trail: 5%",
             "setting_key": "trailing_stop",
         },
+        params=(
+            ParamSpec("type", "select", "type", TRAILING_STOP_DEFAULTS["type"],
+                      options=TRAILING_STOP_TYPE_OPTIONS),
+            # A percent when type=pct, a multiple of ATR when type=atr.
+            ParamSpec("value", "number", "value", TRAILING_STOP_DEFAULTS["value"],
+                      min=0.0, unit="% or x ATR"),
+            ParamSpec("source", "select", "source", TRAILING_STOP_DEFAULTS["source"],
+                      options=TRAILING_STOP_SOURCE_OPTIONS),
+            ParamSpec("activate_on_profit", "bool", "activate on profit",
+                      TRAILING_STOP_DEFAULTS["activate_on_profit"]),
+            ParamSpec("activate_pct", "number", "activate pct", TRAILING_STOP_DEFAULTS["activate_pct"],
+                      min=0.0, unit="%"),
+        ),
     ),
 
     # ------------------------------------------------------------------
@@ -376,11 +583,11 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=("@bool",),
         writes=(),
         defaults={
-            "params": {},
             "ins": 1,
             "outs": 0,
             "subtitle": "Entry",
         },
+        inputs=_ONE_SIGNAL,
     ),
     NodeCatalogEntry(
         name="exit",
@@ -389,11 +596,11 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         reads=("@bool",),
         writes=(),
         defaults={
-            "params": {},
             "ins": 1,
             "outs": 0,
             "subtitle": "Exit",
         },
+        inputs=_OPTIONAL_SIGNAL,
     ),
 
     # ------------------------------------------------------------------
@@ -409,11 +616,11 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         writes=(),
         compile_active=False,
         defaults={
-            "params": {},
             "ins": 1,
             "outs": 0,
             "subtitle": "Size (T4)",
         },
+        inputs=_OPTIONAL_SIGNAL,
     ),
     NodeCatalogEntry(
         name="stop",
@@ -423,11 +630,11 @@ NODE_CATALOG: list[NodeCatalogEntry] = [
         writes=(),
         compile_active=False,
         defaults={
-            "params": {},
             "ins": 1,
             "outs": 0,
             "subtitle": "Stop (T4)",
         },
+        inputs=_OPTIONAL_SIGNAL,
     ),
 ]
 
@@ -466,6 +673,11 @@ def catalog_by_category() -> dict[str, list[NodeCatalogEntry]]:
     for entry in NODE_CATALOG:
         result.setdefault(entry.cat, []).append(entry)
     return result
+
+
+def catalog_json() -> list[dict[str, Any]]:
+    """The whole catalog as plain JSON, in catalog order (section 4.3 shape)."""
+    return [e.to_json() for e in NODE_CATALOG]
 
 
 # ===========================================================================

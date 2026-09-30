@@ -4,6 +4,11 @@
  * Renders: 3px left stripe, 16×16 icon chip, title, subtitle, attribute pills,
  * display-flag glow, bypass-flag dim+dot, invisible handles.
  *
+ * Diagnostics (spec S05): the node reads its own problems from the shared
+ * diagnostics store and shows a DiagnosticBadge after the subtitle. Any error
+ * turns the card border red. The node id comes from React Flow's node
+ * context, or from the `nodeId` prop outside a flow (tests).
+ *
  * Handles: a node gets a target (input) handle unless `hasInput` is false,
  * and a source (output) handle unless `hasOutput` is false. Terminals (Entry,
  * Exit, ...) have no output and the Ticker has no input, so a user can never
@@ -13,8 +18,11 @@
  * scoped to .nodebuilder-root.
  */
 
-import { Handle, Position } from '@xyflow/react'
+import { Handle, Position, useNodeId } from '@xyflow/react'
 import { CATS, type CatKey } from '../categories'
+import { useNodeBuilderStore } from '../store'
+import { useNodeDiagnostics } from '../useDiagnostics'
+import { DiagnosticBadge } from './DiagnosticBadge'
 
 // ---------------------------------------------------------------------------
 // Attr pill
@@ -87,7 +95,12 @@ interface BaseNodeProps {
   hasInput?: boolean
   /** Render the source (output) handle. False for terminals like Entry/Exit. */
   hasOutput?: boolean
+  /** Node id for diagnostics. Defaults to the React Flow node this renders in. */
+  nodeId?: string
 }
+
+/** Card border when the node has an error (ui-ux-spec 4.8). */
+const ERROR_BORDER = '1px solid rgba(248, 113, 113, 0.6)'
 
 export function BaseNode({
   cat,
@@ -102,7 +115,13 @@ export function BaseNode({
   editable = false,
   hasInput = true,
   hasOutput = true,
+  nodeId: nodeIdProp,
 }: BaseNodeProps) {
+  const flowNodeId = useNodeId()
+  const nodeId = nodeIdProp ?? flowNodeId
+  const diagnostics = useNodeDiagnostics(nodeId)
+  const hasError = diagnostics.some(d => d.severity === 'error')
+  const select = useNodeBuilderStore(s => s.select)
   const catEntry = CATS[cat] ?? CATS.indicator
   const catColor = catEntry.color
   const glyph = catEntry.glyph
@@ -116,7 +135,8 @@ export function BaseNode({
     width,
     fontFamily: 'var(--nb-font-sans)',
     background: 'var(--nb-bg-node)',
-    border: '1px solid var(--nb-border)',
+    // One shorthand for both states; never mixed with borderColor (bug 22).
+    border: hasError ? ERROR_BORDER : '1px solid var(--nb-border)',
     borderRadius: 'var(--nb-radius-node)',
     position: 'relative',
     overflow: 'hidden',
@@ -151,7 +171,7 @@ export function BaseNode({
         />
       )}
 
-      <div style={containerStyle}>
+      <div className="nb-node-card" style={containerStyle}>
         {/* 3px left stripe */}
         <div style={{
           position: 'absolute',
@@ -220,6 +240,15 @@ export function BaseNode({
             }}>
               {subtitle}
             </span>
+          )}
+
+          {/* Diagnostics badge, only when this node has a problem */}
+          {nodeId && diagnostics.length > 0 && (
+            <DiagnosticBadge
+              nodeId={nodeId}
+              diagnostics={diagnostics}
+              onActivate={() => select(nodeId)}
+            />
           )}
         </div>
 

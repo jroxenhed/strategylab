@@ -1,7 +1,8 @@
 """HTTP-level tests for POST /api/nodebuilder/backtest (F435 item 0.A).
 
 Contract the editor builds against:
-  - every graph error is a 400 with {"detail": <message>, "node_id": <id or null>}
+  - every graph error is a 400 with {"detail": <message>, "node_id": <id or null>,
+    "code": <diagnostic code>, "diagnostics": [<plan 4.2 Diagnostic>, ...]}
   - other bad fields keep FastAPI's 422
   - summary carries open_position ({direction, entry_price, unrealized_pct} or
     null) and exit_connected (bool)
@@ -88,9 +89,15 @@ def _rsi_entry(exit_wired: bool = True) -> dict:
 def _assert_graph_error(resp, node_id):
     assert resp.status_code == 400, resp.text
     body = resp.json()
-    assert set(body) == {"detail", "node_id"}
+    assert set(body) == {"detail", "node_id", "code", "diagnostics"}
     assert isinstance(body["detail"], str) and body["detail"]
     assert body["node_id"] == node_id
+    assert isinstance(body["code"], str) and body["code"]
+    assert isinstance(body["diagnostics"], list) and body["diagnostics"]
+    assert any(
+        d["severity"] == "error" and d["code"] == body["code"] and d["node_id"] == node_id
+        for d in body["diagnostics"]
+    )
 
 
 # ---------------------------------------------------------------------------

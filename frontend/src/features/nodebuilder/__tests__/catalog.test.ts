@@ -14,7 +14,9 @@ import {
   TRAILING_STOP_DEFAULTS,
   TRAILING_STOP_SOURCE_OPTIONS,
   TRAILING_STOP_TYPE_OPTIONS,
+  hasInputPort,
 } from "../catalog";
+import { GENERATED_CATALOG } from "../catalog.generated";
 import { CATS } from "../categories";
 
 // Minimum required categories that the backend also asserts.
@@ -268,5 +270,75 @@ describe("trailing_stop settings node (F435 0.A)", () => {
     const ts = getNode("trailing_stop");
     expect(ts.paramTypes?.value).toEqual({ type: "number", unit: "% or x ATR" });
     expect(ts.paramTypes?.activate_pct).toEqual({ type: "number", unit: "%" });
+  });
+});
+
+describe("catalog is built from catalog.generated.ts (F435 1.D, D9)", () => {
+  it("has the same entries, in the same order, as the generated backend catalog", () => {
+    expect(NODE_CATALOG.map((e) => e.name)).toEqual(GENERATED_CATALOG.map((g) => g.name));
+    for (const g of GENERATED_CATALOG) {
+      const e = getNode(g.name);
+      expect(e.cat).toBe(g.cat);
+      expect(e.desc).toBe(g.desc);
+      expect(e.compileActive).toBe(g.compile_active);
+      expect(e.reads).toEqual(g.reads);
+      expect(e.writes).toEqual(g.writes);
+      expect(e.defaults.subtitle).toBe(g.subtitle);
+    }
+  });
+
+  it("every entry carries its ParamSpec list and PortsSpec", () => {
+    for (const entry of NODE_CATALOG) {
+      expect(entry.params, `node "${entry.name}" has no params`).toBeDefined();
+      expect(entry.inputs, `node "${entry.name}" has no inputs`).toBeDefined();
+    }
+  });
+
+  it("defaults.params and paramTypes come from the ParamSpecs, key for key", () => {
+    for (const entry of NODE_CATALOG) {
+      const specs = entry.params ?? [];
+      expect(Object.keys(entry.defaults.params)).toEqual(specs.map((p) => p.name));
+      for (const p of specs) {
+        expect(entry.defaults.params[p.name]).toEqual(p.default);
+        expect(entry.paramTypes?.[p.name], `node "${entry.name}" param "${p.name}"`).toBeDefined();
+      }
+    }
+  });
+
+  it("int and number specs render as number fields, bool as a false/true select", () => {
+    expect(getNode("rsi").params?.find((p) => p.name === "period")?.type).toBe("int");
+    expect(getNode("rsi").paramTypes?.period).toEqual({ type: "number" });
+    expect(getNode("trailing_stop").params?.find((p) => p.name === "activate_on_profit")?.type).toBe("bool");
+  });
+
+  it("the node row shows 'fraction' for frac and hides 'bars'", () => {
+    expect(getNode("position_size").params?.[0].unit).toBe("frac");
+    expect(getNode("position_size").paramTypes?.size?.unit).toBe("fraction");
+    expect(getNode("sma").params?.[0].unit).toBe("bars");
+    expect(getNode("sma").paramTypes?.period?.unit).toBeUndefined();
+  });
+
+  it("ticker symbol and interval are not code-able (D1)", () => {
+    const params = getNode("ticker").params ?? [];
+    expect(params.find((p) => p.name === "symbol")?.code_able).toBe(false);
+    expect(params.find((p) => p.name === "interval")?.code_able).toBe(false);
+  });
+
+  it("comparisons have ports a and optional b; AND/OR are dynamic", () => {
+    const cmp = getNode("crosses_above").inputs;
+    expect(cmp?.ports).toEqual([{ label: "a" }, { label: "b", optional: true }]);
+    expect(cmp?.dynamic).toBe(false);
+    expect([cmp?.min, cmp?.max]).toEqual([1, 2]);
+    expect(getNode("and").inputs?.dynamic).toBe(true);
+    expect(getNode("or").inputs?.dynamic).toBe(true);
+    expect(getNode("entry").inputs?.min).toBe(1);
+  });
+
+  it("hasInputPort follows PortsSpec.max: tickers and settings take no wire", () => {
+    for (const entry of NODE_CATALOG) {
+      expect(hasInputPort(entry.name), entry.name).toBe((entry.inputs?.max ?? 0) > 0);
+    }
+    expect(getNode("ticker").inputs?.max).toBe(0);
+    expect(getNode("stop_loss").inputs?.max).toBe(0);
   });
 });

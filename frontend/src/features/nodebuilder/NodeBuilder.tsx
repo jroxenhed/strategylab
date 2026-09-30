@@ -1,29 +1,36 @@
 /**
  * NodeBuilder — top-level feature component for the graph viewer + editor.
  *
- * Unit 4a: read-only graph viewer (auto-render via TanStack Query).
- * Unit 5: editable graph mode via Zustand store.
- * Unit 8b: "▶ Run Backtest" button in edit mode.
- *
  * Modes:
- * 1. View mode (default): renders the TanStack Query auto-render result read-only.
+ * 1. View mode (default): renders the TanStack Query auto-render result of
+ *    the chart's rule strategy, read-only. "Edit this graph" copies it into
+ *    the editor.
  * 2. Edit mode: the Zustand store has a graph (graph.readOnly=false); Canvas uses it.
  *
- * The "New Empty Graph" button creates a blank editable graph in the store and
- * switches to edit mode. It asks first when there are unsaved edits.
- * "Discard edits" throws the edit copy away and goes back to the view mode.
+ * Graphs are named server objects (W1). The graph toolbar (GraphToolbar,
+ * S01) names the graph and holds New, Open, Save, Save as, Rename,
+ * Duplicate, Delete, Export and Import; useGraphSession does the work
+ * (dialogs, Graph Browser, drafts, the 409 conflict flow). Notices show in
+ * one stack under the toolbar (NoticeStack, S07).
+ *
+ * Diagnostics (1.G) are validated 300 ms after each commit; the toolbar
+ * shows the count and Run is disabled while there are errors.
  *
  * The results strip names the symbol and interval it ran on, dims itself as
  * "stale" once the graph changes, and flags an open position or an
  * unconnected Exit. Text logic lives in resultsStrip.ts.
  */
 
-import { memo, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { StrategyRequest } from '../../shared/types/strategy'
-import { fetchAutoRender, fetchGraphBacktest, type GraphBacktestResult } from '../../api/nodebuilder'
+import { fetchAutoRender, fetchGraphBacktest, type GraphBacktestResult, type GraphNode } from '../../api/nodebuilder'
+import { errorDiagnostics } from '../../api/graphs'
+import type { Diagnostic } from '../../api/nodebuilderValidate'
 import { apiErrorDetail } from '../../shared/utils/errors'
 import Canvas from './Canvas'
+import { NODE_CATALOG } from './catalog'
+import { newNodeId } from './operations'
 import { hasEdits, useNodeBuilderStore } from './store'
 import {
   buildResultsStrip,
@@ -35,7 +42,30 @@ import {
   STALE_REQUEST_TITLE,
   STALE_TITLE,
 } from './resultsStrip'
-import { describeUnsupportedNodes, findUnsupportedNodes, REGIME_REMOVED_TEXT } from './editNotices'
+import {
+  findUnsupportedNodes,
+  REGIME_LEARN_MORE_TEXT,
+  REGIME_REMOVED_TEXT,
+  UNSUPPORTED_PREFIX,
+  UNSUPPORTED_SUFFIX,
+  unsupportedLabel,
+} from './editNotices'
+import { registerCommands } from './commands'
+import { useGlobalKeys } from './commands/useGlobalKeys'
+import {
+  getDiagnosticsView,
+  retryValidation,
+  setServerDiagnostics,
+  useDiagnostics,
+  useDiagnosticsController,
+} from './useDiagnostics'
+import { DiagnosticsPopover } from './DiagnosticsPopover'
+import GraphToolbar, { type ToolbarMode } from './GraphToolbar'
+import { runDisabledReason, VALIDATE_OFFLINE_KEY, validateOfflineText } from './graphText'
+import NoticeStack from './NoticeStack'
+import { pushNotice, resolveNotice, type Notice } from './notices'
+import { runLegacySeed, seedBannerText } from './persistence'
+import { useGraphSession } from './useGraphSession'
 import './tokens.css'
 
 interface NodeBuilderProps {
@@ -53,6 +83,15 @@ interface GraphRun {
   requestKey: string
 }
 
+/** A failed run: the sentence to show and the node at fault, if known. */
+interface RunError {
+  text: string
+  nodeId: string | null
+}
+
+// The legacy seed runs once per page load, however often NodeBuilder mounts.
+let seedStarted = false
+
 function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
   // Stable cache key: JSON.stringify is deterministic within a session.
   const strategyHash = request != null ? JSON.stringify(request) : null
@@ -68,11 +107,55 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
   // Store state
   const storeGraph = useNodeBuilderStore(s => s.graph)
   const dirty = useNodeBuilderStore(hasEdits)
+  const graphMeta = useNodeBuilderStore(s => s.graphMeta)
+  const layoutEpoch = useNodeBuilderStore(s => s.layoutEpoch)
   const regimeRemoved = useNodeBuilderStore(s => s.regimeRemoved)
-  const newEmptyGraph = useNodeBuilderStore(s => s.newEmptyGraph)
   const loadFromAutoRender = useNodeBuilderStore(s => s.loadFromAutoRender)
-  const discardEdits = useNodeBuilderStore(s => s.discardEdits)
   const selectNode = useNodeBuilderStore(s => s.select)
+
+  // Diagnostics: one controller for the whole builder; the counts drive
+  // the toolbar chip and the Run button.
+  useDiagnosticsController()
+  const diagnostics = useDiagnostics()
+  const [diagAnchor, setDiagAnchor] = useState<HTMLElement | null>(null)
+
+  // S05 "validate offline": one S07 error banner per failure streak, with
+  // Retry. It goes away once a validate succeeds (the streak ends); a
+  // dismissed banner stays dismissed until the next streak.
+  const validateOffline = diagnostics.offline
+  const validateOfflineDetail = diagnostics.offlineDetail
+  const offlineBannerShown = useRef(false)
+  useEffect(() => {
+    if (!validateOffline) {
+      if (offlineBannerShown.current) resolveNotice(VALIDATE_OFFLINE_KEY)
+      offlineBannerShown.current = false
+      return
+    }
+    if (offlineBannerShown.current) return
+    offlineBannerShown.current = true
+    pushNotice({
+      key: VALIDATE_OFFLINE_KEY,
+      severity: 'error',
+      text: validateOfflineText(validateOfflineDetail),
+      actions: [{ label: 'Retry', run: retryValidation, testId: 'nb-validate-retry' }],
+    })
+  }, [validateOffline, validateOfflineDetail])
+
+  const session = useGraphSession()
+
+  // Global commands (Cmd+S, Cmd+O, Cmd+Enter, Cmd+Z) work in every mode,
+  // from the canvas and from a param field (foundation 6.2).
+  const rootRef = useRef<HTMLDivElement>(null)
+  useGlobalKeys(rootRef)
+
+  // Showing the graph view hands it the keyboard, so Cmd+O works straight
+  // away (focus was on the toggle that opened the view). Focus already inside
+  // the builder (the canvas) is left alone.
+  useEffect(() => {
+    if (!graphViewActive) return
+    const root = rootRef.current
+    if (root && !root.contains(document.activeElement)) root.focus({ preventScroll: true })
+  }, [graphViewActive])
 
   // Edit mode = store has a graph (readOnly=false)
   const editMode = storeGraph !== null && !storeGraph.readOnly
@@ -80,22 +163,32 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
   // Which graph to pass to Canvas
   const activeGraph = editMode ? storeGraph : (autoGraph ?? null)
 
-  // Unit 8b: graph backtest state
+  // Graph backtest state
   const [backtestRunning, setBacktestRunning] = useState(false)
   const [lastRun, setLastRun] = useState<GraphRun | null>(null)
-  const [backtestError, setBacktestError] = useState<string | null>(null)
-  // Bumped by every run and every clear, so a run still in flight after
-  // Discard / New Empty Graph (or a newer run) drops its late result.
+  const [runError, setRunError] = useState<RunError | null>(null)
+  // Bumped by every run, every clear and Stop, so a run still in flight
+  // after a graph change (or a newer run) drops its late result.
   const runIdRef = useRef(0)
+  // The request of the run in flight; Stop and a clear abort it (S01), so the
+  // server stops working on a result nobody will see.
+  const runAbortRef = useRef<AbortController | null>(null)
+  function abortRun() {
+    runAbortRef.current?.abort()
+    runAbortRef.current = null
+  }
 
   const hasNodes = storeGraph != null && Object.keys(storeGraph.nodes).length > 0
+  const errorCount = diagnostics.errorCount
 
   // Nodes the compiler cannot run yet. Recomputed on every edit, so the
   // banner goes away once the user removes them.
-  const unsupportedText = useMemo(
-    () => (editMode ? describeUnsupportedNodes(findUnsupportedNodes(storeGraph)) : null),
+  const unsupported = useMemo(
+    () => (editMode ? findUnsupportedNodes(storeGraph) : []),
     [editMode, storeGraph],
   )
+  // The regime banner's "Learn more" shows one more sentence.
+  const [regimeHelp, setRegimeHelp] = useState(false)
 
   // The run also depends on the request (dates, capital), so a new chart
   // backtest makes the strip stale too. Moving a node does not: the graph
@@ -115,46 +208,93 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
 
   function clearRun() {
     runIdRef.current += 1
+    abortRun()
     setBacktestRunning(false)
     setLastRun(null)
-    setBacktestError(null)
+    setRunError(null)
   }
 
-  function confirmDropEdits(): boolean {
-    if (!dirty) return true
-    return window.confirm('You have unsaved edits to this graph. Throw them away?')
-  }
-
-  function handleNewEmptyGraph() {
-    if (!confirmDropEdits()) return
+  // A different graph on screen (open, new, edit copy) drops the last run
+  // and any run still in flight. A save or Save as keeps it.
+  const firstEpoch = useRef(true)
+  useEffect(() => {
+    if (firstEpoch.current) {
+      firstEpoch.current = false
+      return
+    }
     clearRun()
-    newEmptyGraph()
-  }
+  }, [layoutEpoch])
 
-  function handleDiscardEdits() {
-    if (!confirmDropEdits()) return
-    clearRun()
-    discardEdits()
+  // One-time import of the old browser-only saved graphs (S01).
+  useEffect(() => {
+    if (seedStarted) return
+    seedStarted = true
+    void runLegacySeed().then(outcome => {
+      if (!outcome) return
+      if (outcome.tooLarge) {
+        pushNotice({ key: 'seed_imported', severity: 'warn', text: seedBannerText(outcome) })
+        return
+      }
+      if (outcome.imported + outcome.duplicates + outcome.unreadable === 0) return
+      pushNotice({
+        key: 'seed_imported',
+        severity: 'info',
+        text: seedBannerText(outcome),
+        actions: [{ label: 'Open…', run: session.openBrowser }],
+      })
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Reopen the last graph the first time the graph view is shown.
+  const openLastGraph = session.openLastGraph
+  useEffect(() => {
+    if (graphViewActive) openLastGraph()
+  }, [graphViewActive, openLastGraph])
+
+  // The empty graph's ghost Ticker card (foundation 7): add a Ticker.
+  function addTicker() {
+    const entry = NODE_CATALOG.find(e => e.name === 'ticker')
+    if (!entry) return
+    useNodeBuilderStore.getState().addNode({
+      id: newNodeId(), type: 'ticker', name: 'ticker', parent: null,
+      params: { ...entry.defaults.params } as GraphNode['params'],
+      position: [0, 0], display: false, bypass: false,
+    })
   }
 
   function handleEditThisGraph() {
     if (!autoGraph) return
-    clearRun()
     loadFromAutoRender(autoGraph)
   }
 
+  function handleStop() {
+    runIdRef.current += 1
+    abortRun()
+    setBacktestRunning(false)
+  }
+
   async function handleRunBacktest() {
-    if (storeGraph == null || !hasNodes) return
+    // Read the stores now, not this render's copies: Cmd+Enter in a param
+    // field commits the field and runs in the same key press, before React
+    // renders again.
+    const { graph: runGraph, commitSeq: seqAtStart } = useNodeBuilderStore.getState()
+    if (runGraph == null || runGraph.readOnly || backtestRunning) return
+    const runHasNodes = Object.keys(runGraph.nodes).length > 0
+    if (runDisabledReason(getDiagnosticsView().errorCount, runHasNodes) != null) return
     const runId = ++runIdRef.current
-    const graphKeyAtStart = graphKey
+    abortRun()
+    const ctrl = new AbortController()
+    runAbortRef.current = ctrl
+    const graphKeyAtStart = graphEvalKey(runGraph)
     const requestKeyAtStart = requestKey
     setBacktestRunning(true)
-    setBacktestError(null)
+    setRunError(null)
     setLastRun(null)
     try {
       // Derive ticker/interval/source from the graph's ticker node, falling back to the
       // loaded request when available.
-      const tickerNode = Object.values(storeGraph.nodes).find(n => n.type === 'ticker')
+      const tickerNode = Object.values(runGraph.nodes).find(n => n.type === 'ticker')
       const ticker = (tickerNode?.params?.symbol as string | undefined) ?? request?.ticker ?? 'AAPL'
       const interval = (tickerNode?.params?.interval as string | undefined) ?? request?.interval ?? '1d'
       const source = (tickerNode?.params?.source as string | undefined) ?? request?.source ?? 'yahoo'
@@ -162,7 +302,7 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
       const end = request?.end ?? '2024-01-01'
 
       const result = await fetchGraphBacktest({
-        graph: storeGraph,
+        graph: runGraph,
         ticker,
         interval,
         source,
@@ -172,89 +312,196 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
         position_size: request?.position_size ?? 1.0,
         slippage_bps: request?.slippage_bps ?? 2.0,
         direction: request?.direction ?? 'long',
-      })
-      if (runId !== runIdRef.current) return  // superseded or cleared
+      }, ctrl.signal)
+      if (runId !== runIdRef.current) return  // superseded, cleared or stopped
       setLastRun({ result, ticker, interval, graphKey: graphKeyAtStart, requestKey: requestKeyAtStart })
     } catch (e: unknown) {
       if (runId !== runIdRef.current) return
-      setBacktestError(describeBacktestError(e, storeGraph))
-      // Select the node the server names, so its ring shows which one to fix.
+      // A 400 with diagnostics replaces the current set until the next commit
+      // (S05), but only while the graph on screen is the one that ran: after
+      // an edit, the /validate scheduled for the new graph owns the list.
+      const diags = errorDiagnostics(e)
+      if (diags && diags.length > 0 && useNodeBuilderStore.getState().commitSeq === seqAtStart) {
+        setServerDiagnostics(diags as Diagnostic[])
+      }
       const badNode = errorNodeId(e)
-      if (badNode && storeGraph.nodes[badNode]) selectNode(badNode)
+      setRunError({ text: describeBacktestError(e, runGraph), nodeId: badNode })
+      // Select the node the server names, so its ring shows which one to fix
+      // (select() ignores a node deleted meanwhile).
+      if (badNode) selectNode(badNode)
     } finally {
+      if (runAbortRef.current === ctrl) runAbortRef.current = null
       if (runId === runIdRef.current) setBacktestRunning(false)
     }
   }
 
+  // Latest handlers for the keyboard commands, registered once.
+  const keyHandlers = useRef({ save: session.save, open: session.openBrowser, run: handleRunBacktest })
+  useEffect(() => {
+    keyHandlers.current = { save: session.save, open: session.openBrowser, run: handleRunBacktest }
+  })
+  useEffect(
+    () =>
+      registerCommands([
+        {
+          id: 'graph.save',
+          label: 'Save',
+          keys: ['mod+s'],
+          scope: 'global',
+          inFields: true,
+          run: () => keyHandlers.current.save(),
+        },
+        {
+          id: 'graph.open',
+          label: 'Open…',
+          keys: ['mod+o'],
+          scope: 'global',
+          inFields: true,
+          run: () => keyHandlers.current.open(),
+        },
+        {
+          id: 'cook.run',
+          label: 'Run backtest',
+          keys: ['mod+enter'],
+          scope: 'global',
+          inFields: true,
+          run: () => void keyHandlers.current.run(),
+        },
+      ]),
+    [],
+  )
+
+  // Banners that follow state rather than events.
+  const derivedNotices: Notice[] = []
+  if (runError && editMode) {
+    const node = runError.nodeId ? storeGraph?.nodes[runError.nodeId] : undefined
+    derivedNotices.push({
+      // Its own key: a pushed save/import/delete `server_error` must not hide
+      // the run error (NoticeStack drops a derived notice whose key is pushed).
+      key: 'run_error',
+      severity: 'error',
+      text: (
+        <>
+          {runError.text}
+          {node && (
+            <>
+              {' · '}
+              <button type="button" className="nb-banner__link" onClick={() => selectNode(node.id)}>
+                {node.name || node.id}
+              </button>
+            </>
+          )}
+        </>
+      ),
+      onDismiss: () => setRunError(null),
+      actions: [{ label: 'Retry', run: () => handleRunBacktest() }],
+    })
+  }
+  if (editMode && regimeRemoved.length > 0) {
+    derivedNotices.push({
+      key: 'regime_removed',
+      severity: 'warn',
+      text: regimeHelp ? `${REGIME_REMOVED_TEXT} ${REGIME_LEARN_MORE_TEXT}` : REGIME_REMOVED_TEXT,
+      actions: [
+        { label: 'Learn more', title: REGIME_LEARN_MORE_TEXT, run: () => setRegimeHelp(v => !v), testId: 'nb-regime-learn-more' },
+      ],
+    })
+  }
+  if (unsupported.length > 0) {
+    derivedNotices.push({
+      key: 'unsupported_nodes',
+      severity: 'error',
+      text: (
+        <>
+          {UNSUPPORTED_PREFIX}
+          {unsupported.map((u, i) => (
+            <Fragment key={u.id}>
+              {i > 0 && ', '}
+              <button
+                type="button"
+                className="nb-banner__link"
+                title={`Select ${storeGraph?.nodes[u.id]?.name || u.id}`}
+                onClick={() => selectNode(u.id)}
+              >
+                {unsupportedLabel(u)}
+              </button>
+            </Fragment>
+          ))}
+          {UNSUPPORTED_SUFFIX}
+        </>
+      ),
+    })
+  }
+
+  const mode: ToolbarMode = editMode ? 'edit' : request != null && autoGraph ? 'view' : 'none'
+  const toolbar = (
+    <GraphToolbar
+      mode={mode}
+      name={graphMeta?.name ?? null}
+      rev={graphMeta?.id ? graphMeta.rev : null}
+      dirty={dirty}
+      loading={session.busy === 'loading'}
+      saving={session.busy === 'saving'}
+      running={backtestRunning}
+      hasNodes={hasNodes}
+      errorCount={errorCount}
+      warningCount={diagnostics.warningCount}
+      diagnosticsUnknown={diagnostics.pending && !diagnostics.hasResult}
+      onRun={() => void handleRunBacktest()}
+      onStop={handleStop}
+      onSave={session.save}
+      onNew={session.newGraph}
+      onOpen={session.openBrowser}
+      onSaveAs={session.saveAs}
+      onRename={session.rename}
+      onRenameInline={session.renameInline}
+      onDuplicate={session.duplicate}
+      onExport={session.exportJson}
+      onImport={session.importJson}
+      onDelete={session.deleteCurrent}
+      onEditThisGraph={handleEditThisGraph}
+      onCloseGraph={session.closeGraph}
+      onDiagnosticsClick={el => setDiagAnchor(a => (a ? null : el))}
+    />
+  )
+
+  const shared = (
+    <>
+      {session.element}
+      {editMode && (
+        <DiagnosticsPopover
+          open={diagAnchor != null}
+          anchorEl={diagAnchor}
+          onClose={() => setDiagAnchor(null)}
+          onSelectNode={id => selectNode(id)}
+        />
+      )}
+    </>
+  )
+
   if (request == null && !editMode) {
     return (
-      <div className="nodebuilder-root" style={styles.root}>
-        <div style={styles.toolbar}>
-          <button style={styles.btn} onClick={handleNewEmptyGraph}>
-            New Empty Graph
-          </button>
-        </div>
+      <div ref={rootRef} className="nodebuilder-root" style={styles.root} tabIndex={-1} data-nb-builder="">
+        {toolbar}
+        <NoticeStack />
         <div style={styles.empty}>
-          No strategy to show yet. Go Back to Chart and run a backtest, then
-          come back here to see that strategy as a graph. Or start from a New
-          Empty Graph.
+          <span>
+            No strategy to show yet. Go Back to Chart and run a backtest, then
+            come back here to see that strategy as a graph. Or start a New graph
+            from ⋯, or use{' '}
+            <button type="button" className="nb-empty-graph__link" onClick={session.openBrowser}>⋯ › Open</button>
+            {' '}to load a saved graph.
+          </span>
         </div>
+        {shared}
       </div>
     )
   }
 
   return (
-    <div className="nodebuilder-root" style={styles.root}>
-      {/* Toolbar */}
-      <div style={styles.toolbar}>
-        {editMode ? (
-          <span style={styles.editBadge}>Editing</span>
-        ) : null}
-        <button style={styles.btn} onClick={handleNewEmptyGraph}>
-          New Empty Graph
-        </button>
-        {editMode && (
-          <button
-            style={styles.btn}
-            onClick={handleDiscardEdits}
-            title="Throw away this edited copy and go back to the read-only graph"
-          >
-            Discard edits
-          </button>
-        )}
-        {!editMode && autoGraph && (
-          <button
-            style={{
-              ...styles.btn,
-              background: 'oklch(0.24 0.08 230 / 0.5)',
-              border: '1px solid oklch(0.45 0.10 230 / 0.6)',
-              color: 'oklch(0.85 0.14 230)',
-            }}
-            onClick={handleEditThisGraph}
-            title="Copy the auto-rendered graph into the editor so you can modify it"
-          >
-            Edit this graph
-          </button>
-        )}
-        {editMode && hasNodes && (
-          <button
-            style={{
-              ...styles.btn,
-              background: backtestRunning
-                ? 'oklch(0.22 0.018 250)'
-                : 'oklch(0.24 0.10 145 / 0.5)',
-              border: '1px solid oklch(0.45 0.12 145 / 0.6)',
-              color: 'oklch(0.85 0.18 145)',
-              opacity: backtestRunning ? 0.6 : 1,
-              cursor: backtestRunning ? 'wait' : 'pointer',
-            }}
-            onClick={handleRunBacktest}
-            disabled={backtestRunning}
-          >
-            {backtestRunning ? 'Running…' : '▶ Run Backtest'}
-          </button>
-        )}
-      </div>
+    <div ref={rootRef} className="nodebuilder-root" style={styles.root} tabIndex={-1} data-nb-builder="">
+      {toolbar}
+      <NoticeStack extra={derivedNotices} />
 
       {/* Content */}
       {isLoading && !editMode && (
@@ -266,17 +513,6 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
         <div style={styles.errorBanner}>
           Failed to render graph: {apiErrorDetail(error, (error as Error).message)}
         </div>
-      )}
-      {backtestError && editMode && (
-        <div style={styles.errorBanner}>
-          Backtest error: {backtestError}
-        </div>
-      )}
-      {editMode && regimeRemoved.length > 0 && (
-        <div style={styles.warnBanner}>{REGIME_REMOVED_TEXT}</div>
-      )}
-      {unsupportedText && (
-        <div style={styles.warnBanner}>{unsupportedText}</div>
       )}
       {editMode && strip && (
         <div
@@ -319,8 +555,25 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
       {activeGraph && (
         <div style={styles.canvasWrapper}>
           <Canvas graph={activeGraph} />
+          {editMode && !hasNodes && (
+            <div className="nb-empty-graph" data-testid="nb-empty-graph">
+              <div>Press Tab to add a node</div>
+              <div>Start with a Ticker, then indicators, comparisons, and an Output Group</div>
+              <div>
+                or{' '}
+                <button type="button" className="nb-empty-graph__link" onClick={session.openBrowser} data-testid="nb-empty-open">
+                  ⋯ › Open
+                </button>{' '}
+                to load a saved graph
+              </div>
+              <button type="button" className="nb-empty-graph__ghost" onClick={addTicker} aria-label="Add Ticker" data-testid="nb-empty-ticker">
+                Ticker
+              </button>
+            </div>
+          )}
         </div>
       )}
+      {shared}
     </div>
   )
 }
@@ -337,36 +590,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     position: 'relative',
-  },
-  toolbar: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    padding: '6px 10px',
-    borderBottom: '1px solid oklch(0.28 0.014 250)',
-    flexShrink: 0,
-    background: 'oklch(0.18 0.014 250)',
-  },
-  editBadge: {
-    fontSize: 11,
-    fontWeight: 600,
-    color: 'oklch(0.72 0.18 145)',
-    background: 'oklch(0.20 0.04 145 / 0.3)',
-    border: '1px solid oklch(0.45 0.12 145 / 0.5)',
-    borderRadius: 4,
-    padding: '2px 7px',
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
-    marginRight: 4,
-  },
-  btn: {
-    fontSize: 12,
-    padding: '4px 10px',
-    borderRadius: 4,
-    border: '1px solid oklch(0.40 0.018 250)',
-    background: 'oklch(0.24 0.018 250)',
-    color: 'oklch(0.85 0.010 250)',
-    cursor: 'pointer',
+    outline: 'none',
   },
   canvasWrapper: {
     flex: 1,
@@ -437,16 +661,6 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid oklch(0.45 0.010 250)',
     borderRadius: 4,
     padding: '1px 6px',
-  },
-  warnBanner: {
-    background: 'oklch(0.30 0.08 75 / 0.18)',
-    border: '1px solid oklch(0.60 0.12 75 / 0.5)',
-    color: 'oklch(0.85 0.12 75)',
-    fontSize: 12,
-    padding: '6px 12px',
-    borderRadius: 4,
-    margin: '8px 8px 0',
-    flexShrink: 0,
   },
   backtestDivider: {
     color: 'oklch(0.45 0.010 250)',

@@ -1,0 +1,146 @@
+/* Diagnostics UI (spec S05, ui-ux-spec 4.8). Tokens come from tokens.css;
+   every rule is scoped under .nodebuilder-root like the rest of the builder. */
+
+/* Node badge: 14x14 circle in the header. */
+.nodebuilder-root .nb-diag-badge {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--nb-font-mono);
+  font-weight: 700;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--nb-text-on-color);
+  cursor: pointer;
+  user-select: none;
+}
+.nodebuilder-root .nb-diag-badge--error { background: var(--nb-error); }
+.nodebuilder-root .nb-diag-badge--warning { background: var(--nb-warn); font-size: 8px; }
+.nodebuilder-root .nb-diag-badge--warning.nb-diag-badge--count { font-size: 9px; }
+.nodebuilder-root .nb-diag-badge:focus-visible {
+  outline: 2px solid var(--nb-border-focus);
+  outline-offset: 1px;
+}
+
+/* Hover tooltip, portalled to the body. */
+.nodebuilder-root.nb-diag-tooltip {
+  position: fixed;
+  z-index: 10002;
+  max-width: 320px;
+  padding: 6px 8px;
+  background: var(--nb-bg-elevated);
+  border: 1px solid var(--nb-border-strong);
+  border-radius: var(--nb-radius-menu);
+  box-shadow: var(--nb-shadow-popover);
+  font-family: var(--nb-font-sans);
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--nb-text-secondary);
+  pointer-events: none;
+}
+.nodebuilder-root .nb-diag-tooltip__line { display: flex; gap: 6px; }
+.nodebuilder-root .nb-diag-tooltip__mark { flex-shrink: 0; }
+.nodebuilder-root .nb-diag-tooltip__mark--error { color: var(--nb-error); }
+.nodebuilder-root .nb-diag-tooltip__mark--warning { color: var(--nb-warn); }
+.nodebuilder-root .nb-diag-tooltip__more { color: var(--nb-text-dim); padding-left: 14px; }
+
+/* Graph-wide list popover. The shell (.nb-popover) gives bg, border, radius
+   and shadow; this lays out the inside. */
+.nodebuilder-root .nb-diag-pop {
+  display: flex;
+  flex-direction: column;
+  max-height: 352px;
+  font-family: var(--nb-font-sans);
+}
+.nodebuilder-root .nb-diag-pop__header {
+  flex-shrink: 0;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--nb-text);
+}
+.nodebuilder-root .nb-diag-pop__close {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--nb-text-muted);
+  cursor: pointer;
+}
+.nodebuilder-root .nb-diag-pop__close:hover { background: var(--nb-bg-hover); color: var(--nb-text); }
+.nodebuilder-root .nb-diag-pop__list { overflow-y: auto; min-height: 0; }
+.nodebuilder-root .nb-diag-pop__group {
+  padding: 6px 8px 2px;
+  font-family: var(--nb-font-mono);
+  font-size: 11px;
+  color: var(--nb-text);
+}
+.nodebuilder-root .nb-diag-pop__row {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.nodebuilder-root .nb-diag-pop__row:hover,
+.nodebuilder-root .nb-diag-pop__row:focus-visible { background: var(--nb-bg-hover); outline: none; }
+.nodebuilder-root .nb-diag-pop__row--static { cursor: default; }
+.nodebuilder-root .nb-diag-pop__dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.nodebuilder-root .nb-diag-pop__dot--error { background: var(--nb-error); }
+.nodebuilder-root .nb-diag-pop__dot--warning { background: var(--nb-warn); }
+.nodebuilder-root .nb-diag-pop__dot--info { background: var(--nb-text-dim); }
+.nodebuilder-root .nb-diag-pop__msg {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--nb-text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.nodebuilder-root .nb-diag-pop__code {
+  flex-shrink: 0;
+  font-family: var(--nb-font-mono);
+  font-size: 10px;
+  color: var(--nb-text-dim);
+}
+.nodebuilder-root .nb-diag-pop__empty {
+  padding: 12px 8px;
+  font-size: 11px;
+  color: var(--nb-text-dim);
+}
+.nodebuilder-root .nb-diag-pop__footer {
+  flex-shrink: 0;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--nb-text-dim);
+  border-top: 1px solid var(--nb-border-subtle);
+}

@@ -7,7 +7,8 @@
  *   field (what a native undo can do) is ignored, and the field keeps showing
  *   the store value; a blur after an undo while focused commits what the field
  *   shows; the field and the store agree after every blur.
- * - Bug 22: no React warning from mixing `border` and `borderColor`.
+ * - Bug 22: no React warning from mixing `border` and `borderColor`; S05 uses
+ *   one `border` shorthand in both states.
  *
  * The harness reads the param from the real store and passes it to ParamRow,
  * the same way the node renderers do.
@@ -18,26 +19,31 @@ import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useNodeBuilderStore } from '../store'
 import { ParamRow } from '../nodes/ParamRow'
-import type { Graph } from '../../../api/nodebuilder'
+import type { Graph, ParamValue } from '../../../api/nodebuilder'
 import type { ParamTypeSpec } from '../catalog'
 
 const NODE_ID = 'rsi_1'
 
 function seedGraph(params: Record<string, unknown>) {
   const graph: Graph = {
-    _version: 1,
+    _version: 2,
+    stream_schema: 1,
     readOnly: false,
+    meta: {},
     nodes: {
       [NODE_ID]: {
         id: NODE_ID,
         type: 'rsi',
-        params,
+        name: NODE_ID,
+        parent: null,
+        params: params as Record<string, ParamValue>,
         position: [0, 0],
         display: false,
         bypass: false,
       },
     },
     wires: [],
+    annotations: { boxes: [], notes: [] },
   }
   act(() => { useNodeBuilderStore.setState({ graph }) })
 }
@@ -214,7 +220,7 @@ describe('ParamRow Cmd+Z desync guard (bug 7)', () => {
     await user.tab()
     expect(storeParam('period')).toBe(14)
     expect(input.value).toBe('abc')
-    expect(input.title).toBe('Must be a number')
+    expect(input.title).toBe('Enter a number')
 
     setStoreParam('period', 15)
     expect(input.value).toBe('15')
@@ -231,7 +237,7 @@ describe('ParamRow styling (bug 22)', () => {
     await user.clear(input)
     await user.type(input, 'abc')
     await user.tab()
-    expect(input.title).toBe('Must be a number')
+    expect(input.title).toBe('Enter a number')
     // Back to valid, which re-renders the style the other way.
     await user.clear(input)
     await user.type(input, '12')
@@ -240,14 +246,15 @@ describe('ParamRow styling (bug 22)', () => {
     expect(messages.filter(m => /border|conflicting property/i.test(m))).toEqual([])
   })
 
-  it('the invalid state overrides borderColor only, on top of longhand borders', async () => {
+  it('the invalid state swaps one border shorthand (S05), with aria-invalid', async () => {
     const user = userEvent.setup()
     const input = renderRow('period', { type: 'number' })
-    expect(input.style.borderStyle).toBe('solid')
+    expect(input.style.border).toBe('1px solid var(--nb-border)')
+    expect(input.getAttribute('aria-invalid')).toBeNull()
     await user.clear(input)
     await user.type(input, 'abc')
     await user.tab()
-    expect(input.style.borderStyle).toBe('solid')
-    expect(input.style.borderColor).toContain('--nb-cat-rules')
+    expect(input.style.border).toBe('1px solid var(--nb-error)')
+    expect(input.getAttribute('aria-invalid')).toBe('true')
   })
 })

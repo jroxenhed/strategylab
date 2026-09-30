@@ -2,7 +2,7 @@
  * Unit 5 — operations.ts tests
  *
  * 20 required scenarios covering:
- * - addNode, removeWire, removeNodeWithRewire, addWire, spliceNodeOntoWire, moveNode
+ * - addNode, removeWire, removeNodesWithRewire, addWire, spliceNodeOntoWire, moveNode(s)
  * - readOnly rejection (ReadOnlyGraphError)
  * - persistence / version validation (IncompatibleGraphVersionError)
  * - cycle detection (wouldCreateCycle)
@@ -17,6 +17,13 @@ import {
   moveNode,
   updateNodeParams,
   removeNodeWithRewire,
+  removeNodesWithRewire,
+  removeNodes,
+  moveNodes,
+  lowestFreeInPort,
+  uniqueName,
+  sanitizeName,
+  newNodeId,
   spliceNodeOntoWire,
   wouldCreateCycle,
   ReadOnlyGraphError,
@@ -43,12 +50,15 @@ beforeAll(() => {
 // Fixtures
 // ---------------------------------------------------------------------------
 
-function makeNode(id: string, position: [number, number] = [0, 0]): GraphNode {
-  return { id, type: 'indicator', params: {}, position, display: false, bypass: false }
+function makeNode(id: string, position: [number, number] = [0, 0], type = 'indicator'): GraphNode {
+  return {
+    id, type, name: id.toLowerCase(), parent: null,
+    params: {}, position, display: false, bypass: false,
+  }
 }
 
-function makeWire(id: string, from: string, to: string, attr?: string): GraphWire {
-  return { id, from, to, attr: attr ?? null }
+function makeWire(id: string, from: string, to: string, attr?: string, toPort = 'in0'): GraphWire {
+  return { id, from, to, from_port: 'out', to_port: toPort, attr: attr ?? null }
 }
 
 function makeGraph(
@@ -57,10 +67,13 @@ function makeGraph(
   readOnly = false,
 ): Graph {
   return {
-    _version: 1,
+    _version: 2,
+    stream_schema: 1,
     readOnly,
+    meta: {},
     nodes: Object.fromEntries(nodes.map(n => [n.id, n])),
     wires,
+    annotations: { boxes: [], notes: [] },
   }
 }
 
@@ -106,91 +119,150 @@ it('4. removeWire on readOnly throws', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 5. removeNodeWithRewire — 3 incoming × 2 outgoing → 6 new wires
+// 5-8. Delete with rewire: the Houdini rule. Exactly one wire into the set
+// from outside bridges to every outside consumer, on the consumer's port.
+// Anything else deletes with no rewire.
 // ---------------------------------------------------------------------------
-it('5. removeNodeWithRewire — 3 incoming × 2 outgoing → 6 new wires', () => {
-  idCounter = 0
-  const nodes = [
-    makeNode('IN1'), makeNode('IN2'), makeNode('IN3'),
-    makeNode('M'),
-    makeNode('OUT1'), makeNode('OUT2'),
-  ]
-  const wires = [
-    makeWire('wi1', 'IN1', 'M'),
-    makeWire('wi2', 'IN2', 'M'),
-    makeWire('wi3', 'IN3', 'M'),
-    makeWire('wo1', 'M', 'OUT1'),
-    makeWire('wo2', 'M', 'OUT2'),
-  ]
-  const g = makeGraph(nodes, wires)
-  const result = removeNodeWithRewire(g, 'M')
+describe('removeNodesWithRewire (Houdini rule)', () => {
+  it('5. one outside input bridges to every consumer on the same port', () => {
+    const nodes = [makeNode('IN'), makeNode('M'), makeNode('OUT1'), makeNode('OUT2')]
+    const wires = [
+      makeWire('wi', 'IN', 'M', '@close'),
+      makeWire('wo1', 'M', 'OUT1', '@rsi', 'in1'),
+      makeWire('wo2', 'M', 'OUT2', '@rsi', 'in0'),
+    ]
+    const result = removeNodeWithRewire(makeGraph(nodes, wires), 'M')
+    expect(result.nodes['M']).toBeUndefined()
+    expect(result.wires).toHaveLength(2)
+    const toOut1 = result.wires.find(w => w.to === 'OUT1')!
+    const toOut2 = result.wires.find(w => w.to === 'OUT2')!
+    expect(toOut1.from).toBe('IN')
+    expect(toOut1.to_port).toBe('in1')
+    expect(toOut1.from_port).toBe('out')
+    expect(toOut2.to_port).toBe('in0')
+    // The bridge carries what the source provides.
+    expect(toOut1.attr).toBe('@close')
+  })
 
-  // M is gone
-  expect(result.nodes['M']).toBeUndefined()
-  // original 5 incident wires gone; 6 new rewires added
-  expect(result.wires).toHaveLength(6)
+  it('6. two outside inputs: delete with no rewire', () => {
+    const nodes = [makeNode('IN1'), makeNode('IN2'), makeNode('M'), makeNode('OUT')]
+    const wires = [
+      makeWire('wi1', 'IN1', 'M', undefined, 'in0'),
+      makeWire('wi2', 'IN2', 'M', undefined, 'in1'),
+      makeWire('wo1', 'M', 'OUT'),
+    ]
+    const result = removeNodeWithRewire(makeGraph(nodes, wires), 'M')
+    expect(result.nodes['M']).toBeUndefined()
+    expect(result.wires).toHaveLength(0)
+  })
 
-  // Each IN connects to each OUT exactly once
-  const pairs = result.wires.map(w => `${w.from}→${w.to}`)
-  for (const inId of ['IN1', 'IN2', 'IN3']) {
-    for (const outId of ['OUT1', 'OUT2']) {
-      expect(pairs).toContain(`${inId}→${outId}`)
-    }
-  }
+  it('7. no self-loop: a consumer that is the source itself is skipped', () => {
+    const nodes = [makeNode('A'), makeNode('M')]
+    const wires = [makeWire('wi1', 'A', 'M'), makeWire('wo1', 'M', 'A')]
+    const result = removeNodeWithRewire(makeGraph(nodes, wires), 'M')
+    expect(result.wires).toHaveLength(0)
+  })
+
+  it('8. no outside input: no rewire', () => {
+    const nodes = [makeNode('M'), makeNode('OUT')]
+    const result = removeNodeWithRewire(makeGraph(nodes, [makeWire('wo1', 'M', 'OUT')]), 'M')
+    expect(result.wires).toHaveLength(0)
+    expect(result.nodes['M']).toBeUndefined()
+  })
+
+  it('8b. a chain deleted as a set bridges its one input to its consumers', () => {
+    // T -> A -> B -> C ; delete {A, B} -> T feeds C on C's old port.
+    const nodes = [makeNode('T'), makeNode('A'), makeNode('B'), makeNode('C')]
+    const wires = [
+      makeWire('w1', 'T', 'A'),
+      makeWire('w2', 'A', 'B'),
+      makeWire('w3', 'B', 'C', undefined, 'in2'),
+    ]
+    const result = removeNodesWithRewire(makeGraph(nodes, wires), ['A', 'B'])
+    expect(Object.keys(result.nodes).sort()).toEqual(['C', 'T'])
+    expect(result.wires).toHaveLength(1)
+    expect(result.wires[0]).toMatchObject({ from: 'T', to: 'C', to_port: 'in2' })
+  })
+
+  it('8c. a set with two inputs from outside is not rewired', () => {
+    const nodes = [makeNode('T1'), makeNode('T2'), makeNode('A'), makeNode('B'), makeNode('C')]
+    const wires = [
+      makeWire('w1', 'T1', 'A'),
+      makeWire('w2', 'T2', 'B'),
+      makeWire('w3', 'A', 'C', undefined, 'in0'),
+      makeWire('w4', 'B', 'C', undefined, 'in1'),
+    ]
+    const result = removeNodesWithRewire(makeGraph(nodes, wires), ['A', 'B'])
+    expect(result.wires).toHaveLength(0)
+  })
+
+  it('8d. never wires into a Ticker or out of an Entry terminal', () => {
+    // Source is an Entry terminal (no output port): no bridge may leave it.
+    const nodes = [makeNode('E', [0, 0], 'entry'), makeNode('M'), makeNode('OUT')]
+    const wires = [makeWire('w1', 'E', 'M'), makeWire('w2', 'M', 'OUT')]
+    expect(removeNodeWithRewire(makeGraph(nodes, wires), 'M').wires).toHaveLength(0)
+    // Consumer is a Ticker (no input port): no bridge may enter it.
+    const nodes2 = [makeNode('S'), makeNode('M'), makeNode('TK', [0, 0], 'ticker')]
+    const wires2 = [makeWire('w1', 'S', 'M'), makeWire('w2', 'M', 'TK')]
+    expect(removeNodeWithRewire(makeGraph(nodes2, wires2), 'M').wires).toHaveLength(0)
+  })
+
+  it('8e. removeNodes deletes nodes and their wires without rewiring', () => {
+    const nodes = [makeNode('IN'), makeNode('M'), makeNode('OUT')]
+    const wires = [makeWire('wi', 'IN', 'M'), makeWire('wo', 'M', 'OUT')]
+    const result = removeNodes(makeGraph(nodes, wires), ['M'])
+    expect(result.wires).toHaveLength(0)
+    expect(Object.keys(result.nodes).sort()).toEqual(['IN', 'OUT'])
+  })
 })
 
 // ---------------------------------------------------------------------------
-// 6. removeNodeWithRewire dedups same-target wires
+// Ports, names, batch moves
 // ---------------------------------------------------------------------------
-it('6. removeNodeWithRewire dedups same-target wires', () => {
-  idCounter = 100
-  // Two incomings from SAME source — rewire would try A→OUT twice
-  const nodes = [makeNode('A'), makeNode('M'), makeNode('OUT')]
-  const wires = [
-    makeWire('wi1', 'A', 'M', '@bool'),
-    makeWire('wi2', 'A', 'M', '@price'), // duplicate from A
-    makeWire('wo1', 'M', 'OUT'),
-  ]
-  const g = makeGraph(nodes, wires)
-  const result = removeNodeWithRewire(g, 'M')
+describe('ports, names and batch moves', () => {
+  it('addWire without a port takes the lowest free in<k> on the target', () => {
+    let g = makeGraph([makeNode('A'), makeNode('B'), makeNode('C')], [])
+    g = addWire(g, { id: 'w1', from: 'A', to: 'C' })
+    g = addWire(g, { id: 'w2', from: 'B', to: 'C' })
+    expect(g.wires.map(w => w.to_port)).toEqual(['in0', 'in1'])
+    expect(g.wires.every(w => w.from_port === 'out')).toBe(true)
+    // Free in0 again: the next wire fills the gap.
+    g = removeWire(g, 'w1')
+    expect(lowestFreeInPort(g, 'C')).toBe('in0')
+  })
 
-  // Should produce exactly 1 wire: A → OUT (not 2)
-  expect(result.wires).toHaveLength(1)
-  expect(result.wires[0].from).toBe('A')
-  expect(result.wires[0].to).toBe('OUT')
-})
+  it('addNode keeps sibling names unique', () => {
+    let g = makeGraph([], [])
+    g = addNode(g, { ...makeNode('n1'), name: 'rsi' })
+    g = addNode(g, { ...makeNode('n2'), name: 'rsi' })
+    g = addNode(g, { ...makeNode('n3'), name: 'rsi' })
+    expect(['n1', 'n2', 'n3'].map(id => g.nodes[id].name)).toEqual(['rsi', 'rsi1', 'rsi2'])
+    expect(uniqueName(g, 'Crosses Above')).toBe('crosses_above')
+  })
 
-// ---------------------------------------------------------------------------
-// 7. removeNodeWithRewire no self-loop (from === to after rewire)
-// ---------------------------------------------------------------------------
-it('7. removeNodeWithRewire no self-loop', () => {
-  idCounter = 200
-  // A → M → A would create self-loop: skip
-  const nodes = [makeNode('A'), makeNode('M')]
-  const wires = [
-    makeWire('wi1', 'A', 'M'),
-    makeWire('wo1', 'M', 'A'),
-  ]
-  const g = makeGraph(nodes, wires)
-  const result = removeNodeWithRewire(g, 'M')
+  it('names follow the shared paths.ts rule, as the backend does (FC-8)', () => {
+    let g = makeGraph([], [])
+    g = addNode(g, { ...makeNode('n1'), name: 'sma200' })
+    g = addNode(g, { ...makeNode('n2'), name: 'sma200' })
+    expect(g.nodes.n2.name).toBe('sma201')
+    expect(sanitizeName('200 day')).toBe('n_200_day')
+    expect(uniqueName(g, '200 day')).toBe('n_200_day')
+  })
 
-  // Self-loop A → A must be skipped
-  expect(result.wires).toHaveLength(0)
-})
+  it('newNodeId has the n_ plus 8 base-36 shape', () => {
+    expect(newNodeId()).toMatch(/^n_[a-z0-9]{8}$/)
+  })
 
-// ---------------------------------------------------------------------------
-// 8. removeNodeWithRewire 0 incoming → no rewires
-// ---------------------------------------------------------------------------
-it('8. removeNodeWithRewire 0 incoming → no rewires', () => {
-  idCounter = 300
-  const nodes = [makeNode('M'), makeNode('OUT')]
-  const wires = [makeWire('wo1', 'M', 'OUT')]
-  const g = makeGraph(nodes, wires)
-  const result = removeNodeWithRewire(g, 'M')
-
-  // M gone, wo1 gone, no rewires created
-  expect(result.wires).toHaveLength(0)
-  expect(result.nodes['M']).toBeUndefined()
+  it('moveNodes applies one delta or one per id', () => {
+    const g = makeGraph([makeNode('A', [0, 0]), makeNode('B', [10, 10])], [])
+    const same = moveNodes(g, ['A', 'B'], [5, -5])
+    expect(same.nodes.A.position).toEqual([5, -5])
+    expect(same.nodes.B.position).toEqual([15, 5])
+    const each = moveNodes(g, ['A', 'B'], [[1, 1], [2, 2]])
+    expect(each.nodes.A.position).toEqual([1, 1])
+    expect(each.nodes.B.position).toEqual([12, 12])
+    expect(moveNodes(g, ['A'], [0, 0])).toBe(g)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -305,12 +377,11 @@ it('15d. updateNodeParams no-op on missing node', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 16. loadGraph with _version=0 throws IncompatibleGraphVersionError
+// 16. version check: _version=0 throws IncompatibleGraphVersionError
 // ---------------------------------------------------------------------------
-it('16. loadGraph with _version=0 throws IncompatibleGraphVersionError', () => {
-  // Test the validation function directly (store.loadGraph uses localStorage;
-  // we test the error type and MIN_SUPPORTED_VERSION constant here).
-  const staleGraph: Graph = { _version: 0, readOnly: false, nodes: {}, wires: [] }
+it('16. version check: _version=0 throws IncompatibleGraphVersionError', () => {
+  // Test the error type and MIN_SUPPORTED_VERSION constant directly.
+  const staleGraph = { _version: 0, readOnly: false, nodes: {}, wires: [] }
   const version = staleGraph._version ?? 0
   expect(version < MIN_SUPPORTED_VERSION).toBe(true)
 
@@ -322,10 +393,10 @@ it('16. loadGraph with _version=0 throws IncompatibleGraphVersionError', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 17. loadGraph with _version=1 loads (at minimum version)
+// 17. version check: _version=1 loads (at minimum version)
 // ---------------------------------------------------------------------------
-it('17. loadGraph with _version=1 loads (at minimum version)', () => {
-  const g: Graph = { _version: 1, readOnly: false, nodes: {}, wires: [] }
+it('17. version check: _version=1 loads (at minimum version)', () => {
+  const g = { _version: 1, readOnly: false, nodes: {}, wires: [] }
   expect(g._version >= MIN_SUPPORTED_VERSION).toBe(true)
   // No error thrown
   expect(() => {
@@ -336,10 +407,10 @@ it('17. loadGraph with _version=1 loads (at minimum version)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 18. loadGraph with _version=99 loads (additive tolerance)
+// 18. version check: _version=99 loads (additive tolerance)
 // ---------------------------------------------------------------------------
-it('18. loadGraph with _version=99 loads (additive tolerance)', () => {
-  const g: Graph = { _version: 99, readOnly: false, nodes: {}, wires: [] }
+it('18. version check: _version=99 loads (additive tolerance)', () => {
+  const g = { _version: 99, readOnly: false, nodes: {}, wires: [] }
   expect(g._version >= MIN_SUPPORTED_VERSION).toBe(true)
   expect(() => {
     if (g._version < MIN_SUPPORTED_VERSION) {
@@ -425,7 +496,7 @@ describe('spliceNodeOntoWire — F7 cycle guard', () => {
 // ---------------------------------------------------------------------------
 describe('addWire refuses a wire with no port at one end', () => {
   function typed(id: string, type: string): GraphNode {
-    return { id, type, params: {}, position: [0, 0], display: false, bypass: false }
+    return makeNode(id, [0, 0], type)
   }
 
   it.each([
