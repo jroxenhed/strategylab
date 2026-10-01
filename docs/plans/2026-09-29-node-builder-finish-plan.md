@@ -1373,7 +1373,7 @@ Also ask after W2 and after W5: does the graph now beat the rule builder for the
 **Deferred from the Wave 3 review (2026-10-01).** Full notes: `.run/F435/w3/integration.md` and `fix.md` (local only).
 
 - **Design calls for the final UI/UX pass (Fable).** The node name as the visible card title (today the title comes from the type, for example "RSI(14)"); the Inspector param-row styling (24px grid, unit inside the field, native stepping); the selection ring against the display outline; where a per-param "slider shown" toggle lives.
-- **Browser checks NOT-RUN.** The elk layout worker in "Edit this graph" (it falls back to the main thread if the worker fails), double-click on empty canvas, and the param context menu. Check them in the first live-browser pass.
+- **Param menu on an editable field.** Right-click on a param label or value cell opens the param menu; on the editable text input itself the browser text menu shows. The live check on 2026-10-01 passed the layout worker, double-click and menus.
 - **Right-click inside a box** gives only the box menu; the pane rows (Add node, Paste) are not added.
 - **TabMenu filter and mode line** for "Insert node…" (S24); a flash message stands in.
 - **Draft save time and a conflict flag in the status bar** need reactive state from the persistence session.
