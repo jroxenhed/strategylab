@@ -24,6 +24,7 @@ import { useDiagnostics } from './useDiagnostics'
 import { useBuilder } from './slots'
 import { focusNode } from './viewOps'
 import { useRelativeTime } from './ui/relativeTime'
+import { toggleAutoCook } from './AutoCookToggle'
 import type { Graph } from '../../api/nodebuilder'
 import {
   bindCursorEl,
@@ -169,11 +170,14 @@ function CookSegment() {
     tone = 'nb-status--error'
     clickable = cook.failedNodeId != null
   } else if (cook.stale) {
-    text = 'stale'
+    // S27: "stale · fix errors to cook" when errors block the auto cook.
+    text = cook.staleNote ? `stale · ${cook.staleNote}` : 'stale'
     tone = 'nb-status--warn'
   } else if (cook.phase === 'cooked') {
     text = cook.endedAt != null ? `cooked ${clockText(cook.endedAt)}` : 'cooked'
-    tone = fresh ? 'nb-status--ok' : ''
+    // The server answered from the last good cook (its fetch failed).
+    if (cook.staleNote) text = `${text} · ${cook.staleNote}`
+    tone = cook.staleNote ? 'nb-status--warn' : fresh ? 'nb-status--ok' : ''
   } else if (cook.phase === 'cancelled' && fresh) {
     text = 'cancelled'
   } else {
@@ -189,11 +193,24 @@ function CookSegment() {
       {preview && <span className="nb-status--dim"> · preview</span>}
     </>
   )
+  // S27: the segment announces `cooked` and `failed` only. The visible text
+  // (cooking…, stale, idle) is not a live region; this hidden one changes
+  // only when a cook ends as cooked or failed, so auto cook does not speak on
+  // every edit (UX-11).
+  const announce = cooking
+    ? ''
+    : cook.phase === 'failed'
+      ? 'cook failed'
+      : cook.phase === 'cooked' && !cook.stale
+        ? text
+        : ''
+  const live = (
+    <span role="status" aria-live="polite" className="nb-sr-only" data-testid="nb-status-cook-live">{announce}</span>
+  )
   if (clickable) {
-    // The live region wraps the button, so the button keeps its role (S20:
-    // clickable segments are buttons; UX-11).
+    // S20: clickable segments are buttons.
     return (
-      <span role="status" aria-live="polite" className="nb-status__live">
+      <>
         <button
           type="button"
           className={`nb-status__seg nb-status__btn ${tone}`}
@@ -203,13 +220,17 @@ function CookSegment() {
         >
           {body}
         </button>
-      </span>
+        {live}
+      </>
     )
   }
   return (
-    <span role="status" aria-live="polite" className={`nb-status__seg ${tone}`} data-testid="nb-status-cook">
-      {body}
-    </span>
+    <>
+      <span className={`nb-status__seg ${tone}`} data-testid="nb-status-cook">
+        {body}
+      </span>
+      {live}
+    </>
   )
 }
 
@@ -296,6 +317,30 @@ function SavedSegment() {
   )
 }
 
+const selectAutoCook = (s: NodeBuilderState) => s.autoCook
+const selectCanAutoCook = (s: NodeBuilderState) => s.graph != null && !s.graph.readOnly
+
+/** S20 segment 7: `auto cook on` / `auto cook off` (dim when off); click = the A command. */
+function AutoCookSegment() {
+  const editable = useNodeBuilderStore(selectCanAutoCook)
+  const on = useNodeBuilderStore(selectAutoCook)
+  if (!editable) {
+    return <span className="nb-status__seg nb-status--dim" data-testid="nb-status-autocook">—</span>
+  }
+  return (
+    <button
+      type="button"
+      className={`nb-status__seg nb-status__btn${on ? '' : ' nb-status--dim'}`}
+      data-testid="nb-status-autocook"
+      title="Toggle auto cook (A)"
+      aria-pressed={on}
+      onClick={toggleAutoCook}
+    >
+      {on ? 'auto cook on' : 'auto cook off'}
+    </button>
+  )
+}
+
 const selectNodeCount = (s: NodeBuilderState) => (s.graph ? Object.keys(s.graph.nodes).length : -1)
 
 function GraphSegment() {
@@ -342,6 +387,7 @@ function StatusBar() {
       <DiagnosticsSegment />
       <FlashSegment />
       <div className="nb-status__right">
+        <AutoCookSegment />
         <SavedSegment />
         <GraphSegment />
       </div>

@@ -55,6 +55,7 @@ import { AttrPicker } from './AttrPicker'
 import { TimeRangeInput } from './TimeRangeInput'
 import { DayOfWeekInput } from './DayOfWeekInput'
 import { WriteChip } from './WriteChip'
+import { FromSidebarRow, useSidebarParamValue } from '../sidebarWindow'
 
 /** Which special widget a param gets, from its ParamSpec; null for a plain field. */
 export type StreamWidget = 'attr' | 'time_range' | 'days' | 'write'
@@ -208,6 +209,17 @@ function paramTestId(nodeId: string, paramKey: string, variant: ParamRowProps['v
 }
 
 export function ParamRow(props: ParamRowProps) {
+  // D11 before W5: a Ticker's symbol and interval come from the sidebar (UX-01).
+  const fromSidebar = useSidebarParamValue(props.nodeId, props.paramKey)
+  if (fromSidebar != null) {
+    return (
+      <FromSidebarRow
+        label={props.spec?.label || props.paramKey}
+        value={fromSidebar}
+        testId={paramTestId(props.nodeId, props.paramKey, props.variant)}
+      />
+    )
+  }
   const widget = streamWidgetFor(props.spec, props.value)
   if (widget && props.spec) return <StreamParamRow {...props} spec={props.spec} widget={widget} />
   return <ValueParamRow {...props} />

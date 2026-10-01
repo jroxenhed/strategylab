@@ -51,6 +51,27 @@ interface ChartProps {
   interval?: string
   from?: string
   to?: string
+  /** sessionStorage key for the saved visible range. The rule chart and the
+   *  graph view's chart each keep their own range (F435 CI-01); the range is
+   *  restored only onto the same ticker|interval|from|to it was saved on. */
+  rangeStorageKey?: string
+}
+
+const DEFAULT_RANGE_KEY = 'strategylab-chart-range'
+
+/** Parse a saved range. Returns it only when it was saved on `fitKey`
+ *  (a legacy bare range, saved before the key existed, is accepted as is). */
+export function parseSavedRange(raw: string | null, fitKey: string): { from: number; to: number } | null {
+  if (!raw) return null
+  try {
+    const v = JSON.parse(raw)
+    if (v && typeof v === 'object' && 'range' in v) {
+      return v.fitKey === fitKey && v.range && typeof v.range.from === 'number' ? v.range : null
+    }
+    return v && typeof v.from === 'number' && typeof v.to === 'number' ? v : null
+  } catch {
+    return null
+  }
 }
 
 declare global {
@@ -141,8 +162,11 @@ function buildMarkers(trades: Trade[], subPane = false) {
   })
 }
 
-export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, instanceLoading, loadingByInstance, instanceError, instanceErrorMessage, onRetryIndicators, trades, emaOverlays, ruleSignals, regimeSeries, viewInterval, backtestInterval, onChartReady, autoIntervalEnabled, onAutoRenderChange, ticker, interval, from, to }: ChartProps) {
+export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indicators, instanceData, instanceLoading, loadingByInstance, instanceError, instanceErrorMessage, onRetryIndicators, trades, emaOverlays, ruleSignals, regimeSeries, viewInterval, backtestInterval, onChartReady, autoIntervalEnabled, onAutoRenderChange, ticker, interval, from, to, rangeStorageKey = DEFAULT_RANGE_KEY }: ChartProps) {
   const [tzMode] = useTimezone()
+  // Read live by the (stable) range-change subscription's write timer.
+  const rangeStorageKeyRef = useRef(rangeStorageKey)
+  rangeStorageKeyRef.current = rangeStorageKey
   /** Render-layer auto interval: null = render at data resolution (viewInterval).
    *  Set internally by zoom-span evaluation; cleared on checkbox disable. */
   const [autoRenderInterval, setAutoRenderInterval] = useState<string | null>(null)
@@ -449,7 +473,10 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       sessionWriteTimer = window.setTimeout(() => {
         // R3: no async switch pending anymore — render-layer resample is synchronous.
         // Always safe to persist the logical range.
-        sessionStorage.setItem('strategylab-chart-range', JSON.stringify(range))
+        try {
+          sessionStorage.setItem(rangeStorageKeyRef.current,
+            JSON.stringify({ range, fitKey: lastFitParamsRef.current }))
+        } catch {}
         sessionWriteTimer = null
       }, 200)
 
@@ -641,9 +668,13 @@ export default function Chart({ data, spyData, qqqData, showSpy, showQqq, indica
       // First load: restore saved range or fit.
       rangeRestoredRef.current = true
       lastFitParamsRef.current = fitKey
-      const savedRange = sessionStorage.getItem('strategylab-chart-range')
+      // Restore only a range saved on this same series (CI-01): the rule chart
+      // and graph view keep separate keys, and each stores its fitKey.
+      let raw: string | null = null
+      try { raw = sessionStorage.getItem(rangeStorageKeyRef.current) } catch {}
+      const savedRange = parseSavedRange(raw, fitKey)
       if (savedRange) {
-        try { chart.timeScale().setVisibleLogicalRange(JSON.parse(savedRange)) }
+        try { chart.timeScale().setVisibleLogicalRange(savedRange) }
         catch { chart.timeScale().fitContent() }
       } else {
         chart.timeScale().fitContent()

@@ -93,6 +93,9 @@ body {
 /* F230: results panel scrollers reserve gutter so content doesn't jump
    when scrollbar appears, and the bar is consistently visible. */
 .results-scroller { scrollbar-gutter: stable; }
+/* S30: rule-only Results tabs dimmed for a graph result; full contrast on focus (UX-15). */
+.results-tab-dim { opacity: 0.6; }
+.results-tab-dim:focus-visible, .results-tab-dim:hover { opacity: 1; }
 
 /* Globals */
 button { 

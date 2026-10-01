@@ -192,7 +192,7 @@ describe('NodeBuilder frame', () => {
     expect(screen.getByTestId('canvas-stub')).toBeInTheDocument()
     // The Inspector slot sits beside the column that holds the toolbar and canvas.
     const right = screen.getByTestId('slot-rightPanel')
-    const column = screen.getByTestId('canvas-stub').closest('div[style*="column"]')
+    const column = screen.getByTestId('canvas-stub').closest('[data-nb-column]')
     expect(column).not.toBeNull()
     expect(column!.contains(right)).toBe(false)
     expect(column!.contains(screen.getByTestId('slot-bottomPanel'))).toBe(true)

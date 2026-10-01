@@ -165,7 +165,11 @@ describe('status bar', () => {
     useNodeBuilderStore.setState({ cook: { ...IDLE_COOK, phase: 'cooking', startedAt: Date.now() } })
     renderBar()
     const seg = screen.getByTestId('nb-status-cook')
-    expect(seg).toHaveAttribute('role', 'status')
+    // W4 UX-11: the visible text is not live; the hidden live region speaks
+    // only cooked and failed, so it is empty while cooking.
+    expect(seg).not.toHaveAttribute('role')
+    expect(screen.getByTestId('nb-status-cook-live')).toHaveAttribute('role', 'status')
+    expect(screen.getByTestId('nb-status-cook-live').textContent).toBe('')
     const ms = screen.getByTestId('nb-status-cook-ms')
     expect(ms).toHaveAttribute('aria-hidden', 'true')
     expect(ms.textContent).toMatch(/ms$/)
@@ -177,7 +181,7 @@ describe('status bar', () => {
     const btn = screen.getByTestId('nb-status-cook')
     expect(btn.tagName).toBe('BUTTON')
     expect(btn).not.toHaveAttribute('role')
-    expect(btn.parentElement).toHaveAttribute('role', 'status')
+    expect(screen.getByTestId('nb-status-cook-live')).toHaveTextContent('cook failed')
     expect(screen.getByRole('button', { name: /cook failed/ })).toBe(btn)
   })
 

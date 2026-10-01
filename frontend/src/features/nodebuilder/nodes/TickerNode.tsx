@@ -12,15 +12,21 @@
 import type { NodeProps } from '@xyflow/react'
 import { BaseNode, type BaseNodeData } from './BaseNode'
 import { ParamRows } from './ParamRow'
+import { FROM_SIDEBAR, sidebarTickerValue, useSidebarWindow } from '../sidebarWindow'
 
 export default function TickerNode({ id, data }: NodeProps) {
   const d = data as unknown as BaseNodeData
   const params = d.params ?? {}
   const editable = d.editable === true
 
-  const symbol = typeof params.symbol === 'string' ? params.symbol : (d.backendType ?? 'Ticker')
-  const interval = typeof params.interval === 'string' ? params.interval : ''
-  const subtitle = editable ? undefined : interval || undefined
+  // D11 before W5: in the app the sidebar's symbol and interval drive every
+  // run, so the card shows those, not its own params (UX-01).
+  const win = useSidebarWindow()
+  const sbSymbol = sidebarTickerValue(win, 'ticker', 'symbol')
+  const sbInterval = sidebarTickerValue(win, 'ticker', 'interval')
+  const symbol = sbSymbol ?? (typeof params.symbol === 'string' ? params.symbol : (d.backendType ?? 'Ticker'))
+  const interval = sbInterval ?? (typeof params.interval === 'string' ? params.interval : '')
+  const subtitle = editable ? undefined : (interval ? (win ? `${interval} · ${FROM_SIDEBAR}` : interval) : undefined)
 
   const writes = d.catalog?.writes ?? ['@open', '@high', '@low', '@close', '@volume']
 

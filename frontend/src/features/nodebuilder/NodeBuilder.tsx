@@ -16,9 +16,13 @@
  * Diagnostics (1.G) are validated 300 ms after each commit; the toolbar
  * shows the count and Run is disabled while there are errors.
  *
- * The results strip names the symbol and interval it ran on, dims itself as
- * "stale" once the graph changes, and flags an open position or an
- * unconnected Exit. Text logic lives in resultsStrip.ts.
+ * Results (W4, D10): a run goes through App's run handler (`onRunGraph`),
+ * which builds the request from the sidebar window and leaves out the
+ * fields the graph owns (graphRun.ts, D11). The result lives in App's
+ * `graphResult`, never in `lastRequest`. Below the canvas, GraphChartSplit
+ * (S28) holds the chart panel, whose bar shows the last run's summary
+ * ("stale" once the graph or the window changes), and the Data Sheet (S25).
+ * Auto cook (useAutoCook, S27) refreshes node data after each edit.
  *
  * Layout slots (W3 pre-step 3.0): the frame below has named places that
  * other items fill through slots.ts without editing this file: toolbarLeft
@@ -32,7 +36,7 @@
 import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { StrategyRequest } from '../../shared/types/strategy'
-import { fetchAutoRender, fetchGraphBacktest, type GraphBacktestResult, type GraphNode } from '../../api/nodebuilder'
+import { fetchAutoRender, type GraphNode } from '../../api/nodebuilder'
 import { errorDiagnostics } from '../../api/graphs'
 import type { Diagnostic } from '../../api/nodebuilderValidate'
 import { apiErrorDetail } from '../../shared/utils/errors'
@@ -42,16 +46,21 @@ import { newNodeId } from './operations'
 import { hasEdits, useNodeBuilderStore } from './store'
 import { focusNode } from './viewOps'
 import { IDLE_COOK } from './store/status'
+import { describeBacktestError, errorNodeId, graphEvalKey } from './resultsStrip'
+import { SidebarWindowContext } from './sidebarWindow'
 import {
-  buildResultsStrip,
-  describeBacktestError,
-  errorNodeId,
-  EXIT_NOT_CONNECTED_TITLE,
-  graphEvalKey,
-  STALE_LABEL,
-  STALE_REQUEST_TITLE,
-  STALE_TITLE,
-} from './resultsStrip'
+  requestSettingsKey,
+  runGraphBacktest,
+  useGraphRunSettingsKey,
+  windowKey,
+  windowOfRequest,
+  type GraphResultState,
+  type GraphRunArgs,
+  type GraphRunHandler,
+  type GraphWindow,
+} from './graphRun'
+import { GraphChartSplit, GraphSheet, type ChartBarModel } from './GraphChartSplit'
+import { useAutoCook } from './useAutoCook'
 import {
   findUnsupportedNodes,
   REGIME_LEARN_MORE_TEXT,
@@ -83,16 +92,16 @@ import './tokens.css'
 interface NodeBuilderProps {
   request: StrategyRequest | null
   graphViewActive: boolean
-}
-
-/** One finished run: its result, what it ran on, and the state it ran against. */
-interface GraphRun {
-  result: GraphBacktestResult
-  ticker: string
-  interval: string
-  /** What the graph computed and which request it ran with; a mismatch later means stale. */
-  graphKey: string
-  requestKey: string
+  /**
+   * The sidebar window (D11): ticker, dates, interval and source. Runs,
+   * auto cook and the Data Sheet use it. Null: fall back to `request`.
+   */
+  graphWindow?: GraphWindow | null
+  /** App's run handler (D10): builds the request and runs it. */
+  onRunGraph?: GraphRunHandler
+  /** App's graph result (D10). With `onGraphResult` set, App keeps the result. */
+  graphResult?: GraphResultState | null
+  onGraphResult?: (result: GraphResultState | null) => void
 }
 
 /** A failed run: the sentence to show and the node at fault, if known. */
@@ -104,7 +113,7 @@ interface RunError {
 // The legacy seed runs once per page load, however often NodeBuilder mounts.
 let seedStarted = false
 
-function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
+function NodeBuilder({ request, graphViewActive, graphWindow = null, onRunGraph, graphResult, onGraphResult }: NodeBuilderProps) {
   // Stable cache key: JSON.stringify is deterministic within a session.
   const strategyHash = request != null ? JSON.stringify(request) : null
 
@@ -175,9 +184,15 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
   // Which graph to pass to Canvas
   const activeGraph = editMode ? storeGraph : (autoGraph ?? null)
 
-  // Graph backtest state
+  // Graph backtest state. The result is App's when App passes
+  // `onGraphResult` (D10); on its own (tests) the builder keeps it here.
   const [backtestRunning, setBacktestRunning] = useState(false)
-  const [lastRun, setLastRun] = useState<GraphRun | null>(null)
+  const [localResult, setLocalResult] = useState<GraphResultState | null>(null)
+  const result = onGraphResult ? (graphResult ?? null) : localResult
+  function publishResult(next: GraphResultState | null) {
+    if (onGraphResult) onGraphResult(next)
+    else setLocalResult(next)
+  }
   const [runError, setRunError] = useState<RunError | null>(null)
   // Bumped by every run, every clear and Stop, so a run still in flight
   // after a graph change (or a newer run) drops its late result.
@@ -202,45 +217,74 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
   // The regime banner's "Learn more" shows one more sentence.
   const [regimeHelp, setRegimeHelp] = useState(false)
 
-  // The run also depends on the request (dates, capital), so a new chart
-  // backtest makes the strip stale too. Moving a node does not: the graph
-  // key leaves out positions.
+  // The window runs and cooks use: the sidebar's when App passes it (D11).
+  // On its own (tests), the builder falls back to the loaded request.
+  const fallbackWindow = useMemo<GraphWindow>(() => ({
+    ticker: request?.ticker ?? 'AAPL',
+    start: request?.start ?? '2022-01-01',
+    end: request?.end ?? '2024-01-01',
+    interval: request?.interval ?? '1d',
+    source: request?.source ?? 'yahoo',
+  }), [request])
+  const runWindow = graphWindow ?? fallbackWindow
+
+  // Auto cook (S27): a debounced /preview after each edit, on the sidebar
+  // window. It never runs the backtest; it stops while the view is hidden.
+  useAutoCook({ window: graphWindow, active: graphViewActive })
+
+  // A result goes stale when the graph changes what it computes, or when the
+  // sidebar window changes. Moving a node does not: the graph key leaves out
+  // positions.
   const graphKey = useMemo(() => graphEvalKey(storeGraph), [storeGraph])
-  const requestKey = strategyHash ?? ''
-  const graphStale = lastRun != null && lastRun.graphKey !== graphKey
-  const requestStale = lastRun != null && lastRun.requestKey !== requestKey
-  const strip = useMemo(
-    () =>
-      lastRun
-        ? buildResultsStrip(lastRun.result.summary, lastRun, graphStale || requestStale)
-        : null,
-    [lastRun, graphStale, requestStale],
-  )
-  const staleTitle = graphStale ? STALE_TITLE : STALE_REQUEST_TITLE
+  const graphStale = result != null && result.graphKey !== graphKey
+  const windowStale = result != null && graphWindow != null
+    && windowKey(windowOfRequest(result.request)) !== windowKey(graphWindow)
+  // ...or when capital, direction or an APPLIES TO GRAPH setting changed in
+  // the settings panel since the run (CI-09). App-driven runs only: on its
+  // own (tests) the builder runs from the loaded request.
+  const runSettingsKey = useGraphRunSettingsKey()
+  const settingsStale = result != null && onRunGraph != null
+    && requestSettingsKey(result.request) !== runSettingsKey
+  const resultStale = graphStale || windowStale || settingsStale
 
   // The status bar reads the cook state from the store (status slice).
   const setCook = useNodeBuilderStore(s => s.setCook)
-  const resultStale = graphStale || requestStale
   useEffect(() => { setCook({ stale: resultStale }) }, [resultStale, setCook])
+
+  // The chart bar (S28) under the canvas.
+  const chartBar = useMemo<ChartBarModel>(
+    () => ({ result, stale: resultStale, running: backtestRunning, ticker: runWindow.ticker }),
+    [result, resultStale, backtestRunning, runWindow.ticker],
+  )
 
   function clearRun() {
     runIdRef.current += 1
     abortRun()
     setBacktestRunning(false)
-    setLastRun(null)
+    publishResult(null)
     setRunError(null)
     setCook(IDLE_COOK)
   }
 
   // A different graph on screen (open, new, edit copy) drops the last run
-  // and any run still in flight. A save or Save as keeps it.
+  // and any run still in flight. A save or Save as keeps it. So does the
+  // elk tidy that lands a moment after "Edit this graph" (3.F): it bumps the
+  // epoch but only moves nodes, so the same graph id and eval key mean the
+  // run still belongs to the graph on screen.
   const firstEpoch = useRef(true)
+  const loadKeyRef = useRef<string | null>(null)
   useEffect(() => {
+    const s = useNodeBuilderStore.getState()
+    const loadKey = `${s.graphMeta?.id ?? ''}#${graphEvalKey(s.graph)}`
+    const sameGraph = loadKey === loadKeyRef.current
+    loadKeyRef.current = loadKey
     if (firstEpoch.current) {
       firstEpoch.current = false
       return
     }
+    if (sameGraph) return
     clearRun()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layoutEpoch])
 
   // One-time import of the old browser-only saved graphs (S01).
@@ -293,11 +337,24 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
     setCook({ phase: 'cancelled', endedAt: Date.now() })
   }
 
+  // Without App's handler (tests), run the request here. The ticker and
+  // interval then come from the graph's Ticker node first, as before W4.
+  function runStandalone(args: GraphRunArgs): Promise<GraphResultState> {
+    const tickerNode = Object.values(args.graph.nodes).find(n => n.type === 'ticker')
+    const base = graphWindow ?? {
+      ...fallbackWindow,
+      ticker: (tickerNode?.params?.symbol as string | undefined) ?? fallbackWindow.ticker,
+      interval: (tickerNode?.params?.interval as string | undefined) ?? fallbackWindow.interval,
+    }
+    const direction = request?.direction === 'short' ? 'short' : request?.direction === 'long' ? 'long' : undefined
+    return runGraphBacktest(args, { ...base, initial_capital: request?.initial_capital ?? 10000 }, { direction })
+  }
+
   async function handleRunBacktest() {
     // Read the stores now, not this render's copies: Cmd+Enter in a param
     // field commits the field and runs in the same key press, before React
     // renders again.
-    const { graph: runGraph, commitSeq: seqAtStart } = useNodeBuilderStore.getState()
+    const { graph: runGraph, commitSeq: seqAtStart, graphMeta: meta } = useNodeBuilderStore.getState()
     if (runGraph == null || runGraph.readOnly || backtestRunning) return
     const runHasNodes = Object.keys(runGraph.nodes).length > 0
     if (runDisabledReason(getDiagnosticsView().errorCount, runHasNodes) != null) return
@@ -305,39 +362,29 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
     abortRun()
     const ctrl = new AbortController()
     runAbortRef.current = ctrl
-    const graphKeyAtStart = graphEvalKey(runGraph)
-    const requestKeyAtStart = requestKey
     setBacktestRunning(true)
     setRunError(null)
-    setLastRun(null)
-    setCook({ phase: 'cooking', kind: 'backtest', startedAt: Date.now(), endedAt: null, stale: false, failedNodeId: null })
+    // The last result stays on screen while this run cooks (the chart bar
+    // reads "running…"); it is replaced when the new one arrives.
+    // `stale` is left alone (UX-03): it follows resultStale, so a failed or
+    // stopped run keeps the old result marked stale in the Results header.
+    setCook({ phase: 'cooking', kind: 'backtest', startedAt: Date.now(), endedAt: null, failedNodeId: null })
     try {
-      // Derive ticker/interval from the graph's ticker node, falling back to the
-      // loaded request when available. The data source is the sidebar's only
-      // (plan D11): a Ticker has no source param since W2, and a stale one left
-      // on an older graph must not override the sidebar.
-      const tickerNode = Object.values(runGraph.nodes).find(n => n.type === 'ticker')
-      const ticker = (tickerNode?.params?.symbol as string | undefined) ?? request?.ticker ?? 'AAPL'
-      const interval = (tickerNode?.params?.interval as string | undefined) ?? request?.interval ?? '1d'
-      const source = request?.source ?? 'yahoo'
-      const start = request?.start ?? '2022-01-01'
-      const end = request?.end ?? '2024-01-01'
-
-      const result = await fetchGraphBacktest({
+      // The window and capital come from the sidebar and the settings panel
+      // (D11); the data source is the sidebar's only. Graph-owned fields
+      // (size, stop, costs) are never sent (graphRun.buildGraphRequest).
+      const args: GraphRunArgs = {
         graph: runGraph,
-        ticker,
-        interval,
-        source,
-        start,
-        end,
-        initial_capital: request?.initial_capital ?? 10000,
-        position_size: request?.position_size ?? 1.0,
-        slippage_bps: request?.slippage_bps ?? 2.0,
-        direction: request?.direction ?? 'long',
-      }, ctrl.signal)
+        graphId: meta?.id ?? null,
+        rev: meta?.id ? meta.rev : null,
+        graphName: meta?.name ?? null,
+        signal: ctrl.signal,
+      }
+      const next = await (onRunGraph ? onRunGraph(args) : runStandalone(args))
       if (runId !== runIdRef.current) return  // superseded, cleared or stopped
-      setLastRun({ result, ticker, interval, graphKey: graphKeyAtStart, requestKey: requestKeyAtStart })
-      setCook({ phase: 'cooked', endedAt: Date.now() })
+      publishResult(next)
+      // The backtest's cook id lets auto cook refresh the sparklines from it.
+      setCook({ phase: 'cooked', endedAt: Date.now(), cookId: next.response.cook_id ?? null })
     } catch (e: unknown) {
       if (runId !== runIdRef.current) return
       // A 400 with diagnostics replaces the current set until the next commit
@@ -360,9 +407,9 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
   }
 
   // Latest handlers for the keyboard commands, registered once.
-  const keyHandlers = useRef({ save: session.save, open: session.openBrowser, run: handleRunBacktest })
+  const keyHandlers = useRef({ save: session.save, open: session.openBrowser, run: handleRunBacktest, stop: handleStop })
   useEffect(() => {
-    keyHandlers.current = { save: session.save, open: session.openBrowser, run: handleRunBacktest }
+    keyHandlers.current = { save: session.save, open: session.openBrowser, run: handleRunBacktest, stop: handleStop }
   })
   useEffect(
     () =>
@@ -390,6 +437,15 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
           scope: 'global',
           inFields: true,
           run: () => void keyHandlers.current.run(),
+        },
+        {
+          // S27: Esc cancels a running backtest cook. Only while one runs, so
+          // Esc keeps its other meanings (clear selection) the rest of the time.
+          id: 'cook.cancel',
+          label: 'Cancel backtest',
+          keys: ['escape'],
+          when: s => s.cooks.backtest.phase === 'cooking',
+          run: () => keyHandlers.current.stop(),
         },
       ]),
     [],
@@ -557,64 +613,42 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
             Failed to render graph: {apiErrorDetail(error, (error as Error).message)}
           </div>
         )}
-        {editMode && strip && (
-          <div
-            style={{ ...styles.backtestHeadline, opacity: strip.stale ? 0.5 : 1 }}
-            title={strip.stale ? staleTitle : undefined}
-          >
-            <span style={styles.backtestContext}>{strip.context}</span>
-            <span style={styles.backtestDivider}>·</span>
-            <span style={styles.backtestStat}>{strip.trades}</span>
-            <span style={styles.backtestDivider}>·</span>
-            <span
-              style={{
-                ...styles.backtestStat,
-                color:
-                  strip.returnSign === 'pos'
-                    ? 'oklch(0.72 0.18 145)'
-                    : strip.returnSign === 'neg'
-                      ? 'oklch(0.65 0.20 25)'
-                      : styles.backtestStat.color,
-              }}
-            >
-              {strip.returnText}
-            </span>
-            <span style={styles.backtestDivider}>·</span>
-            <span style={styles.backtestStat}>{strip.sharpe}</span>
-            {strip.openPosition && (
-              <>
-                <span style={styles.backtestDivider}>·</span>
-                <span style={styles.backtestStat} title={strip.openPositionTitle ?? undefined}>
-                  {strip.openPosition}
-                </span>
-              </>
-            )}
-            {strip.exitWarning && (
-              <span style={styles.backtestWarn} title={EXIT_NOT_CONNECTED_TITLE}>{strip.exitWarning}</span>
-            )}
-            {strip.stale && <span style={styles.staleBadge}>{STALE_LABEL}</span>}
-          </div>
-        )}
+        {/* S28: canvas, chart panel (its bar holds the run summary that the
+             old results strip showed) and the Data Sheet, in one split. */}
         {activeGraph && (
-          <div style={styles.canvasWrapper}>
-            <Canvas graph={activeGraph} />
-            {editMode && !hasNodes && (
-              <div className="nb-empty-graph" data-testid="nb-empty-graph">
-                <div>Press Tab to add a node</div>
-                <div>Start with a Ticker, then indicators, comparisons, and an Output Group</div>
-                <div>
-                  or{' '}
-                  <button type="button" className="nb-empty-graph__link" onClick={session.openBrowser} data-testid="nb-empty-open">
-                    ⋯ › Open
-                  </button>{' '}
-                  to load a saved graph
-                </div>
-                <button type="button" className="nb-empty-graph__ghost" onClick={addTicker} aria-label="Add Ticker" data-testid="nb-empty-ticker">
-                  Ticker
-                </button>
+          <GraphChartSplit
+            bar={chartBar}
+            sheet={
+              <GraphSheet
+                window={graphWindow}
+                result={result}
+                readOnlyGraph={editMode ? undefined : activeGraph}
+                onRunBacktest={builderApi.runBacktest}
+                onEditGraph={editMode ? undefined : handleEditThisGraph}
+              />
+            }
+            canvas={
+              <div style={styles.canvasWrapper}>
+                <Canvas graph={activeGraph} />
+                {editMode && !hasNodes && (
+                  <div className="nb-empty-graph" data-testid="nb-empty-graph">
+                    <div>Press Tab to add a node</div>
+                    <div>Start with a Ticker, then indicators, comparisons, and an Output Group</div>
+                    <div>
+                      or{' '}
+                      <button type="button" className="nb-empty-graph__link" onClick={session.openBrowser} data-testid="nb-empty-open">
+                        ⋯ › Open
+                      </button>{' '}
+                      to load a saved graph
+                    </div>
+                    <button type="button" className="nb-empty-graph__ghost" onClick={addTicker} aria-label="Add Ticker" data-testid="nb-empty-ticker">
+                      Ticker
+                    </button>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            }
+          />
         )}
       </>
     )
@@ -625,6 +659,8 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
   // runs the full width under both.
   return (
     <BuilderContext.Provider value={builderApi}>
+    {/* D11 before W5: Ticker nodes show the sidebar symbol and interval (UX-01). */}
+    <SidebarWindowContext.Provider value={graphWindow ?? null}>
       <div
         ref={rootRef}
         className="nodebuilder-root"
@@ -637,7 +673,7 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
         onContextMenu={e => { if (!isTypingTarget(e.target)) e.preventDefault() }}
       >
         <div style={styles.main}>
-          <div style={styles.column}>
+          <div style={styles.column} data-nb-column="">
             {toolbarRow}
             {content}
             <Slot name="bottomPanel" />
@@ -649,12 +685,14 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
         <Slot name="overlays" />
         <Slot name="dialogs" />
       </div>
+    </SidebarWindowContext.Provider>
     </BuilderContext.Provider>
   )
 }
 
 // Memoized so App re-renders don't re-render the hidden graph tree (perf P6).
-// Props are App state (lastRequest) and a boolean, so they are stable.
+// Props are App state (lastRequest, graphResult, the memoized window), a
+// boolean and stable callbacks, so they are stable.
 export default memo(NodeBuilder)
 
 const styles: Record<string, React.CSSProperties> = {
@@ -675,7 +713,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'row',
     position: 'relative',
   },
-  // Toolbar, notices, results strip, canvas and the bottom panel.
+  // Toolbar, notices, the canvas/chart/sheet split and the bottom panel.
   column: {
     flex: 1,
     minWidth: 0,
@@ -727,42 +765,5 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 4,
     margin: '8px 8px 0',
     flexShrink: 0,
-  },
-  backtestHeadline: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    padding: '5px 12px',
-    background: 'oklch(0.17 0.012 250)',
-    borderBottom: '1px solid oklch(0.28 0.014 250)',
-    flexShrink: 0,
-    fontSize: 12,
-    fontVariantNumeric: 'tabular-nums',
-  },
-  backtestStat: {
-    color: 'oklch(0.82 0.010 250)',
-  },
-  backtestContext: {
-    color: 'oklch(0.82 0.010 250)',
-    fontWeight: 600,
-  },
-  backtestWarn: {
-    marginLeft: 6,
-    color: 'oklch(0.80 0.14 75)',
-    fontWeight: 600,
-  },
-  staleBadge: {
-    marginLeft: 'auto',
-    fontSize: 10,
-    fontWeight: 600,
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
-    color: 'oklch(0.80 0.010 250)',
-    border: '1px solid oklch(0.45 0.010 250)',
-    borderRadius: 4,
-    padding: '1px 6px',
-  },
-  backtestDivider: {
-    color: 'oklch(0.45 0.010 250)',
   },
 }

@@ -17,6 +17,7 @@ import KellySizing from './KellySizing'
 import SensitivityPanel from './SensitivityPanel'
 import OptimizerPanel from './OptimizerPanel'
 import WalkForwardPanel from './WalkForwardPanel'
+import { GraphResultHeader, NotAvailableForGraph, type GraphResultInfo } from '../nodebuilder/graphResultUi'
 
 export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace' | 'session' | 'monte_carlo' | 'rolling' | 'hold_duration' | 'sensitivity' | 'optimizer' | 'walk_forward'
 type SortCol =
@@ -91,7 +92,17 @@ interface Props {
   mainTimestamps?: (string | number)[]
   onApplyParams?: (updatedReq: StrategyRequest) => void
   onRunBacktest?: () => void
+  /**
+   * Set when the result shown is a graph run (S30, D10). Results then shows
+   * the graph header line, dims the Sensitivity / Optimizer / Walk-Forward
+   * tabs and shows "Not available for graph results" in their place. Pass
+   * `lastRequest={null}` with it: a graph run never has a rule request.
+   */
+  graphInfo?: GraphResultInfo | null
 }
+
+/** Tabs that re-run a rule request; they do not apply to a graph result (S30). */
+const RULE_ONLY_TABS: readonly ResultsTab[] = ['sensitivity', 'optimizer', 'walk_forward']
 
 function autoDefaultBucket(equityLength: number): string {
   if (equityLength < 500) return 'W'
@@ -100,7 +111,9 @@ function autoDefaultBucket(equityLength: number): string {
   return 'M'
 }
 
-export default function Results({ result, mainChart, activeTab, onTabChange, bucket, onBucketChange, lastRequest, showBaseline, onShowBaselineChange, logScale, onLogScaleChange, viewInterval, backtestInterval, sweepInit, onSweepConsumed, mainTimestamps, onApplyParams, onRunBacktest }: Props) {
+export default function Results({ result, mainChart, activeTab, onTabChange, onBucketChange, lastRequest, showBaseline, onShowBaselineChange, logScale, onLogScaleChange, viewInterval, backtestInterval, sweepInit, onSweepConsumed, mainTimestamps, onApplyParams, onRunBacktest, graphInfo = null, bucket: bucketProp }: Props) {
+  // S30/CI-06: macro buckets need a rule request; a graph result is Detail only.
+  const bucket = graphInfo ? null : bucketProp
   const { summary, trades, equity_curve, signal_trace } = result
   const [tzMode] = useTimezone()
   const chartRef = useRef<HTMLDivElement>(null)
@@ -392,13 +405,14 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
     }
 
     // Initial alignment: match main chart's visible logical range, or fit content as fallback
+    // mainChart can be a just-removed instance in the commit that swaps the
+    // chart (view toggle): guard every call on it (Key Bugs Fixed).
+    let alignRange: ReturnType<ReturnType<IChartApi['timeScale']>['getVisibleLogicalRange']> = null
     if (mainChart) {
-      const range = mainChart.timeScale().getVisibleLogicalRange()
-      if (range) {
-        try { chart.timeScale().setVisibleLogicalRange(range) } catch {}
-      } else {
-        chart.timeScale().fitContent()
-      }
+      try { alignRange = mainChart.timeScale().getVisibleLogicalRange() } catch { alignRange = null }
+    }
+    if (alignRange) {
+      try { chart.timeScale().setVisibleLogicalRange(alignRange) } catch {}
     } else {
       chart.timeScale().fitContent()
     }
@@ -434,8 +448,10 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
     }
 
     if (mainChart) {
-      mainChart.timeScale().subscribeVisibleLogicalRangeChange(onMainRangeChange)
-      mainChart.subscribeCrosshairMove(onMainCrosshairMove)
+      try {
+        mainChart.timeScale().subscribeVisibleLogicalRangeChange(onMainRangeChange)
+        mainChart.subscribeCrosshairMove(onMainCrosshairMove)
+      } catch { /* chart already removed */ }
     }
 
     return () => {
@@ -467,6 +483,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
 
   return (
     <div ref={containerRef} className="results-scroller" style={styles.container}>
+      {graphInfo && <GraphResultHeader info={graphInfo} />}
       <div style={{ ...styles.tabBar, flexWrap: 'nowrap', overflowX: 'auto' }}>
         <div style={{ display: 'flex', flexWrap: 'nowrap' }}>
           {(['summary', 'equity', 'trades',
@@ -475,12 +492,18 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
              ...(sells.length >= 2 ? ['monte_carlo'] : []),
              ...(sells.length >= 5 ? ['rolling'] : []),
              ...(sells.length >= 2 ? ['hold_duration'] : []),
-             ...(lastRequest ? ['sensitivity', 'optimizer', 'walk_forward'] : []),
+             ...(lastRequest || graphInfo ? ['sensitivity', 'optimizer', 'walk_forward'] : []),
           ] as ResultsTab[]).map(tab => (
             <button
               key={tab}
               onClick={() => onTabChange(tab)}
-              style={{ ...styles.tab, ...(activeTab === tab ? styles.tabActive : {}) }}
+              // S30: rule-only tabs stay visible (and clickable) but dimmed for a
+              // graph result; the class restores full contrast on focus (index.css).
+              className={graphInfo && RULE_ONLY_TABS.includes(tab) && activeTab !== tab ? 'results-tab-dim' : undefined}
+              style={{
+                ...styles.tab,
+                ...(activeTab === tab ? styles.tabActive : {}),
+              }}
             >
               {tab === 'summary' ? 'Summary'
                 : tab === 'equity' ? 'Equity Curve'
@@ -497,7 +520,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
           ))}
         </div>
         <div style={{ display: 'flex', marginLeft: 'auto', gap: 2, alignItems: 'center' }}>
-          {(['Detail', 'D', 'W', 'M', 'Q', 'Y'] as const).map(b => {
+          {!graphInfo && (['Detail', 'D', 'W', 'M', 'Q', 'Y'] as const).map(b => {
             const isDetail = b === 'Detail'
             const isActive = isDetail ? bucket === null : bucket === b
             const isRecommended = !isDetail && bucket === null && b === autoDefaultBucket(equity_curve.length)
@@ -858,19 +881,24 @@ export default function Results({ result, mainChart, activeTab, onTabChange, buc
       {/* Keep panels mounted across sub-tab switches so expensive run results
           (sweep heatmaps, optimizer tables, walk-forward windows) survive
           tab switching. Visibility is toggled via display:none. */}
-      {lastRequest && (
+      {/* S30: a graph result has no rule request, so these panels do not apply. */}
+      {graphInfo && RULE_ONLY_TABS.includes(activeTab) && (
+        <NotAvailableForGraph onBackToChart={graphInfo.onBackToChart} />
+      )}
+
+      {lastRequest && !graphInfo && (
         <div style={{ padding: '0 16px 16px', display: activeTab === 'sensitivity' ? undefined : 'none' }}>
           <SensitivityPanel lastRequest={lastRequest} sweepInit={sweepInit} onSweepConsumed={onSweepConsumed} />
         </div>
       )}
 
-      {lastRequest && (
+      {lastRequest && !graphInfo && (
         <div style={{ padding: '0 16px 16px', display: activeTab === 'optimizer' ? undefined : 'none' }}>
           <OptimizerPanel lastRequest={lastRequest} onApplyParams={onApplyParams} onRunBacktest={onRunBacktest} />
         </div>
       )}
 
-      {lastRequest && (
+      {lastRequest && !graphInfo && (
         <div style={{ padding: '0 16px 16px', display: activeTab === 'walk_forward' ? undefined : 'none' }}>
           <WalkForwardPanel lastRequest={lastRequest} onApplyParams={onApplyParams} onRunBacktest={onRunBacktest} />
         </div>

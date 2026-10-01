@@ -1,6 +1,7 @@
 /**
- * CanvasChrome — the React Flow extras drawn with the canvas: the dot grid
- * and the minimap (W3 pre-step 3.0; minimap colors by item 3.H, spec S22).
+ * CanvasChrome — the React Flow extras drawn with the canvas: the dot grid,
+ * the minimap (W3 pre-step 3.0; minimap colors by item 3.H, spec S22) and
+ * the W4 sparkline layer (S26).
  * Rendered inside <ReactFlow>.
  *
  * React Flow's zoom Controls are not drawn (foundation amendment A2, audit
@@ -18,6 +19,7 @@ import { Background, MiniMap, useStore, type ReactFlowState } from '@xyflow/reac
 import type { Graph } from '../../api/nodebuilder'
 import { minimapNodeColorWith, tokenColor } from './minimapColors'
 import { isUnsupportedNode } from './nodes/unsupported'
+import { SparklineLayer } from './nodes/Sparkline'
 import { useScreenGraph } from './screen'
 import { useDiagnostics, type Diagnostic } from './useDiagnostics'
 import './statusChrome.css'
@@ -74,6 +76,9 @@ export default function CanvasChrome() {
   return (
     <>
       <Background gap={20} color="oklch(0.26 0.018 250)" />
+      {/* W4 (S26): one canvas for every node's sparkline. It needs the
+          ReactFlow context (ViewportPortal, useStoreApi), hence lives here. */}
+      <SparklineLayer />
       {!hidden && (
         <MiniMap
           position="bottom-left"

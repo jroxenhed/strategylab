@@ -36,7 +36,7 @@ export { HISTORY_CAP, hasEdits } from './store/graph'
 export type { GraphMeta, GraphRecipe, HistoryEntry } from './store/graph'
 export type { SelectionInput } from './store/selection'
 export type { Viewport } from './store/view'
-export type { CookPhase, CookStatus } from './store/status'
+export type { CookKind, CookPhase, CookStatus, CookStatuses, PreviewState } from './store/status'
 
 /** Actions defined in this file rather than in a slice. */
 export interface LoadActions {

@@ -4,6 +4,11 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-10-02
+
+- **Node builder Wave 4, "See the data" ([F435](TODO.md#f435)).** A cook cache with /inspect and /preview lets the editor look inside any wire: the Data Sheet drawer shows every attribute row by row with histograms and filters, nodes carry sparklines, and auto cook refreshes them 500 ms after an edit. Graph results now use the app's Results panel and the one Chart, moved into a graph/chart split view, with trade markers. Graph-owned settings are greyed "Set by graph" and never sent.
+- **Wave 4 review and checks.** Four reviewers found 51 findings; the one P1 was confirmed and fixed: the Ticker node's symbol and interval looked editable, but runs used the sidebar's. The node now shows them read-only, "from sidebar". The integration pass also found that Cmd+Enter in graph view started a rule backtest next to the graph run; fixed with a test. Gate PASS; vitest 1511; pytest only the 68 baseline failures; the split probe passed 13 of 13. A live Playwright run on AAPL 1d gave 9 trades and +32.19%, the same as the rule backtest, with markers, sparklines and a 251-row Data Sheet.
+
 ## 2026-10-01
 
 - **Node builder Wave 3, "Houdini editor ergonomics and the Inspector" ([F435](TODO.md#f435)).** The Inspector panel shows and edits the selected node: name, params, reads and writes, flags and diagnostics. The editor got display and bypass flags (D, B), copy and paste (Cmd+C, Cmd+V, Cmd+D, Alt-drag), framing (F, H, G), network boxes and sticky notes, an elkjs tidy layout (L) in a web worker, wire reconnect and splice, context menus, a status bar and a ? shortcut overlay. React Flow's zoom controls are gone (amendment A2). A pre-step split the store into slices and added registries for node types, plugins, commands and layout slots, so later waves add features without editing the canvas.

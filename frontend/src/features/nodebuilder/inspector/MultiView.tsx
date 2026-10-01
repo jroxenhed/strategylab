@@ -20,6 +20,7 @@ import { catalogEntry } from '../streamLabels'
 import { Button } from '../ui/Button'
 import { InspectorSectionShell } from './Section'
 import { catVars, categoryOf, coerceParamNumber, commandForKeys, focusCanvas, glyphOf, sameValue, useInspectorGraph, valueText } from './util'
+import { FromSidebarRow, sidebarTickerValue, useSidebarWindow } from '../sidebarWindow'
 
 /**
  * Bulk buttons. The key cap is the first chord, formatted for the platform
@@ -119,6 +120,7 @@ export function MultiView({ nodeIds, editable }: { nodeIds: readonly string[]; e
   const { graph } = useInspectorGraph()
   const nodes = nodeIds.map(id => graph?.nodes[id]).filter((n): n is GraphNode => n != null)
   const type = nodes.length > 0 && nodes.every(n => n.type === nodes[0].type) ? nodes[0].type : null
+  const sidebarWindow = useSidebarWindow()
   const cat = type ? categoryOf(type) : null
   const specs = type ? (catalogEntry(type)?.params ?? []).filter(s => SHARED_TYPES.has(s.type)) : []
   // Re-render when commands may have changed state (selection, graph).
@@ -162,7 +164,13 @@ export function MultiView({ nodeIds, editable }: { nodeIds: readonly string[]; e
       )}
       {type && specs.length > 0 && (
         <InspectorSectionShell id="shared" title="Shared parameters">
-          {specs.map(spec => <SharedParamRow key={spec.name} spec={spec} nodes={nodes} editable={editable} />)}
+          {specs.map(spec => {
+            // D11 before W5: Ticker symbol and interval come from the sidebar (UX-01).
+            const sb = sidebarTickerValue(sidebarWindow, type ?? undefined, spec.name)
+            return sb != null
+              ? <FromSidebarRow key={spec.name} label={spec.label || spec.name} value={sb} testId={`nb-inspector-shared-${spec.name}`} />
+              : <SharedParamRow key={spec.name} spec={spec} nodes={nodes} editable={editable} />
+          })}
         </InspectorSectionShell>
       )}
     </>

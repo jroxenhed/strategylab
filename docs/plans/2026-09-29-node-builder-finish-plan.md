@@ -725,6 +725,12 @@ export function registerSlot(name: SlotName, id: string, Component: React.Compon
 
 ### Wave 4: See the data (data sheet, sparklines, auto-cook, real results)
 
+**Status: done (2026-10-02).** Items 4.A to 4.D are in. A four-reviewer wave found 51 findings; the one P1 (the Ticker node's symbol and interval looked editable but runs used the sidebar's) was confirmed and fixed, and the rest are fixed or accepted. A live Playwright run passed: a graph run on AAPL 1d gave 9 trades and +32.19%, equal to the rule backtest. Contract notes for later waves:
+- The editor backtest returns `cook_id` on `GraphBacktestRouteResponse`; `GraphBacktestResponse` keeps its four keys (parity trio).
+- `/inspect` and `/preview` add `kept`, `stale_data` and `total_unfiltered`; new codes 404 `target_not_found`, 422 `cook_or_graph_required`, `attr_unknown`, `around_time_invalid`, `window_required`, 502 `data_unavailable`. The cache lifetime counts from the last read, with a 30-minute cap.
+- In W4, graph runs send the sidebar's trailing stop, time stop and borrow rate (graph-owned only from W5) and the sidebar direction; GRAPH_OWNED_FIELDS is still never sent.
+- `store/status.ts` holds `cooks: { backtest, preview }` with a derived latest cook (amendment A4).
+
 **Goal.** Debug any wire. The graph and the chart are one workspace.
 
 **Order.** 4.A (backend) in parallel with {4.B, 4.C} (frontend, against the mocked contract). 4.D last on the frontend, because it mounts everything. 4.D owns every `NodeBuilder.tsx` and toolbar edit; 4.B and 4.C export components and hooks only (critic 20).
@@ -1379,3 +1385,11 @@ Also ask after W2 and after W5: does the graph now beat the rule builder for the
 - **Draft save time and a conflict flag in the status bar** need reactive state from the persistence session.
 - **`meta` on graph nodes** (node notes in the Inspector) needs a backend schema field.
 - **Network keyed by path:** renaming a network drops the view back to root. W6 6.C moves it to an id.
+
+**Deferred from the Wave 4 review (2026-10-02).** Full notes: `.run/F435/w4/integration.md`, `fix-frontend.md` and `fix-backend.md` (local only).
+
+- **Graph Results panel height.** In graph view the Results panel stays at 30 % of the right sidebar; a larger default needs a keyed layout that would remount the watchlist and the settings portal. The header wraps instead.
+- **Display-flag chart sub-pane** (stretch goal): not built.
+- **Deviations accepted:** the Data Sheet is a drawer under the split, not a third panel; graph Results sit in the right sidebar; the stale bar's Cook button runs the backtest; markers use the rule chart's colours.
+- **A cleaner seam for graph run settings:** `getGraphRunSettings()` on the StrategyBuilder handle instead of reading the `strategylab-strategy` localStorage key.
+- **Status bar after a backtest** can show the backtest cook while a "fix errors to cook" preview note waits.

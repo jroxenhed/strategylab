@@ -39,6 +39,15 @@
  * Port hover text (S08) shows after 400 ms through nodes/hoverTip.ts,
  * written straight to the page, so hovering never renders React.
  *
+ * Sparkline slot (spec S26, W4 item 4.C): when the last `/preview` has data
+ * for this node, the body reserves a 28px slot between the params and the
+ * chips. The node reads only its own preview entry (`useNodePreview`), so a
+ * new preview re-renders only the nodes whose data changed. The drawing is
+ * done by the one SparklineLayer canvas; the slot registers its element
+ * with `useSparklineSlot` and carries the hover text, the click (select the
+ * node, open the Data Sheet) and a text summary for screen readers. No slot
+ * on a bypassed node or below zoom 0.5.
+ *
  * All color references use CSS custom properties from tokens.css
  * scoped to .nodebuilder-root.
  */
@@ -50,7 +59,9 @@ import {
   useNodeConnections,
   useNodeId,
   useNodesData,
+  useStore,
   useUpdateNodeInternals,
+  type ReactFlowState,
 } from '@xyflow/react'
 import type { GraphNode } from '../../../api/nodebuilder'
 import { CATS, type CatKey } from '../categories'
@@ -78,6 +89,15 @@ import { ParamRows } from './ParamRow'
 import { UnsupportedNode } from './UnsupportedNode'
 import { isUnsupportedNode } from './unsupported'
 import { WriteChip } from './WriteChip'
+import {
+  SPARKLINE_HEIGHT,
+  SPARKLINE_MIN_ZOOM,
+  sparklineSummary,
+  sparklineTooltip,
+  useNodePreview,
+  useSparklineSlot,
+} from './Sparkline'
+import { getCommand, runCommand } from '../commands'
 import '../stream.css'
 import './node.css'
 
@@ -179,6 +199,23 @@ const MAX_CHIPS = 6
 const NO_PARAMS: Record<string, unknown> = {}
 
 type Chip = { kind: 'read'; name: string } | { kind: 'write'; slot: WriteSlot }
+
+/** True while the canvas is zoomed in enough to show sparklines (a boolean, so zooming re-renders only at the threshold). */
+const selectSparkZoom = (s: ReactFlowState) => s.transform[2] >= SPARKLINE_MIN_ZOOM
+
+/**
+ * A click on the sparkline: select this node alone and open the Data Sheet
+ * on it (S26, the `S` key's behavior). The sheet follows the selection, so
+ * it is only toggled when it is closed.
+ */
+function openSheetOn(nodeId: string): void {
+  const s = useNodeBuilderStore.getState()
+  if (s.selectedNodeIds.length !== 1 || s.selectedNodeIds[0] !== nodeId) {
+    s.setSelection({ nodeIds: [nodeId], primary: nodeId })
+  }
+  const toggle = getCommand('panels.toggleSheet')
+  if (toggle && !toggle.checked?.(useNodeBuilderStore.getState())) runCommand('panels.toggleSheet')
+}
 
 export function BaseNode({
   cat,
@@ -338,6 +375,12 @@ export function BaseNode({
 
   const showAllPortLabels = ports.length >= 2
 
+  // ── Sparkline slot (S26) ─────────────────────────────────────────────────
+  const preview = useNodePreview(nodeId)
+  const sparkZoom = useStore(selectSparkZoom)
+  const showSpark = !!preview && !!nodeId && !bypass && sparkZoom
+  const sparkRef = useSparklineSlot(showSpark ? nodeId : null, catColor)
+
   if (unsupported && nodeId && nodeType) {
     return (
       <UnsupportedNode
@@ -483,7 +526,7 @@ export function BaseNode({
         </div>
 
         {/* Body — param rows, then chips */}
-        {(hasChips || children || readParamValues) && (
+        {(hasChips || children || readParamValues || showSpark) && (
           <div
             className="nb-node-body"
             data-testid={nodeId ? `nb-node-body-${nodeId}` : undefined}
@@ -500,6 +543,21 @@ export function BaseNode({
             {children}
             {readParamValues && nodeId && (
               <ParamRows nodeId={nodeId} params={readParamValues} specs={readParams} />
+            )}
+            {showSpark && preview && nodeId && (
+              <div
+                ref={sparkRef}
+                className="nb-sparkline-slot"
+                data-testid={`nb-sparkline-slot-${nodeId}`}
+                data-kind={preview.kind}
+                style={{ height: SPARKLINE_HEIGHT, flexShrink: 0, cursor: 'pointer' }}
+                onPointerEnter={e => startHoverTip(e.currentTarget, sparklineTooltip(preview), 'below')}
+                onPointerLeave={endHoverTip}
+                onPointerDown={endHoverTip}
+                onClick={() => openSheetOn(nodeId)}
+              >
+                <span className="nb-sr-only">{sparklineSummary(preview)}</span>
+              </div>
             )}
             {hasChips && (
               <div

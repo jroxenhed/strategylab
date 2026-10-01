@@ -220,6 +220,8 @@ export interface GraphBacktestResult {
   trades: TradeRecord[]
   equity_curve: CurvePoint[]
   baseline_curve: CurvePoint[]
+  /** W4: the server's cook cache id for this run (null when not kept). */
+  cook_id?: string | null
 }
 
 /**

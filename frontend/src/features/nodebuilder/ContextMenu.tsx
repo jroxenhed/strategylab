@@ -53,7 +53,7 @@ import './contextMenu.css'
  * rebuild an open menu (IP-9). Everything else counts, so a later command's
  * `when`/`checked` that reads a new field still stays live.
  */
-const MENU_IGNORED: ReadonlySet<string> = new Set(['flash', 'cook', 'viewport', 'viewports', 'viewportsEpoch'])
+const MENU_IGNORED: ReadonlySet<string> = new Set(['flash', 'cook', 'cooks', 'lastCookKind', 'preview', 'viewport', 'viewports', 'viewportsEpoch'])
 
 /** The store's data fields a menu row may read (functions and MENU_IGNORED left out). */
 function menuRelevantState(s: NodeBuilderState): Record<string, unknown> {

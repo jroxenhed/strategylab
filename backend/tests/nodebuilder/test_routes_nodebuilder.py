@@ -240,7 +240,8 @@ def test_success_summary_has_open_position_and_exit_connected(client):
     resp = client.post(URL, json=_rsi_entry())
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    assert set(data) == {"summary", "trades", "equity_curve", "baseline_curve"}
+    # W4: the route adds cook_id (the Data Sheet / sparklines read the cook).
+    assert set(data) == {"summary", "trades", "equity_curve", "baseline_curve", "cook_id"}
     assert data["summary"]["exit_connected"] is True
     assert "open_position" in data["summary"]
     assert data["summary"]["num_trades"] > 0

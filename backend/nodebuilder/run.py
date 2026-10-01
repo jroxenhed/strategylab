@@ -4,12 +4,23 @@ run_graph_backtest() compiles a graph, computes its indicators and runs the
 shared simulator.  It lives here, not in the routes module, so the API route
 and the bot code can both call it.  The route in routes/nodebuilder.py is a
 thin wrapper that turns errors into HTTP responses.
+
+The graph cooks once, before the simulation: every node runs over the whole
+frame, and the simulator reads the Entry and Exit columns bar by bar.  The
+editor's backtest keeps every node's stream from that cook (keep_all) so
+the wire inspector can read it from the cook cache (plan D6) without
+cooking again; the bot path keeps only the terminals.  This module never
+imports the cook cache: the route does.
 """
 from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Optional
 
 import pandas as pd
 
 from models import StrategyRequest
+from nodebuilder import evaluator as _evaluator
 from nodebuilder.api_models import GraphBacktestRequest, GraphBacktestResponse
 from nodebuilder.compile import compile as _compile_graph
 from nodebuilder.evaluator import evaluate_graph
@@ -135,6 +146,68 @@ def _open_position(trades: list[dict], last_close: float) -> dict | None:
     }
 
 
+@dataclass
+class GraphCook:
+    """One cook of a graph over one fetched frame.
+
+    program : the CompiledProgram.
+    result  : the kernel CookResult (every node's stream when keep_all).
+    df      : the window's main frame.
+    frames  : ``((symbol, interval, df), ...)`` for EVERY frame the cook
+              read.  The editor's cache key fingerprints all of them (plan
+              D6), so code that makes a cook read another frame (W5
+              reference tickers, HTF frames) must add it here.
+    """
+    program: Any
+    result: Any
+    df: pd.DataFrame
+    frames: tuple = ()
+
+
+def cook_attrs(program, attrs: dict, *, keep_all: bool = False):
+    """Cook *program* over the bars in *attrs* (as build_graph_attrs makes
+    them) and return the kernel CookResult.
+
+    The bars are read exactly as evaluate_graph reads them, so a backtest
+    cooked here gives the signals the per-bar adapter gave.  keep_all keeps
+    every node's output stream (the editor's inspector cook); otherwise
+    only the terminals' streams are kept.  CPU work: never call this on an
+    event loop.
+    """
+    index, bars = _evaluator.bars_from_attrs(attrs)
+    return _evaluator.cook_program(program, index=index, bars=bars, keep_all=keep_all)
+
+
+def cook_graph_window(
+    graph,
+    *,
+    ticker: str,
+    start: str,
+    end: str,
+    interval: str,
+    source: str,
+    df: Optional[pd.DataFrame] = None,
+) -> GraphCook:
+    """Compile *graph*, fetch its frame (unless *df* is given) and cook it
+    with every node's stream kept.  The same cook a backtest makes, without
+    the simulation: what the inspector does on a cache miss (plan D6).
+
+    Raises GraphValidationError for a graph that does not compile, and
+    ValueError or HTTPException(400) for a bad source or missing data.
+    """
+    from shared import _fetch, require_valid_source
+
+    src = require_valid_source(source)
+    program = _compile_graph(graph)
+    if df is None:
+        df = _fetch(ticker, start, end, interval, source=src)
+    if df is None or len(df) == 0:
+        raise ValueError(f"No data for {ticker} in {start}..{end} ({interval}).")
+    attrs = build_graph_attrs(program, df)
+    return GraphCook(program=program, result=cook_attrs(program, attrs, keep_all=True), df=df,
+                     frames=((ticker, interval, df),))
+
+
 def run_graph_backtest(
     req: GraphBacktestRequest,
     df: pd.DataFrame | None = None,
@@ -151,6 +224,19 @@ def run_graph_backtest(
         ValueError: invalid source or other data issues.
         HTTPException: re-raised from _run_simulation.
     """
+    response, _cook = run_graph_backtest_cooked(req, df, keep_all=False)
+    return response
+
+
+def run_graph_backtest_cooked(
+    req: GraphBacktestRequest,
+    df: pd.DataFrame | None = None,
+    *,
+    keep_all: bool = True,
+) -> tuple[GraphBacktestResponse, GraphCook]:
+    """run_graph_backtest, plus the cook it made (for the editor's cook
+    cache).  keep_all (the default here) keeps every node's stream so the
+    wire inspector can read it; run_graph_backtest passes False."""
     from routes.backtest import _run_simulation
     from shared import _fetch, _format_time_index, require_valid_source
 
@@ -173,22 +259,20 @@ def run_graph_backtest(
     # builds them for the live bot too, so both paths see the same series.
     indicator_attrs = build_graph_attrs(program, df, settings.get("trailing_stop"))
 
-    # 8. Build memoising signal callables that match _run_simulation's signature:
+    # 8. Cook the graph once over the whole frame, then build the signal
+    #    callables _run_simulation expects, reading the Entry/Exit columns:
     #    buy_signal_fn(i, curr_regime_active) -> (fired, rules, direction)
     #    sell_signal_fn(i, position_direction, curr_regime_active) -> (fired, rules)
-    cached_eval = _make_cached_eval(program, indicator_attrs)
+    result = cook_attrs(program, indicator_attrs, keep_all=keep_all)
+    entry_col, exit_col = _evaluator.signal_columns(program, result)
 
     direction = settings["direction"]
 
     def buy_signal_fn(i: int, curr_regime_active: bool):
-        sigs = cached_eval(i)
-        fired = sigs["entry"]
-        return bool(fired), [], direction
+        return bool(entry_col[i]), [], direction
 
     def sell_signal_fn(i: int, position_direction, curr_regime_active: bool):
-        sigs = cached_eval(i)
-        fired = sigs["exit"]
-        return bool(fired), []
+        return bool(exit_col[i]), []
 
     # 9. Build a StrategyRequest-shaped object for _run_simulation
     sim_req = _settings_to_strategy_request(settings, req)
@@ -218,9 +302,11 @@ def run_graph_backtest(
     summary["open_position"] = _open_position(sim_result["trades"], float(df["Close"].iloc[-1]))
     summary["exit_connected"] = program.exit_attr != _NO_EXIT_ATTR
 
-    return GraphBacktestResponse(
+    response = GraphBacktestResponse(
         summary=summary,
         trades=sim_result["trades"],
         equity_curve=sim_result["equity_curve"],
         baseline_curve=baseline_curve,
     )
+    return response, GraphCook(program=program, result=result, df=df,
+                               frames=((req.ticker, req.interval, df),))

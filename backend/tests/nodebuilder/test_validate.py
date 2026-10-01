@@ -130,6 +130,8 @@ def no_data(monkeypatch):
     # The names the callers actually bound at import (BC-11): patching only
     # the defining modules would never intercept these calls.
     monkeypatch.setattr(routes_mod, "run_graph_backtest", _boom)
+    # W4: the backtest route calls the keep-all variant.
+    monkeypatch.setattr(routes_mod, "run_graph_backtest_cooked", _boom)
     monkeypatch.setattr(run_mod, "build_graph_attrs", _boom)
 
 

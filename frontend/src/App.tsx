@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import type { BacktestResult, IndicatorInstance, DataSource, StrategyRequest, DatePreset } from './shared/types'
 import { requestSignature } from './shared/types/requestSignature'
@@ -20,6 +21,20 @@ import { useTimezone, tzLabel } from './shared/utils/time'
 import { seedFromLocalStorageIfAny } from './shared/utils/seedFromLocalStorage'
 import NodeBuilder from './features/nodebuilder/NodeBuilder'
 import AutoRenderToggle from './features/nodebuilder/AutoRenderToggle'
+import {
+  graphHeaderText,
+  graphResultAsBacktest,
+  graphTrades,
+  readGraphRunSettings,
+  runGraphBacktest,
+  windowOfRequest,
+  type GraphResultState,
+  type GraphRunHandler,
+  type GraphWindow,
+} from './features/nodebuilder/graphRun'
+import { useGraphChartHost } from './features/nodebuilder/graphSplitState'
+import { GraphResultHint, type GraphResultInfo } from './features/nodebuilder/graphResultUi'
+import { useNodeBuilderStore } from './features/nodebuilder/store'
 
 type AppTab = 'chart' | 'trading' | 'discovery' | 'desk'
 
@@ -108,6 +123,12 @@ export default function App() {
   const [extendedHours, setExtendedHours] = useState<boolean>(saved?.extendedHours ?? false)
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(_cachedBacktest?.result ?? null)
   const [lastRequest, setLastRequest] = useState<StrategyRequest | null>(_cachedBacktest?.request ?? null)
+  // D10: a graph run has its own state. It is never written into lastRequest
+  // or backtestResult (the Optimizer, WFA and Sensitivity panels re-send
+  // lastRequest, and auto-render reads it).
+  const [graphResult, setGraphResult] = useState<GraphResultState | null>(null)
+  const [graphResultsTab, setGraphResultsTab] = useState<ResultsTab>('summary')
+  const [graphBucket, setGraphBucket] = useState<string | null>(null)
   const [resultsTab, setResultsTab] = useState<ResultsTab>('summary')
   const [sweepInit, setSweepInit] = useState<{ path: string; centerVal: number } | null>(null)
   const [macroBucket, setMacroBucket] = useState<string | null>(null)
@@ -196,24 +217,128 @@ export default function App() {
     try { localStorage.setItem(GRAPH_VIEW_KEY, String(graphViewActive)) } catch {}
   }, [graphViewActive])
 
-  const chartInterval = chartEnabled ? viewInterval : interval
-  const { data: ohlcv = EMPTY_OHLCV, isLoading: ohlcvLoading, isFetching: ohlcvFetching, isError: ohlcvError, refetch: refetchOhlcv } = useOHLCV(ticker, start, end, chartInterval, dataSource, extendedHours)
-  const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', start, end, chartInterval, dataSource, extendedHours, chartEnabled && showSpy)
-  const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', start, end, chartInterval, dataSource, extendedHours, chartEnabled && showQqq)
+  // ---- Graph runs (D10, D11) -------------------------------------------------
+  // The sidebar window drives graph runs, auto cook and the Data Sheet.
+  const graphWindow = useMemo<GraphWindow>(
+    () => ({ ticker, start, end, interval, source: dataSource }),
+    [ticker, start, end, interval, dataSource],
+  )
+  const graphWindowRef = useRef(graphWindow)
+  const lastRequestRef = useRef(lastRequest)
+  useEffect(() => {
+    graphWindowRef.current = graphWindow
+    lastRequestRef.current = lastRequest
+  }, [graphWindow, lastRequest])
+  // The run handler NodeBuilder calls. It builds the request from the sidebar
+  // (window) and the settings panel (capital, direction, the "applies to
+  // graph" settings), never the graph-owned fields, and returns the result;
+  // NodeBuilder stores it through setGraphResult once it is still current.
+  const handleRunGraph = useCallback<GraphRunHandler>(args => {
+    const fallback = lastRequestRef.current
+    const settings = readGraphRunSettings({ initial_capital: fallback?.initial_capital, direction: fallback?.direction })
+    return runGraphBacktest(args, { ...graphWindowRef.current, initial_capital: settings.initial_capital }, settings.extras)
+  }, [])
+  // "stale" on the graph result: NodeBuilder keeps it in the backtest cook state.
+  const graphResultStale = useNodeBuilderStore(s => s.cooks.backtest.stale)
+
+  // ---- The chart (one instance, D10) ------------------------------------------
+  // In graph view the chart shows the graph result's ticker, interval, dates
+  // and source (or the sidebar's with no result). They are set here as the
+  // chart's own view, never through onTickerChange, which would clear the
+  // rule result.
+  const gv = graphViewActive
+  const graphChartWindow = graphResult ? windowOfRequest(graphResult.request) : graphWindow
+  const cTicker = gv ? graphChartWindow.ticker : ticker
+  const cStart = gv ? graphChartWindow.start : start
+  const cEnd = gv ? graphChartWindow.end : end
+  const cSource = (gv ? graphChartWindow.source : dataSource) as DataSource
+  // The graph backtest fetches regular hours only.
+  const cExtended = gv ? false : extendedHours
+  const cBaseInterval = gv ? graphChartWindow.interval : interval
+  const cViewInterval = gv ? graphChartWindow.interval : viewInterval
+  const chartInterval = gv ? cBaseInterval : (chartEnabled ? viewInterval : interval)
+  // Header Auto toggle follows the displayed chart's interval (CI-07).
+  const chartIntervalOptions = gv ? getCoarserIntervals(cBaseInterval) : viewIntervalOptions
+  const { data: ohlcv = EMPTY_OHLCV, isLoading: ohlcvLoading, isFetching: ohlcvFetching, isError: ohlcvError, refetch: refetchOhlcv } = useOHLCV(cTicker, cStart, cEnd, chartInterval, cSource, cExtended)
+  const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', cStart, cEnd, chartInterval, cSource, cExtended, chartEnabled && showSpy)
+  const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', cStart, cEnd, chartInterval, cSource, cExtended, chartEnabled && showQqq)
 
   const { data: instanceData = {}, refetch: refetchIndicators, isLoading: instanceLoading, loadingByInstance, isError: instanceError, errorMessage: instanceErrorMessage } = useInstanceIndicators(
-    ticker, start, end, interval, chartEnabled ? indicators : [], dataSource, extendedHours, viewInterval,
+    cTicker, cStart, cEnd, cBaseInterval, chartEnabled ? indicators : [], cSource, cExtended, cViewInterval,
   )
 
   const refreshChart = useCallback(() => {
     refetchOhlcv(); refetchIndicators(); refetchSpy(); refetchQqq()
   }, [refetchOhlcv, refetchIndicators, refetchSpy, refetchQqq])
 
-  const trades = useMemo(() => backtestResult?.trades ?? [], [backtestResult])
+  // Graph trades render as the chart's trade markers, like rule trades.
+  const trades = useMemo(
+    () => (gv ? graphTrades(graphResult) : (backtestResult?.trades ?? [])),
+    [gv, graphResult, backtestResult],
+  )
   const mainTimestamps = useMemo(() => ohlcv.map(d => d.time), [ohlcv])
-  const emaOverlays = backtestResult?.ema_overlays
-  const ruleSignals = backtestResult?.rule_signals
-  const regimeSeries = backtestResult?.regime_series
+  // Rule-only overlays (graph results carry none).
+  const emaOverlays = gv ? undefined : backtestResult?.ema_overlays
+  const ruleSignals = gv ? undefined : backtestResult?.rule_signals
+  const regimeSeries = gv ? undefined : backtestResult?.regime_series
+
+  // The graph view's chart panel element (null while that panel is closed).
+  const graphChartHost = useGraphChartHost()
+
+  const chartBody = !chartEnabled ? (
+    <div style={styles.chartDisabled}>
+      <span style={{ color: '#8b949e', fontSize: 12 }}>Chart disabled</span>
+      <button onClick={() => setChartEnabled(true)} style={styles.chartToggleBtn}>Enable</button>
+    </div>
+  ) : ohlcv.length > 0 ? (
+    <Chart
+      data={ohlcv}
+      spyData={showSpy ? (spyData ?? []) : undefined}
+      qqqData={showQqq ? (qqqData ?? []) : undefined}
+      showSpy={showSpy}
+      showQqq={showQqq}
+      indicators={indicators}
+      instanceData={instanceData}
+      instanceLoading={instanceLoading}
+      loadingByInstance={loadingByInstance}
+      instanceError={instanceError}
+      instanceErrorMessage={instanceErrorMessage}
+      onRetryIndicators={refetchIndicators}
+      trades={trades}
+      emaOverlays={emaOverlays}
+      ruleSignals={ruleSignals}
+      regimeSeries={regimeSeries}
+      viewInterval={cViewInterval}
+      backtestInterval={cBaseInterval}
+      onChartReady={setMainChart}
+      autoIntervalEnabled={autoDownsample}
+      onAutoRenderChange={setAutoRenderInterval}
+      ticker={cTicker}
+      interval={chartInterval}
+      from={cStart}
+      to={cEnd}
+      rangeStorageKey={gv ? 'strategylab-chart-range:graph' : 'strategylab-chart-range'}
+    />
+  ) : (ohlcvLoading || ohlcvFetching) ? (
+    <ChartSkeleton ticker={cTicker} />
+  ) : ohlcvError ? (
+    <div style={styles.empty}>Failed to load {cTicker}</div>
+  ) : (
+    <div style={styles.empty}>No data for {cTicker}</div>
+  )
+
+  // ---- The graph result in the Results panel (S30) ------------------------------
+  const graphBacktest = useMemo(() => (graphResult ? graphResultAsBacktest(graphResult) : null), [graphResult])
+  const graphInfo = useMemo<GraphResultInfo | null>(
+    () => (graphResult
+      ? {
+        headerText: graphHeaderText(graphResult),
+        stale: graphResultStale,
+        onBackToChart: () => setGraphViewActive(false),
+      }
+      : null),
+    [graphResult, graphResultStale],
+  )
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
@@ -239,7 +364,7 @@ export default function App() {
           >
             {tzLabel()}
           </button>
-          {ticker} &nbsp;·&nbsp; {start} → {end}
+          {cTicker} &nbsp;·&nbsp; {cStart} → {cEnd}
           {activeTab === 'chart' && (
             <>
               <button onClick={refreshChart} style={styles.chartToggleBtn} title="Reload chart data">
@@ -248,6 +373,8 @@ export default function App() {
               <button onClick={() => setChartEnabled(c => !c)} style={{ ...styles.chartToggleBtn, opacity: chartEnabled ? 0.5 : 1 }}>
                 {chartEnabled ? 'Disable Chart' : 'Enable Chart'}
               </button>
+              {/* CI-07: the split's chart bar owns open/close in graph view. */}
+              {!graphViewActive && (
               <button
                 onClick={() => setChartCollapsed(c => !c)}
                 style={{ ...styles.chartToggleBtn, opacity: chartCollapsed ? 1 : 0.5 }}
@@ -256,12 +383,14 @@ export default function App() {
               >
                 {chartCollapsed ? '▸ Show Chart' : '◂ Hide Chart'}
               </button>
+              )}
               <AutoRenderToggle
                 active={graphViewActive}
                 onToggle={() => setGraphViewActive(v => !v)}
               />
-              {/* F235 — sticky metrics strip after button cluster */}
-              {backtestResult && (() => {
+              {/* F235 — sticky metrics strip after button cluster (rule result;
+                   in graph view the chart bar carries the graph's summary) */}
+              {backtestResult && !graphViewActive && (() => {
                 const s = backtestResult.summary
                 const ret = s.total_return_pct != null ? (s.total_return_pct >= 0 ? '+' : '') + s.total_return_pct.toFixed(1) + '%' : '—'
                 const sharpe = s.sharpe_ratio != null ? s.sharpe_ratio.toFixed(2) : '—'
@@ -273,7 +402,7 @@ export default function App() {
                   </span>
                 )
               })()}
-              {chartEnabled && viewIntervalOptions.length > 1 && (
+              {chartEnabled && chartIntervalOptions.length > 1 && (
                 <label
                   style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#8b949e', cursor: 'pointer', userSelect: 'none' }}
                   title="Automatically aggregate to a coarser interval when zoomed out (restores full resolution on zoom-in)"
@@ -287,13 +416,14 @@ export default function App() {
                   Auto
                 </label>
               )}
-              {chartEnabled && viewIntervalOptions.length > 1 && (
+              {chartEnabled && chartIntervalOptions.length > 1 && (
                 autoRenderInterval ? (
                   <span
                     style={{ fontSize: 11, color: '#8b949e', border: '1px solid #30363d', borderRadius: 4, padding: '2px 6px', cursor: 'default' }}
                     title="Auto render-layer aggregate (zoom in to restore full resolution)"
                   >Auto ({autoRenderInterval})</span>
-                ) : viewInterval === interval && !isAggOpen ? (
+                ) : graphViewActive ? null /* CI-07: Aggregate is the rule chart's view; graph view shows the graph interval */
+                : viewInterval === interval && !isAggOpen ? (
                   <button
                     onClick={() => setIsAggOpen(true)}
                     style={{ background: 'none', border: '1px solid #30363d', borderRadius: 4, color: '#8b949e', cursor: 'pointer', fontSize: 11, padding: '2px 6px' }}
@@ -363,7 +493,14 @@ export default function App() {
                 {/* Unit 4a — NodeBuilder graph view: display:none survival so TanStack Query
                      cache is retained while toggling. Both subtrees stay mounted. */}
                 <div style={{ position: 'absolute', inset: 0, display: graphViewActive ? 'block' : 'none', zIndex: 1 }}>
-                  <NodeBuilder request={lastRequest} graphViewActive={graphViewActive} />
+                  <NodeBuilder
+                    request={lastRequest}
+                    graphViewActive={graphViewActive}
+                    graphWindow={graphWindow}
+                    onRunGraph={handleRunGraph}
+                    graphResult={graphResult}
+                    onGraphResult={setGraphResult}
+                  />
                 </div>
 
                 {/* Chart + Rules subtree: hidden when graph view is active */}
@@ -380,46 +517,9 @@ export default function App() {
                   {!chartCollapsed && (<>
                   <Panel defaultSize="50%" minSize="15%">
                     <div className="panel-fill">
-                      {!chartEnabled ? (
-                        <div style={styles.chartDisabled}>
-                          <span style={{ color: '#8b949e', fontSize: 12 }}>Chart disabled</span>
-                          <button onClick={() => setChartEnabled(true)} style={styles.chartToggleBtn}>Enable</button>
-                        </div>
-                      ) : ohlcv.length > 0 ? (
-                        <Chart
-                          data={ohlcv}
-                          spyData={showSpy ? (spyData ?? []) : undefined}
-                          qqqData={showQqq ? (qqqData ?? []) : undefined}
-                          showSpy={showSpy}
-                          showQqq={showQqq}
-                          indicators={indicators}
-                          instanceData={instanceData}
-                          instanceLoading={instanceLoading}
-                          loadingByInstance={loadingByInstance}
-                          instanceError={instanceError}
-                          instanceErrorMessage={instanceErrorMessage}
-                          onRetryIndicators={refetchIndicators}
-                          trades={trades}
-                          emaOverlays={emaOverlays}
-                          ruleSignals={ruleSignals}
-                          regimeSeries={regimeSeries}
-                          viewInterval={viewInterval}
-                          backtestInterval={interval}
-                          onChartReady={setMainChart}
-                          autoIntervalEnabled={autoDownsample}
-                          onAutoRenderChange={setAutoRenderInterval}
-                          ticker={ticker}
-                          interval={chartInterval}
-                          from={start}
-                          to={end}
-                        />
-                      ) : (ohlcvLoading || ohlcvFetching) ? (
-                        <ChartSkeleton ticker={ticker} />
-                      ) : ohlcvError ? (
-                        <div style={styles.empty}>Failed to load {ticker}</div>
-                      ) : (
-                        <div style={styles.empty}>No data for {ticker}</div>
-                      )}
+                      {/* D10: the one Chart lives here in chart view and moves
+                           into the graph split (a portal below) in graph view. */}
+                      {!graphViewActive && chartBody}
                     </div>
                   </Panel>
 
@@ -457,6 +557,7 @@ export default function App() {
                         <>
                           <StrategyBuilder
                             ref={strategyBuilderRef}
+                            graphViewActive={graphViewActive}
                             ticker={ticker}
                             start={start}
                             end={end}
@@ -473,10 +574,16 @@ export default function App() {
                             settingsPortalId="strategy-settings-portal"
                             extendedHours={extendedHours}
                           />
+                          {graphResult && !graphViewActive && (
+                            <GraphResultHint
+                              headerText={graphHeaderText(graphResult)}
+                              onShowGraph={() => setGraphViewActive(true)}
+                            />
+                          )}
                           {backtestResult && (
                             <Results
                               result={backtestResult}
-                              mainChart={mainChart}
+                              mainChart={graphViewActive ? null : mainChart}
                               activeTab={resultsTab}
                               onTabChange={setResultsTab}
                               bucket={macroBucket}
@@ -490,7 +597,7 @@ export default function App() {
                               backtestInterval={interval}
                               sweepInit={sweepInit}
                               onSweepConsumed={() => setSweepInit(null)}
-                              mainTimestamps={mainTimestamps}
+                              mainTimestamps={graphViewActive ? undefined : mainTimestamps}
                               onApplyParams={(updatedReq) => {
                                 strategyBuilderRef.current?.applyStrategyRequest(updatedReq)
                               }}
@@ -516,10 +623,46 @@ export default function App() {
               <div style={styles.rightPanel}>
                 <Group orientation="vertical" style={{ height: '100%' }}>
                   <Panel defaultSize="30%" minSize="15%">
-                    <WatchlistPanel
-                      currentSymbol={ticker}
-                      onSymbolClick={t => { setTicker(t); setBacktestResult(null) }}
-                    />
+                    {/* In graph view this panel shows the graph result (S28:
+                         Results sits outside the graph split, on the right).
+                         The watchlist stays mounted underneath. */}
+                    <div style={{ height: '100%', display: graphViewActive ? 'none' : 'block' }}>
+                      <WatchlistPanel
+                        currentSymbol={ticker}
+                        onSymbolClick={t => { setTicker(t); setBacktestResult(null) }}
+                      />
+                    </div>
+                    {/* F152 pattern: once a graph result exists its Results
+                         instance stays mounted under display:none, so its
+                         Monte Carlo result and equity chart survive a view
+                         toggle (CI-04). It syncs to the chart only in graph view. */}
+                    {(graphViewActive || graphBacktest) && (
+                      <div style={{ ...styles.graphResults, display: graphViewActive ? 'block' : 'none' }} data-testid="graph-results-panel">
+                        {graphBacktest && graphInfo ? (
+                          <Results
+                            result={graphBacktest}
+                            mainChart={graphViewActive ? mainChart : null}
+                            activeTab={graphResultsTab}
+                            onTabChange={setGraphResultsTab}
+                            bucket={graphBucket}
+                            onBucketChange={setGraphBucket}
+                            lastRequest={null}
+                            showBaseline={showBaseline}
+                            onShowBaselineChange={setShowBaseline}
+                            logScale={logScale}
+                            onLogScaleChange={setLogScale}
+                            viewInterval={cViewInterval}
+                            backtestInterval={cBaseInterval}
+                            mainTimestamps={graphViewActive ? mainTimestamps : undefined}
+                            graphInfo={graphInfo}
+                          />
+                        ) : (
+                          <div style={styles.graphResultsEmpty}>
+                            No graph result yet. Run the backtest from the graph toolbar (⌘↵).
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </Panel>
                   <Separator className="resize-handle-h" />
                   <Panel defaultSize="70%" minSize="20%">
@@ -545,6 +688,13 @@ export default function App() {
           <Desk />
         </div>
       </div>
+      {/* D10/S28: in graph view the same chart is mounted in the graph
+           split's open chart panel. Never two charts: chartBody renders
+           above only outside graph view. */}
+      {graphViewActive && graphChartHost && createPortal(
+        <div className="panel-fill">{chartBody}</div>,
+        graphChartHost,
+      )}
     </div>
   )
 }
@@ -582,6 +732,8 @@ const styles: Record<string, React.CSSProperties> = {
     borderLeft: '1px solid var(--border-light)',
     overflow: 'hidden',
   },
+  graphResults: { height: '100%', overflowY: 'auto', background: 'var(--bg-main)' },
+  graphResultsEmpty: { padding: 16, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 },
   metricsStrip: {
     fontSize: 11, color: 'var(--text-secondary)',
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
