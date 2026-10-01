@@ -1,0 +1,58 @@
+{
+  "_doc": "Display and bypass flags (F435 W3 item 3.B, spec S16). The frontend test (frontend/src/features/nodebuilder/__tests__/flags.test.ts) presses B on n_ema in `before` and checks the graph JSON it would send equals `after_bypass`. pytest (test_flags_vector.py) cooks `after_bypass` and checks the bypassed EMA passes its input through, so the RSI runs on the close as if the EMA were not there. Display never changes signals.",
+  "before": {
+    "_version": 3,
+    "stream_schema": 1,
+    "readOnly": false,
+    "meta": {},
+    "nodes": {
+      "n_tick": {"id": "n_tick", "type": "ticker", "name": "ticker", "parent": null,
+                 "params": {"symbol": "AAPL", "interval": "1d"}, "position": [0, 0], "display": false, "bypass": false},
+      "n_ema": {"id": "n_ema", "type": "ema", "name": "ema", "parent": null,
+                "params": {"period": 10}, "position": [0, 120], "display": false, "bypass": false},
+      "n_rsi": {"id": "n_rsi", "type": "rsi", "name": "rsi", "parent": null,
+                "params": {"period": 14, "type": "wilder", "source": "@close"}, "position": [0, 240], "display": true, "bypass": false},
+      "n_lo": {"id": "n_lo", "type": "below", "name": "lo", "parent": null,
+               "params": {"threshold": 45}, "position": [0, 360], "display": false, "bypass": false},
+      "n_entry": {"id": "n_entry", "type": "entry", "name": "entry", "parent": null,
+                  "params": {}, "position": [0, 480], "display": false, "bypass": false}
+    },
+    "wires": [
+      {"id": "w_1", "from": "n_tick", "to": "n_ema", "from_port": "out", "to_port": "in0"},
+      {"id": "w_2", "from": "n_ema", "to": "n_rsi", "from_port": "out", "to_port": "in0"},
+      {"id": "w_3", "from": "n_rsi", "to": "n_lo", "from_port": "out", "to_port": "in0"},
+      {"id": "w_4", "from": "n_lo", "to": "n_entry", "from_port": "out", "to_port": "in0"}
+    ],
+    "annotations": {"boxes": [], "notes": []}
+  },
+  "bypass_node": "n_ema",
+  "after_bypass": {
+    "_version": 3,
+    "stream_schema": 1,
+    "readOnly": false,
+    "meta": {},
+    "nodes": {
+      "n_tick": {"id": "n_tick", "type": "ticker", "name": "ticker", "parent": null,
+                 "params": {"symbol": "AAPL", "interval": "1d"}, "position": [0, 0], "display": false, "bypass": false},
+      "n_ema": {"id": "n_ema", "type": "ema", "name": "ema", "parent": null,
+                "params": {"period": 10}, "position": [0, 120], "display": false, "bypass": true},
+      "n_rsi": {"id": "n_rsi", "type": "rsi", "name": "rsi", "parent": null,
+                "params": {"period": 14, "type": "wilder", "source": "@close"}, "position": [0, 240], "display": true, "bypass": false},
+      "n_lo": {"id": "n_lo", "type": "below", "name": "lo", "parent": null,
+               "params": {"threshold": 45}, "position": [0, 360], "display": false, "bypass": false},
+      "n_entry": {"id": "n_entry", "type": "entry", "name": "entry", "parent": null,
+                  "params": {}, "position": [0, 480], "display": false, "bypass": false}
+    },
+    "wires": [
+      {"id": "w_1", "from": "n_tick", "to": "n_ema", "from_port": "out", "to_port": "in0"},
+      {"id": "w_2", "from": "n_ema", "to": "n_rsi", "from_port": "out", "to_port": "in0"},
+      {"id": "w_3", "from": "n_rsi", "to": "n_lo", "from_port": "out", "to_port": "in0"},
+      {"id": "w_4", "from": "n_lo", "to": "n_entry", "from_port": "out", "to_port": "in0"}
+    ],
+    "annotations": {"boxes": [], "notes": []}
+  },
+  "display_node": "n_lo",
+  "after_display": {
+    "n_tick": false, "n_ema": false, "n_rsi": false, "n_lo": true, "n_entry": false
+  }
+}

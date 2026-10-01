@@ -7,13 +7,16 @@
  * - Hover for 400 ms: a tooltip lists the messages (5 at most, then
  *   "and N more"). The tooltip is portalled so the node card's
  *   `overflow: hidden` cannot clip it.
- * - Click: selects the node (from W3 it also opens the Inspector).
+ * - Click: the caller selects the node (or the wire the problem is about);
+ *   the badge then opens the Inspector with its Diagnostics section
+ *   expanded and flashes the param row the first problem names (S05, W3).
  * Info-severity problems do not show a badge.
  */
 
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Diagnostic } from '../../../api/nodebuilderValidate'
+import { openInspectorDiagnostics } from '../inspector/state'
 import '../diagnostics.css'
 
 /** Hover delay before the tooltip shows. */
@@ -100,7 +103,12 @@ export function DiagnosticBadge({
         // Keyboard focus shows the tooltip too; a mouse click's focus does not.
         onFocus={e => { if (isFocusVisible(e.currentTarget)) showTip() }}
         onBlur={() => { clearHover(); setTipAt(null) }}
-        onClick={() => { clearHover(); setTipAt(null); onActivate?.() }}
+        onClick={() => {
+          clearHover()
+          setTipAt(null)
+          onActivate?.()
+          openInspectorDiagnostics(nodeId, list.find(d => d.param)?.param ?? null)
+        }}
       >
         {glyph}
       </button>

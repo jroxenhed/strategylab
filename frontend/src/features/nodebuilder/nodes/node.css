@@ -1,0 +1,184 @@
+/*
+ * Node flags (S16), the unsupported-node card (S13) and the hover tip used
+ * by ports and flags (S08). Tokens come from tokens.css. Node-level values
+ * arrive as CSS variables (--cat).
+ */
+
+/* ── Flag dots (S16, foundation 4.6) ─────────────────────────────────────── */
+
+/* A column just outside the card's right edge. */
+.nodebuilder-root .nb-flags {
+  position: absolute;
+  right: -14px;
+  top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 1;
+}
+
+.nodebuilder-root .nb-flag {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--nb-flag-off);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--nb-motion-fast) var(--nb-ease),
+    transform var(--nb-motion-fast) var(--nb-ease);
+}
+/* A 16x16 hit area around each 8px dot. */
+.nodebuilder-root .nb-flag::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  transform: translate(-50%, -50%);
+}
+.nodebuilder-root .nb-flag--display[aria-pressed='true'] { background: var(--nb-flag-display); }
+.nodebuilder-root .nb-flag--bypass[aria-pressed='true'] { background: var(--nb-flag-bypass); }
+
+/* Visible when lit, on node hover, or while the node is selected. CSS only. */
+.nodebuilder-root .nb-flag[aria-pressed='true'],
+.nodebuilder-root .react-flow__node:hover .nb-flag,
+.nodebuilder-root .react-flow__node.selected .nb-flag,
+.nodebuilder-root .nb-flags--always .nb-flag { opacity: 1; }
+
+.nodebuilder-root .nb-flag:hover { transform: scale(1.25); }
+.nodebuilder-root .nb-flag:focus { outline: none; }
+.nodebuilder-root .nb-flag:focus-visible {
+  outline: 2px solid var(--nb-border-focus);
+  outline-offset: 2px;
+}
+
+/* ── Bypassed node (foundation 4.9) ──────────────────────────────────────── */
+
+/* The second 3px bar, right of the category stripe. */
+.nodebuilder-root .nb-bypass-bar {
+  position: absolute;
+  left: 3px;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--nb-flag-bypass);
+  pointer-events: none;
+}
+
+/* ── Unsupported or unknown node (S13) ───────────────────────────────────── */
+
+.nodebuilder-root .nb-unsupported {
+  position: relative;
+  width: 176px;
+  font-family: var(--nb-font-sans);
+  background: var(--nb-bg-node);
+  border: 1px dashed rgba(248, 113, 113, 0.6);
+  border-radius: var(--nb-radius-node);
+  overflow: hidden;
+}
+.nodebuilder-root .react-flow__node:hover .nb-unsupported {
+  border-color: var(--nb-border-strong);
+}
+.nodebuilder-root .nb-unsupported__stripe {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--nb-text-dim);
+  border-radius: 5px 0 0 5px;
+}
+.nodebuilder-root .nb-unsupported__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 5px 11px;
+  min-height: 24px;
+}
+.nodebuilder-root .nb-unsupported__glyph {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--nb-bg-chip-read);
+  color: var(--nb-text-muted);
+  font-family: var(--nb-font-mono);
+  font-weight: 700;
+  font-size: 9px;
+  line-height: 1;
+  user-select: none;
+}
+.nodebuilder-root .nb-unsupported__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--nb-text);
+}
+.nodebuilder-root .nb-unsupported__type {
+  flex-shrink: 0;
+  font-family: var(--nb-font-mono);
+  font-size: 10px;
+  line-height: 16px;
+  white-space: nowrap;
+  color: var(--nb-warn);
+}
+.nodebuilder-root .nb-unsupported__body {
+  padding: 4px 10px 7px 12px;
+  border-top: 1px solid var(--nb-border-subtle);
+}
+.nodebuilder-root .nb-unsupported__row {
+  display: grid;
+  grid-template-columns: minmax(56px, auto) 1fr;
+  gap: 8px;
+  height: 20px;
+  align-items: center;
+  font-family: var(--nb-font-mono);
+  font-size: 11px;
+}
+.nodebuilder-root .nb-unsupported__label { color: var(--nb-text-muted); }
+.nodebuilder-root .nb-unsupported__value {
+  color: var(--nb-text-secondary);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nodebuilder-root .nb-unsupported__hint {
+  margin-top: 2px;
+  font-family: var(--nb-font-mono);
+  font-size: 10px;
+  color: var(--nb-text-dim);
+}
+
+/* ── Hover tip (ports, flags), portalled to the body ─────────────────────── */
+
+.nodebuilder-root.nb-hover-tip {
+  position: fixed;
+  z-index: 10002;
+  max-width: 320px;
+  padding: 3px 7px;
+  background: var(--nb-bg-elevated);
+  border: 1px solid var(--nb-border-strong);
+  border-radius: 6px;
+  box-shadow: var(--nb-shadow-popover);
+  font-family: var(--nb-font-mono);
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--nb-text-secondary);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.nodebuilder-root.nb-hover-tip[hidden] { display: none; }

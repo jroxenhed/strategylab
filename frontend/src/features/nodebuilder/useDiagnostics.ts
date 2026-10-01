@@ -41,6 +41,8 @@ import {
 } from '../../api/nodebuilderValidate'
 import type { StreamSchema } from '../../api/nodebuilder'
 import { wireIdForDiagnostic } from './streamLabels'
+import { isUnsupportedNode, localUnsupportedDiagnostic, UNSUPPORTED_CODES } from './nodes/unsupported'
+import type { Graph } from '../../api/nodebuilder'
 
 export type { Diagnostic, Severity, DiagnosticCode } from '../../api/nodebuilderValidate'
 
@@ -74,6 +76,12 @@ interface DiagStore {
   server: Diagnostic[]
   /** Local field problems, keyed by `localKey(nodeId, param)`. */
   local: Record<string, Diagnostic>
+  /**
+   * Nodes the client already knows are unsupported (S13: unknown type, or
+   * not compile-active and wired). Counted as errors before /validate
+   * answers, so the card, the counts and Run agree (UX-10).
+   */
+  unsupported: Diagnostic[]
   /** The store commitSeq the current server list belongs to (-1 = none). */
   validatedSeq: number
   /** Each node's output stream from the last validate answer. */
@@ -99,6 +107,7 @@ const useDiagStore = create<DiagStore>()(() => ({
   view: EMPTY_VIEW,
   server: [],
   local: {},
+  unsupported: [],
   validatedSeq: -1,
   streams: NO_STREAMS,
   wireFocus: null,
@@ -125,8 +134,17 @@ function sameDiagnostics(a: readonly Diagnostic[], b: readonly Diagnostic[]): bo
  * problems read the same as before keeps its old list, so its card does not
  * re-render on every /validate answer.
  */
-function derive(server: Diagnostic[], local: Record<string, Diagnostic>, prevByNode: Record<string, Diagnostic[]>) {
-  const diagnostics = [...server, ...Object.values(local)]
+function derive(
+  server: Diagnostic[],
+  local: Record<string, Diagnostic>,
+  unsupported: Diagnostic[],
+  prevByNode: Record<string, Diagnostic[]>,
+) {
+  // A node the server already reported as unsupported is not counted twice.
+  const serverUnsupported = new Set<string>()
+  for (const d of server) if (d.node_id && UNSUPPORTED_CODES.has(d.code)) serverUnsupported.add(d.node_id)
+  const clientOnly = unsupported.filter(d => !d.node_id || !serverUnsupported.has(d.node_id))
+  const diagnostics = [...server, ...clientOnly, ...Object.values(local)]
   const byNode: Record<string, Diagnostic[]> = {}
   let errorCount = 0
   let warningCount = 0
@@ -151,17 +169,19 @@ function update(patch: Partial<Omit<DiagStore, 'view' | 'wireFocus'>> & { flags?
     const flagsChange = (Object.keys(flags) as (keyof ViewFlags)[]).some(k => s.view[k] !== flags[k])
     const streams = patch.streams ? keepSameStreams(s.streams, patch.streams) : s.streams
     // Nothing would change: keep the same state, so no subscriber re-renders.
-    if (!patch.server && !patch.local && !flagsChange && streams === s.streams
+    if (!patch.server && !patch.local && !patch.unsupported && !flagsChange && streams === s.streams
       && (patch.validatedSeq ?? s.validatedSeq) === s.validatedSeq) {
       return s
     }
     const server = patch.server ?? s.server
     const local = patch.local ?? s.local
-    const lists = patch.server || patch.local ? derive(server, local, s.view.byNode) : null
+    const unsupported = patch.unsupported ?? s.unsupported
+    const lists = patch.server || patch.local || patch.unsupported ? derive(server, local, unsupported, s.view.byNode) : null
     const view: DiagnosticsState = { ...s.view, ...(lists ?? {}), ...flags }
     return {
       server,
       local,
+      unsupported,
       validatedSeq: patch.validatedSeq ?? s.validatedSeq,
       view,
       streams,
@@ -384,6 +404,31 @@ export function useParamDiagnostic(nodeId: string, param: string): Diagnostic | 
 }
 
 /**
+ * The client's own unsupported-node errors for an editable graph (S13):
+ * the same rule as the card, without the server's list.
+ */
+export function clientUnsupportedDiagnostics(graph: Graph | null): Diagnostic[] {
+  if (!graph || graph.readOnly) return NO_DIAGNOSTICS
+  const wiredIn = new Set<string>()
+  for (const w of graph.wires) wiredIn.add(w.to)
+  const out: Diagnostic[] = []
+  for (const [id, n] of Object.entries(graph.nodes)) {
+    if (isUnsupportedNode(n.type, wiredIn.has(id), NO_DIAGNOSTICS)) {
+      const d = localUnsupportedDiagnostic(id, n.type)
+      out.push(n.name ? { ...d, path: `/${n.name}` } : d)
+    }
+  }
+  return out.length ? out : NO_DIAGNOSTICS
+}
+
+/** Recompute the client unsupported list; writes only when it changed. */
+function syncUnsupported(graph: Graph | null): void {
+  const next = clientUnsupportedDiagnostics(graph)
+  if (sameDiagnostics(useDiagStore.getState().unsupported, next)) return
+  update({ unsupported: next })
+}
+
+/**
  * Mount ONCE (NodeBuilder). Calls /validate 300 ms after each store commit
  * (it watches `commitSeq`), and once on mount when the graph on screen has
  * not been checked yet.
@@ -391,9 +436,11 @@ export function useParamDiagnostic(nodeId: string, param: string): Diagnostic | 
 export function useDiagnosticsController(): void {
   useEffect(() => {
     const unsubscribe = useNodeBuilderStore.subscribe((state, prev) => {
+      if (state.graph !== prev.graph) syncUnsupported(state.graph)
       if (state.commitSeq !== prev.commitSeq) scheduleValidate()
     })
     const { graph, commitSeq } = useNodeBuilderStore.getState()
+    syncUnsupported(graph)
     if (graph && useDiagStore.getState().validatedSeq !== commitSeq) scheduleValidate()
     return () => {
       unsubscribe()
@@ -464,5 +511,5 @@ export function setLocalParamInvalid(nodeId: string, param: string, message: str
 export function resetDiagnostics(): void {
   cancelTimer()
   cancelInFlight()
-  useDiagStore.setState({ view: EMPTY_VIEW, server: [], local: {}, validatedSeq: -1, streams: NO_STREAMS, wireFocus: null })
+  useDiagStore.setState({ view: EMPTY_VIEW, server: [], local: {}, unsupported: [], validatedSeq: -1, streams: NO_STREAMS, wireFocus: null })
 }

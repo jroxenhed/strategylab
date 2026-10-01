@@ -19,9 +19,17 @@
  * The results strip names the symbol and interval it ran on, dims itself as
  * "stale" once the graph changes, and flags an open position or an
  * unconnected Exit. Text logic lives in resultsStrip.ts.
+ *
+ * Layout slots (W3 pre-step 3.0): the frame below has named places that
+ * other items fill through slots.ts without editing this file: toolbarLeft
+ * and toolbarRight inside GraphToolbar's clusters, rightPanel right of the canvas
+ * column (the Inspector), bottomPanel under the canvas, statusBar along the
+ * bottom, then overlays and dialogs. Slot components reach the session and
+ * the Run and Stop actions through BuilderContext (useBuilder). The cook
+ * state is mirrored into the store's status slice for the status bar.
  */
 
-import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { StrategyRequest } from '../../shared/types/strategy'
 import { fetchAutoRender, fetchGraphBacktest, type GraphBacktestResult, type GraphNode } from '../../api/nodebuilder'
@@ -32,6 +40,8 @@ import Canvas from './Canvas'
 import { NODE_CATALOG } from './catalog'
 import { newNodeId } from './operations'
 import { hasEdits, useNodeBuilderStore } from './store'
+import { focusNode } from './viewOps'
+import { IDLE_COOK } from './store/status'
 import {
   buildResultsStrip,
   describeBacktestError,
@@ -66,6 +76,8 @@ import NoticeStack from './NoticeStack'
 import { pushNotice, resolveNotice, type Notice } from './notices'
 import { runLegacySeed, seedBannerText } from './persistence'
 import { useGraphSession } from './useGraphSession'
+import { BuilderContext, Slot, type BuilderApi } from './slots'
+import { isTypingTarget } from './canvasHelpers'
 import './tokens.css'
 
 interface NodeBuilderProps {
@@ -206,12 +218,18 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
   )
   const staleTitle = graphStale ? STALE_TITLE : STALE_REQUEST_TITLE
 
+  // The status bar reads the cook state from the store (status slice).
+  const setCook = useNodeBuilderStore(s => s.setCook)
+  const resultStale = graphStale || requestStale
+  useEffect(() => { setCook({ stale: resultStale }) }, [resultStale, setCook])
+
   function clearRun() {
     runIdRef.current += 1
     abortRun()
     setBacktestRunning(false)
     setLastRun(null)
     setRunError(null)
+    setCook(IDLE_COOK)
   }
 
   // A different graph on screen (open, new, edit copy) drops the last run
@@ -272,6 +290,7 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
     runIdRef.current += 1
     abortRun()
     setBacktestRunning(false)
+    setCook({ phase: 'cancelled', endedAt: Date.now() })
   }
 
   async function handleRunBacktest() {
@@ -291,6 +310,7 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
     setBacktestRunning(true)
     setRunError(null)
     setLastRun(null)
+    setCook({ phase: 'cooking', kind: 'backtest', startedAt: Date.now(), endedAt: null, stale: false, failedNodeId: null })
     try {
       // Derive ticker/interval from the graph's ticker node, falling back to the
       // loaded request when available. The data source is the sidebar's only
@@ -317,6 +337,7 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
       }, ctrl.signal)
       if (runId !== runIdRef.current) return  // superseded, cleared or stopped
       setLastRun({ result, ticker, interval, graphKey: graphKeyAtStart, requestKey: requestKeyAtStart })
+      setCook({ phase: 'cooked', endedAt: Date.now() })
     } catch (e: unknown) {
       if (runId !== runIdRef.current) return
       // A 400 with diagnostics replaces the current set until the next commit
@@ -328,9 +349,10 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
       }
       const badNode = errorNodeId(e)
       setRunError({ text: describeBacktestError(e, runGraph), nodeId: badNode })
+      setCook({ phase: 'failed', endedAt: Date.now(), failedNodeId: badNode })
       // Select the node the server names, so its ring shows which one to fix
       // (select() ignores a node deleted meanwhile).
-      if (badNode) selectNode(badNode)
+      if (badNode) focusNode(badNode)
     } finally {
       if (runAbortRef.current === ctrl) runAbortRef.current = null
       if (runId === runIdRef.current) setBacktestRunning(false)
@@ -388,7 +410,7 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
           {node && (
             <>
               {' · '}
-              <button type="button" className="nb-banner__link" onClick={() => selectNode(node.id)}>
+              <button type="button" className="nb-banner__link" onClick={() => focusNode(node.id)}>
                 {node.name || node.id}
               </button>
             </>
@@ -423,7 +445,7 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
                 type="button"
                 className="nb-banner__link"
                 title={`Select ${storeGraph?.nodes[u.id]?.name || u.id}`}
-                onClick={() => selectNode(u.id)}
+                onClick={() => focusNode(u.id)}
               >
                 {unsupportedLabel(u)}
               </button>
@@ -434,6 +456,20 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
       ),
     })
   }
+
+  // What slot components reach through useBuilder(). One object for the
+  // builder's life, so the panels that read it do not re-render with every
+  // NodeBuilder render; its members always use the latest session and run.
+  const builderRef = useRef({ session, run: handleRunBacktest, stop: handleStop })
+  useEffect(() => {
+    builderRef.current = { session, run: handleRunBacktest, stop: handleStop }
+  })
+  const [builderApi] = useState<BuilderApi>(() => ({
+    get session() { return builderRef.current.session },
+    runBacktest: () => void builderRef.current.run(),
+    stopBacktest: () => builderRef.current.stop(),
+    openDiagnostics: anchor => setDiagAnchor(a => (a === anchor ? null : anchor)),
+  }))
 
   const mode: ToolbarMode = editMode ? 'edit' : request != null && autoGraph ? 'view' : 'none'
   const toolbar = (
@@ -481,10 +517,18 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
     </>
   )
 
+  // The toolbar row. GraphToolbar draws the toolbarLeft / toolbarRight slots
+  // inside its own clusters (A1 order) and the S22 hint in its middle.
+  const toolbarRow = (
+    <div style={styles.toolbarRow}>
+      <div style={styles.toolbarMain}>{toolbar}</div>
+    </div>
+  )
+
+  let content: ReactNode
   if (request == null && !editMode) {
-    return (
-      <div ref={rootRef} className="nodebuilder-root" style={styles.root} tabIndex={-1} data-nb-builder="">
-        {toolbar}
+    content = (
+      <>
         <NoticeStack />
         <div style={styles.empty}>
           <span>
@@ -495,88 +539,117 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
             {' '}to load a saved graph.
           </span>
         </div>
-        {shared}
-      </div>
+      </>
+    )
+  } else {
+    content = (
+      <>
+        <NoticeStack extra={derivedNotices} />
+
+        {/* Content */}
+        {isLoading && !editMode && (
+          <div style={styles.loadingWrapper}>
+            <div className="chart-skeleton" style={styles.skeleton} />
+          </div>
+        )}
+        {error && !editMode && (
+          <div style={styles.errorBanner}>
+            Failed to render graph: {apiErrorDetail(error, (error as Error).message)}
+          </div>
+        )}
+        {editMode && strip && (
+          <div
+            style={{ ...styles.backtestHeadline, opacity: strip.stale ? 0.5 : 1 }}
+            title={strip.stale ? staleTitle : undefined}
+          >
+            <span style={styles.backtestContext}>{strip.context}</span>
+            <span style={styles.backtestDivider}>·</span>
+            <span style={styles.backtestStat}>{strip.trades}</span>
+            <span style={styles.backtestDivider}>·</span>
+            <span
+              style={{
+                ...styles.backtestStat,
+                color:
+                  strip.returnSign === 'pos'
+                    ? 'oklch(0.72 0.18 145)'
+                    : strip.returnSign === 'neg'
+                      ? 'oklch(0.65 0.20 25)'
+                      : styles.backtestStat.color,
+              }}
+            >
+              {strip.returnText}
+            </span>
+            <span style={styles.backtestDivider}>·</span>
+            <span style={styles.backtestStat}>{strip.sharpe}</span>
+            {strip.openPosition && (
+              <>
+                <span style={styles.backtestDivider}>·</span>
+                <span style={styles.backtestStat} title={strip.openPositionTitle ?? undefined}>
+                  {strip.openPosition}
+                </span>
+              </>
+            )}
+            {strip.exitWarning && (
+              <span style={styles.backtestWarn} title={EXIT_NOT_CONNECTED_TITLE}>{strip.exitWarning}</span>
+            )}
+            {strip.stale && <span style={styles.staleBadge}>{STALE_LABEL}</span>}
+          </div>
+        )}
+        {activeGraph && (
+          <div style={styles.canvasWrapper}>
+            <Canvas graph={activeGraph} />
+            {editMode && !hasNodes && (
+              <div className="nb-empty-graph" data-testid="nb-empty-graph">
+                <div>Press Tab to add a node</div>
+                <div>Start with a Ticker, then indicators, comparisons, and an Output Group</div>
+                <div>
+                  or{' '}
+                  <button type="button" className="nb-empty-graph__link" onClick={session.openBrowser} data-testid="nb-empty-open">
+                    ⋯ › Open
+                  </button>{' '}
+                  to load a saved graph
+                </div>
+                <button type="button" className="nb-empty-graph__ghost" onClick={addTicker} aria-label="Add Ticker" data-testid="nb-empty-ticker">
+                  Ticker
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </>
     )
   }
 
+  // The frame and its slots (see the file header). The Inspector (rightPanel)
+  // runs the full height beside the toolbar and the canvas; the status bar
+  // runs the full width under both.
   return (
-    <div ref={rootRef} className="nodebuilder-root" style={styles.root} tabIndex={-1} data-nb-builder="">
-      {toolbar}
-      <NoticeStack extra={derivedNotices} />
-
-      {/* Content */}
-      {isLoading && !editMode && (
-        <div style={styles.loadingWrapper}>
-          <div className="chart-skeleton" style={styles.skeleton} />
+    <BuilderContext.Provider value={builderApi}>
+      <div
+        ref={rootRef}
+        className="nodebuilder-root"
+        style={styles.root}
+        tabIndex={-1}
+        data-nb-builder=""
+        // S19: no browser menu anywhere in the builder (minimap, Inspector,
+        // toolbar, status bar, the ContextMenu key on the focused root);
+        // text fields keep theirs (UX-05).
+        onContextMenu={e => { if (!isTypingTarget(e.target)) e.preventDefault() }}
+      >
+        <div style={styles.main}>
+          <div style={styles.column}>
+            {toolbarRow}
+            {content}
+            <Slot name="bottomPanel" />
+          </div>
+          <Slot name="rightPanel" />
         </div>
-      )}
-      {error && !editMode && (
-        <div style={styles.errorBanner}>
-          Failed to render graph: {apiErrorDetail(error, (error as Error).message)}
-        </div>
-      )}
-      {editMode && strip && (
-        <div
-          style={{ ...styles.backtestHeadline, opacity: strip.stale ? 0.5 : 1 }}
-          title={strip.stale ? staleTitle : undefined}
-        >
-          <span style={styles.backtestContext}>{strip.context}</span>
-          <span style={styles.backtestDivider}>·</span>
-          <span style={styles.backtestStat}>{strip.trades}</span>
-          <span style={styles.backtestDivider}>·</span>
-          <span
-            style={{
-              ...styles.backtestStat,
-              color:
-                strip.returnSign === 'pos'
-                  ? 'oklch(0.72 0.18 145)'
-                  : strip.returnSign === 'neg'
-                    ? 'oklch(0.65 0.20 25)'
-                    : styles.backtestStat.color,
-            }}
-          >
-            {strip.returnText}
-          </span>
-          <span style={styles.backtestDivider}>·</span>
-          <span style={styles.backtestStat}>{strip.sharpe}</span>
-          {strip.openPosition && (
-            <>
-              <span style={styles.backtestDivider}>·</span>
-              <span style={styles.backtestStat} title={strip.openPositionTitle ?? undefined}>
-                {strip.openPosition}
-              </span>
-            </>
-          )}
-          {strip.exitWarning && (
-            <span style={styles.backtestWarn} title={EXIT_NOT_CONNECTED_TITLE}>{strip.exitWarning}</span>
-          )}
-          {strip.stale && <span style={styles.staleBadge}>{STALE_LABEL}</span>}
-        </div>
-      )}
-      {activeGraph && (
-        <div style={styles.canvasWrapper}>
-          <Canvas graph={activeGraph} />
-          {editMode && !hasNodes && (
-            <div className="nb-empty-graph" data-testid="nb-empty-graph">
-              <div>Press Tab to add a node</div>
-              <div>Start with a Ticker, then indicators, comparisons, and an Output Group</div>
-              <div>
-                or{' '}
-                <button type="button" className="nb-empty-graph__link" onClick={session.openBrowser} data-testid="nb-empty-open">
-                  ⋯ › Open
-                </button>{' '}
-                to load a saved graph
-              </div>
-              <button type="button" className="nb-empty-graph__ghost" onClick={addTicker} aria-label="Add Ticker" data-testid="nb-empty-ticker">
-                Ticker
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-      {shared}
-    </div>
+        <Slot name="statusBar" />
+        {shared}
+        <Slot name="overlays" />
+        <Slot name="dialogs" />
+      </div>
+    </BuilderContext.Provider>
   )
 }
 
@@ -593,6 +666,31 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     position: 'relative',
     outline: 'none',
+  },
+  // Canvas column plus the right panel.
+  main: {
+    flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'row',
+    position: 'relative',
+  },
+  // Toolbar, notices, results strip, canvas and the bottom panel.
+  column: {
+    flex: 1,
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    position: 'relative',
+  },
+  toolbarRow: {
+    display: 'flex',
+    alignItems: 'stretch',
+    flexShrink: 0,
+  },
+  toolbarMain: {
+    flex: 1,
+    minWidth: 0,
   },
   canvasWrapper: {
     flex: 1,

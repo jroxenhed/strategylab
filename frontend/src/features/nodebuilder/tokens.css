@@ -171,43 +171,8 @@
   border-radius: var(--nb-radius-node);
 }
 
-/* Zoom controls — RF's defaults are white buttons, invisible against light
-   and glaring against our dark canvas (bug 16). Selectors carry the
-   .nodebuilder-root prefix so they beat RF's own stylesheet. */
-.nodebuilder-root .react-flow__controls {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-  border: 1px solid var(--nb-border);
-  border-radius: var(--nb-radius-card);
-  overflow: hidden;
-}
-/* Lift the controls above the attribution link, which shares the
-   bottom-right corner, so the two no longer overlap. */
-.nodebuilder-root .react-flow__controls.bottom {
-  margin-bottom: 28px;
-}
-.nodebuilder-root .react-flow__controls-button {
-  background: var(--nb-bg-panel);
-  border-bottom: 1px solid var(--nb-border-subtle);
-  color: var(--nb-text-secondary);
-}
-.nodebuilder-root .react-flow__controls-button:last-child {
-  border-bottom: none;
-}
-.nodebuilder-root .react-flow__controls-button:hover {
-  background: var(--nb-bg-node-top);
-  color: var(--nb-text);
-}
-.nodebuilder-root .react-flow__controls-button:disabled {
-  color: var(--nb-text-dim);
-}
-.nodebuilder-root .react-flow__controls-button svg {
-  fill: currentColor;
-}
-
-/* Attribution link — dark chip instead of RF's light one. */
-.nodebuilder-root .react-flow__attribution {
-  background: rgba(11, 14, 20, 0.7);
-}
+/* React Flow's zoom Controls are not drawn (A2). The attribution chip's
+   background and size live in statusChrome.css (S22). */
 .nodebuilder-root .react-flow__attribution a {
   color: var(--nb-text-dim);
 }
@@ -503,7 +468,8 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  flex: 1;
+  /* The hint box (.nb-hint, statusChrome.css) takes the free middle. */
+  flex: 0 1 auto;
 }
 .nodebuilder-root .nb-toolbar__right {
   display: flex;

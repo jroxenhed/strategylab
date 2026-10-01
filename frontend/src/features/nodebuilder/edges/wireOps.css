@@ -1,0 +1,36 @@
+/* Wire moves (spec S23): long-wire fade, splice and refusal states, the dragged wire end. */
+
+/*
+ * A long wire's stroke fades in the middle (`--nb-fade-stroke` is its own
+ * gradient, set by AttrEdge). Hovered, selected and hot wires keep the
+ * plain stroke.
+ */
+.nodebuilder-root .react-flow__edge:not(:hover) .nb-edge--fade:not(.nb-edge--selected):not(.nb-edge--hot) .nb-edge__path,
+.nodebuilder-root svg > .nb-edge--fade:not(:hover):not(.nb-edge--selected):not(.nb-edge--hot) .nb-edge__path {
+  stroke: var(--nb-fade-stroke);
+}
+
+/* A refused splice, or a wire end dropped on empty canvas: red for 150 ms. */
+.nodebuilder-root .react-flow__edge .nb-edge.nb-edge--flash .nb-edge__path,
+.nodebuilder-root .nb-edge.nb-edge--flash .nb-edge__path {
+  stroke: var(--nb-wire-invalid);
+  stroke-width: var(--nb-wire-width-hot);
+}
+
+/* A wire end dragged over a port that will not take it. */
+.nodebuilder-root .react-flow__connection.invalid .react-flow__connection-path {
+  stroke: var(--nb-wire-invalid);
+  stroke-dasharray: 4 3;
+}
+/* ...and the cursor says no (S23, UX-19). React Flow sets `invalid` only
+   while the line is over a port that refuses it, so the cursor is back to
+   normal over empty canvas and over a valid port. */
+.nodebuilder-root .react-flow:has(.react-flow__connection.invalid),
+.nodebuilder-root .react-flow:has(.react-flow__connection.invalid) .react-flow__pane,
+.nodebuilder-root .react-flow:has(.react-flow__connection.invalid) .react-flow__node,
+.nodebuilder-root .react-flow:has(.react-flow__connection.invalid) .react-flow__handle {
+  cursor: not-allowed;
+}
+.nodebuilder-root .react-flow__edgeupdater {
+  cursor: grab;
+}

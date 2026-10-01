@@ -17,6 +17,9 @@ import { Popover } from './ui/Popover'
 import { onMenuKeyDown } from './ui/menuKeys'
 import { nameError } from './persistence'
 import { diagnosticsLabel, modKeyCap, runDisabledReason } from './graphText'
+import { Slot } from './slots'
+import HintBar from './HintBar'
+import { prefetchLayout } from './layout'
 
 export type ToolbarMode = 'none' | 'view' | 'edit'
 
@@ -314,9 +317,14 @@ export default function GraphToolbar(props: GraphToolbarProps) {
             )}
           </>
         ) : null}
+        <Slot name="toolbarLeft" />
       </div>
 
+      <HintBar />
+
       <div className="nb-toolbar__right">
+        {/* A1: toolbarRight entries ordered under 50 (Reset view 10, Auto cook 20) come first. */}
+        <Slot name="toolbarRight" maxOrder={49} />
         {showChip && (
           <button
             type="button"
@@ -337,7 +345,16 @@ export default function GraphToolbar(props: GraphToolbarProps) {
         )}
 
         {mode === 'view' && props.onEditThisGraph && (
-          <Button kind="primary" onClick={props.onEditThisGraph} title="Edit this graph" data-testid="nb-btn-edit">
+          <Button
+            kind="primary"
+            onClick={props.onEditThisGraph}
+            // Load the layout engine while the user reaches for the button,
+            // so the tidy is usually done before the editor first fits (IP-4).
+            onPointerEnter={prefetchLayout}
+            onFocus={prefetchLayout}
+            title="Edit this graph"
+            data-testid="nb-btn-edit"
+          >
             Edit this graph
           </Button>
         )}
@@ -394,6 +411,8 @@ export default function GraphToolbar(props: GraphToolbarProps) {
         >
           ⋯
         </Button>
+        {/* Panel toggles (order 50 and up, Inspector 90) after the ⋯ menu. */}
+        <Slot name="toolbarRight" minOrder={50} />
       </div>
 
       {menuAnchor && <OverflowMenu anchor={menuAnchor} items={menuItems} onClose={() => setMenuAnchor(null)} />}

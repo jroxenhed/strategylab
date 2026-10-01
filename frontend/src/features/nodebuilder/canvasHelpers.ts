@@ -119,10 +119,12 @@ export function planDeletion(
 export function dragStopMoves(
   primary: FlowNodeLike | null | undefined,
   dragged: readonly FlowNodeLike[] | null | undefined,
+  /** Graph (absolute) position of a React Flow node (EA-1); default: its own position. */
+  toGraph: (n: FlowNodeLike) => [number, number] = n => [n.position.x, n.position.y],
 ): Array<{ id: string; position: [number, number] }> {
   const out = new Map<string, [number, number]>()
-  for (const n of dragged ?? []) out.set(n.id, [n.position.x, n.position.y])
-  if (primary && !out.has(primary.id)) out.set(primary.id, [primary.position.x, primary.position.y])
+  for (const n of dragged ?? []) out.set(n.id, toGraph(n))
+  if (primary && !out.has(primary.id)) out.set(primary.id, toGraph(primary))
   return Array.from(out, ([id, position]) => ({ id, position }))
 }
 
@@ -213,6 +215,20 @@ export function mergeLocalNodes<T extends FlowNodeLike>(curr: T[], next: T[]): T
 // ---------------------------------------------------------------------------
 
 /** True when the key press belongs to a text field, select or editable element. */
+/**
+ * True when a pointer release landed on empty canvas for wire drops (UX-02):
+ * the pane itself, or the empty inside of a network box or sticky note
+ * (they are React Flow nodes over the pane, and boxes are drawn around node
+ * groups, so most drops land on one). A port, a graph node or a text field
+ * inside them is not empty.
+ */
+export function isEmptyCanvasTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false
+  if (target.classList.contains('react-flow__pane')) return true
+  if (isTypingTarget(target) || target.closest('.react-flow__handle')) return false
+  return target.closest('.react-flow__node-nbBox, .react-flow__node-nbNote') != null
+}
+
 export function isTypingTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null
   if (!el || typeof el.tagName !== 'string') return false

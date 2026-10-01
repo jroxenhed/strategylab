@@ -175,7 +175,19 @@ export function renameNode<G extends PathGraph>(graph: G, nodeId: string, newNam
 
 // Points stored path strings at a renamed node's new path. Nothing stores
 // paths yet; W6 adds promoted-param targets and W7 adds ch() strings, and
-// both get rewritten here (including paths under oldPath).
-export function rewritePathRefs<G extends PathGraph>(graph: G, _oldPath: string, _newPath: string): G {
+// both get rewritten here (including paths under oldPath). `onlyNodes`
+// limits the rewrite to refs stored on those nodes: a paste renames the
+// pasted copies, and only refs inside the pasted set follow (FC-9); refs
+// elsewhere still mean the originals.
+export function rewritePathRefs<G extends PathGraph>(
+  graph: G,
+  oldPath: string,
+  newPath: string,
+  onlyNodes?: ReadonlySet<string>,
+): G {
+  // Nothing to rewrite until W6/W7 store paths.
+  void oldPath
+  void newPath
+  void onlyNodes
   return graph
 }

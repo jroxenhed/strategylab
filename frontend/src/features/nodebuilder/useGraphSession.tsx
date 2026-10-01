@@ -90,6 +90,16 @@ interface DraftPrompt {
 
 const st = () => useNodeBuilderStore.getState()
 
+/**
+ * The graph description has one source: `graph.meta.description`, edited in
+ * the Inspector legend (undoable, saved with the graph). A save mirrors it
+ * into the server envelope's `description`, which the Graph Browser shows.
+ */
+function graphDescription(g: Graph): string {
+  const d = g.meta?.description
+  return typeof d === 'string' ? d : ''
+}
+
 function editable(g: Graph): Graph {
   return g.readOnly ? { ...g, readOnly: false } : g
 }
@@ -346,7 +356,8 @@ export function useGraphSession(): GraphSession {
     const oldId = s.graphMeta?.id ?? null
     let env: GraphEnvelope
     try {
-      env = await createGraph({ name, graph: sent })
+      const description = graphDescription(sent)
+      env = await createGraph(description ? { name, description, graph: sent } : { name, graph: sent })
     } catch (e) {
       return isNameTaken(e) ? nameTakenText(name) : graphErrorDetail(e)
     }
@@ -396,7 +407,7 @@ export function useGraphSession(): GraphSession {
     const sent = s.graph
     setBusy('saving')
     try {
-      const env = await saveGraph(meta.id, { rev: meta.rev, graph: sent })
+      const env = await saveGraph(meta.id, { rev: meta.rev, description: graphDescription(sent), graph: sent })
       finishSave(metaOf(env), sent)
       keepDraftInStep(meta.id, sent)
       setLastGraphId(env.id)

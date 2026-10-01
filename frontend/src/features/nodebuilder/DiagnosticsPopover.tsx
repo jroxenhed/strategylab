@@ -5,9 +5,10 @@
  * Rows are grouped by node (the node's name; `Graph` for problems with no
  * node). A row click on a problem about a wire (`port` set, or
  * `dangling_wire`) selects that wire (focusDiagnosticWire, W2); any other row
- * hands the node id to `onSelectNode`, which selects it (framing it waits for
- * the W3 F command); graph-level rows do nothing. Arrow keys move between
- * rows; Esc closes (the shell).
+ * hands the node id to `onSelectNode`, which selects it, and then frames the
+ * node when it is not fully on screen (F behavior, W3 3.D), and opens the
+ * Inspector with Diagnostics expanded and the param flashed (S05, A3);
+ * graph-level rows do nothing. Arrow keys move between rows; Esc closes (the shell).
  */
 
 import { useMemo, useRef } from 'react'
@@ -15,6 +16,8 @@ import type { KeyboardEvent } from 'react'
 import { Popover } from './ui/Popover'
 import { useNodeBuilderStore } from './store'
 import { focusDiagnosticWire, useDiagnostics } from './useDiagnostics'
+import { frameNode } from './viewOps'
+import { openInspectorDiagnostics } from './inspector/state'
 import type { Diagnostic } from '../../api/nodebuilderValidate'
 import './diagnostics.css'
 
@@ -123,7 +126,12 @@ export function DiagnosticsPopover({ open, anchorEl, onClose, onSelectNode }: Di
                   data-nb-diag-row=""
                   data-testid={`nb-diag-row-${index}`}
                   className={g.nodeId ? 'nb-diag-pop__row' : 'nb-diag-pop__row nb-diag-pop__row--static'}
-                  onClick={() => { if (focusDiagnosticWire(d)) return; if (g.nodeId) onSelectNode(g.nodeId) }}
+                  onClick={() => {
+                    if (focusDiagnosticWire(d) || !g.nodeId) return
+                    onSelectNode(g.nodeId)
+                    frameNode(g.nodeId, { onlyIfOffscreen: true })
+                    openInspectorDiagnostics(g.nodeId, d.param)
+                  }}
                 >
                   <span className={`nb-diag-pop__dot nb-diag-pop__dot--${d.severity}`} aria-hidden="true" />
                   <span className="nb-diag-pop__msg">{d.message}</span>

@@ -49,6 +49,7 @@ import { useNodeBuilderStore } from '../store'
 import { useParamDiagnostic, setLocalParamInvalid, LOCAL_NUMBER_MESSAGE } from '../useDiagnostics'
 import type { ParamSpec, ParamTypeSpec } from '../catalog'
 import { paramSpecsOf } from '../streamLabels'
+import { openParamMenu } from '../contextMenuModel'
 import { unitLabel } from './paramFormat'
 import { AttrPicker } from './AttrPicker'
 import { TimeRangeInput } from './TimeRangeInput'
@@ -193,6 +194,17 @@ export interface ParamRowProps {
   typeSpec?: ParamTypeSpec
   /** The catalog spec; it picks the stream widgets. */
   spec?: ParamSpec
+  /**
+   * 'inspector' (S14): the same row drawn in the Inspector. It gets its own
+   * test id and message id (`nb-param-inspector-<nodeId>-<param>`), so the
+   * node row and the Inspector row never share one while both are on screen.
+   */
+  variant?: 'node' | 'inspector'
+}
+
+/** The test id of a param field; the Inspector variant has its own. */
+function paramTestId(nodeId: string, paramKey: string, variant: ParamRowProps['variant']): string {
+  return variant === 'inspector' ? `nb-param-inspector-${nodeId}-${paramKey}` : `nb-param-${nodeId}-${paramKey}`
 }
 
 export function ParamRow(props: ParamRowProps) {
@@ -214,6 +226,7 @@ function StreamParamRow({
   value,
   spec,
   widget,
+  variant,
 }: ParamRowProps & { spec: ParamSpec; widget: StreamWidget }) {
   const readOnly = useNodeBuilderStore(s => s.graph?.readOnly ?? false)
   let cell: React.ReactNode
@@ -230,7 +243,12 @@ function StreamParamRow({
   // A div, not a label: a label would forward a click on its text to the
   // first button inside it and open the picker by surprise.
   return (
-    <div style={streamRowStyle} data-testid={`nb-param-${nodeId}-${paramKey}`} data-param-kind={widget}>
+    <div
+      style={streamRowStyle}
+      data-testid={paramTestId(nodeId, paramKey, variant)}
+      data-param-kind={widget}
+      onContextMenu={e => openParamMenu(e, nodeId, paramKey)}
+    >
       <span style={{ flexShrink: 0 }}>{spec.label || paramKey}</span>
       {cell}
     </div>
@@ -242,6 +260,7 @@ function ValueParamRow({
   paramKey,
   value,
   typeSpec,
+  variant,
 }: ParamRowProps) {
   const updateNodeParams = useNodeBuilderStore(s => s.updateNodeParams)
   const resolvedType = typeSpec?.type ?? (typeof value === 'number' ? 'number' : 'string')
@@ -273,7 +292,7 @@ function ValueParamRow({
   const serverDiag = useParamDiagnostic(nodeId, paramKey)
   const localInvalid = isNumber && !isSelect && isUnparseableNumber(draft)
   const invalidMessage = localInvalid ? LOCAL_NUMBER_MESSAGE : serverDiag?.message ?? null
-  const testId = `nb-param-${nodeId}-${paramKey}`
+  const testId = paramTestId(nodeId, paramKey, variant)
   const messageId = `${testId}-msg`
 
   // Report the local problem to the shared store (no request), and take it
@@ -321,7 +340,7 @@ function ValueParamRow({
     // A select has no typing to protect, so it always shows the store value.
     return (
       <>
-      <label style={labelStyle}>
+      <label style={labelStyle} onContextMenu={e => openParamMenu(e, nodeId, paramKey)}>
         <span style={{ flexShrink: 0 }}>{paramKey}</span>
         <select
           value={initial}
@@ -347,7 +366,7 @@ function ValueParamRow({
 
   return (
     <>
-    <label style={labelStyle}>
+    <label style={labelStyle} onContextMenu={e => openParamMenu(e, nodeId, paramKey)}>
       <span style={{ flexShrink: 0 }}>{paramKey}</span>
       <input
         type="text"

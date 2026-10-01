@@ -3,6 +3,9 @@
  * Cmd+Y redo. They act on the graph history in the store, not on the
  * browser's own undo, and never fire while typing in a text field (the
  * dispatcher skips those), so a param field keeps its native Cmd+Z.
+ *
+ * Loaded by the commands/ auto-registry (index.ts), which registers the
+ * exported `commands`.
  */
 
 import type { Command } from './index'
@@ -14,7 +17,7 @@ function editing(): boolean {
   return g != null && !g.readOnly
 }
 
-export const historyCommands: Command[] = [
+export const commands: Command[] = [
   {
     id: 'history.undo',
     label: 'Undo',

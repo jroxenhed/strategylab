@@ -7,7 +7,7 @@
  */
 
 import type { Graph, GraphNode, GraphWire, ParamValue } from '../../api/nodebuilder'
-import { canWire } from './catalog'
+import { NODE_CATALOG, canWire, hasOutputPort, type NodeCatalogEntry } from './catalog'
 import { sanitizeName as pathsSanitizeName, siblingNames, uniqueName as pathsUniqueName } from './paths'
 
 // ---------------------------------------------------------------------------
@@ -294,11 +294,36 @@ export function removeNodes(graph: Graph, nodeIds: readonly string[]): Graph {
   if (doomed.size === 0) return graph
   const nodes = { ...graph.nodes }
   for (const id of doomed) delete nodes[id]
-  return {
+  return mapBoxMembers({
     ...graph,
     nodes,
     wires: graph.wires.filter(w => !doomed.has(w.from) && !doomed.has(w.to)),
-  }
+  }, id => (doomed.has(id) ? null : id))
+}
+
+/**
+ * Rewrite every network box's member list (FC-2): `fn` maps a member id to
+ * its new id, or null to drop it. Boxes whose members do not change stay
+ * the same objects, and the graph is returned as is when none changes, so
+ * box membership never points at a node that is gone.
+ */
+export function mapBoxMembers(graph: Graph, fn: (id: string) => string | null): Graph {
+  const boxes = graph.annotations?.boxes
+  if (!boxes || boxes.length === 0) return graph
+  let changed = false
+  const next = boxes.map(b => {
+    let out: string[] | null = null
+    b.members.forEach((m, i) => {
+      const to = fn(m)
+      if (to === m && !out) return
+      out ??= b.members.slice(0, i)
+      if (to !== null && !out.includes(to)) out.push(to)
+    })
+    if (!out) return b
+    changed = true
+    return { ...b, members: out }
+  })
+  return changed ? { ...graph, annotations: { ...graph.annotations!, boxes: next } } : graph
 }
 
 /**
@@ -428,4 +453,134 @@ export function spliceNodeOntoWire(
     ...graph,
     wires: [...withoutWire, firstLeg, secondLeg],
   }
+}
+
+// ---------------------------------------------------------------------------
+// Flags (spec S16): display and bypass
+// ---------------------------------------------------------------------------
+
+/** The two Houdini flags a node carries. */
+export type NodeFlag = 'display' | 'bypass'
+
+// Looked up per call by the flag checks; the catalog is static.
+const ENTRY_BY_NAME: ReadonlyMap<string, NodeCatalogEntry> = new Map(NODE_CATALOG.map(e => [e.name, e]))
+
+/**
+ * Why `flag` cannot be turned on for a node of this type, or null when it
+ * can (foundation 4.6). Only nodes with an output have a display flag
+ * (not terminals, not Settings nodes). Every node but terminals and
+ * Tickers can be bypassed. A type missing from the catalog gets neither:
+ * the compiler does not know it, bypassed or not (S13).
+ */
+export function flagProblemForType(nodeType: string | undefined, flag: NodeFlag): string | null {
+  const entry = nodeType ? ENTRY_BY_NAME.get(nodeType) : undefined
+  if (!entry) {
+    return flag === 'display' ? 'Unsupported nodes have no display flag' : 'Unsupported nodes cannot be bypassed'
+  }
+  if (flag === 'display') {
+    if (entry.cat === 'output') return 'Terminals have no display flag'
+    if (!hasOutputPort(nodeType)) return 'Settings nodes have no display flag'
+    return null
+  }
+  if (entry.cat === 'output') return 'Terminals cannot be bypassed'
+  // Same rule as the backend's `bypassable=False` (nodes_data.py, nodes_terminals.py).
+  if (entry.cat === 'ticker') return 'Tickers cannot be bypassed'
+  return null
+}
+
+/** Same as flagProblemForType, for a node of the graph. A missing node: "Select a node first". */
+export function flagProblem(graph: Graph, nodeId: string, flag: NodeFlag): string | null {
+  const node = graph.nodes[nodeId]
+  if (!node) return 'Select a node first'
+  return flagProblemForType(node.type, flag)
+}
+
+/**
+ * Set one flag on one node (S16). Turning display on clears it on every
+ * other node of the same network (same `parent`) in the same step: there
+ * is one display node per network. Turning a flag on for a node that may
+ * not have it (flagProblem) changes nothing; turning a flag off always
+ * works. Returns the same graph when nothing changes, so the store records
+ * no undo step (clicking the lit display dot again is a no-op).
+ */
+export function setFlag(graph: Graph, nodeId: string, flag: NodeFlag, value: boolean): Graph {
+  return setFlags(graph, [nodeId], flag, value)
+}
+
+/**
+ * Set one flag on several nodes in one step (B on a selection). Nodes that
+ * may not carry the flag are skipped. For display only the last allowed id
+ * of each network keeps the flag.
+ */
+export function setFlags(graph: Graph, nodeIds: readonly string[], flag: NodeFlag, value: boolean): Graph {
+  assertEditable(graph, 'setFlag')
+  // Copied on the first change only, so "no change" returns the same graph.
+  let nodes = graph.nodes
+  let changed = false
+  const put = (n: GraphNode, v: boolean) => {
+    if (n[flag] === v) return
+    if (!changed) { nodes = { ...graph.nodes }; changed = true }
+    nodes[n.id] = { ...n, [flag]: v }
+  }
+  for (const id of nodeIds) {
+    const node = nodes[id]
+    if (!node) continue
+    if (value && flagProblemForType(node.type, flag) != null) continue
+    if (flag === 'display' && value) {
+      const parent = node.parent ?? null
+      for (const other of Object.values(nodes)) {
+        if (other.id !== id && other.display && (other.parent ?? null) === parent) put(other, false)
+      }
+    }
+    put(node, value)
+  }
+  return changed ? { ...graph, nodes } : graph
+}
+
+// ---------------------------------------------------------------------------
+// Replace a node (spec S13 "Replace with…")
+// ---------------------------------------------------------------------------
+
+/**
+ * Put node `newId` (already in the graph) where `oldId` was, then delete
+ * `oldId`: the new node takes the old one's position and network, and
+ * every wire of the old node that fits moves over. Inputs keep their port
+ * (`in0`, `in1`, ...) while the new type has that port; the output moves
+ * when the new type has one. Wires that do not fit, or would close a
+ * cycle, are dropped. The display flag moves over when the new type can
+ * carry it. One step, so the store records one undo entry.
+ */
+export function replaceNode(graph: Graph, oldId: string, newId: string): Graph {
+  assertEditable(graph, 'replaceNode')
+  const old = graph.nodes[oldId]
+  const fresh = graph.nodes[newId]
+  if (!old || !fresh || oldId === newId) return graph
+  const entry = ENTRY_BY_NAME.get(fresh.type)
+  const maxIn = entry?.inputs ? (entry.inputs.dynamic ? Infinity : Math.max(entry.inputs.max, entry.inputs.ports.length)) : (entry?.defaults.ins ?? 1)
+  const placed: GraphNode = {
+    ...fresh,
+    position: old.position,
+    parent: old.parent ?? null,
+    display: old.display && flagProblemForType(fresh.type, 'display') == null,
+  }
+  // The replacement takes the old node's place in its network boxes too (FC-2).
+  const withMembers = mapBoxMembers({ ...graph, nodes: { ...graph.nodes, [newId]: placed } }, m => (m === oldId ? newId : m))
+  let working: Graph = removeNodes(withMembers, [oldId])
+  for (const w of graph.wires) {
+    if (w.from === newId || w.to === newId) continue
+    let moved: GraphWire | null = null
+    if (w.to === oldId) {
+      const k = /^in(\d+)$/.exec(w.to_port)
+      if (!k || Number(k[1]) >= maxIn) continue
+      if (!canWire(working.nodes[w.from]?.type, fresh.type)) continue
+      if (working.wires.some(x => x.to === newId && x.to_port === w.to_port)) continue
+      moved = { ...w, to: newId }
+    } else if (w.from === oldId) {
+      if (!canWire(fresh.type, working.nodes[w.to]?.type)) continue
+      moved = { ...w, from: newId }
+    }
+    if (!moved || wouldCreateCycle(working, moved.from, moved.to)) continue
+    working = { ...working, wires: [...working.wires, moved] }
+  }
+  return working
 }

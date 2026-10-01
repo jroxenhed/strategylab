@@ -16,6 +16,16 @@
  * is hovered), selected, and the diagnostic stroke when a diagnostic is
  * about this wire.
  *
+ * Wire moves (spec S23, plugins/wireOps.ts): `spliceHot` draws the wire hot
+ * while a dragged node rests on it (label shown), `flash` draws it red for a
+ * moment when a splice or a wire-end drop is refused.
+ *
+ * Long-wire fade (foundation 5.3): a wire longer than 600 flow units
+ * (straight line) is stroked with its own gradient, full at both ends and
+ * 35% in the middle, in the wire's colour. Hovered, selected and hot wires
+ * keep the plain stroke (wireOps.css). The gradient lives in the wire's own
+ * `<defs>`, keyed by wire id.
+ *
  * Hovering the wire or its label for 300 ms shows the stream popover: every
  * attribute that flows on the wire, grouped by writer, with the ones the
  * consumer reads ringed. It follows the pointer and takes no pointer events.
@@ -24,10 +34,12 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import type { Edge, EdgeProps } from '@xyflow/react'
 import { pointOnWire, wirePath } from '../streamLabels'
 import { StreamPopover, streamPopoverPosition } from './StreamPopover'
 import '../stream.css'
+import './wireOps.css'
 
 /** What Canvas.tsx hands each wire. */
 export interface AttrEdgeData extends Record<string, unknown> {
@@ -52,12 +64,24 @@ export interface AttrEdgeData extends Record<string, unknown> {
   fromName: string
   toName: string
   portLabel: string
+  /** A dragged node rests on this wire: dropping it splices (plugins/wireOps.ts). */
+  spliceHot?: boolean
+  /** Briefly red: a refused splice or a wire end dropped on empty canvas. */
+  flash?: boolean
 }
 
 export type AttrFlowEdge = Edge<AttrEdgeData, 'attr'>
 
 /** How long the pointer rests on a wire before the stream popover shows. */
 export const STREAM_POPOVER_DELAY_MS = 300
+
+/** Wires longer than this (flow units, straight line) fade in the middle. */
+export const LONG_WIRE = 600
+
+/** The id of a long wire's gradient. */
+function fadeId(wireId: string): string {
+  return `nb-fade-${wireId}`
+}
 
 const PLACEHOLDER_TIP = 'This node does not read anything yet. Pick an attribute on the node.'
 
@@ -88,12 +112,21 @@ export default function AttrEdge({
   const placeholder = data?.placeholder ?? false
   const t = data?.t ?? 0.5
   const at = pointOnWire(sourceX, sourceY, targetX, targetY, t)
-  const restHidden = !selected && !!data && (data.hidden !== null || data.lowZoom)
+  const restHidden = !selected && !data?.spliceHot && !!data && (data.hidden !== null || data.lowZoom)
+
+  const hot = !!data?.hot || !!data?.spliceHot
+  // The fade: long wires at rest only.
+  const fade = !selected && !hot && !data?.flash
+    && Math.hypot(targetX - sourceX, targetY - sourceY) > LONG_WIRE
+  const fadeUrl = `url(#${fadeId(id)})`
+  const fadeColor = data?.diag ? 'var(--nb-wire-invalid)' : 'var(--nb-wire)'
 
   let cls = 'nb-edge'
   if (selected) cls += ' nb-edge--selected'
-  if (data?.hot) cls += ' nb-edge--hot'
+  if (hot) cls += ' nb-edge--hot'
   if (data?.diag) cls += ' nb-edge--diag'
+  if (data?.flash) cls += ' nb-edge--flash'
+  if (fade) cls += ' nb-edge--fade'
 
   let labelCls = 'nb-edge__label'
   if (placeholder) labelCls += ' nb-edge__label--placeholder'
@@ -137,8 +170,26 @@ export default function AttrEdge({
       onMouseEnter={enter}
       onMouseMove={move}
       onMouseLeave={leave}
+      style={fade ? ({ '--nb-fade-stroke': fadeUrl } as CSSProperties) : undefined}
     >
-      <path className="nb-edge__path" d={path} />
+      {fade && (
+        <defs>
+          <linearGradient
+            id={fadeId(id)}
+            gradientUnits="userSpaceOnUse"
+            x1={sourceX}
+            y1={sourceY}
+            x2={targetX}
+            y2={targetY}
+          >
+            <stop offset="0" style={{ stopColor: fadeColor }} />
+            <stop offset="0.3" style={{ stopColor: fadeColor, stopOpacity: 0.35 }} />
+            <stop offset="0.7" style={{ stopColor: fadeColor, stopOpacity: 0.35 }} />
+            <stop offset="1" style={{ stopColor: fadeColor }} />
+          </linearGradient>
+        </defs>
+      )}
+      <path className="nb-edge__path" d={path} stroke={fade ? fadeUrl : undefined} />
       <path
         className="react-flow__edge-interaction"
         d={path}

@@ -16,7 +16,7 @@
  */
 
 import { useEffect, useRef, type RefObject } from 'react'
-import { chordOf, findCommand, type CommandScope } from './index'
+import { chordOf, commandCtx, findCommands, type CommandScope } from './index'
 import { belongsToBuilder, isTypingTarget } from '../canvasHelpers'
 import { isDialogOpen } from '../ui/dialogStack'
 
@@ -36,20 +36,23 @@ export function handleGlobalKey(e: KeyboardEvent, root: Element | null, bodyActi
     block()
     return false
   }
-  const cmd = findCommand(chord, GLOBAL_SCOPES)
   const typing = isTypingTarget(e.target)
-  if (!cmd || (typing && !cmd.inFields)) {
+  const cmds = findCommands(chord, GLOBAL_SCOPES).filter(c => !typing || c.inFields)
+  if (cmds.length === 0) {
     block()
     return false
   }
-  // Commit the field first (ParamRow commits on blur), then run.
+  // Commit the field first (ParamRow commits on blur), then run. The newest
+  // command runs first; one that returns false hands the key to the next.
   if (typing) (e.target as HTMLElement).blur()
-  if (cmd.run(e) === false) {
-    block()
-    return false
+  const ctx = commandCtx(e)
+  for (const cmd of cmds) {
+    if (cmd.run(ctx) === false) continue
+    e.preventDefault()
+    return true
   }
-  e.preventDefault()
-  return true
+  block()
+  return false
 }
 
 /** Listen for global commands while the builder whose root is `rootRef` is mounted. */

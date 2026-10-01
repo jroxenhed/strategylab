@@ -25,6 +25,20 @@
  * chips are left out. Over 6 chips, the first 5 show and a `+N` chip opens
  * the full list.
  *
+ * Flags (spec S16, foundation 4.6 and 4.9): in edit mode a column of two
+ * dots hangs off the right edge: display (blue) on nodes with an output,
+ * bypass (amber) on every node but Tickers and terminals. A click changes
+ * that one node's flag as one undo step and never moves the selection.
+ * The dots show when lit, on hover or while selected (CSS only). A display
+ * node gets a blue inner outline; a bypassed node a second amber bar, a dim
+ * body and the type label `bypassed`.
+ *
+ * Unsupported nodes (spec S13): a node the compiler cannot run draws the
+ * UnsupportedNode card instead (see nodes/unsupported.ts for the rule).
+ *
+ * Port hover text (S08) shows after 400 ms through nodes/hoverTip.ts,
+ * written straight to the page, so hovering never renders React.
+ *
  * All color references use CSS custom properties from tokens.css
  * scoped to .nodebuilder-root.
  */
@@ -55,10 +69,17 @@ import {
   type WriteSlot,
 } from '../streamLabels'
 import { Popover } from '../ui/Popover'
+import { clickBypassFlag, clickDisplayFlag } from '../commands/flags'
+import { flagProblemForType } from '../operations'
 import { DiagnosticBadge } from './DiagnosticBadge'
+import { endHoverTip, startHoverTip } from './hoverTip'
+import { requestRename } from '../inspector/state'
 import { ParamRows } from './ParamRow'
+import { UnsupportedNode } from './UnsupportedNode'
+import { isUnsupportedNode } from './unsupported'
 import { WriteChip } from './WriteChip'
 import '../stream.css'
+import './node.css'
 
 // ---------------------------------------------------------------------------
 // Attr pill (a plain read chip)
@@ -81,6 +102,21 @@ export function AttrPill({ label, write = false, catColor }: PillProps) {
   return <span className="nb-chip">{label}</span>
 }
 
+/**
+ * Double-click on a node's header: select that node alone and start the
+ * inline rename (the Inspector's name field, same as F2). Unsupported nodes
+ * draw UnsupportedNode instead of this header, so they never rename (S13).
+ */
+function renameFromHeader(e: React.MouseEvent, nodeId: string): void {
+  e.stopPropagation()
+  const s = useNodeBuilderStore.getState()
+  if (!s.graph || s.graph.readOnly || !(nodeId in s.graph.nodes)) return
+  if (s.selectedNodeIds.length !== 1 || s.selectedNodeIds[0] !== nodeId) {
+    s.setSelection({ nodeIds: [nodeId], primary: nodeId })
+  }
+  requestRename(nodeId)
+}
+
 // ---------------------------------------------------------------------------
 // BaseNode props
 // ---------------------------------------------------------------------------
@@ -90,9 +126,19 @@ export interface BaseNodeData extends Record<string, unknown> {
   params: Record<string, unknown>
   display: boolean
   bypass: boolean
+  /** The node's name (graph `node.name`); shown as the title's hover text. */
+  name?: string
+  /** The node's path, e.g. `/rsi_fast`. */
   nodePath: string
   /** True when the canvas is in editable mode. */
   editable?: boolean
+  /**
+   * The whole graph node (EA-6). A renderer that needs a node field the
+   * list above does not copy (parent W5, promoted/locked W6, code and
+   * spare params W7) reads it here: in the read-only view the graph is not
+   * in the store. The card data is rebuilt whenever the node object changes.
+   */
+  node?: import('../../../api/nodebuilder').GraphNode
 }
 
 interface BaseNodeProps {
@@ -106,9 +152,9 @@ interface BaseNodeProps {
   reads?: readonly string[]
   /** Fixed write attributes, for node types with no `write` params. */
   writes?: readonly string[]
-  /** Is this node display-flagged? (blue halo). */
+  /** Is this node display-flagged? (blue inner outline, lit blue dot). */
   display?: boolean
-  /** Is this node bypassed? (dim + amber dot). */
+  /** Is this node bypassed? (amber bar, dim body, lit amber dot). */
   bypass?: boolean
   /** Width of the node in px. */
   width?: number
@@ -206,19 +252,24 @@ export function BaseNode({
     return m
   }, [diagnostics])
 
-  // The hover text needs the latest streams, so it is written straight to
-  // the element when the pointer arrives (no React render on hover).
-  const setPortTitle = (portId: string, label: string) => (e: React.PointerEvent<HTMLDivElement>) => {
+  // The hover text needs the latest streams, so it is worked out when the
+  // pointer arrives and shown by hoverTip (no React render on hover).
+  const showPortTip = (portId: string, label: string) => (e: React.PointerEvent<HTMLDivElement>) => {
     const error = portErrors.get(portId)
-    if (error) { e.currentTarget.title = error; return }
+    if (error) { startHoverTip(e.currentTarget, error, 'above'); return }
     const from = sourceByPort.get(portId)
     let readsHere: string[] = []
     if (from && nodeId) {
       const graph = { nodes: { [nodeId]: { ...node, id: nodeId } as GraphNode }, wires: [] }
       readsHere = readsThroughWire({ from, to: nodeId }, graph, getStreams())
     }
-    e.currentTarget.title = inputPortTitle(label, readsHere)
+    startHoverTip(e.currentTarget, inputPortTitle(label, readsHere), 'above')
   }
+
+  // ── Unsupported node (S13) ───────────────────────────────────────────────
+  // Every hook above runs either way, so the hook order never changes.
+  const connectedPorts = useMemo(() => [...sourceByPort.keys()], [sourceByPort])
+  const unsupported = !!nodeId && isUnsupportedNode(nodeType, connectedPorts.length > 0, diagnostics)
 
   // ── Chips ────────────────────────────────────────────────────────────────
   const hasWriteParams = writeParamsOf(nodeType).length > 0
@@ -237,8 +288,9 @@ export function BaseNode({
   ]
   const folded = chips.length > MAX_CHIPS
   const shownChips = folded ? chips.slice(0, MAX_CHIPS - 1) : chips
-  const [moreOpen, setMoreOpen] = useState(false)
-  const moreRef = useRef<HTMLButtonElement>(null)
+  // The `+N` button the full chip list hangs from, while it is open.
+  const [moreAnchor, setMoreAnchor] = useState<HTMLButtonElement | null>(null)
+  const moreOpen = moreAnchor != null
 
   const renderChip = (c: Chip, i: number) => c.kind === 'read'
     ? <span key={`r-${i}-${c.name}`} className="nb-chip">{c.name}</span>
@@ -261,11 +313,20 @@ export function BaseNode({
     borderRadius: 'var(--nb-radius-node)',
     position: 'relative',
     overflow: 'hidden',
-    opacity: bypass ? 0.55 : 1,
-    boxShadow: display
-      ? `0 0 0 1px var(--nb-flag-display), 0 0 16px var(--nb-flag-display)`
-      : 'none',
+    // Display: a blue inner outline (foundation 4.9). With selection, the
+    // selection ring shows outside it.
+    outline: display ? '1px solid var(--nb-flag-display)' : undefined,
+    outlineOffset: display ? -1 : undefined,
   }
+
+  // Which flag dots this node offers (foundation 4.6). Read-only graphs draw none.
+  const showDisplayDot = editable && !!nodeId && hasOutput && flagProblemForType(nodeType, 'display') == null
+  // A stray bypass on a node that cannot have it still shows, so it can be cleared.
+  const showBypassDot = editable && !!nodeId && (bypass || flagProblemForType(nodeType, 'bypass') == null)
+  // A flag click must not start a drag or change the selection.
+  const stopPointer = (e: React.SyntheticEvent) => { e.stopPropagation(); endHoverTip() }
+  const flagTip = (text: string) => (e: React.PointerEvent<HTMLButtonElement>) =>
+    startHoverTip(e.currentTarget, text, 'right')
 
   // A badge click goes where the node's first problem is: its wire when the
   // problem is about a wire (spec S05), else the node.
@@ -276,6 +337,20 @@ export function BaseNode({
   }
 
   const showAllPortLabels = ports.length >= 2
+
+  if (unsupported && nodeId && nodeType) {
+    return (
+      <UnsupportedNode
+        nodeId={nodeId}
+        nodeType={nodeType}
+        fallbackName={title}
+        params={params}
+        connectedPorts={connectedPorts}
+        diagnostics={diagnostics}
+        editable={editable}
+      />
+    )
+  }
 
   return (
     <>
@@ -297,7 +372,9 @@ export function BaseNode({
             style={{ ...catVars, left }}
             data-testid={nodeId ? `nb-port-${nodeId}-${p.id}` : undefined}
             aria-label={`input ${p.label}`}
-            onPointerEnter={setPortTitle(p.id, p.label)}
+            onPointerEnter={showPortTip(p.id, p.label)}
+            onPointerLeave={endHoverTip}
+            onPointerDown={endHoverTip}
           />
         )
       })}
@@ -323,15 +400,21 @@ export function BaseNode({
           background: catColor,
           borderRadius: '5px 0 0 5px',
         }} />
+        {/* Bypass: a second 3px amber bar right of the stripe */}
+        {bypass && <div className="nb-bypass-bar" data-testid={nodeId ? `nb-bypass-bar-${nodeId}` : undefined} />}
 
-        {/* Header */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          padding: '6px 10px 5px 11px',
-          minHeight: 24,
-        }}>
+        {/* Header. Double-click renames inline (foundation 6.1, UX-07). */}
+        <div
+          data-testid={nodeId ? `nb-node-header-${nodeId}` : undefined}
+          onDoubleClick={editable && nodeId ? e => renameFromHeader(e, nodeId) : undefined}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '6px 10px 5px 11px',
+            minHeight: 24,
+          }}
+        >
           {/* Icon chip */}
           <div style={{
             width: 16,
@@ -365,21 +448,27 @@ export function BaseNode({
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
             lineHeight: '16px',
-          }}>
+          }}
+            title={nodeData?.nodePath ? `${title} · ${nodeData.nodePath}` : undefined}
+            data-testid={nodeId ? `nb-node-title-${nodeId}` : undefined}
+          >
             {title}
           </span>
 
-          {/* Subtitle */}
-          {subtitle && (
-            <span style={{
-              fontFamily: 'var(--nb-font-mono)',
-              fontSize: 10,
-              color: 'var(--nb-text-muted)',
-              whiteSpace: 'nowrap',
-              flexShrink: 0,
-              lineHeight: '16px',
-            }}>
-              {subtitle}
+          {/* Subtitle (the type label). A bypassed node reads `bypassed`. */}
+          {(subtitle || bypass) && (
+            <span
+              data-testid={nodeId ? `nb-node-type-${nodeId}` : undefined}
+              style={{
+                fontFamily: 'var(--nb-font-mono)',
+                fontSize: 10,
+                color: bypass ? 'var(--nb-flag-bypass)' : 'var(--nb-text-muted)',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+                lineHeight: '16px',
+              }}
+            >
+              {bypass ? 'bypassed' : subtitle}
             </span>
           )}
 
@@ -395,13 +484,19 @@ export function BaseNode({
 
         {/* Body — param rows, then chips */}
         {(hasChips || children || readParamValues) && (
-          <div style={{
-            padding: '4px 10px 7px 12px',
-            borderTop: '1px solid var(--nb-border-subtle)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 4,
-          }}>
+          <div
+            className="nb-node-body"
+            data-testid={nodeId ? `nb-node-body-${nodeId}` : undefined}
+            style={{
+              padding: '4px 10px 7px 12px',
+              borderTop: '1px solid var(--nb-border-subtle)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 4,
+              // Bypassed: the body dims, the header keeps full opacity (4.9).
+              opacity: bypass ? 0.45 : undefined,
+            }}
+          >
             {children}
             {readParamValues && nodeId && (
               <ParamRows nodeId={nodeId} params={readParamValues} specs={readParams} />
@@ -414,14 +509,13 @@ export function BaseNode({
                 {shownChips.map(renderChip)}
                 {folded && (
                   <button
-                    ref={moreRef}
                     type="button"
                     className="nb-chip nb-chip--more nodrag"
                     aria-haspopup="dialog"
                     aria-expanded={moreOpen}
                     aria-label={`${chips.length - shownChips.length} more attributes`}
                     onPointerDown={e => e.stopPropagation()}
-                    onClick={() => setMoreOpen(o => !o)}
+                    onClick={e => { const el = e.currentTarget; setMoreAnchor(a => (a ? null : el)) }}
                   >
                     +{chips.length - shownChips.length}
                   </button>
@@ -431,19 +525,45 @@ export function BaseNode({
           </div>
         )}
 
-        {/* Bypass dot — amber, top-right corner */}
-        {bypass && (
-          <div style={{
-            position: 'absolute',
-            top: 5,
-            right: 6,
-            width: 6,
-            height: 6,
-            borderRadius: '50%',
-            background: 'var(--nb-flag-bypass)',
-          }} />
-        )}
       </div>
+
+      {/* Flag dots, outside the right edge (S16). Not tab stops on the canvas. */}
+      {(showDisplayDot || showBypassDot) && nodeId && (
+        <div className="nb-flags nodrag nopan">
+          {showDisplayDot && (
+            <button
+              type="button"
+              tabIndex={-1}
+              className="nb-flag nb-flag--display nodrag nopan"
+              data-testid={`nb-flag-display-${nodeId}`}
+              aria-label="Display flag"
+              aria-pressed={display}
+              onPointerEnter={flagTip(display ? 'Display (D) · already shown' : 'Display (D)')}
+              onPointerLeave={endHoverTip}
+              onPointerDown={stopPointer}
+              onMouseDown={stopPointer}
+              onDoubleClick={stopPointer}
+              onClick={e => { stopPointer(e); clickDisplayFlag(nodeId) }}
+            />
+          )}
+          {showBypassDot && (
+            <button
+              type="button"
+              tabIndex={-1}
+              className="nb-flag nb-flag--bypass nodrag nopan"
+              data-testid={`nb-flag-bypass-${nodeId}`}
+              aria-label="Bypass flag"
+              aria-pressed={bypass}
+              onPointerEnter={flagTip('Bypass (B)')}
+              onPointerLeave={endHoverTip}
+              onPointerDown={stopPointer}
+              onMouseDown={stopPointer}
+              onDoubleClick={stopPointer}
+              onClick={e => { stopPointer(e); clickBypassFlag(nodeId) }}
+            />
+          )}
+        </div>
+      )}
 
       {/* Output port (bottom edge) */}
       {hasOutput && (
@@ -457,13 +577,16 @@ export function BaseNode({
           data-testid={nodeId ? `nb-port-${nodeId}-out` : undefined}
           aria-label="output"
           title={outputPortTitle(writeSlots)}
+          onPointerEnter={e => startHoverTip(e.currentTarget, outputPortTitle(writeSlots), 'below')}
+          onPointerLeave={endHoverTip}
+          onPointerDown={endHoverTip}
         />
       )}
 
       {moreOpen && folded && (
         <Popover
-          anchor={moreRef.current}
-          onClose={() => setMoreOpen(false)}
+          anchor={moreAnchor}
+          onClose={() => setMoreAnchor(null)}
           role="dialog"
           ariaLabel="All attributes"
           width={240}

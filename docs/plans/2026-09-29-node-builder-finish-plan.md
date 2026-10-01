@@ -634,6 +634,14 @@ Semantics must match `signal_engine.py` exactly for every rule condition, includ
 
 ### Wave 3: Houdini editor ergonomics and the Inspector
 
+**Status: done (2026-10-01).** Items 3.0 and 3.A to 3.H are in. A four-reviewer wave found 57 findings; none was a confirmed P0 or P1, and 55 are fixed. Contract changes later waves must use:
+- Graph positions are absolute flow coordinates. React Flow child positions convert through `rfPositionOf` / `graphPositionOf` in `rfMapping.ts` (W5 network frames build on this).
+- A command's `run` receives `{canvas | null, store, event}`, not `CanvasCtx`, because global keys can run with no canvas. Command has `priority`, `menuSlot` and `readOnlyOk`. Command and plugin modules export lists instead of registering at load time.
+- Undo and redo run every reconciler registered with `registerGraphReconciler` (`store/reconcile.ts`). `commit(label, recipe, { coalesce })` and `dropCoalesced` merge bursts (arrow nudge, typing in a note).
+- Inspector sections no longer receive `graph` in `InspectorSectionProps`; they read it from the store (W7 code sections).
+- A `status` store slice holds cook state; W4 changes it to `cooks: { backtest, preview }` (amendment A4).
+- The network is still keyed by path; W6 6.C moves it to an id.
+
 **Goal.** It feels like Houdini's network editor. The Inspector (F272) ships.
 
 **Order.**
@@ -1361,3 +1369,13 @@ Also ask after W2 and after W5: does the graph now beat the rule builder for the
 - **Bool through shift or rolling** writes float 0/1, because write types are static. This is a design choice.
 - **UI polish (W3).** The S13 unsupported-node card, the long-wire fade, wire reconnect and splice, the port tooltip, values in the stream popover, and a notice when a drag from a full port ends on empty canvas.
 - **Daily graphs with long lookbacks** fetch years of bars for recursive indicators. Check IBKR daily history before such a bot runs. W7 adds the `asyncio.wait_for` guard around `cook_graph_bar`.
+
+**Deferred from the Wave 3 review (2026-10-01).** Full notes: `.run/F435/w3/integration.md` and `fix.md` (local only).
+
+- **Design calls for the final UI/UX pass (Fable).** The node name as the visible card title (today the title comes from the type, for example "RSI(14)"); the Inspector param-row styling (24px grid, unit inside the field, native stepping); the selection ring against the display outline; where a per-param "slider shown" toggle lives.
+- **Browser checks NOT-RUN.** The elk layout worker in "Edit this graph" (it falls back to the main thread if the worker fails), double-click on empty canvas, and the param context menu. Check them in the first live-browser pass.
+- **Right-click inside a box** gives only the box menu; the pane rows (Add node, Paste) are not added.
+- **TabMenu filter and mode line** for "Insert node…" (S24); a flash message stands in.
+- **Draft save time and a conflict flag in the status bar** need reactive state from the persistence session.
+- **`meta` on graph nodes** (node notes in the Inspector) needs a backend schema field.
+- **Network keyed by path:** renaming a network drops the view back to root. W6 6.C moves it to an id.

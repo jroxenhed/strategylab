@@ -1,0 +1,116 @@
+/* Right-click menu (spec S19). The shell is the Popover; these override its padding and colour. */
+
+.nodebuilder-root.nb-popover.nb-ctxmenu {
+  width: 232px;
+  padding: 4px 0;
+  overflow: visible;
+  background: var(--nb-bg-panel);
+  user-select: none;
+}
+
+.nodebuilder-root .nb-ctxmenu__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.nodebuilder-root .nb-ctxmenu__item {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+  height: 28px;
+  padding: 0 12px 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--nb-text);
+  font: var(--nb-fw-regular, 400) 12px/16px var(--nb-font-sans);
+  text-align: left;
+  cursor: default;
+  outline: none;
+}
+.nodebuilder-root .nb-ctxmenu__item:hover,
+.nodebuilder-root .nb-ctxmenu__item:focus-visible,
+.nodebuilder-root .nb-ctxmenu__item:focus,
+.nodebuilder-root .nb-ctxmenu__item[aria-expanded='true'] {
+  background: var(--nb-bg-hover);
+}
+.nodebuilder-root .nb-ctxmenu__item--danger { color: var(--nb-error); }
+.nodebuilder-root .nb-ctxmenu__item--disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.nodebuilder-root .nb-ctxmenu__check {
+  flex: 0 0 12px;
+  width: 12px;
+  margin-right: 4px;
+  font-size: 11px;
+  color: var(--nb-text-secondary);
+}
+.nodebuilder-root .nb-ctxmenu__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.nodebuilder-root .nb-ctxmenu__key {
+  flex: 0 0 auto;
+  margin-left: 12px;
+  font: 10px/14px var(--nb-font-mono);
+  color: var(--nb-text-dim);
+  background: none;
+  border: 0;
+  padding: 0;
+}
+.nodebuilder-root .nb-ctxmenu__arrow {
+  flex: 0 0 auto;
+  margin-left: 12px;
+  font-size: 10px;
+  color: var(--nb-text-dim);
+}
+
+.nodebuilder-root .nb-ctxmenu__sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--nb-border);
+}
+
+/* Submenus sit to the right of their row (fixed, so the shell does not clip them). */
+.nodebuilder-root .nb-ctxmenu__sub {
+  position: fixed;
+  z-index: 1;
+  width: 232px;
+  padding: 4px 0;
+  background: var(--nb-bg-panel);
+  border: 1px solid var(--nb-border-strong);
+  border-radius: var(--nb-radius-menu);
+  box-shadow: var(--nb-shadow-popover);
+}
+.nodebuilder-root .nb-ctxmenu__sub--swatches {
+  width: auto;
+  display: grid;
+  grid-template-columns: repeat(4, 14px);
+  gap: 8px;
+  padding: 8px;
+}
+.nodebuilder-root .nb-ctxmenu__swatch {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid var(--nb-border-strong);
+  border-radius: 3px;
+  cursor: default;
+  outline: none;
+}
+.nodebuilder-root .nb-ctxmenu__swatch:hover,
+.nodebuilder-root .nb-ctxmenu__swatch:focus {
+  border-color: var(--nb-text);
+}
+.nodebuilder-root .nb-ctxmenu__swatch--on {
+  box-shadow: 0 0 0 2px var(--nb-border-focus);
+}
+.nodebuilder-root .nb-ctxmenu__swatch[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
