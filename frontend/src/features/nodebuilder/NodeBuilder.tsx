@@ -292,12 +292,14 @@ function NodeBuilder({ request, graphViewActive }: NodeBuilderProps) {
     setRunError(null)
     setLastRun(null)
     try {
-      // Derive ticker/interval/source from the graph's ticker node, falling back to the
-      // loaded request when available.
+      // Derive ticker/interval from the graph's ticker node, falling back to the
+      // loaded request when available. The data source is the sidebar's only
+      // (plan D11): a Ticker has no source param since W2, and a stale one left
+      // on an older graph must not override the sidebar.
       const tickerNode = Object.values(runGraph.nodes).find(n => n.type === 'ticker')
       const ticker = (tickerNode?.params?.symbol as string | undefined) ?? request?.ticker ?? 'AAPL'
       const interval = (tickerNode?.params?.interval as string | undefined) ?? request?.interval ?? '1d'
-      const source = (tickerNode?.params?.source as string | undefined) ?? request?.source ?? 'yahoo'
+      const source = request?.source ?? 'yahoo'
       const start = request?.start ?? '2022-01-01'
       const end = request?.end ?? '2024-01-01'
 

@@ -11,6 +11,13 @@ the graphs folder, library assets, seeds) upgrades a stored graph the same way.
   ``meta`` and ``annotations``.
 - A v2 graph that is missing a node name or a wire port gets it filled in by
   the same rules.  This keeps a half-built graph from the editor loadable.
+- v2 -> v3 (plan D4) moves attribute choice off the wires and onto the
+  nodes.  Every write param gets its final name stored (``@rsi``,
+  ``@rsi_2``...).  Every empty read param that a wire feeds gets the name the
+  v2 engine would have read through that wire's ``attr`` label, so a graph
+  computes exactly what it did.  Then ``wire.attr`` is dropped, as is the
+  Ticker's ``source`` param (the sidebar owns the data source since W2, plan
+  D11).  See ``migrate_v2_to_v3``.
 
 Paths
 -----
@@ -40,7 +47,7 @@ if TYPE_CHECKING:  # pragma: no cover
 # Constants
 # ---------------------------------------------------------------------------
 
-CURRENT_GRAPH_VERSION: int = 2
+CURRENT_GRAPH_VERSION: int = 3
 """The ``_version`` every loaded graph ends up at."""
 
 NAME_RE = re.compile(r"^[a-z_][a-z0-9_]{0,63}$")
@@ -255,18 +262,464 @@ def migrate_graph_data(data: Any) -> Any:
         return data  # let pydantic report the bad field
 
     if version < 2:
-        return migrate_v1_to_v2(data)
-
-    # v2: fill in any names or ports the sender left out.
-    out = dict(data)
-    out["nodes"] = {k: _as_dict(n, by_alias=False) for k, n in (out.get("nodes") or {}).items()}
-    out["wires"] = [_as_dict(w, by_alias=True) for w in (out.get("wires") or [])]
-    _fill_names(out["nodes"])
-    _fill_ports(out["wires"])
-    if "_version" not in out:
-        out["_version"] = out.pop("version")
+        out = migrate_v1_to_v2(data)
     else:
-        out.pop("version", None)
+        # v2 or v3: fill in any names or ports the sender left out.
+        out = dict(data)
+        out["nodes"] = {k: _as_dict(n, by_alias=False) for k, n in (out.get("nodes") or {}).items()}
+        out["wires"] = [_as_dict(w, by_alias=True) for w in (out.get("wires") or [])]
+        _fill_names(out["nodes"])
+        _fill_ports(out["wires"])
+        if "_version" not in out:
+            out["_version"] = out.pop("version")
+        else:
+            out.pop("version", None)
+    if version < 3:
+        out = migrate_v2_to_v3(out)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# v2 -> v3: attribute choice moves from the wires to the nodes (plan D4)
+# ---------------------------------------------------------------------------
+
+
+class _NodeView:
+    """The three fields the kernel's naming helpers read from a node."""
+
+    __slots__ = ("id", "type", "params")
+
+    def __init__(self, node_id: Any, node_type: str, params: dict) -> None:
+        self.id = node_id
+        self.type = node_type
+        self.params = params
+
+
+class _GraphView:
+    """Just enough of a Graph for ``kernel.schema.assign_write_names``."""
+
+    def __init__(self, nodes: dict) -> None:
+        self.nodes = nodes
+
+
+def _topological_ids(nodes: dict, wires: list) -> list:
+    """Node keys in the order ``models.topological_sort`` gives (Kahn's
+    algorithm, ties by id), so write names come out as compile would pick
+    them.  Unlike that function it never fails: wires to unknown nodes are
+    skipped and nodes on a cycle go last, in node order (the model refuses
+    such a graph right after migration anyway).
+    """
+    in_degree = {k: 0 for k in nodes}
+    adj: dict[Any, list] = {k: [] for k in nodes}
+    for wire in wires:
+        if not isinstance(wire, dict):
+            continue
+        src, dst = _hkey(wire.get("from", wire.get("from_path"))), _hkey(_wire_target(wire))
+        if src in adj and dst in in_degree:
+            adj[src].append(dst)
+            in_degree[dst] += 1
+    queue = sorted((k for k, d in in_degree.items() if d == 0), key=str)
+    order: list = []
+    while queue:
+        key = queue.pop(0)
+        order.append(key)
+        for nxt in sorted(adj[key], key=str):
+            in_degree[nxt] -= 1
+            if in_degree[nxt] == 0:
+                queue.append(nxt)
+    placed = set(order)
+    return order + [k for k in nodes if k not in placed]
+
+
+def _wire_port_key(item: tuple) -> tuple:
+    """Sort key for (list index, wire): numbered ports first, in port order,
+    then the rest in list order.  The same order compile reads inputs in."""
+    i, wire = item
+    port = wire.get("to_port")
+    k = int(port[2:]) if isinstance(port, str) and _PORT_RE.match(port) else None
+    return (k is None, k if k is not None else 0, i)
+
+
+# Wave 1's indicator types.  Their one input was optional: an indicator with
+# no wire read the run's bars (W1 nodes.py ``_SOURCE_INPUT``).
+_W1_INDICATORS = ("rsi", "macd", "sma", "ema", "bollinger", "atr")
+
+
+def _wire_from(wire: dict) -> Any:
+    return wire.get("from", wire.get("from_path"))
+
+
+def _registered(node: Any) -> Any:
+    """The NodeType of a node dict, or None."""
+    from nodebuilder.kernel import registry
+
+    if not isinstance(node, dict) or not isinstance(node.get("type"), str):
+        return None
+    return registry.get(node["type"])
+
+
+def _inbound(wires: list) -> dict:
+    out: dict = {}
+    for wire in wires:
+        if isinstance(wire, dict):
+            out.setdefault(_hkey(_wire_target(wire)), []).append(wire)
+    return out
+
+
+def _new_wire_id(wires: list, base: str) -> str:
+    taken = {w.get("id") for w in wires if isinstance(w, dict)}
+    wid, n = base, 1
+    while wid in taken:
+        n += 1
+        wid = f"{base}_{n}"
+    return wid
+
+
+def _number_odd_ports(nodes: dict, wires: list) -> None:
+    """Wave 1 ignored the port id on a node that is not a comparison: a
+    single-input node read its one wire, and AND/OR read every wire, numbered
+    ports first, then the rest in list order.  Give such wires the ``in<k>``
+    port Wave 1 read them on (MD-09).  Comparisons refused a non-numbered
+    port in Wave 1, so they keep it and stay refused.
+    """
+    for target, items in _inbound(wires).items():
+        nt = _registered(nodes.get(target))
+        odd = [w for w in items if not (isinstance(w.get("to_port"), str) and _PORT_RE.match(w["to_port"]))]
+        if nt is None or not odd:
+            continue
+        if nt.inputs.max == 1:
+            if len(items) == 1:
+                items[0]["to_port"] = "in0"
+        elif nt.inputs.dynamic:
+            used = {int(w["to_port"][2:]) for w in items if w not in odd}
+            k = 0
+            for wire in odd:  # list order, after every numbered port
+                while k in used or k <= max(used, default=-1):
+                    k += 1
+                wire["to_port"] = f"in{k}"
+                used.add(k)
+
+
+def _split_wide_logic(nodes: dict, wires: list) -> None:
+    """Wave 1 had no input cap on AND/OR (a 20-rule strategy drew one AND
+    with 20 inputs); the v3 node takes at most ``inputs.max`` (16).  Split a
+    wider node into parts of the same type, each at most that wide, feeding
+    the original, as from_rules does (MD-03).  AND of ANDs and OR of ORs is
+    the same signal; the original keeps its id, so wires out of it stay.
+    A node whose ``terms`` are already named is left alone.
+    """
+    for target, items in list(_inbound(wires).items()):
+        node = nodes.get(target)
+        nt = _registered(node)
+        if nt is None or node.get("type") not in ("and", "or"):
+            continue
+        limit = nt.inputs.max
+        params = node.get("params") if isinstance(node.get("params"), dict) else {}
+        if params.get("terms") or len(items) <= limit:
+            continue
+        ordered = [w for _i, w in sorted(enumerate(items), key=_wire_port_key)]
+        n_parts = -(-len(ordered) // limit)
+        if n_parts > limit:
+            # Over limit * limit (256) inputs: not reachable from the rule
+            # builder (100 rules); left for compile to refuse.
+            continue
+        size = -(-len(ordered) // n_parts)  # even parts, none over the limit
+        groups = [ordered[i:i + size] for i in range(0, len(ordered), size)]
+        node_id = node.get("id", target)
+        siblings = {n.get("name") for n in nodes.values()
+                    if isinstance(n, dict) and n.get("parent") == node.get("parent")
+                    and isinstance(n.get("name"), str)}
+        for k, group in enumerate(groups):
+            part_id = f"{node_id}_part{k}"
+            while part_id in nodes:
+                part_id += "_"
+            name = unique_name(sanitize_name(f"{node.get('name') or 'logic'}_part{k}"), siblings)
+            siblings.add(name)
+            nodes[part_id] = {
+                "id": part_id, "type": node["type"], "name": name, "parent": node.get("parent"),
+                "params": {}, "position": node.get("position", [0.0, 0.0]),
+                "display": False, "bypass": False,
+            }
+            for j, wire in enumerate(group):
+                if "to" in wire or "to_path" not in wire:
+                    wire["to"] = part_id
+                    wire.pop("to_path", None)
+                else:
+                    wire["to_path"] = part_id
+                wire["to_port"] = f"in{j}"
+            wires.append({"id": _new_wire_id(wires, f"{part_id}_out"), "from": part_id,
+                          "to": node_id, "from_port": "out", "to_port": f"in{k}"})
+
+
+def _wire_unwired_indicators(nodes: dict, wires: list) -> None:
+    """Wave 1 computed every indicator from the run's bars, wired or not
+    (an orphan or unwired RSI was RSI of the run's close).  The v3 engine
+    refuses an indicator with no input, so wire each Wave 1 indicator type
+    with no inbound wire from a root Ticker on in0 (LT-2, MD-04).  Before W5
+    every Ticker reads the run's bars, so the values are what Wave 1 used;
+    the read params get their defaults (@close; ATR's @high/@low), which is
+    what Wave 1 read.  With no root Ticker, one is added; with several, the
+    first by id is used.
+    """
+    if not any(isinstance(n, dict) and n.get("type") == "entry" for n in nodes.values()):
+        return  # Wave 1 compiled nothing without an Entry; leave the graph alone
+    has_input = {_hkey(_wire_target(w)) for w in wires if isinstance(w, dict)}
+    todo = [k for k, n in nodes.items()
+            if isinstance(n, dict) and n.get("type") in _W1_INDICATORS
+            and n.get("parent") is None and _hkey(k) not in has_input
+            and _registered(n) is not None]
+    if not todo:
+        return
+    tickers = sorted((k for k, n in nodes.items() if isinstance(n, dict)
+                      and n.get("type") == "ticker" and n.get("parent") is None), key=str)
+    if tickers:
+        ticker = tickers[0]
+    else:
+        ticker = "/ticker" if "/ticker" not in nodes else "/ticker_bars"
+        while ticker in nodes:
+            ticker += "_"
+        siblings = {n.get("name") for n in nodes.values() if isinstance(n, dict)
+                    and n.get("parent") is None and isinstance(n.get("name"), str)}
+        nodes[ticker] = {"id": ticker, "type": "ticker", "name": unique_name("ticker", siblings),
+                         "parent": None, "params": {}, "position": [0.0, 0.0],
+                         "display": False, "bypass": False}
+    ticker_id = nodes[ticker].get("id", ticker)
+    for key in todo:
+        node_id = nodes[key].get("id", key)
+        wires.append({"id": _new_wire_id(wires, f"{ticker_id}-{node_id}-in0"), "from": ticker_id,
+                      "to": node_id, "from_port": "out", "to_port": "in0"})
+
+
+def _note_ticker_source(out: dict, nodes: dict) -> None:
+    """The Ticker ``source`` param is dropped in v3 (plan D11: the sidebar
+    owns the data source).  Keep the old choice as ``meta.legacy_source`` so
+    it is not lost without a trace (MD-07).  Never pushes meta past its key
+    cap."""
+    found = sorted({n["params"]["source"] for n in nodes.values()
+                    if isinstance(n, dict) and n.get("type") == "ticker"
+                    and isinstance(n.get("params"), dict)
+                    and isinstance(n["params"].get("source"), str) and n["params"]["source"]})
+    if not found:
+        return
+    meta = out.get("meta")
+    if meta is None:
+        meta = {}
+    if not isinstance(meta, dict) or "legacy_source" in meta:
+        return
+    from nodebuilder.models import _META_MAX_KEYS
+
+    if len(meta) >= _META_MAX_KEYS:
+        return
+    out["meta"] = {**meta, "legacy_source": ",".join(found)}
+
+
+def migrate_v2_to_v3(data: dict) -> dict:
+    """Upgrade a v2 graph dict (names and ports already filled) to v3.
+
+    v2 picked what a node read through each input wire's ``attr`` label.  v3
+    keeps that choice on the node, in its read params (plan D4).  For each
+    node type the backend knows, in this order:
+
+    0. Wave 1 shapes the v3 engine refuses are rewritten to what Wave 1
+       computed (F435 W2 fix pass; signals pinned by
+       tests/nodebuilder/test_w1_goldens.py against the frozen Wave 1
+       engine): a non-numbered port on a single-input node or AND/OR gets
+       its in<k> (``_number_odd_ports``); an AND/OR over 16 inputs is split
+       into parts (``_split_wide_logic``); a Wave 1 indicator with no input
+       is wired from a root Ticker, added if there is none
+       (``_wire_unwired_indicators``); the Ticker source is kept as
+       ``meta.legacy_source`` (``_note_ticker_source``).
+    1. Every write param gets its final name stored.  A valid name is kept;
+       an empty one gets the catalog default made unique in the graph
+       (``kernel.schema.assign_write_names``, the names compile would use).
+    2. Every empty read param that a wire feeds gets the name the v2 engine
+       read through that wire (``kernel.schema._resolve_reads``):
+       - a label the source type knows (a Ticker field such as ``@high``, a
+         MACD or Bollinger output such as ``@macd_signal``) names that output;
+       - any other label, or no label, reads the source's primary write;
+       - a param of the ``legacy_ignore`` kind (an indicator's ``source``)
+         ignores the label and reads the source's primary write (a Ticker's
+         ``@close``).
+       ``attr_list`` params (logic ``terms``) get one name per wire, in port
+       order.  Params that already name an attribute are left alone.
+    3. Old auto-rendered graphs wired one Ticker into ATR three times (in0,
+       in1, in2).  ATR has one input; the extra wires from the same node
+       added nothing and are dropped.
+    4. ``wire.attr`` is dropped.  It stays only where it could not be turned
+       into a param, so compile still reports what it reported before: a
+       wire into a node type the backend does not know, or a label that
+       names another type's output (``@macd_signal`` out of an RSI).
+    5. The Ticker ``source`` param is dropped (plan D11).
+
+    Never raises on a malformed graph: anything it cannot read is left as it
+    is for the model to report.
+    """
+    from nodebuilder.kernel import registry
+    from nodebuilder.kernel.schema import (
+        AttrInfo, _list_value, _type_ok, assign_write_names, primary_write,
+    )
+    from nodebuilder.kernel.stream import is_attr_name
+    import nodebuilder.trading  # noqa: F401  (registers every node type)
+
+    out = dict(data)
+    # Copies, so the caller's dicts are never changed.
+    nodes: dict = {}
+    for key, node in (out.get("nodes") or {}).items():
+        if isinstance(node, dict):
+            node = dict(node)
+            if isinstance(node.get("params"), dict):
+                node["params"] = dict(node["params"])
+        nodes[key] = node
+    out["nodes"] = nodes
+    wires: list = [dict(w) if isinstance(w, dict) else w for w in (out.get("wires") or [])]
+
+    # 0. Wave 1 shapes the v3 engine would refuse, rewritten to what Wave 1
+    #    computed (F435 W2: a graph that compiled in Wave 1 compiles in Wave 2
+    #    with the same signals).
+    _number_odd_ports(nodes, wires)
+    _split_wide_logic(nodes, wires)
+    _wire_unwired_indicators(nodes, wires)
+    _note_ticker_source(out, nodes)
+
+    # Node views for every node whose type is registered.
+    views: dict = {}
+    for key, node in nodes.items():
+        if not isinstance(node, dict):
+            continue
+        params = node.get("params")
+        if params is None:
+            params = node["params"] = {}
+        if not isinstance(params, dict):
+            continue
+        node_type = node.get("type")
+        if node_type == "ticker":
+            params.pop("source", None)
+        node_id = node.get("id", key)
+        if (isinstance(node_type, str) and isinstance(node_id, str)
+                and registry.get(node_type) is not None):
+            views[_hkey(key)] = _NodeView(node_id, node_type, params)
+
+    # 1. Final write names, stored on the node.
+    order = [views[k] for k in _topological_ids(nodes, wires) if _hkey(k) in views]
+    write_names = assign_write_names(_GraphView(views), order)
+    by_id = {v.id: v for v in views.values()}
+    for view in views.values():
+        for slot, name in write_names.get(view.id, {}).items():
+            view.params[slot] = name
+
+    def _write_dtypes(view: _NodeView, st) -> dict[str, str]:
+        """Name -> dtype of everything *view* writes."""
+        out = {name: dtype for name, dtype in st.fixed_writes}
+        for spec in st.write_params():
+            name = write_names.get(view.id, {}).get(spec.name)
+            if name is not None:
+                out[name] = spec.dtype or "float"
+        return out
+
+    strict_labels = registry.strict_legacy_labels()
+    keep_label: set[int] = set()   # ids of wires whose attr must stay
+    drop: set[int] = set()         # ids of redundant wires
+
+    inbound: dict[Any, list] = {}
+    for i, wire in enumerate(wires):
+        if isinstance(wire, dict):
+            inbound.setdefault(_hkey(_wire_target(wire)), []).append((i, wire))
+
+    for target, items in inbound.items():
+        view = views.get(target)
+        if view is None:
+            # Unknown consumer type: keep its labels for whatever reads them.
+            keep_label.update(id(w) for _i, w in items if w.get("attr"))
+            continue
+        nt = registry.get(view.type)
+        limit = nt.inputs.max
+        wired: dict[int, dict] = {}
+        extra: list[dict] = []
+        for _i, wire in sorted(items, key=_wire_port_key):
+            port = wire.get("to_port")
+            k = int(port[2:]) if isinstance(port, str) and _PORT_RE.match(port) else None
+            if k is None or k >= limit:
+                extra.append(wire)
+            else:
+                wired.setdefault(k, wire)
+        # 3. A wire past the node's last port, from a node already wired in.
+        sources = {_hkey(w.get("from", w.get("from_path"))) for w in wired.values()}
+        for wire in extra:
+            if _hkey(wire.get("from", wire.get("from_path"))) in sources:
+                drop.add(id(wire))
+
+        def _name_through(wire: dict, spec) -> tuple[Optional[str], bool]:
+            """(name the v2 engine read through *wire* for *spec*, ok).
+
+            ok is False when the read must stay implicit (param empty, label
+            kept): the label names another type's output, or the name it
+            reads has the wrong type for *spec*.  Compile then reports the
+            error exactly as before, against the same node (a wrong-type
+            implicit read is blamed on the node upstream, an explicit one on
+            the reader).
+            """
+            src = by_id.get(_hkey(wire.get("from", wire.get("from_path"))))
+            st = registry.get(src.type) if src is not None else None
+            if src is None:
+                # A source type the backend does not know (yet): keep the
+                # label, as for an unknown consumer, so the choice survives
+                # until the type is registered (MD-08).
+                return None, False
+            label = wire.get("attr") if spec.name not in nt.legacy_ignore else None
+            name = None
+            if label:
+                target_slot = st.legacy_reads.get(label)
+                if target_slot is not None:
+                    name = write_names.get(src.id, {}).get(target_slot, target_slot)
+                elif label in strict_labels:
+                    return None, False
+            if name is None:
+                name = primary_write(src, st, write_names)
+            dtype = _write_dtypes(src, st).get(name)
+            if dtype is not None and not _type_ok(spec.dtype, AttrInfo(name, dtype, src.id)):
+                return None, False
+            return name, True
+
+        ports = sorted(wired)
+        for spec in nt.read_params():
+            raw = view.params.get(spec.name)
+            fed = nt.ports_for_param(spec.name, ports)
+            if not fed:
+                continue
+            if spec.type == "attr":
+                if raw not in (None, "") or (isinstance(spec.default, str) and spec.default):
+                    continue
+                name, ok = _name_through(wired[fed[0]], spec)
+                if not ok:
+                    keep_label.add(id(wired[fed[0]]))
+                elif name is not None and is_attr_name(name):
+                    view.params[spec.name] = name
+            else:
+                if _list_value(raw) != []:
+                    continue  # already named (or malformed: the model says so)
+                names: list[str] = []
+                for k in fed:
+                    name, ok = _name_through(wired[k], spec)
+                    if not ok:
+                        names = []
+                        keep_label.update(id(wired[j]) for j in fed)
+                        break
+                    if name is not None and is_attr_name(name):
+                        names.append(name)
+                if names:
+                    view.params[spec.name] = names
+
+    new_wires = []
+    for wire in wires:
+        if isinstance(wire, dict):
+            if id(wire) in drop:
+                continue
+            if id(wire) not in keep_label:
+                wire.pop("attr", None)
+        new_wires.append(wire)
+    out["wires"] = new_wires
+    out.pop("version", None)
+    out["_version"] = 3
     return out
 
 

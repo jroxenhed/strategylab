@@ -13,6 +13,7 @@ import pytest
 
 import bot_manager as _bot_manager_mod
 from bot_manager import BotManager
+from nodebuilder.migrate import CURRENT_GRAPH_VERSION
 from nodebuilder.models import Graph
 
 _HERE = os.path.dirname(__file__)
@@ -59,7 +60,7 @@ def test_botsjson_v1_graph_migrates_on_load(bots_file, name):
     assert state.status == "stopped"
     assert not mgr.tasks
     g = config.graph
-    assert g is not None and g.version == 2
+    assert g is not None and g.version == CURRENT_GRAPH_VERSION
     assert all(n.name and n.parent is None for n in g.nodes.values())
     assert all(w.to_port and w.to_port.startswith("in") for w in g.wires)
     # Same graph as migrating the API-shaped copy directly.
@@ -68,7 +69,7 @@ def test_botsjson_v1_graph_migrates_on_load(bots_file, name):
     ).model_dump(mode="json", by_alias=True)
 
 
-def test_botsjson_is_rewritten_as_v2_and_reloads(bots_file):
+def test_botsjson_is_rewritten_at_current_version_and_reloads(bots_file):
     raw = _V1["botsjson"]["simple_long_rsi"]
     bots_file.write_text(json.dumps({"bot_fund": 1000.0, "bots": [_graph_bot_entry("g-1", raw)]}))
 
@@ -77,7 +78,7 @@ def test_botsjson_is_rewritten_as_v2_and_reloads(bots_file):
 
     saved = json.loads(bots_file.read_text())
     stored = saved["bots"][0]["config"]["graph"]
-    assert stored["version"] == 2
+    assert stored["version"] == CURRENT_GRAPH_VERSION
     assert all("name" in n and "subgraph" not in n for n in stored["nodes"].values())
     assert all(w["to_port"] for w in stored["wires"])
 
@@ -97,7 +98,7 @@ def test_botsjson_is_rewritten_as_v2_and_reloads(bots_file):
 def _bad_graph_rows() -> dict:
     """Graphs that cannot load, each for a different reason."""
     base = _V1["botsjson"]["simple_long_rsi"]
-    newer = {**base, "version": 3, "promoted": {"x": 1}}  # a field W1 does not know
+    newer = {**base, "version": CURRENT_GRAPH_VERSION + 1, "promoted": {"x": 1}}  # a field this code does not know
     bad_name = json.loads(json.dumps(base))
     first = next(iter(bad_name["nodes"]))
     bad_name["nodes"][first]["name"] = "Bad Name"

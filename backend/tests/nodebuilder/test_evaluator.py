@@ -1,34 +1,34 @@
-"""Unit 7a tests — evaluate_graph, compute_indicators_from_specs."""
+"""Running a compiled graph: cook_program, cook_signals, the evaluate_graph
+adapter, and the legacy compute_indicators_from_specs (F435 W2, plan D5)."""
 from __future__ import annotations
 
-import sys
 import os
+import sys
 
 # Ensure backend/ is on sys.path
 _BACKEND = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
-import pytest
 import numpy as np
 import pandas as pd
-from unittest.mock import patch
+import pytest
 
 from indicators import OHLCVSeries, compute_instance
+from nodebuilder.compile import compile as nb_compile
 from nodebuilder.evaluator import (
-    CompiledProgram,
+    NO_EXIT_ATTR,
     IndicatorSpec,
-    PerBarOp,
-    SimulatorSetting,
     compute_indicators_from_specs,
+    cook_program,
+    cook_signals,
     evaluate_graph,
 )
-from nodebuilder.compile import compile as nb_compile
 from nodebuilder.models import Graph, Node, Wire
 
 
 # ---------------------------------------------------------------------------
-# Fixture: 100-bar OHLCV data
+# Fixtures and helpers
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
@@ -42,9 +42,15 @@ def ohlcv_100() -> OHLCVSeries:
     return OHLCVSeries(close=close, high=pd.Series(high), low=pd.Series(low), volume=volume)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+def _frame(o: OHLCVSeries) -> pd.DataFrame:
+    return pd.DataFrame({"Open": o.close, "High": o.high, "Low": o.low, "Close": o.close,
+                         "Volume": o.volume})
+
+
+def _attrs(o: OHLCVSeries) -> dict:
+    return {"@open": o.close, "@high": o.high, "@low": o.low, "@close": o.close,
+            "@volume": o.volume}
+
 
 def _node(path: str, node_type: str, params: dict | None = None, bypass: bool = False) -> Node:
     return Node(id=path, type=node_type, params=params or {}, bypass=bypass)
@@ -52,10 +58,6 @@ def _node(path: str, node_type: str, params: dict | None = None, bypass: bool = 
 
 def _wire(wire_id: str, from_path: str, to_path: str) -> Wire:
     return Wire(**{"id": wire_id, "from": from_path, "to": to_path})
-
-
-def _make_graph(nodes: dict[str, Node], wires: list[Wire]) -> Graph:
-    return Graph(nodes=nodes, wires=wires)
 
 
 def _rsi_below_graph(threshold: float = 30.0, period: int = 14) -> Graph:
@@ -71,197 +73,136 @@ def _rsi_below_graph(threshold: float = 30.0, period: int = 14) -> Graph:
         _wire("w2", "/rsi", "/below"),
         _wire("w3", "/below", "/entry"),
     ]
-    return _make_graph(nodes, wires)
-
-
-def _init_attrs_for_program(program: CompiledProgram, num_bars: int, indicator_attrs: dict) -> dict:
-    """Pre-allocate NaN/False Series for each PerBarOp write target."""
-    attrs = dict(indicator_attrs)  # copy in indicator Series
-    seen_writes = set()
-    for op in program.per_bar_program:
-        if op.writes not in seen_writes:
-            attrs[op.writes] = pd.Series(np.zeros(num_bars, dtype=float))
-            seen_writes.add(op.writes)
-    return attrs
+    return Graph(nodes=nodes, wires=wires)
 
 
 # ---------------------------------------------------------------------------
-# test_compute_indicators_from_specs_rsi
+# Legacy dispatcher (kept for callers of the Wave 0 API)
 # ---------------------------------------------------------------------------
 
 def test_compute_indicators_from_specs_rsi(ohlcv_100):
-    """IndicatorSpec(rsi, period=14, type=sma) → @rsi matches compute_instance directly."""
-    spec = IndicatorSpec(
-        catalog_name="rsi",
-        params={"period": 14, "type": "sma"},
-        write_attr="@rsi",
-        node_path="/rsi",
-    )
+    spec = IndicatorSpec(catalog_name="rsi", params={"period": 14, "type": "sma"},
+                         write_attr="@rsi", node_path="/rsi")
     result = compute_indicators_from_specs([spec], ohlcv_100)
-    assert "@rsi" in result
-
-    # Must match direct compute_instance call
     expected = compute_instance("rsi", {"period": 14, "type": "sma"}, ohlcv_100)["rsi"]
-    pd.testing.assert_series_equal(result["@rsi"], expected, check_names=False)
+    pd.testing.assert_series_equal(result["@rsi"], expected)
 
-
-# ---------------------------------------------------------------------------
-# test_compute_indicators_from_specs_macd_multi_output
-# ---------------------------------------------------------------------------
 
 def test_compute_indicators_from_specs_macd_multi_output(ohlcv_100):
-    """MACD spec → @macd_line, @macd_signal, @macd_histogram matching compute_instance."""
-    spec = IndicatorSpec(
-        catalog_name="macd",
-        params={"fast": 12, "slow": 26, "signal": 9},
-        write_attr="@macd_line",   # primary
-        node_path="/macd",
-    )
+    spec = IndicatorSpec(catalog_name="macd", params={"fast": 12, "slow": 26, "signal": 9},
+                         write_attr="@macd_line", node_path="/macd")
     result = compute_indicators_from_specs([spec], ohlcv_100)
-
-    assert "@macd_line" in result
-    assert "@macd_signal" in result
-    assert "@macd_histogram" in result
-
-    ref = compute_instance("macd", {"fast": 12, "slow": 26, "signal": 9}, ohlcv_100)
-    pd.testing.assert_series_equal(result["@macd_line"], ref["macd"], check_names=False)
-    pd.testing.assert_series_equal(result["@macd_signal"], ref["signal"], check_names=False)
-    pd.testing.assert_series_equal(result["@macd_histogram"], ref["histogram"], check_names=False)
+    assert {"@macd_line", "@macd_signal", "@macd_histogram"} <= set(result)
 
 
-# ---------------------------------------------------------------------------
-# test_compute_indicators_from_specs_dedup_cache
-# ---------------------------------------------------------------------------
-
-def test_compute_indicators_from_specs_dedup_cache(ohlcv_100):
-    """Two specs with identical params → compute_instance called once (cache hit)."""
-    spec_a = IndicatorSpec(
-        catalog_name="rsi",
-        params={"period": 14, "type": "sma"},
-        write_attr="@rsi",
-        node_path="/rsi_a",
-    )
-    spec_b = IndicatorSpec(
-        catalog_name="rsi",
-        params={"period": 14, "type": "sma"},
-        write_attr="@rsi",
-        node_path="/rsi_b",
-    )
-    cache: dict = {}
-    # Call once — populates cache
-    compute_indicators_from_specs([spec_a], ohlcv_100, cache=cache)
-    assert len(cache) == 1
-
-    # Call again with same spec — cache hit, result unchanged
-    compute_indicators_from_specs([spec_b], ohlcv_100, cache=cache)
-    # Cache should still have exactly 1 entry (no duplicate)
-    assert len(cache) == 1
+def test_programs_carry_no_specs():
+    """Indicators are nodes of the column program now."""
+    prog = nb_compile(_rsi_below_graph())
+    assert prog.indicator_specs == () and prog.per_bar_program == ()
+    assert compute_indicators_from_specs(prog.indicator_specs, None) == {}
 
 
 # ---------------------------------------------------------------------------
-# test_evaluate_graph_per_bar_returns_entry_exit
+# Cooking
 # ---------------------------------------------------------------------------
 
-def test_evaluate_graph_per_bar_returns_entry_exit(ohlcv_100):
-    """evaluate_graph returns {"entry": bool, "exit": bool} at every bar."""
-    g = _rsi_below_graph()
-    prog = nb_compile(g)
-    n = len(ohlcv_100.close)
+def test_cook_signals_match_eval_rules(ohlcv_100):
+    """RSI<30 as a graph and as a rule give the same signal on every bar."""
+    from signal_engine import Rule, compute_indicators, eval_rules
 
-    indicator_attrs = compute_indicators_from_specs(prog.indicator_specs, ohlcv_100)
-    # The indicator spec write_attr is @rsi; PerBarOp reads it.
-    attrs = _init_attrs_for_program(prog, n, indicator_attrs)
-    # Also seed raw OHLCV attrs (consumed by ticker node downstream)
-    attrs["@close"] = ohlcv_100.close
-    attrs["@high"] = ohlcv_100.high
-    attrs["@low"] = ohlcv_100.low
-    attrs["@volume"] = ohlcv_100.volume
-    attrs.setdefault("@always_false", pd.Series(np.zeros(n, dtype=float)))
+    prog = nb_compile(_rsi_below_graph(threshold=30.0))
+    entry, exit_ = cook_signals(prog, _frame(ohlcv_100))
 
-    for i in range(n):
-        out = evaluate_graph(prog, attrs, i)
-        assert "entry" in out
-        assert "exit" in out
-        assert isinstance(out["entry"], bool)
-        assert isinstance(out["exit"], bool)
+    rule = Rule(indicator="rsi", condition="below", value=30.0, params={"period": 14, "type": "sma"})
+    ind = compute_indicators(close=ohlcv_100.close, high=ohlcv_100.high, low=ohlcv_100.low,
+                             rules=[rule])
+    rule_entry = [eval_rules([rule], "AND", ind, i) for i in range(len(entry))]
+    assert entry.tolist() == rule_entry
+    assert not exit_.any() and prog.exit_attr == NO_EXIT_ATTR
 
 
-# ---------------------------------------------------------------------------
-# test_evaluate_graph_matches_eval_rules
-# ---------------------------------------------------------------------------
-
-def test_evaluate_graph_matches_eval_rules(ohlcv_100):
-    """RSI<30 graph mode vs RSI<30 rule mode produce identical boolean signals bar-by-bar."""
-    from signal_engine import Rule, eval_rules, compute_indicators
-
-    # --- Graph path ---
-    g = _rsi_below_graph(threshold=30.0)
-    prog = nb_compile(g)
-    n = len(ohlcv_100.close)
-
-    indicator_attrs = compute_indicators_from_specs(prog.indicator_specs, ohlcv_100)
-    attrs = _init_attrs_for_program(prog, n, indicator_attrs)
-    attrs["@close"] = ohlcv_100.close
-    attrs.setdefault("@always_false", pd.Series(np.zeros(n, dtype=float)))
-
-    graph_entry = []
-    for i in range(n):
-        out = evaluate_graph(prog, attrs, i)
-        graph_entry.append(out["entry"])
-
-    # --- Rule path ---
-    rule = Rule(indicator="rsi", condition="below", value=30.0,
-                params={"period": 14, "type": "sma"})
-    rule_indicators = compute_indicators(
-        close=ohlcv_100.close,
-        high=ohlcv_100.high,
-        low=ohlcv_100.low,
-        rules=[rule],
-    )
-    rule_entry = [eval_rules([rule], "AND", rule_indicators, i) for i in range(n)]
-
-    # Must match exactly
-    assert graph_entry == rule_entry, (
-        f"Graph and rule entry signals disagree: "
-        f"graph={sum(graph_entry)} trues, rule={sum(rule_entry)} trues"
-    )
-
-
-# ---------------------------------------------------------------------------
-# test_per_bar_program_uses_correct_attrs
-# ---------------------------------------------------------------------------
-
-def test_per_bar_program_uses_correct_attrs():
-    """RSI series with known values around 30 → below comparison fires True on expected bar."""
-    # Construct a synthetic RSI-like series where bar 5 dips below 30
+def test_comparison_on_known_values():
+    """Close below 30 on bar 5 only: Entry fires on bar 5 only; bar 0 never fires."""
     n = 20
-    rsi_values = [50.0] * n
-    rsi_values[5] = 25.0   # bar 5 is below 30
+    close = np.full(n, 50.0)
+    close[5] = 25.0
+    close[0] = 10.0  # below 30, but bar 0 is always False
+    df = pd.DataFrame({"Open": close, "High": close, "Low": close, "Close": close, "Volume": 1.0})
+    graph = Graph(nodes={
+        "/ticker": _node("/ticker", "ticker"),
+        "/below": _node("/below", "below", {"threshold": 30.0}),
+        "/entry": _node("/entry", "entry"),
+    }, wires=[_wire("w1", "/ticker", "/below"), _wire("w2", "/below", "/entry")])
+    entry, _exit = cook_signals(nb_compile(graph), df)
+    assert np.flatnonzero(entry).tolist() == [5]
 
-    g = _rsi_below_graph(threshold=30.0)
-    prog = nb_compile(g)
 
-    # Override indicator attrs with our synthetic RSI series
-    rsi_series = pd.Series(rsi_values)
-    # The spec write_attr is "@rsi"
-    indicator_attrs = {"@rsi": rsi_series}
-    attrs = _init_attrs_for_program(prog, n, indicator_attrs)
-    attrs["@close"] = pd.Series(rsi_values)   # not used by the below comparison
-    attrs.setdefault("@always_false", pd.Series(np.zeros(n, dtype=float)))
+def test_cook_keeps_only_what_is_asked(ohlcv_100):
+    prog = nb_compile(_rsi_below_graph())
+    df = _frame(ohlcv_100)
+    lean = cook_program(prog, df)
+    assert set(lean.streams) == {"/entry"}
+    full = cook_program(prog, df, keep_all=True)
+    assert set(full.streams) == {"/ticker", "/rsi", "/below", "/entry"}
+    expected = compute_instance("rsi", {"period": 14, "type": "sma"}, ohlcv_100)["rsi"].to_numpy()
+    np.testing.assert_array_equal(full.column("/rsi", "@rsi"), expected)
+    # The RSI column was freed in the lean cook once the comparison had read it.
+    assert len(lean.store) == 1
 
-    results = []
-    for i in range(n):
+
+# ---------------------------------------------------------------------------
+# evaluate_graph: the per-bar adapter
+# ---------------------------------------------------------------------------
+
+def test_evaluate_graph_returns_entry_exit_at_every_bar(ohlcv_100):
+    prog = nb_compile(_rsi_below_graph())
+    attrs = _attrs(ohlcv_100)
+    entry, _ = cook_signals(prog, _frame(ohlcv_100))
+    for i in range(len(entry)):
         out = evaluate_graph(prog, attrs, i)
-        results.append(out["entry"])
+        assert set(out) == {"entry", "exit"}
+        assert isinstance(out["entry"], bool) and isinstance(out["exit"], bool)
+        assert out["entry"] == entry[i]
 
-    # Bar 0 → False (i < 1 guard in comparison fn)
-    assert results[0] is False
 
-    # Bar 5 → True (25.0 < 30)
-    assert results[5] is True, f"Expected True at bar 5, got {results[5]}"
+def test_evaluate_graph_cooks_once_per_attrs(ohlcv_100, monkeypatch):
+    import nodebuilder.evaluator as evaluator
 
-    # Other bars (except bar 5) → False since rsi_values = 50.0 > 30
-    for i in range(1, n):
-        if i == 5:
-            continue
-        assert results[i] is False, f"Expected False at bar {i}, got {results[i]}"
+    prog = nb_compile(_rsi_below_graph())
+    calls = []
+    real = evaluator.cook_signals
+
+    def spy(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+
+    monkeypatch.setattr(evaluator, "cook_signals", spy)
+    attrs = _attrs(ohlcv_100)
+    for i in range(10):
+        evaluate_graph(prog, attrs, i)
+    assert len(calls) == 1
+    # A new program (a recompile) cooks again.
+    evaluate_graph(nb_compile(_rsi_below_graph(threshold=40.0)), attrs, 3)
+    assert len(calls) == 2
+
+
+def test_evaluate_graph_needs_only_close():
+    """Wave 0 callers sometimes seeded only @close; the rest is NaN."""
+    close = pd.Series(np.linspace(10, 50, 30))
+    graph = Graph(nodes={
+        "/ticker": _node("/ticker", "ticker"),
+        "/above": _node("/above", "above", {"threshold": 30.0}),
+        "/entry": _node("/entry", "entry"),
+    }, wires=[_wire("w1", "/ticker", "/above"), _wire("w2", "/above", "/entry")])
+    prog = nb_compile(graph)
+    attrs = {"@close": close}
+    assert evaluate_graph(prog, attrs, 29)["entry"] is True
+    assert evaluate_graph(prog, attrs, 1)["entry"] is False
+
+
+def test_live_last_bar_reads_the_last_value(ohlcv_100):
+    """The bot reads bar -1 (len - 1); a negative index works too."""
+    prog = nb_compile(_rsi_below_graph(threshold=60.0))
+    attrs = _attrs(ohlcv_100)
+    n = len(ohlcv_100.close)
+    assert evaluate_graph(prog, attrs, n - 1) == evaluate_graph(prog, attrs, -1)

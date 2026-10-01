@@ -4,6 +4,12 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-10-01
+
+- **Node builder Wave 2, "Columnar kernel and universal stream" ([F435](TODO.md#f435)).** Graphs now cook column by column instead of bar by bar: the 500,000-bar benchmark takes 0.22 s on mfcore01, down from 86.4 s, with the same signals. Every node type lives in a self-registering module, and the frontend catalog is generated from that registry. The graph language now covers every rule-builder condition and indicator, and from_rules output equals the rule engine bar for bar, including NOT and the bar-0 guard. The editor got named ports, attribute pickers, write chips, wire labels and the time widgets.
+- **Wave 2 review.** Four reviewers found 35 findings; all 6 P0/P1 were confirmed and fixed. The P0: the lean cook could free a column that Entry or Exit still read, so every cook failed and a live bot stopped checking exits with no alert. Cook failures now count toward the 5-in-a-row alert. A graph that compiled in Wave 1 still compiles and gives the same signals, checked against reference signals from the committed Wave 1 engine (130 of 130 cases). The first Wave 2 boot writes bots.json.pre-w2 for a rollback.
+- **Wave 2 gate.** Build, render probe and backend smoke PASS after one fix: the goldens generator ran its body at import time. Pytest: 6418 passed, and the 68 failures are the same set as before Wave 0. Vitest: 981 passed. The parity trio is green with no fixture changed. The laptop slept once during the wave; a continuation run finished it.
+
 ## 2026-09-30
 
 - **Node builder Wave 0, "Unbreak" ([F435](TODO.md#f435)).** Items 0.A to 0.H of the finish plan went in: errors come back as a 400 with the node id, graph bots take their stops and size from the graph, and a new sweep test checks every rule against its rendered graph. The canvas got multi-select, a Tab menu at the cursor, and honest banners for nodes that compile cannot run.

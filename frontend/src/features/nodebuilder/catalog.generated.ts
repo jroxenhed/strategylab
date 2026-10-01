@@ -1,6 +1,7 @@
 // GENERATED FILE. Do not edit by hand.
 //
-// Source: backend/nodebuilder/nodes.py (the node catalog, plan decision D9).
+// Source: the backend node registry (backend/nodebuilder/trading/nodes_*.py,
+// listed by backend/nodebuilder/nodes.py; plan decision D9).
 // Regenerate from the repo root with:
 //   backend/venv/bin/python backend/scripts/export_nodebuilder_catalog.py
 // backend/tests/nodebuilder/test_catalog_consistency.py fails when this file
@@ -43,7 +44,7 @@ export interface PortsSpec {
   max: number;
 }
 
-/** A backend catalog entry, as nodes.NodeCatalogEntry.to_json() gives it. */
+/** A backend catalog entry, as NodeCatalogEntry.to_json() gives it. */
 export interface GeneratedCatalogEntry {
   name: string;
   cat: string;
@@ -94,21 +95,143 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "default": "1d",
         "options": ["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"],
         "code_able": false
-      },
-      {
-        "name": "source",
-        "type": "select",
-        "label": "source",
-        "default": "yahoo",
-        "options": ["yahoo", "alpaca", "alpaca-iex", "ibkr"]
       }
     ],
     "reads": [],
-    "writes": ["@open", "@high", "@low", "@close", "@volume"],
+    "writes": ["@open", "@high", "@low", "@close", "@volume", "@time", "@index"],
     "subtitle": null,
     "setting_key": null,
     "ins": 0,
     "outs": 5
+  },
+  {
+    "name": "merge",
+    "cat": "data",
+    "desc": "Joins the streams on its inputs into one, so a node below can read from all of them.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "in0" },
+        { "label": "in1", "optional": true }
+      ],
+      "dynamic": true,
+      "min": 1,
+      "max": 16
+    },
+    "params": [],
+    "reads": [],
+    "writes": [],
+    "subtitle": "merge",
+    "setting_key": null,
+    "ins": 2,
+    "outs": 0
+  },
+  {
+    "name": "price",
+    "cat": "data",
+    "desc": "One price field (default @close) under its own name.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "source" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      { "name": "field", "type": "attr", "label": "field", "default": "@close", "dtype": "float" },
+      { "name": "out", "type": "write", "label": "out", "default": "@price", "dtype": "float" }
+    ],
+    "reads": ["@close"],
+    "writes": ["@price"],
+    "subtitle": "close",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "time_of_day",
+    "cat": "data",
+    "desc": "True when the bar starts inside the time range (New York time, from included, to excluded). Empty: the regular session 09:30-16:00.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "in", "optional": true }
+      ],
+      "dynamic": false,
+      "min": 0,
+      "max": 1
+    },
+    "params": [
+      { "name": "range", "type": "time_range", "label": "range", "default": null, "optional": true },
+      { "name": "out", "type": "write", "label": "out", "default": "@in_time", "dtype": "bool" }
+    ],
+    "reads": [],
+    "writes": ["@in_time"],
+    "subtitle": "session",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "day_of_week",
+    "cat": "data",
+    "desc": "True on the picked weekdays (New York date). No days picked: never true.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "in", "optional": true }
+      ],
+      "dynamic": false,
+      "min": 0,
+      "max": 1
+    },
+    "params": [
+      {
+        "name": "days",
+        "type": "select",
+        "label": "days",
+        "default": ["mon", "tue", "wed", "thu", "fri"],
+        "options": ["mon", "tue", "wed", "thu", "fri"]
+      },
+      { "name": "out", "type": "write", "label": "out", "default": "@on_day", "dtype": "bool" }
+    ],
+    "reads": [],
+    "writes": ["@on_day"],
+    "subtitle": "M T W T F",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "session_bar",
+    "cat": "data",
+    "desc": "The bar's number in its day's regular session (0 = the first bar at or after 09:30 New York time). NaN outside 09:30-16:00 and on daily bars.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "in", "optional": true }
+      ],
+      "dynamic": false,
+      "min": 0,
+      "max": 1
+    },
+    "params": [
+      {
+        "name": "out",
+        "type": "write",
+        "label": "out",
+        "default": "@session_bar",
+        "dtype": "float"
+      }
+    ],
+    "reads": [],
+    "writes": ["@session_bar"],
+    "subtitle": "bar #",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
   },
   {
     "name": "rsi",
@@ -117,10 +240,10 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
     "compile_active": true,
     "inputs": {
       "ports": [
-        { "label": "source", "optional": true }
+        { "label": "source" }
       ],
       "dynamic": false,
-      "min": 0,
+      "min": 1,
       "max": 1
     },
     "params": [
@@ -139,7 +262,9 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "label": "type",
         "default": "wilder",
         "options": ["sma", "wilder"]
-      }
+      },
+      { "name": "source", "type": "attr", "label": "source", "default": null, "dtype": "float" },
+      { "name": "out", "type": "write", "label": "out", "default": "@rsi", "dtype": "float" }
     ],
     "reads": ["@close"],
     "writes": ["@rsi"],
@@ -155,10 +280,10 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
     "compile_active": true,
     "inputs": {
       "ports": [
-        { "label": "source", "optional": true }
+        { "label": "source" }
       ],
       "dynamic": false,
-      "min": 0,
+      "min": 1,
       "max": 1
     },
     "params": [
@@ -188,6 +313,28 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "min": 2,
         "max": 500,
         "unit": "bars"
+      },
+      { "name": "source", "type": "attr", "label": "source", "default": null, "dtype": "float" },
+      {
+        "name": "out_line",
+        "type": "write",
+        "label": "out_line",
+        "default": "@macd_line",
+        "dtype": "float"
+      },
+      {
+        "name": "out_signal",
+        "type": "write",
+        "label": "out_signal",
+        "default": "@macd_signal",
+        "dtype": "float"
+      },
+      {
+        "name": "out_hist",
+        "type": "write",
+        "label": "out_hist",
+        "default": "@macd_histogram",
+        "dtype": "float"
       }
     ],
     "reads": ["@close"],
@@ -204,10 +351,10 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
     "compile_active": true,
     "inputs": {
       "ports": [
-        { "label": "source", "optional": true }
+        { "label": "source" }
       ],
       "dynamic": false,
-      "min": 0,
+      "min": 1,
       "max": 1
     },
     "params": [
@@ -219,7 +366,9 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "min": 2,
         "max": 500,
         "unit": "bars"
-      }
+      },
+      { "name": "source", "type": "attr", "label": "source", "default": null, "dtype": "float" },
+      { "name": "out", "type": "write", "label": "out", "default": "@sma", "dtype": "float" }
     ],
     "reads": ["@close"],
     "writes": ["@sma"],
@@ -235,10 +384,10 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
     "compile_active": true,
     "inputs": {
       "ports": [
-        { "label": "source", "optional": true }
+        { "label": "source" }
       ],
       "dynamic": false,
-      "min": 0,
+      "min": 1,
       "max": 1
     },
     "params": [
@@ -250,7 +399,9 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "min": 2,
         "max": 500,
         "unit": "bars"
-      }
+      },
+      { "name": "source", "type": "attr", "label": "source", "default": null, "dtype": "float" },
+      { "name": "out", "type": "write", "label": "out", "default": "@ema", "dtype": "float" }
     ],
     "reads": ["@close"],
     "writes": ["@ema"],
@@ -266,10 +417,10 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
     "compile_active": true,
     "inputs": {
       "ports": [
-        { "label": "source", "optional": true }
+        { "label": "source" }
       ],
       "dynamic": false,
-      "min": 0,
+      "min": 1,
       "max": 1
     },
     "params": [
@@ -289,6 +440,28 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "default": 2.0,
         "min": 0.5,
         "max": 5.0
+      },
+      { "name": "source", "type": "attr", "label": "source", "default": null, "dtype": "float" },
+      {
+        "name": "out_upper",
+        "type": "write",
+        "label": "out_upper",
+        "default": "@bb_upper",
+        "dtype": "float"
+      },
+      {
+        "name": "out_middle",
+        "type": "write",
+        "label": "out_middle",
+        "default": "@bb_middle",
+        "dtype": "float"
+      },
+      {
+        "name": "out_lower",
+        "type": "write",
+        "label": "out_lower",
+        "default": "@bb_lower",
+        "dtype": "float"
       }
     ],
     "reads": ["@close"],
@@ -305,10 +478,10 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
     "compile_active": true,
     "inputs": {
       "ports": [
-        { "label": "source", "optional": true }
+        { "label": "source" }
       ],
       "dynamic": false,
-      "min": 0,
+      "min": 1,
       "max": 1
     },
     "params": [
@@ -320,7 +493,11 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "min": 2,
         "max": 500,
         "unit": "bars"
-      }
+      },
+      { "name": "source", "type": "attr", "label": "source", "default": null, "dtype": "float" },
+      { "name": "high", "type": "attr", "label": "high", "default": "@high", "dtype": "float" },
+      { "name": "low", "type": "attr", "label": "low", "default": "@low", "dtype": "float" },
+      { "name": "out", "type": "write", "label": "out", "default": "@atr", "dtype": "float" }
     ],
     "reads": ["@high", "@low", "@close"],
     "writes": ["@atr"],
@@ -330,9 +507,276 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
     "outs": 1
   },
   {
-    "name": "crosses_above",
-    "cat": "comparison",
-    "desc": "True on the bar where the left series crosses above the right series.",
+    "name": "stochastic",
+    "cat": "indicator",
+    "desc": "Stochastic oscillator: %K and %D. Defaults: k_period=14, d_period=3, smooth_k=3.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "source" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      {
+        "name": "k_period",
+        "type": "int",
+        "label": "k_period",
+        "default": 14,
+        "min": 2,
+        "max": 500,
+        "unit": "bars"
+      },
+      {
+        "name": "d_period",
+        "type": "int",
+        "label": "d_period",
+        "default": 3,
+        "min": 2,
+        "max": 500,
+        "unit": "bars"
+      },
+      {
+        "name": "smooth_k",
+        "type": "int",
+        "label": "smooth_k",
+        "default": 3,
+        "min": 1,
+        "max": 50,
+        "unit": "bars"
+      },
+      { "name": "source", "type": "attr", "label": "source", "default": null, "dtype": "float" },
+      { "name": "high", "type": "attr", "label": "high", "default": "@high", "dtype": "float" },
+      { "name": "low", "type": "attr", "label": "low", "default": "@low", "dtype": "float" },
+      {
+        "name": "out_k",
+        "type": "write",
+        "label": "out_k",
+        "default": "@stoch_k",
+        "dtype": "float"
+      },
+      {
+        "name": "out_d",
+        "type": "write",
+        "label": "out_d",
+        "default": "@stoch_d",
+        "dtype": "float"
+      }
+    ],
+    "reads": ["@high", "@low", "@close"],
+    "writes": ["@stoch_k", "@stoch_d"],
+    "subtitle": "Stoch(14,3,3)",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 2
+  },
+  {
+    "name": "adx",
+    "cat": "indicator",
+    "desc": "Average Directional Index with +DI and -DI. Default period=14.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "source" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      {
+        "name": "period",
+        "type": "int",
+        "label": "period",
+        "default": 14,
+        "min": 2,
+        "max": 500,
+        "unit": "bars"
+      },
+      { "name": "source", "type": "attr", "label": "source", "default": null, "dtype": "float" },
+      { "name": "high", "type": "attr", "label": "high", "default": "@high", "dtype": "float" },
+      { "name": "low", "type": "attr", "label": "low", "default": "@low", "dtype": "float" },
+      {
+        "name": "out_adx",
+        "type": "write",
+        "label": "out_adx",
+        "default": "@adx",
+        "dtype": "float"
+      },
+      {
+        "name": "out_plus_di",
+        "type": "write",
+        "label": "out_plus_di",
+        "default": "@plus_di",
+        "dtype": "float"
+      },
+      {
+        "name": "out_minus_di",
+        "type": "write",
+        "label": "out_minus_di",
+        "default": "@minus_di",
+        "dtype": "float"
+      }
+    ],
+    "reads": ["@high", "@low", "@close"],
+    "writes": ["@adx", "@plus_di", "@minus_di"],
+    "subtitle": "ADX(14)",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 3
+  },
+  {
+    "name": "atr_pct",
+    "cat": "indicator",
+    "desc": "ATR as a percent of the close (atr / close * 100). Default period=14.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "source" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      {
+        "name": "period",
+        "type": "int",
+        "label": "period",
+        "default": 14,
+        "min": 2,
+        "max": 500,
+        "unit": "bars"
+      },
+      { "name": "source", "type": "attr", "label": "source", "default": null, "dtype": "float" },
+      { "name": "high", "type": "attr", "label": "high", "default": "@high", "dtype": "float" },
+      { "name": "low", "type": "attr", "label": "low", "default": "@low", "dtype": "float" },
+      { "name": "out", "type": "write", "label": "out", "default": "@atr_pct", "dtype": "float" }
+    ],
+    "reads": ["@high", "@low", "@close"],
+    "writes": ["@atr_pct"],
+    "subtitle": "ATR%(14)",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "volume",
+    "cat": "indicator",
+    "desc": "Volume: the raw volume (type raw) or its simple moving average (type sma, default period=20).",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "source" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      {
+        "name": "type",
+        "type": "select",
+        "label": "type",
+        "default": "raw",
+        "options": ["raw", "sma"]
+      },
+      {
+        "name": "period",
+        "type": "int",
+        "label": "period",
+        "default": 20,
+        "min": 2,
+        "max": 500,
+        "unit": "bars"
+      },
+      {
+        "name": "source",
+        "type": "attr",
+        "label": "source",
+        "default": "@volume",
+        "dtype": "float"
+      },
+      { "name": "out", "type": "write", "label": "out", "default": "@vol", "dtype": "float" }
+    ],
+    "reads": ["@volume"],
+    "writes": ["@vol"],
+    "subtitle": "volume",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "ma",
+    "cat": "indicator",
+    "desc": "Moving average of any type: sma, ema or rma (Wilder). Default period=20, type=ema.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "source" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      {
+        "name": "period",
+        "type": "int",
+        "label": "period",
+        "default": 20,
+        "min": 2,
+        "max": 500,
+        "unit": "bars"
+      },
+      {
+        "name": "type",
+        "type": "select",
+        "label": "type",
+        "default": "ema",
+        "options": ["sma", "ema", "rma"]
+      },
+      { "name": "source", "type": "attr", "label": "source", "default": null, "dtype": "float" },
+      { "name": "out", "type": "write", "label": "out", "default": "@ma", "dtype": "float" }
+    ],
+    "reads": ["@close"],
+    "writes": ["@ma"],
+    "subtitle": "MA(20, ema)",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "constant",
+    "cat": "signal",
+    "desc": "A fixed number, on every bar (or as one detail value with as_detail).",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "in", "optional": true }
+      ],
+      "dynamic": false,
+      "min": 0,
+      "max": 1
+    },
+    "params": [
+      { "name": "value", "type": "number", "label": "value", "default": 0.0 },
+      { "name": "as_detail", "type": "bool", "label": "as detail", "default": false },
+      { "name": "out", "type": "write", "label": "out", "default": "@const", "dtype": "float" }
+    ],
+    "reads": [],
+    "writes": ["@const"],
+    "subtitle": "constant",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "math",
+    "cat": "signal",
+    "desc": "a op b bar by bar: add, sub, mul, div, min, max; or abs / neg of a. Dividing by zero gives NaN.",
     "compile_active": true,
     "inputs": {
       "ports": [
@@ -345,15 +789,464 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
     },
     "params": [
       {
+        "name": "op",
+        "type": "select",
+        "label": "op",
+        "default": "add",
+        "options": ["add", "sub", "mul", "div", "min", "max", "abs", "neg"]
+      },
+      { "name": "a", "type": "attr", "label": "a", "default": null, "dtype": "float" },
+      {
+        "name": "b",
+        "type": "attr",
+        "label": "b",
+        "default": null,
+        "dtype": "float",
+        "optional": true
+      },
+      { "name": "out", "type": "write", "label": "out", "default": "@math", "dtype": "float" }
+    ],
+    "reads": ["@a", "@b"],
+    "writes": ["@math"],
+    "subtitle": "a + b",
+    "setting_key": null,
+    "ins": 2,
+    "outs": 1
+  },
+  {
+    "name": "shift",
+    "cat": "signal",
+    "desc": "a as it was `bars` bars ago. Default bars=1.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "a" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      { "name": "a", "type": "attr", "label": "a", "default": null, "dtype": "float" },
+      {
+        "name": "bars",
+        "type": "int",
+        "label": "bars",
+        "default": 1,
+        "min": 1,
+        "max": 500,
+        "unit": "bars"
+      },
+      { "name": "out", "type": "write", "label": "out", "default": "@shift", "dtype": "float" }
+    ],
+    "reads": ["@a"],
+    "writes": ["@shift"],
+    "subtitle": "shift 1",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "rolling",
+    "cat": "signal",
+    "desc": "mean, min, max, std or sum of a over the last `window` bars. Default mean over 20.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "a" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      { "name": "a", "type": "attr", "label": "a", "default": null, "dtype": "float" },
+      {
+        "name": "op",
+        "type": "select",
+        "label": "op",
+        "default": "mean",
+        "options": ["mean", "min", "max", "std", "sum"]
+      },
+      {
+        "name": "window",
+        "type": "int",
+        "label": "window",
+        "default": 20,
+        "min": 2,
+        "max": 500,
+        "unit": "bars"
+      },
+      { "name": "out", "type": "write", "label": "out", "default": "@rolling", "dtype": "float" }
+    ],
+    "reads": ["@a"],
+    "writes": ["@rolling"],
+    "subtitle": "mean(20)",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "rising",
+    "cat": "signal",
+    "desc": "True when a is higher than on the bar before.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "a" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      { "name": "a", "type": "attr", "label": "a", "default": null, "dtype": "float" },
+      { "name": "out", "type": "write", "label": "out", "default": "@rising", "dtype": "bool" }
+    ],
+    "reads": ["@a"],
+    "writes": ["@rising"],
+    "subtitle": "rising",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "falling",
+    "cat": "signal",
+    "desc": "True when a is lower than on the bar before.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "a" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      { "name": "a", "type": "attr", "label": "a", "default": null, "dtype": "float" },
+      { "name": "out", "type": "write", "label": "out", "default": "@falling", "dtype": "bool" }
+    ],
+    "reads": ["@a"],
+    "writes": ["@falling"],
+    "subtitle": "falling",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "rising_over",
+    "cat": "signal",
+    "desc": "True when a is higher than it was `bars` bars ago. Default bars=10.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "a" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      { "name": "a", "type": "attr", "label": "a", "default": null, "dtype": "float" },
+      {
+        "name": "bars",
+        "type": "int",
+        "label": "bars",
+        "default": 10,
+        "min": 0,
+        "max": 500,
+        "unit": "bars"
+      },
+      { "name": "out", "type": "write", "label": "out", "default": "@rising_over", "dtype": "bool" }
+    ],
+    "reads": ["@a"],
+    "writes": ["@rising_over"],
+    "subtitle": "rising over",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "falling_over",
+    "cat": "signal",
+    "desc": "True when a is lower than it was `bars` bars ago. Default bars=10.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "a" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      { "name": "a", "type": "attr", "label": "a", "default": null, "dtype": "float" },
+      {
+        "name": "bars",
+        "type": "int",
+        "label": "bars",
+        "default": 10,
+        "min": 0,
+        "max": 500,
+        "unit": "bars"
+      },
+      {
+        "name": "out",
+        "type": "write",
+        "label": "out",
+        "default": "@falling_over",
+        "dtype": "bool"
+      }
+    ],
+    "reads": ["@a"],
+    "writes": ["@falling_over"],
+    "subtitle": "falling over",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "turns_up",
+    "cat": "signal",
+    "desc": "True when a starts rising after falling: the last `bars` steps rose and the one before fell. Optional min move in percent from the low point.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "a" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      { "name": "a", "type": "attr", "label": "a", "default": null, "dtype": "float" },
+      {
+        "name": "bars",
+        "type": "int",
+        "label": "bars",
+        "default": 1,
+        "min": 1,
+        "max": 500,
+        "unit": "bars"
+      },
+      {
+        "name": "min_pct",
+        "type": "number",
+        "label": "min move",
+        "default": null,
+        "min": 0.0,
+        "unit": "%",
+        "optional": true
+      },
+      { "name": "out", "type": "write", "label": "out", "default": "@turns_up", "dtype": "bool" }
+    ],
+    "reads": ["@a"],
+    "writes": ["@turns_up"],
+    "subtitle": "turns up",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "turns_down",
+    "cat": "signal",
+    "desc": "True when a starts falling after rising: the last `bars` steps fell and the one before rose. Optional min move in percent from the high point.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "a" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      { "name": "a", "type": "attr", "label": "a", "default": null, "dtype": "float" },
+      {
+        "name": "bars",
+        "type": "int",
+        "label": "bars",
+        "default": 1,
+        "min": 1,
+        "max": 500,
+        "unit": "bars"
+      },
+      {
+        "name": "min_pct",
+        "type": "number",
+        "label": "min move",
+        "default": null,
+        "min": 0.0,
+        "unit": "%",
+        "optional": true
+      },
+      { "name": "out", "type": "write", "label": "out", "default": "@turns_down", "dtype": "bool" }
+    ],
+    "reads": ["@a"],
+    "writes": ["@turns_down"],
+    "subtitle": "turns down",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "turns_up_below",
+    "cat": "signal",
+    "desc": "True when a rises from a bar that was below the threshold.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "a" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      { "name": "a", "type": "attr", "label": "a", "default": null, "dtype": "float" },
+      { "name": "threshold", "type": "number", "label": "threshold", "default": null },
+      {
+        "name": "out",
+        "type": "write",
+        "label": "out",
+        "default": "@turns_up_below",
+        "dtype": "bool"
+      }
+    ],
+    "reads": ["@a"],
+    "writes": ["@turns_up_below"],
+    "subtitle": "turns up below",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "turns_down_above",
+    "cat": "signal",
+    "desc": "True when a falls from a bar that was above the threshold.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "a" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      { "name": "a", "type": "attr", "label": "a", "default": null, "dtype": "float" },
+      { "name": "threshold", "type": "number", "label": "threshold", "default": null },
+      {
+        "name": "out",
+        "type": "write",
+        "label": "out",
+        "default": "@turns_down_above",
+        "dtype": "bool"
+      }
+    ],
+    "reads": ["@a"],
+    "writes": ["@turns_down_above"],
+    "subtitle": "turns down above",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "accelerating",
+    "cat": "signal",
+    "desc": "True when a's step from the bar before is bigger than the step before it.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "a" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      { "name": "a", "type": "attr", "label": "a", "default": null, "dtype": "float" },
+      {
+        "name": "out",
+        "type": "write",
+        "label": "out",
+        "default": "@accelerating",
+        "dtype": "bool"
+      }
+    ],
+    "reads": ["@a"],
+    "writes": ["@accelerating"],
+    "subtitle": "accelerating",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "decelerating",
+    "cat": "signal",
+    "desc": "True when a's step from the bar before is smaller than the step before it.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "a" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      { "name": "a", "type": "attr", "label": "a", "default": null, "dtype": "float" },
+      {
+        "name": "out",
+        "type": "write",
+        "label": "out",
+        "default": "@decelerating",
+        "dtype": "bool"
+      }
+    ],
+    "reads": ["@a"],
+    "writes": ["@decelerating"],
+    "subtitle": "decelerating",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "crosses_above",
+    "cat": "comparison",
+    "desc": "True on the bar where a crosses above b (or the threshold).",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "a" },
+        { "label": "b", "optional": true }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 2
+    },
+    "params": [
+      { "name": "a", "type": "attr", "label": "a", "default": null, "dtype": "float" },
+      {
+        "name": "b",
+        "type": "attr",
+        "label": "b",
+        "default": null,
+        "dtype": "float",
+        "optional": true
+      },
+      {
         "name": "threshold",
         "type": "number",
         "label": "threshold",
         "default": null,
         "optional": true
-      }
+      },
+      { "name": "out", "type": "write", "label": "out", "default": "@xa", "dtype": "bool" }
     ],
-    "reads": ["@series"],
-    "writes": ["@bool"],
+    "reads": ["@a", "@b"],
+    "writes": ["@xa"],
     "subtitle": "crosses above",
     "setting_key": null,
     "ins": 2,
@@ -362,7 +1255,7 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
   {
     "name": "crosses_below",
     "cat": "comparison",
-    "desc": "True on the bar where the left series crosses below the right series.",
+    "desc": "True on the bar where a crosses below b (or the threshold).",
     "compile_active": true,
     "inputs": {
       "ports": [
@@ -374,16 +1267,26 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
       "max": 2
     },
     "params": [
+      { "name": "a", "type": "attr", "label": "a", "default": null, "dtype": "float" },
+      {
+        "name": "b",
+        "type": "attr",
+        "label": "b",
+        "default": null,
+        "dtype": "float",
+        "optional": true
+      },
       {
         "name": "threshold",
         "type": "number",
         "label": "threshold",
         "default": null,
         "optional": true
-      }
+      },
+      { "name": "out", "type": "write", "label": "out", "default": "@xb", "dtype": "bool" }
     ],
-    "reads": ["@series"],
-    "writes": ["@bool"],
+    "reads": ["@a", "@b"],
+    "writes": ["@xb"],
     "subtitle": "crosses below",
     "setting_key": null,
     "ins": 2,
@@ -392,7 +1295,7 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
   {
     "name": "above",
     "cat": "comparison",
-    "desc": "True when the left series is above the right series (or a scalar threshold).",
+    "desc": "True when a is above b (or the threshold).",
     "compile_active": true,
     "inputs": {
       "ports": [
@@ -404,16 +1307,26 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
       "max": 2
     },
     "params": [
+      { "name": "a", "type": "attr", "label": "a", "default": null, "dtype": "float" },
+      {
+        "name": "b",
+        "type": "attr",
+        "label": "b",
+        "default": null,
+        "dtype": "float",
+        "optional": true
+      },
       {
         "name": "threshold",
         "type": "number",
         "label": "threshold",
         "default": null,
         "optional": true
-      }
+      },
+      { "name": "out", "type": "write", "label": "out", "default": "@above", "dtype": "bool" }
     ],
-    "reads": ["@series"],
-    "writes": ["@bool"],
+    "reads": ["@a", "@b"],
+    "writes": ["@above"],
     "subtitle": "above",
     "setting_key": null,
     "ins": 2,
@@ -422,7 +1335,7 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
   {
     "name": "below",
     "cat": "comparison",
-    "desc": "True when the left series is below the right series (or a scalar threshold).",
+    "desc": "True when a is below b (or the threshold).",
     "compile_active": true,
     "inputs": {
       "ports": [
@@ -434,16 +1347,26 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
       "max": 2
     },
     "params": [
+      { "name": "a", "type": "attr", "label": "a", "default": null, "dtype": "float" },
+      {
+        "name": "b",
+        "type": "attr",
+        "label": "b",
+        "default": null,
+        "dtype": "float",
+        "optional": true
+      },
       {
         "name": "threshold",
         "type": "number",
         "label": "threshold",
         "default": null,
         "optional": true
-      }
+      },
+      { "name": "out", "type": "write", "label": "out", "default": "@below", "dtype": "bool" }
     ],
-    "reads": ["@series"],
-    "writes": ["@bool"],
+    "reads": ["@a", "@b"],
+    "writes": ["@below"],
     "subtitle": "below",
     "setting_key": null,
     "ins": 2,
@@ -463,9 +1386,12 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
       "min": 1,
       "max": 16
     },
-    "params": [],
+    "params": [
+      { "name": "terms", "type": "attr_list", "label": "terms", "default": null, "dtype": "bool" },
+      { "name": "out", "type": "write", "label": "out", "default": "@and", "dtype": "bool" }
+    ],
     "reads": ["@bool"],
-    "writes": ["@bool"],
+    "writes": ["@and"],
     "subtitle": "AND",
     "setting_key": null,
     "ins": 2,
@@ -485,9 +1411,12 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
       "min": 1,
       "max": 16
     },
-    "params": [],
+    "params": [
+      { "name": "terms", "type": "attr_list", "label": "terms", "default": null, "dtype": "bool" },
+      { "name": "out", "type": "write", "label": "out", "default": "@or", "dtype": "bool" }
+    ],
     "reads": ["@bool"],
-    "writes": ["@bool"],
+    "writes": ["@or"],
     "subtitle": "OR",
     "setting_key": null,
     "ins": 2,
@@ -506,12 +1435,40 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
       "min": 1,
       "max": 1
     },
-    "params": [],
+    "params": [
+      { "name": "signal", "type": "attr", "label": "signal", "default": null, "dtype": "bool" },
+      { "name": "out", "type": "write", "label": "out", "default": "@not", "dtype": "bool" }
+    ],
     "reads": ["@bool"],
-    "writes": ["@bool"],
+    "writes": ["@not"],
     "subtitle": "NOT",
     "setting_key": null,
     "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "xor",
+    "cat": "logic",
+    "desc": "True when an odd number of incoming boolean signals are true (two signals: exactly one).",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "in0" },
+        { "label": "in1", "optional": true }
+      ],
+      "dynamic": true,
+      "min": 1,
+      "max": 16
+    },
+    "params": [
+      { "name": "terms", "type": "attr_list", "label": "terms", "default": null, "dtype": "bool" },
+      { "name": "out", "type": "write", "label": "out", "default": "@xor", "dtype": "bool" }
+    ],
+    "reads": ["@bool"],
+    "writes": ["@xor"],
+    "subtitle": "XOR",
+    "setting_key": null,
+    "ins": 2,
     "outs": 1
   },
   {
@@ -534,10 +1491,11 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "min": 0.0,
         "max": 1.0,
         "unit": "frac"
-      }
+      },
+      { "name": "out", "type": "write", "label": "out", "default": "@size_frac", "dtype": "float" }
     ],
     "reads": [],
-    "writes": ["@setting"],
+    "writes": ["@size_frac"],
     "subtitle": "Size: 1 (100%)",
     "setting_key": "position_size",
     "ins": 0,
@@ -563,10 +1521,11 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "min": 0.0,
         "unit": "%",
         "optional": true
-      }
+      },
+      { "name": "out", "type": "write", "label": "out", "default": "@stop_pct", "dtype": "float" }
     ],
     "reads": [],
-    "writes": ["@setting"],
+    "writes": ["@stop_pct"],
     "subtitle": "Stop: 5%",
     "setting_key": "stop_loss",
     "ins": 0,
@@ -584,10 +1543,17 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
       "max": 0
     },
     "params": [
-      { "name": "bps", "type": "number", "label": "bps", "default": 2.0, "min": 0.0, "unit": "bps" }
+      { "name": "bps", "type": "number", "label": "bps", "default": 2.0, "min": 0.0, "unit": "bps" },
+      {
+        "name": "out",
+        "type": "write",
+        "label": "out",
+        "default": "@slippage_bps",
+        "dtype": "float"
+      }
     ],
     "reads": [],
-    "writes": ["@setting"],
+    "writes": ["@slippage_bps"],
     "subtitle": "Slippage: 2 bps",
     "setting_key": "slippage_bps",
     "ins": 0,
@@ -620,10 +1586,24 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "default": 0.0,
         "min": 0.0,
         "unit": "$"
+      },
+      {
+        "name": "out_rate",
+        "type": "write",
+        "label": "out_rate",
+        "default": "@per_share_rate",
+        "dtype": "float"
+      },
+      {
+        "name": "out_min",
+        "type": "write",
+        "label": "out_min",
+        "default": "@min_per_order",
+        "dtype": "float"
       }
     ],
     "reads": [],
-    "writes": ["@setting"],
+    "writes": ["@per_share_rate", "@min_per_order"],
     "subtitle": "Commission: free",
     "setting_key": "commission",
     "ins": 0,
@@ -676,10 +1656,17 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "default": 0.0,
         "min": 0.0,
         "unit": "%"
+      },
+      {
+        "name": "out",
+        "type": "write",
+        "label": "out",
+        "default": "@trail_value",
+        "dtype": "float"
       }
     ],
     "reads": [],
-    "writes": ["@setting"],
+    "writes": ["@trail_value"],
     "subtitle": "Trail: 5%",
     "setting_key": "trailing_stop",
     "ins": 0,
@@ -698,7 +1685,9 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
       "min": 1,
       "max": 1
     },
-    "params": [],
+    "params": [
+      { "name": "signal", "type": "attr", "label": "signal", "default": null, "dtype": "bool" }
+    ],
     "reads": ["@bool"],
     "writes": [],
     "subtitle": "Entry",
@@ -719,7 +1708,16 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
       "min": 0,
       "max": 1
     },
-    "params": [],
+    "params": [
+      {
+        "name": "signal",
+        "type": "attr",
+        "label": "signal",
+        "default": null,
+        "dtype": "bool",
+        "optional": true
+      }
+    ],
     "reads": ["@bool"],
     "writes": [],
     "subtitle": "Exit",

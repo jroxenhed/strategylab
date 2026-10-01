@@ -7,17 +7,17 @@ thin wrapper that turns errors into HTTP responses.
 """
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 from models import StrategyRequest
 from nodebuilder.api_models import GraphBacktestRequest, GraphBacktestResponse
 from nodebuilder.compile import compile as _compile_graph
-from nodebuilder.evaluator import compute_indicators_from_specs, evaluate_graph
+from nodebuilder.evaluator import evaluate_graph
+from nodebuilder.prepare import NO_EXIT_ATTR, build_graph_attrs
 from nodebuilder.sim_settings import settings_overrides
 
 # The exit sentinel compile() uses when nothing is wired into Exit.
-_NO_EXIT_ATTR = "@always_false"
+_NO_EXIT_ATTR = NO_EXIT_ATTR
 
 # Summary keys only the graph backtest returns.  The rule backtest response
 # does not have them, so parity checks skip these keys.
@@ -151,7 +151,6 @@ def run_graph_backtest(
         ValueError: invalid source or other data issues.
         HTTPException: re-raised from _run_simulation.
     """
-    from indicators import OHLCVSeries
     from routes.backtest import _run_simulation
     from shared import _fetch, _format_time_index, require_valid_source
 
@@ -168,39 +167,11 @@ def run_graph_backtest(
     if df is None:
         df = _fetch(req.ticker, req.start, req.end, req.interval, source=source)
 
-    # 5. Build OHLCVSeries and compute indicators from graph specs
-    vol_series = df["Volume"] if "Volume" in df.columns else pd.Series(0, index=df.index)
-    ohlcv = OHLCVSeries(
-        close=df["Close"],
-        high=df["High"],
-        low=df["Low"],
-        volume=vol_series,
-    )
-    indicator_attrs = compute_indicators_from_specs(program.indicator_specs, ohlcv)
-
-    # 6. Seed raw OHLCV attrs so comparisons reading @close/@volume work
-    indicator_attrs["@close"] = df["Close"]
-    indicator_attrs["@open"] = df["Open"]
-    indicator_attrs["@high"] = df["High"]
-    indicator_attrs["@low"] = df["Low"]
-    indicator_attrs["@volume"] = vol_series
-    # Seed the always-false sentinel (used when no exit terminal is wired)
-    indicator_attrs[_NO_EXIT_ATTR] = pd.Series(0.0, index=df.index, dtype="float64")
-
-    # 6b. If trailing_stop is ATR-based and the graph has no explicit ATR node,
-    # compute ATR (period=14) so _run_simulation can use it for the trailing stop.
-    # Without this, indicators.get("atr") returns None and the ATR value is 0
-    # (trail_stop_price = trail_peak + 0 = trail_peak, triggering immediately).
-    ts_config = settings.get("trailing_stop")
-    if ts_config is not None and getattr(ts_config, "type", None) == "atr" and "atr" not in indicator_attrs:
-        from indicators import compute_instance
-        atr_result = compute_instance("atr", {"period": 14}, ohlcv)
-        indicator_attrs["atr"] = atr_result["atr"]
-
-    # 7. Pre-allocate per-op output series as float64 (default NaN)
-    for op in program.per_bar_program:
-        if op.writes not in indicator_attrs:
-            indicator_attrs[op.writes] = pd.Series(np.nan, index=df.index, dtype="float64")
+    # 5-7. The attrs the graph cooks from: the bar series, the always-false
+    # exit sentinel, and ATR(14) when the trailing stop is ATR based (without
+    # it the ATR reads 0 and the trail fires at once).  nodebuilder.prepare
+    # builds them for the live bot too, so both paths see the same series.
+    indicator_attrs = build_graph_attrs(program, df, settings.get("trailing_stop"))
 
     # 8. Build memoising signal callables that match _run_simulation's signature:
     #    buy_signal_fn(i, curr_regime_active) -> (fired, rules, direction)

@@ -4,6 +4,7 @@ import pytest
 
 from pydantic import ValidationError
 
+from nodebuilder.migrate import CURRENT_GRAPH_VERSION
 from nodebuilder.models import (
     MIN_SUPPORTED_VERSION,
     STREAM_SCHEMA_VERSION,
@@ -154,10 +155,10 @@ def test_version_below_min_raises():
 
 
 def test_version_at_min_loads():
-    """_version == MIN_SUPPORTED_VERSION loads, and is migrated up to v2."""
+    """_version == MIN_SUPPORTED_VERSION loads, and is migrated up to the current version."""
     data = {"_version": MIN_SUPPORTED_VERSION, "nodes": {}, "wires": []}
     g = Graph.load(data)
-    assert g.version == 2
+    assert g.version == CURRENT_GRAPH_VERSION
     assert g.stream_schema == STREAM_SCHEMA_VERSION
 
 
@@ -378,7 +379,7 @@ def _n(node_id: str, name: str, parent: str | None = None, node_type: str = "rsi
 
 def test_v2_defaults_on_a_bare_graph():
     g = Graph()
-    assert g.version == 2
+    assert g.version == CURRENT_GRAPH_VERSION
     assert g.stream_schema == STREAM_SCHEMA_VERSION == 1
     assert g.meta == {}
     assert g.annotations.boxes == [] and g.annotations.notes == []

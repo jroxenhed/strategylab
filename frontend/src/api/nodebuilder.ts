@@ -16,10 +16,11 @@ import type { StrategyRequest } from '../shared/types/strategy'
 // ---------------------------------------------------------------------------
 
 /**
- * A node parameter value. W7 adds `{ expr: string }` for code expressions;
- * until then every value is a plain scalar or null.
+ * A node parameter value. A list of names is used by `attr_list` params
+ * (logic `terms`) and by multi-pick params such as the weekday picker
+ * (`['mon', 'tue']`). W7 adds `{ expr: string }` for code expressions.
  */
-export type ParamValue = number | string | boolean | null
+export type ParamValue = number | string | boolean | null | string[]
 
 /** A single node in the graph. */
 export interface GraphNode {
@@ -84,10 +85,40 @@ export interface Graph {
 }
 
 /** Graph version and stream schema the frontend writes for new graphs. */
-export const GRAPH_VERSION = 2
+export const GRAPH_VERSION = 3
 export const STREAM_SCHEMA_VERSION = 1
 
-/** A new, empty, editable v2 graph. */
+// ---------------------------------------------------------------------------
+// The stream schema (plan section 3.3). /validate returns one per node,
+// describing that node's OUTPUT stream. A node's input stream is the union
+// of the output streams of the nodes wired into it.
+// ---------------------------------------------------------------------------
+
+/** Per-bar attribute types. */
+export type PointDtype = 'float' | 'bool'
+/** One-value-per-cook attribute types. W7 adds 'any' for an unannotated code write. */
+export type DetailDtype = 'float' | 'int' | 'bool' | 'str'
+
+/** One attribute on a stream: its name (with the @ sigil), type and writer. */
+export interface AttrInfo {
+  name: string
+  dtype: PointDtype | DetailDtype | 'any'
+  /** Id of the node that wrote it, or null when the server does not know. */
+  written_by: string | null
+}
+
+/** One node's output stream, as /validate describes it. */
+export interface StreamSchema {
+  stream_schema: number
+  /** Per-bar columns, in stream order. */
+  points: AttrInfo[]
+  /** Scalars, one value per cook (settings such as @stop_pct). */
+  detail: AttrInfo[]
+  /** Reserved: always [] until W8. */
+  prims: { kind: string; attrs: AttrInfo[] }[]
+}
+
+/** A new, empty, editable graph at the current version. */
 export function emptyGraph(): Graph {
   return {
     _version: GRAPH_VERSION,

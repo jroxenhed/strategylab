@@ -1,0 +1,484 @@
+/*
+ * Ports, attribute chips, the attribute picker, wires and the time widgets
+ * (F435 W2 item 2.E, specs S08 to S12). Tokens come from tokens.css.
+ * Node-level values are passed as CSS variables: --cat (category color)
+ * and --tint (category tint).
+ */
+
+/* ── Ports (S08) ─────────────────────────────────────────────────────────── */
+
+.nodebuilder-root .react-flow__handle.nb-port {
+  width: 10px;
+  height: 10px;
+  min-width: 10px;
+  min-height: 10px;
+  border-radius: 50%;
+  box-sizing: border-box;
+  transition: transform var(--nb-motion-fast) var(--nb-ease, ease),
+    box-shadow var(--nb-motion-fast) var(--nb-ease, ease);
+}
+
+/* An 18x18 grab area around every port, so wiring is easy when zoomed out. */
+.nodebuilder-root .react-flow__handle.nb-port::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  transform: translate(-50%, -50%);
+}
+
+.nodebuilder-root .react-flow__handle.nb-port--in {
+  top: -5px;
+  bottom: auto;
+  transform: translateX(-50%);
+  background: var(--nb-bg);
+  border: 2px solid var(--cat);
+}
+
+/* A wire plugs in: the ring becomes a filled disc. */
+.nodebuilder-root .react-flow__handle.nb-port--in.nb-port--connected { background: var(--cat); }
+
+.nodebuilder-root .react-flow__handle.nb-port--spare {
+  border-style: dashed;
+  opacity: 0.6;
+}
+
+.nodebuilder-root .react-flow__handle.nb-port--in.nb-port--error { border-color: var(--nb-error); }
+
+.nodebuilder-root .react-flow__handle.nb-port--out {
+  top: auto;
+  bottom: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--cat);
+  border: 1px solid var(--nb-bg);
+}
+
+.nodebuilder-root .react-flow__handle.nb-port:hover {
+  transform: translateX(-50%) scale(1.3);
+  box-shadow: 0 0 6px var(--cat);
+}
+
+/* While a wire is dragged over a port. */
+.nodebuilder-root .react-flow__handle.nb-port.connectingto.valid {
+  border-color: var(--nb-wire-drag);
+  transform: translateX(-50%) scale(1.3);
+}
+.nodebuilder-root .react-flow__handle.nb-port--in.connectingto:not(.valid) {
+  border-color: var(--nb-wire-invalid);
+  cursor: not-allowed;
+}
+
+.nodebuilder-root .nb-port-label {
+  position: absolute;
+  top: -16px;
+  transform: translateX(-50%);
+  font-family: var(--nb-font-mono);
+  font-size: 9px;
+  line-height: 10px;
+  color: var(--nb-text-muted);
+  text-shadow: 0 0 3px var(--nb-bg), 0 0 3px var(--nb-bg);
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+/* A node with one input shows its port name on hover only. */
+.nodebuilder-root .react-flow__node:not(:hover) .nb-port-label--hover { display: none; }
+
+/* ── Chips (S09 read chips, S10 write chips) ─────────────────────────────── */
+
+.nodebuilder-root .nb-chip {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 16px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  font-family: var(--nb-font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 12px;
+  white-space: nowrap;
+  background: var(--nb-bg-chip-read);
+  color: var(--nb-text-muted);
+}
+
+.nodebuilder-root .nb-chip--missing {
+  color: var(--nb-error);
+  text-decoration: underline dotted;
+}
+
+.nodebuilder-root .nb-chip--write {
+  background: var(--tint, var(--nb-bg-chip-read));
+  color: var(--cat, var(--nb-text-secondary));
+  cursor: text;
+  font: inherit;
+  font-family: var(--nb-font-mono);
+  font-size: 10px;
+  font-weight: 500;
+}
+.nodebuilder-root .nb-chip--write.nb-chip--static { cursor: default; }
+.nodebuilder-root .nb-chip--write:not(.nb-chip--static):not(.nb-chip--readonly):hover {
+  background: color-mix(in srgb, var(--tint, var(--nb-bg-chip-read)) 82%, var(--cat, #fff) 18%);
+}
+.nodebuilder-root .nb-chip--write.nb-chip--readonly { cursor: default; }
+.nodebuilder-root .nb-chip--clash { color: var(--nb-error); }
+.nodebuilder-root .nb-chip--shadowed { text-decoration: underline dotted var(--nb-warn); }
+.nodebuilder-root .nb-chip:focus-visible { outline: 2px solid var(--nb-border-focus); outline-offset: 1px; }
+
+.nodebuilder-root .nb-chip-edit {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  box-sizing: border-box;
+  padding: 0 0 0 5px;
+  border-radius: 3px;
+  background: var(--nb-bg-input);
+  border: 1px solid var(--nb-border-focus);
+  color: var(--cat, var(--nb-text));
+  font-family: var(--nb-font-mono);
+  font-size: 10px;
+  font-weight: 500;
+}
+.nodebuilder-root .nb-chip-edit--invalid { border: 1px solid var(--nb-error); }
+.nodebuilder-root .nb-chip-edit input {
+  min-width: 40px;
+  padding: 0 4px 0 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--nb-text);
+  font: inherit;
+}
+
+.nodebuilder-root .nb-chip--more { cursor: pointer; }
+
+/* ── Attribute picker (S09) ──────────────────────────────────────────────── */
+
+.nodebuilder-root .nb-attr-cell {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.nodebuilder-root .nb-attr-chip {
+  cursor: pointer;
+  font-family: var(--nb-font-mono);
+}
+.nodebuilder-root .nb-attr-chip__caret { color: var(--nb-text-dim); margin-left: 3px; }
+.nodebuilder-root .nb-attr-chip--unset { color: var(--nb-text-dim); }
+.nodebuilder-root .nb-attr-chip--required {
+  color: var(--nb-warn);
+  border: 1px solid rgba(251, 191, 36, 0.5);
+}
+.nodebuilder-root .nb-attr-chip--type { color: var(--nb-warn); }
+/* The same name reaches the reader from two writers (attr_clash): an error. */
+.nodebuilder-root .nb-attr-chip--clash { color: var(--nb-error); }
+.nodebuilder-root .nb-attr-chip--open { border: 1px solid var(--nb-border-focus); }
+.nodebuilder-root .nb-attr-chip--disabled { cursor: default; }
+.nodebuilder-root .nb-attr-chip__remove {
+  display: none;
+  margin-left: 3px;
+  font-size: 10px;
+  color: var(--nb-text-dim);
+  cursor: pointer;
+}
+.nodebuilder-root .nb-attr-chip:hover .nb-attr-chip__remove { display: inline; }
+.nodebuilder-root .nb-attr-chip--add {
+  background: transparent;
+  border: 1px dashed var(--nb-border-strong);
+  color: var(--nb-text-muted);
+  cursor: pointer;
+}
+
+.nodebuilder-root .nb-attr-pop { display: flex; flex-direction: column; overflow: hidden; }
+.nodebuilder-root .nb-attr-pop__search {
+  height: 28px;
+  box-sizing: border-box;
+  margin: 0 0 4px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--nb-bg-input);
+  border: 1px solid var(--nb-border);
+  color: var(--nb-text);
+  font-family: var(--nb-font-mono);
+  font-size: 12px;
+  outline: none;
+}
+.nodebuilder-root .nb-attr-pop__search:focus { border: 1px solid var(--nb-border-focus); }
+.nodebuilder-root .nb-attr-pop__list { overflow-y: auto; flex: 1; min-height: 0; }
+.nodebuilder-root .nb-attr-pop__group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 22px;
+  padding: 0 6px;
+  cursor: pointer;
+}
+.nodebuilder-root .nb-attr-pop__writer {
+  font-family: var(--nb-font-mono);
+  font-size: 9px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--tint, var(--nb-bg-chip-read));
+  color: var(--cat, var(--nb-text-muted));
+}
+.nodebuilder-root .nb-attr-pop__count { font-family: var(--nb-font-mono); font-size: 10px; color: var(--nb-text-dim); }
+.nodebuilder-root .nb-attr-pop__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: var(--nb-font-mono);
+  font-size: 11px;
+  color: var(--nb-text);
+}
+.nodebuilder-root .nb-attr-pop__row--active { background: var(--nb-bg-active, rgba(56, 189, 248, 0.14)); }
+.nodebuilder-root .nb-attr-pop__row--dim { opacity: 0.5; }
+.nodebuilder-root .nb-attr-pop__dtype { font-size: 9px; color: var(--nb-text-dim); }
+.nodebuilder-root .nb-attr-pop__check { margin-left: auto; color: var(--nb-selection); }
+.nodebuilder-root .nb-attr-pop__warn { margin-left: auto; color: var(--nb-warn); font-size: 10px; }
+.nodebuilder-root .nb-attr-pop__empty {
+  padding: 8px;
+  font-family: var(--nb-font-sans);
+  font-size: 11px;
+  color: var(--nb-text-dim);
+}
+.nodebuilder-root .nb-attr-pop__footer {
+  height: 22px;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  font-family: var(--nb-font-mono);
+  font-size: 10px;
+  color: var(--nb-text-dim);
+}
+
+/* ── Wires (S11, foundation 5) ───────────────────────────────────────────── */
+
+.nodebuilder-root .nb-edge__path {
+  fill: none;
+  stroke: var(--nb-wire);
+  stroke-width: var(--nb-wire-width);
+  stroke-linecap: round;
+}
+.nodebuilder-root .react-flow__edge:hover .nb-edge__path,
+.nodebuilder-root .nb-edge--hot .nb-edge__path {
+  stroke: var(--nb-wire-hover);
+  stroke-width: var(--nb-wire-width-hot);
+}
+.nodebuilder-root .nb-edge--selected .nb-edge__path {
+  stroke: var(--nb-wire-selected);
+  stroke-width: var(--nb-wire-width-hot);
+}
+.nodebuilder-root .nb-edge--diag .nb-edge__path,
+.nodebuilder-root .react-flow__edge:hover .nb-edge--diag .nb-edge__path {
+  stroke: var(--nb-wire-invalid);
+  stroke-opacity: 0.7;
+  stroke-width: var(--nb-wire-width);
+}
+.nodebuilder-root .nb-edge--diag.nb-edge--selected .nb-edge__path { stroke-width: var(--nb-wire-width-hot); }
+
+/* While a new wire is dragged. */
+.nodebuilder-root .react-flow__connection-path {
+  stroke: var(--nb-wire-drag);
+  stroke-width: 2px;
+  stroke-dasharray: 6 4;
+}
+
+.nodebuilder-root .nb-edge__label {
+  font-family: var(--nb-font-mono);
+  font-size: 10px;
+  fill: var(--nb-wire-label);
+  paint-order: stroke;
+  stroke: var(--nb-wire-label-halo);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  pointer-events: all;
+  cursor: pointer;
+}
+.nodebuilder-root .nb-edge__label--placeholder { fill: var(--nb-text-dim); }
+.nodebuilder-root .nb-edge--selected .nb-edge__label { fill: var(--nb-wire-selected); }
+.nodebuilder-root .nb-edge--diag .nb-edge__label { fill: var(--nb-error); }
+/* Hidden at rest (zoomed out, a fan-out duplicate, or no room); hover shows it. */
+.nodebuilder-root .nb-edge__label--rest-hidden { display: none; }
+.nodebuilder-root .react-flow__edge:hover .nb-edge__label--rest-hidden,
+.nodebuilder-root .nb-edge--hot .nb-edge__label--rest-hidden { display: inline; }
+
+/* ── Stream popover (S11) ────────────────────────────────────────────────── */
+
+.nb-stream-pop {
+  position: fixed;
+  z-index: 1000;
+  width: 280px;
+  box-sizing: border-box;
+  padding: 8px;
+  pointer-events: none;
+  background: var(--nb-bg-elevated);
+  border: 1px solid var(--nb-border-strong);
+  border-radius: var(--nb-radius-menu, 8px);
+  box-shadow: var(--nb-shadow-popover);
+  font-family: var(--nb-font-sans);
+}
+.nb-stream-pop__title {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--nb-text);
+}
+.nb-stream-pop__wire {
+  font-family: var(--nb-font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--nb-text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nb-stream-pop__writer {
+  margin: 4px 0 2px;
+  font-family: var(--nb-font-mono);
+  font-size: 10px;
+  color: var(--nb-text-dim);
+}
+.nb-stream-pop__chips { display: flex; flex-wrap: wrap; gap: 3px; }
+.nb-stream-pop .nb-chip { background: var(--tint, var(--nb-bg-chip-read)); color: var(--cat, var(--nb-text-muted)); }
+.nb-stream-pop .nb-chip--read-here { box-shadow: 0 0 0 1px var(--nb-selection); }
+.nb-stream-pop__footer {
+  height: 18px;
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  font-size: 10px;
+  color: var(--nb-text-dim);
+}
+
+/* ── Time-of-day range and day-of-week (S12) ─────────────────────────────── */
+
+.nodebuilder-root .nb-time-cell {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0 3px;
+  font-family: var(--nb-font-mono);
+  font-size: 11px;
+  color: var(--nb-text);
+  cursor: pointer;
+}
+.nodebuilder-root .nb-time-cell--unset { color: var(--nb-text-dim); }
+/* A stored range that does not parse: shown raw, as an error. */
+.nodebuilder-root .nb-time-cell--invalid { color: var(--nb-error); text-decoration: underline dotted; }
+.nodebuilder-root .nb-time-cell:disabled { cursor: default; }
+.nodebuilder-root .nb-time-pop { padding: 6px; font-family: var(--nb-font-sans); }
+.nodebuilder-root .nb-time-pop__inputs { display: flex; align-items: center; gap: 8px; }
+.nodebuilder-root .nb-time-pop__input {
+  width: 72px;
+  height: 26px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--nb-bg-input);
+  border: 1px solid var(--nb-border);
+  color: var(--nb-text);
+  font-family: var(--nb-font-mono);
+  font-size: 12px;
+  outline: none;
+}
+.nodebuilder-root .nb-time-pop__input:focus { border: 1px solid var(--nb-border-focus); }
+.nodebuilder-root .nb-time-pop__input--invalid,
+.nodebuilder-root .nb-time-pop__input--invalid:focus { border: 1px solid var(--nb-error); }
+.nodebuilder-root .nb-time-pop__tz { font-size: 11px; color: var(--nb-text-dim); }
+.nodebuilder-root .nb-time-pop__help { margin-top: 4px; font-size: 11px; color: var(--nb-error); }
+.nodebuilder-root .nb-time-strip { position: relative; height: 24px; margin: 12px 6px 14px; touch-action: none; }
+.nodebuilder-root .nb-time-strip__track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 6px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--nb-border-strong);
+}
+.nodebuilder-root .nb-time-strip__bar {
+  position: absolute;
+  top: 6px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--cat, var(--nb-accent-primary));
+}
+.nodebuilder-root .nb-time-strip__grip {
+  position: absolute;
+  top: 3px;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  border-radius: 50%;
+  background: var(--nb-text);
+  box-shadow: 0 0 0 1px var(--nb-bg);
+  cursor: ew-resize;
+}
+.nodebuilder-root .nb-time-strip__grip:focus-visible { outline: 2px solid var(--nb-border-focus); outline-offset: 1px; }
+.nodebuilder-root .nb-time-strip__clip { position: absolute; top: 1px; font-size: 9px; color: var(--nb-text-dim); }
+.nodebuilder-root .nb-time-strip__tick {
+  position: absolute;
+  top: 14px;
+  transform: translateX(-50%);
+  font-family: var(--nb-font-mono);
+  font-size: 9px;
+  color: var(--nb-text-dim);
+}
+.nodebuilder-root .nb-time-pop__presets { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.nodebuilder-root .nb-time-pop__preset {
+  height: 20px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--nb-text-secondary);
+  font-family: var(--nb-font-sans);
+  font-size: 11px;
+  cursor: pointer;
+}
+.nodebuilder-root .nb-time-pop__preset:hover { color: var(--nb-text); text-decoration: underline; }
+.nodebuilder-root .nb-time-pop__footer { display: flex; justify-content: flex-end; gap: 8px; }
+
+.nodebuilder-root .nb-days { display: flex; gap: 3px; justify-content: flex-end; flex: 1; }
+.nodebuilder-root .nb-days--none .nb-day { box-shadow: 0 0 0 1px var(--nb-warn); }
+.nodebuilder-root .nb-day {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  box-sizing: border-box;
+  border-radius: 3px;
+  font-family: var(--nb-font-mono);
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+  cursor: pointer;
+  background: var(--nb-bg-input);
+  color: var(--nb-text-dim);
+  border: 1px solid var(--nb-border);
+}
+.nodebuilder-root .nb-day--on {
+  background: var(--tint, var(--nb-bg-chip-read));
+  color: var(--cat, var(--nb-text));
+  border: 1px solid transparent;
+}
+.nodebuilder-root .nb-day:disabled { cursor: default; }
+.nodebuilder-root .nb-day:focus-visible { outline: 2px solid var(--nb-border-focus); outline-offset: 1px; }

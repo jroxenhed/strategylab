@@ -1,451 +1,230 @@
-"""Unit 7b — tests for node impl functions in nodebuilder/nodes.py."""
+"""The trading node types, one impl at a time (F435 W2, plan D5).
+
+Each node type is registered by a module in nodebuilder/trading/.  These
+tests call a type's impl directly on a hand-made stream, with params as
+compile resolves them, and check the column it writes.  The semantics must
+match signal_engine.eval_rule: bar 0 False for every comparison and logic
+node, a NaN on either side is False, crossovers fire on the crossing bar.
+"""
 from __future__ import annotations
 
-import math
-
+import numpy as np
 import pandas as pd
 import pytest
 
-from nodebuilder.nodes import (
-    NODE_CATALOG,
-    NODE_IMPLS,
-    IndicatorImplResult,
-    PerBarImplResult,
-    SimulatorSettingImplResult,
-    above_impl,
-    and_impl,
-    atr_impl,
-    below_impl,
-    bollinger_impl,
-    commission_impl,
-    crosses_above_impl,
-    crosses_below_impl,
-    ema_impl,
-    macd_impl,
-    not_impl,
-    or_impl,
-    position_size_impl,
-    rsi_impl,
-    slippage_impl,
-    sma_impl,
-    stop_loss_impl,
-)
+from indicators import OHLCVSeries, compute_instance
+from nodebuilder.kernel import registry
+from nodebuilder.kernel.schema import Params
+from nodebuilder.kernel.stream import ColumnStore, Stream
+from nodebuilder.nodes import NODE_CATALOG
+
+NAN = float("nan")
+
+
+def _stream(n: int | None = None, **columns) -> Stream:
+    first = next(iter(columns.values()))
+    n = n if n is not None else len(first)
+    store = ColumnStore(pd.RangeIndex(n))
+    out = Stream.empty(store)
+    for name, values in columns.items():
+        out = out.with_point(f"@{name}", np.asarray(values), "/src")
+    return out
+
+
+def _run(node_type: str, inputs: Stream, env: dict | None = None, **params) -> Stream:
+    nt = registry.get(node_type)
+    values = {p.name: p.default for p in nt.params}
+    values.update(params)
+    return nt.impl(inputs, Params(values, "/n", env or {"memo": {}}))
+
+
+def _col(stream: Stream, name: str) -> list:
+    return stream.column(name).tolist()
 
 
 # ---------------------------------------------------------------------------
-# Helper — build a single-column attrs dict from a list
+# Indicators: the same values as indicators.compute_instance
 # ---------------------------------------------------------------------------
 
-def _attrs(name: str, values: list) -> dict:
-    """Wrap a list of values as a pd.Series under the given attribute name."""
-    return {name: pd.Series(values, dtype=float)}
-
-
-def _attrs2(a: str, va: list, b: str, vb: list) -> dict:
-    return {
-        a: pd.Series(va, dtype=float),
-        b: pd.Series(vb, dtype=float),
-    }
-
-
-# ===========================================================================
-# Indicator impls
-# ===========================================================================
-
+@pytest.fixture
+def bars():
+    rng = np.random.default_rng(7)
+    close = 100 + np.cumsum(rng.normal(0, 1, 120))
+    return {"close": close, "high": close + 1.0, "low": close - 1.0}
 
-class TestRsiImpl:
-    def test_default(self):
-        r = rsi_impl({})
-        assert isinstance(r, IndicatorImplResult)
-        assert r.catalog_name == "rsi"
-        assert r.params["period"] == 14
-        assert r.params["type"] == "sma"
-        assert r.write_attr == "@rsi"
-
-    def test_custom(self):
-        r = rsi_impl({"period": 9, "type": "wilder"})
-        assert r.params["period"] == 9
-        assert r.params["type"] == "wilder"
-
-    def test_period_below_2_raises(self):
-        with pytest.raises(ValueError, match="period"):
-            rsi_impl({"period": 1})
-
-    def test_period_above_500_raises(self):
-        with pytest.raises(ValueError, match="period"):
-            rsi_impl({"period": 501})
-
-
-class TestMacdImpl:
-    def test_defaults(self):
-        r = macd_impl({})
-        assert r.catalog_name == "macd"
-        assert r.params["fast"] == 12
-        assert r.params["slow"] == 26
-        assert r.params["signal"] == 9
-        assert r.write_attr == "@macd_line"
-
-    def test_invalid_fast_raises(self):
-        with pytest.raises(ValueError, match="fast"):
-            macd_impl({"fast": 1})
-
-
-class TestSmaEmaDistinct:
-    def test_sma_catalog_name_and_type(self):
-        r = sma_impl({})
-        assert r.catalog_name == "sma"
-        assert r.params["type"] == "sma"
-        assert r.write_attr == "@sma"
-
-    def test_ema_catalog_name_and_type(self):
-        r = ema_impl({})
-        assert r.catalog_name == "ema"
-        assert r.params["type"] == "ema"
-        assert r.write_attr == "@ema"
-
-    def test_sma_ema_are_distinct(self):
-        sma = sma_impl({})
-        ema = ema_impl({})
-        assert sma.catalog_name != ema.catalog_name
-        assert sma.params["type"] != ema.params["type"]
-
-    def test_sma_period_below_2_raises(self):
-        with pytest.raises(ValueError):
-            sma_impl({"period": 0})
-
-    def test_ema_period_below_2_raises(self):
-        with pytest.raises(ValueError):
-            ema_impl({"period": 1})
-
-
-class TestBollingerImpl:
-    def test_defaults(self):
-        r = bollinger_impl({})
-        assert r.catalog_name == "bollinger"
-        assert r.params["period"] == 20
-        assert r.params["stddev"] == 2.0
-        assert r.write_attr == "@bb_upper"
-
-    def test_invalid_period_raises(self):
-        with pytest.raises(ValueError, match="period"):
-            bollinger_impl({"period": 1})
-
-    def test_invalid_stddev_raises(self):
-        with pytest.raises(ValueError, match="stddev"):
-            bollinger_impl({"stddev": 0.1})
-
-
-class TestAtrImpl:
-    def test_default(self):
-        r = atr_impl({})
-        assert r.catalog_name == "atr"
-        assert r.params["period"] == 14
-        assert r.write_attr == "@atr"
-
-    def test_invalid_period_raises(self):
-        with pytest.raises(ValueError, match="period"):
-            atr_impl({"period": 1})
-
-
-# ===========================================================================
-# Comparison impls
-# ===========================================================================
-
-
-class TestBelowImpl:
-    def test_threshold_true(self):
-        result = below_impl({"threshold": 30}, ("@rsi",))
-        attrs = _attrs("@rsi", [25.0])
-        assert result.fn(attrs, 0) is True
-
-    def test_threshold_false(self):
-        result = below_impl({"threshold": 30}, ("@rsi",))
-        attrs = _attrs("@rsi", [35.0])
-        assert result.fn(attrs, 0) is False
-
-    def test_two_inputs(self):
-        result = below_impl({}, ("@close", "@ema"))
-        attrs = _attrs2("@close", [100.0], "@ema", [110.0])
-        assert result.fn(attrs, 0) is True
-
-    def test_two_inputs_false(self):
-        result = below_impl({}, ("@close", "@ema"))
-        attrs = _attrs2("@close", [120.0], "@ema", [110.0])
-        assert result.fn(attrs, 0) is False
-
-    def test_nan_returns_false(self):
-        result = below_impl({"threshold": 30}, ("@rsi",))
-        attrs = _attrs("@rsi", [float("nan")])
-        assert result.fn(attrs, 0) is False
-
-    def test_missing_threshold_and_one_attr_raises(self):
-        with pytest.raises(ValueError):
-            below_impl({}, ("@rsi",))
-
-    def test_writes_bool(self):
-        r = below_impl({"threshold": 30}, ("@rsi",))
-        assert r.writes == "@bool"
-
-
-class TestAboveImpl:
-    def test_threshold_true(self):
-        result = above_impl({"threshold": 70}, ("@rsi",))
-        attrs = _attrs("@rsi", [75.0])
-        assert result.fn(attrs, 0) is True
-
-    def test_threshold_false(self):
-        result = above_impl({"threshold": 70}, ("@rsi",))
-        attrs = _attrs("@rsi", [65.0])
-        assert result.fn(attrs, 0) is False
-
-    def test_nan_returns_false(self):
-        result = above_impl({"threshold": 70}, ("@rsi",))
-        attrs = _attrs("@rsi", [float("nan")])
-        assert result.fn(attrs, 0) is False
-
-
-class TestCrossesAboveImpl:
-    def test_fires_on_crossover_bar(self):
-        # Series: [25, 28, 35] with threshold=30
-        # Bar 0: i=0 guard → False
-        # Bar 1: prev=25 < 30, now=28 < 30 → False (doesn't cross 30 yet)
-        # Bar 2: prev=28 < 30 <= 35 → True
-        result = crosses_above_impl({"threshold": 30.0}, ("@rsi",))
-        attrs = _attrs("@rsi", [25.0, 28.0, 35.0])
-        assert result.fn(attrs, 0) is False
-        assert result.fn(attrs, 1) is False
-        assert result.fn(attrs, 2) is True
-
-    def test_no_false_trigger_when_already_above(self):
-        # Series starts above threshold — no cross
-        result = crosses_above_impl({"threshold": 30.0}, ("@rsi",))
-        attrs = _attrs("@rsi", [35.0, 37.0, 40.0])
-        assert result.fn(attrs, 1) is False
-        assert result.fn(attrs, 2) is False
-
-    def test_two_series_crosses_above(self):
-        # close crosses above ema: [95, 98, 105] vs ema [100, 100, 100]
-        result = crosses_above_impl({}, ("@close", "@ema"))
-        attrs = _attrs2("@close", [95.0, 98.0, 105.0], "@ema", [100.0, 100.0, 100.0])
-        assert result.fn(attrs, 0) is False
-        assert result.fn(attrs, 1) is False   # 98 < 100, still below
-        assert result.fn(attrs, 2) is True    # 98 < 100 AND 105 >= 100
-
-    def test_nan_returns_false(self):
-        result = crosses_above_impl({"threshold": 30.0}, ("@rsi",))
-        attrs = _attrs("@rsi", [25.0, float("nan")])
-        assert result.fn(attrs, 1) is False
-
-    def test_guard_i0(self):
-        result = crosses_above_impl({"threshold": 30.0}, ("@rsi",))
-        attrs = _attrs("@rsi", [35.0])
-        assert result.fn(attrs, 0) is False
-
-
-class TestCrossesBelowImpl:
-    def test_fires_on_crossunder_bar(self):
-        # Series: [35, 32, 25] with threshold=30
-        # Bar 0: i=0 guard → False
-        # Bar 1: prev=35 > 30, now=32 > 30 → False
-        # Bar 2: prev=32 > 30 >= 25 → True
-        result = crosses_below_impl({"threshold": 30.0}, ("@rsi",))
-        attrs = _attrs("@rsi", [35.0, 32.0, 25.0])
-        assert result.fn(attrs, 0) is False
-        assert result.fn(attrs, 1) is False
-        assert result.fn(attrs, 2) is True
-
-    def test_two_series_crosses_below(self):
-        # close crosses below ema: [105, 102, 95] vs ema [100, 100, 100]
-        result = crosses_below_impl({}, ("@close", "@ema"))
-        attrs = _attrs2("@close", [105.0, 102.0, 95.0], "@ema", [100.0, 100.0, 100.0])
-        assert result.fn(attrs, 0) is False
-        assert result.fn(attrs, 1) is False   # 102 > 100, still above
-        assert result.fn(attrs, 2) is True    # 102 > 100 AND 95 <= 100
-
-    def test_guard_i0(self):
-        result = crosses_below_impl({"threshold": 30.0}, ("@rsi",))
-        attrs = _attrs("@rsi", [25.0])
-        assert result.fn(attrs, 0) is False
-
-
-# ===========================================================================
-# Logic impls
-# ===========================================================================
-
-
-class TestAndImpl:
-    def test_all_true(self):
-        result = and_impl({}, ("@a", "@b"))
-        attrs = {"@a": pd.Series([True]), "@b": pd.Series([True])}
-        assert result.fn(attrs, 0) is True
-
-    def test_one_false(self):
-        result = and_impl({}, ("@a", "@b"))
-        attrs = {"@a": pd.Series([True]), "@b": pd.Series([False])}
-        assert result.fn(attrs, 0) is False
-
-    def test_all_false(self):
-        result = and_impl({}, ("@a", "@b"))
-        attrs = {"@a": pd.Series([False]), "@b": pd.Series([False])}
-        assert result.fn(attrs, 0) is False
-
-
-class TestOrImpl:
-    def test_any_true(self):
-        result = or_impl({}, ("@a", "@b"))
-        attrs = {"@a": pd.Series([True]), "@b": pd.Series([False])}
-        assert result.fn(attrs, 0) is True
-
-    def test_all_false(self):
-        result = or_impl({}, ("@a", "@b"))
-        attrs = {"@a": pd.Series([False]), "@b": pd.Series([False])}
-        assert result.fn(attrs, 0) is False
-
-    def test_all_true(self):
-        result = or_impl({}, ("@a", "@b"))
-        attrs = {"@a": pd.Series([True]), "@b": pd.Series([True])}
-        assert result.fn(attrs, 0) is True
-
-
-class TestNotImpl:
-    def test_inverts_true(self):
-        result = not_impl({}, ("@a",))
-        attrs = {"@a": pd.Series([True, True])}
-        assert result.fn(attrs, 1) is False
-
-    def test_inverts_false(self):
-        result = not_impl({}, ("@a",))
-        attrs = {"@a": pd.Series([False, False])}
-        assert result.fn(attrs, 1) is True
-
-    def test_guard_i0_returns_false(self):
-        result = not_impl({}, ("@a",))
-        # Even if bar 0 is True, not_impl guard returns False at i=0
-        attrs = {"@a": pd.Series([True])}
-        assert result.fn(attrs, 0) is False
-
-    def test_no_incoming_raises(self):
-        with pytest.raises(ValueError):
-            not_impl({}, ())
-
-
-# ===========================================================================
-# Settings impls
-# ===========================================================================
-
-
-class TestPositionSizeImpl:
-    def test_default(self):
-        r = position_size_impl({})
-        assert isinstance(r, SimulatorSettingImplResult)
-        assert r.key == "position_size"
-        assert r.value == 1.0
-
-    def test_custom(self):
-        r = position_size_impl({"size": 0.5})
-        assert r.value == 0.5
-
-    def test_zero_raises(self):
-        with pytest.raises(ValueError):
-            position_size_impl({"size": 0.0})
-
-    def test_above_one_raises(self):
-        with pytest.raises(ValueError):
-            position_size_impl({"size": 1.5})
-
-
-class TestStopLossImpl:
-    def test_default_pct(self):
-        r = stop_loss_impl({"pct": 5.0})
-        assert r.key == "stop_loss_pct"
-        assert r.value == 5.0
-
-    def test_none_pct(self):
-        r = stop_loss_impl({"pct": None})
-        assert r.value is None
-
-    def test_missing_pct_is_none(self):
-        r = stop_loss_impl({})
-        assert r.value is None
-
-    def test_zero_pct_raises(self):
-        with pytest.raises(ValueError):
-            stop_loss_impl({"pct": 0.0})
-
-    def test_negative_pct_raises(self):
-        with pytest.raises(ValueError):
-            stop_loss_impl({"pct": -1.0})
-
-
-class TestSlippageImpl:
-    def test_default(self):
-        r = slippage_impl({})
-        assert r.key == "slippage_bps"
-        assert r.value == 2.0
-
-    def test_zero_allowed(self):
-        r = slippage_impl({"bps": 0.0})
-        assert r.value == 0.0
-
-    def test_negative_raises(self):
-        with pytest.raises(ValueError):
-            slippage_impl({"bps": -1.0})
-
-
-class TestCommissionImpl:
-    def test_composite_structure(self):
-        r = commission_impl({"per_share_rate": 0.0035, "min_per_order": 0.35})
-        assert r.key == "commission"
-        assert isinstance(r.value, dict)
-        assert r.value["per_share_rate"] == pytest.approx(0.0035)
-        assert r.value["min_per_order"] == pytest.approx(0.35)
-
-    def test_defaults_are_free(self):
-        r = commission_impl({})
-        assert r.value["per_share_rate"] == 0.0
-        assert r.value["min_per_order"] == 0.0
-
-    def test_negative_per_share_raises(self):
-        with pytest.raises(ValueError):
-            commission_impl({"per_share_rate": -0.01})
-
-
-# ===========================================================================
-# Registry coverage test
-# ===========================================================================
-
-
-class TestNodeImpsRegistryCoversCatalog:
-    def test_registry_covers_compile_active_non_terminal_entries(self):
-        """Every compile-active entry that isn't a terminal (output/ticker) must be in NODE_IMPLS."""
-        skip_cats = {"output", "ticker"}
-        missing = []
-        for entry in NODE_CATALOG:
-            if entry.compile_active and entry.cat not in skip_cats:
-                if entry.name not in NODE_IMPLS:
-                    missing.append(entry.name)
-        assert missing == [], f"Missing NODE_IMPLS entries: {missing}"
-
-
-# ===========================================================================
-# Integration smoke — RSI < 30 fires exactly once on synthetic data
-# ===========================================================================
-
-
-class TestBelowIntegrationSmoke:
-    def test_below_fires_exactly_once(self):
-        """Build a 50-bar synthetic series where one bar drops below 30.
-
-        The below_impl fn is checked on every bar; exactly bar 25 should fire.
-        """
-        # Construct a series: 50..31 (above 30), bar 25 drops to 25, then back up
-        values = list(range(50, 30, -1))  # bars 0..19: 50, 49, ..., 31
-        values += [25.0]                  # bar 20: below 30
-        values += list(range(32, 62))     # bars 21..50: 32..61 (above 30)
-        values = values[:50]              # trim to 50 bars
-
-        attrs = _attrs("@rsi", values)
-        result = below_impl({"threshold": 30.0}, ("@rsi",))
-
-        fired_bars = [i for i in range(50) if result.fn(attrs, i)]
-        assert fired_bars == [20], f"Expected [20], got {fired_bars}"
+
+def _ohlcv(close, high=None, low=None) -> OHLCVSeries:
+    c = pd.Series(close)
+    return OHLCVSeries(close=c, high=pd.Series(high if high is not None else close),
+                       low=pd.Series(low if low is not None else close), volume=c)
+
+
+@pytest.mark.parametrize("node_type,params,family,args,key,out", [
+    ("rsi", {"period": 14, "type": "wilder"}, "rsi", {"period": 14, "type": "wilder"}, "rsi", "@rsi"),
+    ("rsi", {"period": 9, "type": "sma"}, "rsi", {"period": 9, "type": "sma"}, "rsi", "@rsi"),
+    ("sma", {"period": 20}, "ma", {"period": 20, "type": "sma"}, "ma", "@sma"),
+    ("ema", {"period": 20}, "ma", {"period": 20, "type": "ema"}, "ma", "@ema"),
+])
+def test_single_output_indicators_match_compute_instance(bars, node_type, params, family, args, key, out):
+    s = _run(node_type, _stream(close=bars["close"]), source="@close", **params)
+    expected = compute_instance(family, args, _ohlcv(bars["close"]))[key].to_numpy()
+    np.testing.assert_array_equal(s.column(out), expected)
+    assert s.written_by[out] == "/n" and s.dtype(out) == "float"
+    assert "@close" in s  # the input flows on
+
+
+def test_macd_writes_three_named_outputs(bars):
+    s = _run("macd", _stream(close=bars["close"]), source="@close")
+    expected = compute_instance("macd", {"fast": 12, "slow": 26, "signal": 9}, _ohlcv(bars["close"]))
+    np.testing.assert_array_equal(s.column("@macd_line"), expected["macd"].to_numpy())
+    np.testing.assert_array_equal(s.column("@macd_signal"), expected["signal"].to_numpy())
+    np.testing.assert_array_equal(s.column("@macd_histogram"), expected["histogram"].to_numpy())
+
+
+def test_bollinger_writes_three_bands(bars):
+    s = _run("bollinger", _stream(close=bars["close"]), source="@close", stddev=2.5)
+    expected = compute_instance("bb", {"period": 20, "stddev": 2.5}, _ohlcv(bars["close"]))
+    for name, key in (("@bb_upper", "upper"), ("@bb_middle", "middle"), ("@bb_lower", "lower")):
+        np.testing.assert_array_equal(s.column(name), expected[key].to_numpy())
+
+
+def test_atr_reads_high_and_low(bars):
+    s = _run("atr", _stream(**bars), source="@close")
+    expected = compute_instance("atr", {"period": 14},
+                                _ohlcv(bars["close"], bars["high"], bars["low"]))["atr"]
+    np.testing.assert_array_equal(s.column("@atr"), expected.to_numpy())
+
+
+def test_indicator_of_an_indicator(bars):
+    """EMA of RSI: the EMA's source is the RSI column."""
+    rsi = _run("rsi", _stream(close=bars["close"]), source="@close", period=14, type="wilder")
+    ema = _run("ema", rsi, source="@rsi", period=5)
+    expected = compute_instance("ma", {"period": 5, "type": "ema"}, _ohlcv(rsi.column("@rsi")))["ma"]
+    np.testing.assert_array_equal(ema.column("@ema"), expected.to_numpy())
+
+
+def test_named_write_and_memo(bars):
+    """A renamed write lands under its name; the same computation twice in
+    one cook shares one column."""
+    env = {"memo": {}}
+    inputs = _stream(close=bars["close"])
+    a = _run("ema", inputs, env=env, source="@close", period=10, out="@fast")
+    b = _run("ema", a, env=env, source="@close", period=10, out="@fast_too")
+    assert "@fast" in b and b.column_key("@fast") == b.column_key("@fast_too")
+
+
+# ---------------------------------------------------------------------------
+# Comparisons
+# ---------------------------------------------------------------------------
+
+def test_below_threshold():
+    s = _run("below", _stream(x=[10.0, 20.0, 40.0, NAN, 5.0]), a="@x", threshold=30.0)
+    assert _col(s, "@below") == [False, True, False, False, True]  # bar 0 always False
+    assert s.dtype("@below") == "bool"
+
+
+def test_above_two_series():
+    s = _run("above", _stream(x=[1.0, 5.0, 2.0, 9.0], y=[0.0, 3.0, 3.0, NAN]), a="@x", b="@y")
+    assert _col(s, "@above") == [False, True, False, False]
+
+
+def test_crosses_above_threshold_fires_on_the_crossing_bar():
+    s = _run("crosses_above", _stream(x=[20.0, 25.0, 31.0, 35.0, 28.0, 30.0]), a="@x", threshold=30.0)
+    assert _col(s, "@xa") == [False, False, True, False, False, True]
+
+
+def test_crosses_above_two_series():
+    s = _run("crosses_above", _stream(x=[1.0, 1.0, 3.0, 4.0], y=[2.0, 2.0, 2.0, 2.0]), a="@x", b="@y")
+    assert _col(s, "@xa") == [False, False, True, False]
+
+
+def test_crosses_below_two_series_and_nan():
+    s = _run("crosses_below", _stream(x=[5.0, 5.0, 1.0, NAN, 1.0], y=[3.0, 3.0, 3.0, 3.0, 3.0]),
+             a="@x", b="@y")
+    assert _col(s, "@xb") == [False, False, True, False, False]
+
+
+def test_crossover_of_a_bool_signal():
+    """A derived signal is a column, so it has history: 0 -> 1 crosses 0.5."""
+    s = _run("crosses_above", _stream(sig=np.array([True, False, True, True, False, True])),
+             a="@sig", threshold=0.5)
+    assert _col(s, "@xa") == [False, False, True, False, False, True]
+
+
+def test_bar_zero_is_false_for_every_comparison():
+    for node_type in ("above", "below", "crosses_above", "crosses_below"):
+        s = _run(node_type, _stream(x=[100.0, 100.0]), a="@x", threshold=0.0 if "above" in node_type else 1e9)
+        assert s.column(registry.get(node_type).write_params()[0].default)[0] == False  # noqa: E712
+
+
+# ---------------------------------------------------------------------------
+# Logic
+# ---------------------------------------------------------------------------
+
+_A = [True, True, False, True]
+_B = [True, False, False, True]
+
+
+def test_and_or_not():
+    inputs = _stream(a=np.array(_A), b=np.array(_B))
+    assert _col(_run("and", inputs, terms=["@a", "@b"]), "@and") == [False, False, False, True]
+    assert _col(_run("or", inputs, terms=["@a", "@b"]), "@or") == [False, True, False, True]
+    assert _col(_run("not", inputs, signal="@a"), "@not") == [False, False, True, False]
+
+
+def test_logic_with_one_term_still_guards_bar_zero():
+    inputs = _stream(a=np.array(_A))
+    assert _col(_run("and", inputs, terms=["@a"]), "@and") == [False, True, False, True]
+
+
+# ---------------------------------------------------------------------------
+# Settings and terminals
+# ---------------------------------------------------------------------------
+
+def test_settings_write_detail_values():
+    empty = Stream.empty(ColumnStore(pd.RangeIndex(3)))
+    s = _run("stop_loss", empty, pct=2.5)
+    assert s.value("@stop_pct") == 2.5 and s.kind("@stop_pct") == "detail"
+    c = _run("commission", empty, per_share_rate=0.0035, min_per_order=0.35)
+    assert (c.value("@per_share_rate"), c.value("@min_per_order")) == (0.0035, 0.35)
+    # A detail value reads as a full column too.
+    assert s.column("@stop_pct").tolist() == [2.5, 2.5, 2.5]
+
+
+def test_ticker_puts_the_bars_on_the_stream():
+    idx = pd.date_range("2024-01-02", periods=3, freq="D", tz="UTC")
+    store = ColumnStore(idx)
+    bars = {name: np.array([1.0, 2.0, 3.0]) for name in ("@open", "@high", "@low", "@close", "@volume")}
+    s = registry.get("ticker").impl(Stream.empty(store), Params({}, "/t", {"bars": bars}))
+    assert s.names()[:5] == ["@open", "@high", "@low", "@close", "@volume"]
+    assert s.column("@index").tolist() == [0.0, 1.0, 2.0]
+    assert s.column("@time")[1] - s.column("@time")[0] == 86400.0
+    assert set(s.written_by.values()) == {"/t"}
+
+
+def test_terminals_write_nothing():
+    for name in ("entry", "exit"):
+        t = registry.get(name)
+        assert t.impl is None and not t.has_output and not t.write_params()
+
+
+# ---------------------------------------------------------------------------
+# Registry coverage
+# ---------------------------------------------------------------------------
+
+def test_every_catalog_entry_is_a_registered_type():
+    for entry in NODE_CATALOG:
+        t = registry.get(entry.name)
+        assert t is not None and t.entry is entry
+        if entry.compile_active and t.has_output:
+            assert t.impl is not None, f"{entry.name} has no impl"
+
+
+def test_below_fires_exactly_once_on_a_cooked_rsi():
+    """Smoke: a noisy series that sells off once: RSI crosses under 30 once."""
+    wiggle = np.tile([1.0, -1.0], 30)
+    close = 100 + np.concatenate([wiggle, np.linspace(0, -12, 12) + np.tile([0.3, -0.3], 6), wiggle])
+    rsi = _run("rsi", _stream(close=close), source="@close", period=14, type="sma")
+    below = _run("crosses_below", rsi, a="@rsi", threshold=30.0)
+    rule_like = [(rsi.column("@rsi")[i - 1] > 30.0 >= rsi.column("@rsi")[i]) for i in range(1, len(close))]
+    assert int(below.column("@xb").sum()) == sum(rule_like) == 1

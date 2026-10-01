@@ -10,6 +10,7 @@ import {
   dragStopMoves,
   groupByCategory,
   isTypingTarget,
+  markHotEdges,
   menuCatalog,
   menuScreenPoint,
   mergeLocalNodes,
@@ -376,5 +377,21 @@ describe('nodeLabel (UXP-6)', () => {
     expect(nodeLabel({ type: 'rsi', params: {} })).toBe('rsi')
     expect(nodeLabel({ type: 'ticker', params: { symbol: 'AAPL' } })).toBe('ticker AAPL')
     expect(nodeLabel(undefined)).toBe('')
+  })
+})
+
+describe('markHotEdges (spec S11, FP-12)', () => {
+  const e = (id: string, source: string, target: string, hot = false) => ({ id, source, target, data: { hot } })
+
+  it('marks only the hovered node\'s wires and keeps every other edge object', () => {
+    const edges = [e('w1', 'a', 'b'), e('w2', 'b', 'c'), e('w3', 'c', 'd')]
+    const next = markHotEdges(edges, 'b')
+    expect(next.map(x => x.data.hot)).toEqual([true, true, false])
+    expect(next[2]).toBe(edges[2])
+    // Leaving clears them; nothing hot and nothing hovered returns the same array.
+    const cleared = markHotEdges(next, null)
+    expect(cleared.map(x => x.data.hot)).toEqual([false, false, false])
+    expect(markHotEdges(cleared, null)).toBe(cleared)
+    expect(markHotEdges(edges, 'zzz')).toBe(edges)
   })
 })

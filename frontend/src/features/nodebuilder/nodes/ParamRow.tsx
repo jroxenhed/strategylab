@@ -31,33 +31,97 @@
  * `title` and in a hidden element the field points at. A local problem is
  * also reported to the diagnostics store, so the node badge, the error count
  * and Run agree with the red field.
+ *
+ * Stream params (F435 W2, specs S09, S10, S12) are chosen by the catalog
+ * ParamSpec type, never by node type, so node types added later work too:
+ * - `attr` / `attr_list` show the attribute picker (AttrPicker);
+ * - `time_range` shows the time-of-day range (TimeRangeInput);
+ * - a `select` whose value or default is a list shows toggle pills
+ *   (DayOfWeekInput, the weekday picker);
+ * - `write` shows a renamable write chip. On a node the chip row draws the
+ *   write chips, so ParamRows leaves `write` params out unless asked.
+ * The specs come from the `specs` prop, else from the catalog entry of the
+ * node's type in the store. Without either, rows fall back to `paramTypes`.
  */
 
 import { useState, useEffect, useRef } from 'react'
 import { useNodeBuilderStore } from '../store'
 import { useParamDiagnostic, setLocalParamInvalid, LOCAL_NUMBER_MESSAGE } from '../useDiagnostics'
-import type { ParamTypeSpec } from '../catalog'
+import type { ParamSpec, ParamTypeSpec } from '../catalog'
+import { paramSpecsOf } from '../streamLabels'
 import { unitLabel } from './paramFormat'
+import { AttrPicker } from './AttrPicker'
+import { TimeRangeInput } from './TimeRangeInput'
+import { DayOfWeekInput } from './DayOfWeekInput'
+import { WriteChip } from './WriteChip'
+
+/** Which special widget a param gets, from its ParamSpec; null for a plain field. */
+export type StreamWidget = 'attr' | 'time_range' | 'days' | 'write'
+
+export function streamWidgetFor(spec: Pick<ParamSpec, 'type' | 'default' | 'name'> | undefined, value: unknown): StreamWidget | null {
+  if (!spec) return null
+  if (spec.type === 'attr' || spec.type === 'attr_list') return 'attr'
+  if (spec.type === 'time_range') return 'time_range'
+  if (spec.type === 'write') return 'write'
+  if (spec.type === 'select' && (Array.isArray(spec.default) || Array.isArray(value))) return 'days'
+  return null
+}
+
+/** Spec types that show a row even when the param has no stored value yet. */
+const ALWAYS_SHOWN: ReadonlySet<string> = new Set(['attr', 'attr_list', 'time_range'])
+
+/**
+ * The rows to draw, in catalog order: every spec param that is stored (or
+ * is a stream param that should be picked), then stored params the catalog
+ * does not know.
+ */
+export function rowsFor(
+  params: Record<string, unknown>,
+  specs: readonly ParamSpec[],
+  showWrites: boolean,
+): { key: string; value: unknown; spec?: ParamSpec }[] {
+  const out: { key: string; value: unknown; spec?: ParamSpec }[] = []
+  const seen = new Set<string>()
+  for (const spec of specs) {
+    seen.add(spec.name)
+    if (spec.type === 'write' && !showWrites) continue
+    if (!(spec.name in params) && !ALWAYS_SHOWN.has(spec.type)) continue
+    out.push({ key: spec.name, value: params[spec.name] ?? null, spec })
+  }
+  for (const [key, value] of Object.entries(params)) {
+    if (!seen.has(key)) out.push({ key, value })
+  }
+  return out
+}
 
 export function ParamRows({
   nodeId,
   params,
   paramTypes,
+  specs,
+  showWrites = false,
 }: {
   nodeId: string
   params: Record<string, unknown>
   /** Optional per-key type overrides from `NodeCatalogEntry.paramTypes`. */
   paramTypes?: Record<string, ParamTypeSpec>
+  /** The full catalog specs; looked up from the node's type when left out. */
+  specs?: readonly ParamSpec[]
+  /** Also draw `write` params (the Inspector); the node shows them as chips. */
+  showWrites?: boolean
 }) {
+  const nodeType = useNodeBuilderStore(s => s.graph?.nodes[nodeId]?.type)
+  const allSpecs = specs ?? paramSpecsOf(nodeType)
   return (
     <div className="nodrag nopan" style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      {Object.entries(params).map(([key, value]) => (
+      {rowsFor(params, allSpecs, showWrites).map(({ key, value, spec }) => (
         <ParamRow
           key={key}
           nodeId={nodeId}
           paramKey={key}
           value={value}
           typeSpec={paramTypes?.[key]}
+          spec={spec}
         />
       ))}
     </div>
@@ -122,17 +186,63 @@ const unitStyle: React.CSSProperties = {
   color: 'var(--nb-text-muted)',
 }
 
-export function ParamRow({
-  nodeId,
-  paramKey,
-  value,
-  typeSpec,
-}: {
+export interface ParamRowProps {
   nodeId: string
   paramKey: string
   value: unknown
   typeSpec?: ParamTypeSpec
-}) {
+  /** The catalog spec; it picks the stream widgets. */
+  spec?: ParamSpec
+}
+
+export function ParamRow(props: ParamRowProps) {
+  const widget = streamWidgetFor(props.spec, props.value)
+  if (widget && props.spec) return <StreamParamRow {...props} spec={props.spec} widget={widget} />
+  return <ValueParamRow {...props} />
+}
+
+const streamRowStyle: React.CSSProperties = {
+  ...labelStyle,
+  justifyContent: 'space-between',
+  minHeight: 16,
+}
+
+/** A row whose value is a picker, a chip or a widget instead of a text field. */
+function StreamParamRow({
+  nodeId,
+  paramKey,
+  value,
+  spec,
+  widget,
+}: ParamRowProps & { spec: ParamSpec; widget: StreamWidget }) {
+  const readOnly = useNodeBuilderStore(s => s.graph?.readOnly ?? false)
+  let cell: React.ReactNode
+  if (widget === 'attr') {
+    cell = <AttrPicker nodeId={nodeId} spec={spec} value={value} disabled={readOnly} />
+  } else if (widget === 'time_range') {
+    cell = <TimeRangeInput nodeId={nodeId} param={paramKey} value={value} disabled={readOnly} />
+  } else if (widget === 'days') {
+    cell = <DayOfWeekInput nodeId={nodeId} param={paramKey} value={value} options={spec.options} disabled={readOnly} />
+  } else {
+    const name = typeof value === 'string' && value !== '' ? value : typeof spec.default === 'string' ? spec.default : ''
+    cell = name ? <WriteChip nodeId={nodeId} param={paramKey} name={name} editable={!readOnly} /> : null
+  }
+  // A div, not a label: a label would forward a click on its text to the
+  // first button inside it and open the picker by surprise.
+  return (
+    <div style={streamRowStyle} data-testid={`nb-param-${nodeId}-${paramKey}`} data-param-kind={widget}>
+      <span style={{ flexShrink: 0 }}>{spec.label || paramKey}</span>
+      {cell}
+    </div>
+  )
+}
+
+function ValueParamRow({
+  nodeId,
+  paramKey,
+  value,
+  typeSpec,
+}: ParamRowProps) {
   const updateNodeParams = useNodeBuilderStore(s => s.updateNodeParams)
   const resolvedType = typeSpec?.type ?? (typeof value === 'number' ? 'number' : 'string')
   const isNumber = resolvedType === 'number'

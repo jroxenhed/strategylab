@@ -32,7 +32,8 @@ function autoGraph(): Graph {
     nodes: {
       '/ticker': node('/ticker', 'ticker', 0),
       '/entry/rsi': node('/entry/rsi', 'rsi', 100),
-      '/entry/rising': node('/entry/rising', 'rising', 200),
+      // A rule name no node type registers (rising is a real node since W2).
+      '/entry/odd': node('/entry/odd', 'is_above_signal', 200),
       '/entry': node('/entry', 'entry', 300),
       '/regime/ma': node('/regime/ma', 'sma', 50),
     },
@@ -82,14 +83,14 @@ describe('findUnsupportedNodes', () => {
     g.wires.push(wire('ws', '/entry/rsi', '/size'))
     const list = findUnsupportedNodes(g)
     expect(list).toEqual([
-      { id: '/entry/rising', type: 'rising', reason: 'unknown' },
+      { id: '/entry/odd', type: 'is_above_signal', reason: 'unknown' },
       { id: '/size', type: 'size', reason: 'inactive' },
     ])
   })
 
   it('does not warn about an unwired Size or Stop terminal (compile ignores it)', () => {
     const g = autoGraph()
-    delete g.nodes['/entry/rising']
+    delete g.nodes['/entry/odd']
     g.nodes['/size'] = node('/size', 'size')
     g.nodes['/stop'] = node('/stop', 'stop')
     expect(findUnsupportedNodes(g)).toEqual([])
@@ -97,7 +98,7 @@ describe('findUnsupportedNodes', () => {
 
   it('lists per-direction settings and comparisons with a rule detail, as compile refuses them', () => {
     const g = autoGraph()
-    delete g.nodes['/entry/rising']
+    delete g.nodes['/entry/odd']
     g.nodes['/sl_long'] = { ...node('/sl_long', 'stop_loss'), params: { pct: 3, direction: 'long' } }
     g.nodes['/cmp'] = { ...node('/cmp', 'above'), params: { threshold: 1, condition_extra: 'atr_pct' } }
     expect(findUnsupportedNodes(g)).toEqual([
@@ -109,7 +110,7 @@ describe('findUnsupportedNodes', () => {
 
   it('skips a bypassed per-direction setting (compile skips it too)', () => {
     const g = autoGraph()
-    delete g.nodes['/entry/rising']
+    delete g.nodes['/entry/odd']
     g.nodes['/sl_long'] = { ...node('/sl_long', 'stop_loss'), params: { direction: 'long' }, bypass: true }
     expect(findUnsupportedNodes(g)).toEqual([])
   })
@@ -117,7 +118,7 @@ describe('findUnsupportedNodes', () => {
   it('returns nothing for a null graph or a fully supported graph', () => {
     expect(findUnsupportedNodes(null)).toEqual([])
     const g = autoGraph()
-    delete g.nodes['/entry/rising']
+    delete g.nodes['/entry/odd']
     expect(findUnsupportedNodes(g)).toEqual([])
   })
 

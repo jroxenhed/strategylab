@@ -384,3 +384,23 @@ export function suppressTextSelection(doc: Document = document): () => void {
     else style.removeProperty('-webkit-user-select')
   }
 }
+
+/**
+ * Mark the wires of the hovered node "hot" (spec S11), touching only the
+ * edges whose flag changes: every other edge object is returned as is, and
+ * the same array comes back when nothing changed. Hover never re-runs the
+ * full edge build in Canvas.tsx; this patch runs on the local edge mirror.
+ */
+export function markHotEdges<T extends FlowEdgeLike & { data?: Record<string, unknown> }>(
+  edges: T[],
+  hoveredId: string | null,
+): T[] {
+  let changed = false
+  const out = edges.map(e => {
+    const hot = hoveredId !== null && (e.source === hoveredId || e.target === hoveredId)
+    if (!e.data || !!e.data.hot === hot) return e
+    changed = true
+    return { ...e, data: { ...e.data, hot } }
+  })
+  return changed ? out : edges
+}

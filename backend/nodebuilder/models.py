@@ -17,9 +17,9 @@ from pydantic import BaseModel
 
 MIN_SUPPORTED_VERSION: int = 1
 
-STREAM_SCHEMA_VERSION: int = 1
-"""Version of the stream format (plan section 3).  W2 moves the source of
-truth to nodebuilder/kernel/stream.py."""
+# Version of the stream format (plan section 3).  The source of truth is
+# nodebuilder/kernel/stream.py; it is re-exported here for older imports.
+from nodebuilder.kernel.stream import STREAM_SCHEMA_VERSION  # noqa: E402,F401
 
 _META_MAX_KEYS = 32
 
@@ -131,7 +131,14 @@ class Node(BaseModel):
 
 
 class Wire(BaseModel):
-    """A directed edge between two node output and input ports."""
+    """A directed edge from one node's output to an input port of another.
+
+    A wire carries the whole stream of its source node (plan D4).  It does
+    not pick an attribute: the consumer's ``attr`` / ``attr_list`` params do.
+    An empty read param defaults to the primary write of the node on the
+    matching port, so the port matters only for those defaults; once a param
+    names its operand, moving or redrawing the wire never changes it.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -151,8 +158,11 @@ class Wire(BaseModel):
     Wire; Graph fills it in on load in wire order (see migrate.py)."""
 
     attr: Optional[str] = None
-    """Attribute label rendered on the wire (v1/v2 only; W2's v3 migration
-    turns it into consumer params)."""
+    """Legacy (v1/v2) attribute label.  The v3 migration turns it into the
+    consumer's read param.  Until a graph is migrated, compile reads it only
+    for a consumer param that is empty: a label the source node knows (a
+    Ticker field, a MACD or Bollinger output) picks that output; any other
+    label reads the source's primary write."""
 
 
 class NetworkBox(BaseModel):

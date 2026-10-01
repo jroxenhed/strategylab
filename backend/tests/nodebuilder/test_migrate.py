@@ -102,7 +102,7 @@ def test_v1_autorender_graph_migrates(name):
     raw = _V1["api"][name]
     assert raw["_version"] == 1
     g = Graph.model_validate(raw)
-    assert g.version == 2
+    assert g.version == migrate.CURRENT_GRAPH_VERSION
     assert g.stream_schema == 1
     assert set(g.nodes) == set(raw["nodes"])
     assert [w.id for w in g.wires] == [w["id"] for w in raw["wires"]]
@@ -119,12 +119,29 @@ def test_v1_autorender_graph_migrates(name):
 
 
 @pytest.mark.parametrize("name", _NAMES)
-def test_migrated_v1_equals_fresh_v2_autorender(name):
-    """from_rules names and ports nodes exactly as the migration does."""
+def test_migrated_v1_matches_fresh_autorender(name):
+    """from_rules names nodes as the migration does, and both cook the same.
+
+    Since W2 the two are no longer byte-equal: from_rules draws one wire per
+    (source, consumer) pair and v3 reads (a / b / terms params), while a
+    migrated v1 graph keeps its wires.  So compare what matters: every node
+    from_rules draws exists in the migrated graph with the same type and name,
+    and both fire on the same bars with the same settings.
+    """
     req = dict(_STRATEGIES)[name]
-    migrated = Graph.model_validate(_V1["api"][name]).model_dump(mode="json", by_alias=True)
-    fresh = auto_render(req).model_dump(mode="json", by_alias=True)
-    assert migrated == fresh
+    migrated = Graph.model_validate(_V1["api"][name])
+    fresh = auto_render(req)
+    assert migrated.version == fresh.version == migrate.CURRENT_GRAPH_VERSION
+    for node_id, node in fresh.nodes.items():
+        if node_id.startswith("/regime/"):
+            # W2 from_rules draws a regime rule with no series (ma without
+            # params) as a "never" node, as eval_rules reads it; v1 drew an
+            # EMA 20 there.  Regime graphs do not compile until W5 either way.
+            continue
+        assert node_id in migrated.nodes, node_id
+        assert (migrated.nodes[node_id].type, migrated.nodes[node_id].name) == (node.type, node.name)
+    df = _load_df(name)
+    assert _signals(migrated, df) == _signals(fresh, df)
 
 
 @pytest.mark.parametrize("name", _NAMES)
@@ -218,13 +235,16 @@ def test_v1_ports_follow_wire_order_per_consumer():
     ]
 
 
-def test_v1_wire_attr_is_kept():
+def test_v1_wire_attr_becomes_the_consumer_param():
+    """v1/v2 kept the read on the wire; v3 moves it into the consumer's read
+    param (plan 2.B) and drops wire.attr."""
     g = Graph.model_validate({
         "_version": 1,
         "nodes": {"/a": {"id": "/a", "type": "ticker"}, "/b": {"id": "/b", "type": "rsi"}},
         "wires": [{"id": "w", "from": "/a", "to": "/b", "attr": "@close"}],
     })
-    assert g.wires[0].attr == "@close"
+    assert g.wires[0].attr is None
+    assert g.nodes["/b"].params["source"] == "@close"
 
 
 def test_graph_built_from_model_instances_migrates():
@@ -233,7 +253,7 @@ def test_graph_built_from_model_instances_migrates():
         nodes={"/a": Node(id="/a", type="rsi"), "/b": Node(id="/b", type="and")},
         wires=[Wire(**{"id": "w", "from": "/a", "to": "/b"})],
     )
-    assert g.version == 2
+    assert g.version == migrate.CURRENT_GRAPH_VERSION
     assert g.nodes["/a"].name == "a"
     assert g.wires[0].to_port == "in0"
 
@@ -249,7 +269,7 @@ def test_future_version_is_refused_not_stripped():
     from nodebuilder.diagnostics import code_for_error
     from nodebuilder.models import UnsupportedGraphVersionError
 
-    for version in (3, 99):
+    for version in (migrate.CURRENT_GRAPH_VERSION + 1, 99):
         with pytest.raises(UnsupportedGraphVersionError, match="newer StrategyLab") as info:
             Graph.model_validate({"_version": version, "nodes": {}, "wires": [], "promoted": {}})
         assert code_for_error(info.value) == "graph_invalid"

@@ -16,6 +16,9 @@
  *
  * Only one popover is open at a time: opening one asks the open one to close.
  * After an `Esc` close, focus goes back to the anchor element.
+ *
+ * Clicks inside it stop at the panel, so they never reach the React parents
+ * of the popover (a node card on the canvas) through the portal.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { AriaRole, CSSProperties, ReactNode } from 'react'
@@ -288,6 +291,12 @@ export function Popover({
       aria-labelledby={ariaLabelledBy}
       tabIndex={-1}
       data-testid={rest['data-testid']}
+      // The panel is portaled, but React events still bubble along the React
+      // tree: a click here would reach the node card behind it (React Flow
+      // selects the host node, the canvas clears a selected wire). A click
+      // inside a popover is never a click on what opened it.
+      onClick={e => e.stopPropagation()}
+      onDoubleClick={e => e.stopPropagation()}
       style={{
         ...style,
         width,

@@ -1,12 +1,15 @@
-"""Rule-builder coverage sweep (F435 item 0.H).
+"""Rule-builder coverage sweep (F435 item 0.H, all equal since W2 item 2.B).
 
-For every RuleIndicator x RuleCondition (and negated), a rule strategy opened
-as a graph must either:
-  - backtest to the same trades and final value as the rule backtest, or
-  - be refused by compile() with UnsupportedNodeError, which the route
-    turns into a 400 naming the node.
-It must never run and silently give a different result.  There are no
-expected failures: a new divergence fails this test.
+For every RuleIndicator x RuleCondition (and negated), on the buy side and
+the sell side, long and short, a rule strategy opened as a graph must
+backtest to the same trades and final value as the rule backtest.  Nothing
+the rule builder makes is refused any more: the graph language covers every
+condition and indicator (plan W2, critic 1).  There are no expected
+failures: a new divergence fails this test.
+
+The one rule input still refused is a rule on another timeframe
+(rule.timeframe): compile raises UnsupportedNodeError naming its node, so it
+never runs part-way (test_other_timeframe_rule_is_refused).
 
 Data is a deterministic synthetic OHLCV frame (seeded random walk), shaped
 like the parity fixtures (tz-aware daily index, same columns).  No network.
@@ -29,7 +32,6 @@ if _BACKEND_DIR not in sys.path:
 from models import StrategyRequest
 from nodebuilder.api_models import GraphBacktestRequest
 from nodebuilder.evaluator import UnsupportedNodeError
-from nodebuilder.nodes import NODE_CATALOG
 from nodebuilder.from_rules import auto_render
 from nodebuilder.run import run_graph_backtest
 from routes.backtest import run_backtest
@@ -139,19 +141,21 @@ _IDS = [f"{i}-{c}-{'not' if n else 'plain'}-{side}-{d}" for i, c, n, side, d in 
 
 # Rules that never fire on the synthetic data, so the rule side trades
 # nothing on that side and "graph matches rule" proves little.  They still
-# run and compare (a refusal or a crash would fail), but they are exempt from
-# the "the tested rule fired" check below.  Keyed by indicator-condition-
-# (plain|not)-side; the same set holds for long and short.
-#   *-is_below_signal / NOT *-is_above_signal: these series have no signal
-#     line, so is_below_signal is never true.
+# run and compare (a crash or a different trade fails), but they are exempt
+# from the "the tested rule fired" check below.  Keyed by indicator-
+# condition-(plain|not)-side; the same set holds for long and short.
+#   *-is_below_signal / NOT *-is_above_signal: these series sit far above
+#     the MACD signal line (near 0), so is_below_signal is never true.
 #   ema50/ema200 crossover_up / crosses_above: the 200-bar warmup leaves too
 #     few bars on 400 synthetic days for a cross.
 _NEVER_FIRES_BUY = {
     "rsi-is_below_signal-plain", "ma-is_below_signal-plain", "bb-is_below_signal-plain",
     "volume-is_below_signal-plain", "price-is_below_signal-plain",
+    "stochastic-is_below_signal-plain", "adx-is_below_signal-plain",
     "ema20-is_below_signal-plain", "ema50-is_below_signal-plain",
     "ema200-is_below_signal-plain", "ma8-is_below_signal-plain", "ma21-is_below_signal-plain",
     "ma-is_above_signal-not", "volume-is_above_signal-not", "price-is_above_signal-not",
+    "adx-is_above_signal-not",
     "ema20-is_above_signal-not", "ema50-is_above_signal-not", "ema200-is_above_signal-not",
     "ema50-crossover_up-plain", "ema50-crosses_above-plain",
     "ema200-crossover_up-plain", "ema200-crosses_above-plain",
@@ -159,10 +163,12 @@ _NEVER_FIRES_BUY = {
 _NEVER_FIRES_SELL = {
     "rsi-is_below_signal-plain", "ma-is_below_signal-plain", "bb-is_below_signal-plain",
     "volume-is_below_signal-plain", "price-is_below_signal-plain",
+    "stochastic-is_below_signal-plain", "adx-is_below_signal-plain",
     "ema20-is_below_signal-plain", "ema50-is_below_signal-plain",
     "ema200-is_below_signal-plain", "ma8-is_below_signal-plain", "ma21-is_below_signal-plain",
     "rsi-is_above_signal-not", "ma-is_above_signal-not", "bb-is_above_signal-not",
     "volume-is_above_signal-not", "price-is_above_signal-not", "ema20-is_above_signal-not",
+    "stochastic-is_above_signal-not", "adx-is_above_signal-not",
     "ema50-is_above_signal-not", "ema200-is_above_signal-not",
     "ma8-is_above_signal-not", "ma21-is_above_signal-not",
     "ema50-crossover_up-plain", "ema50-crosses_above-plain",
@@ -201,28 +207,28 @@ def _graph_request(req: StrategyRequest) -> GraphBacktestRequest:
     )
 
 
-# ---------------------------------------------------------------------------
-# Which graphs compile must refuse
-# ---------------------------------------------------------------------------
-
-_COMPILE_ACTIVE = {e.name for e in NODE_CATALOG if e.compile_active}
-
-
-def _refusal_reason(graph) -> str | None:
-    """Why compile must refuse this auto-rendered graph, or None if it must run.
-
-    auto_render draws every rule, but a rule the graph cannot run the same
-    way shows up as a node type that is not compile-active (slope
-    conditions, stochastic, adx) or as a comparison carrying a
-    condition_extra marker (ATR%, a bb band or reference it does not draw).
-    """
-    for node in graph.nodes.values():
-        if node.type not in _COMPILE_ACTIVE:
-            return f"node type {node.type!r}"
-        extra = (node.params or {}).get("condition_extra")
-        if extra is not None:
-            return f"condition_extra {extra!r}"
-    return None
+def _assert_runs_like_the_rules(req: StrategyRequest, what: str) -> list:
+    """Both backtests on the synthetic frame: same trades, same final value.
+    Returns the rule backtest's trades."""
+    # The rule backtest accepts every pair today.  An exception here is a
+    # regression in the rule engine and fails the test (never a skip).
+    rule_result = run_backtest(req, include_spy_correlation=False, df=_DF.copy())
+    graph_req = _graph_request(req)
+    # Nothing the rule builder makes is refused: no node may carry the
+    # "cannot draw this" marker.
+    extras = {n.id: n.params["condition_extra"] for n in graph_req.graph.nodes.values()
+              if "condition_extra" in (n.params or {})}
+    assert not extras, f"{what}: auto_render refused part of the rule: {extras}"
+    graph_result = run_graph_backtest(graph_req, df=_DF.copy())
+    rt, gt = rule_result["trades"], graph_result.trades
+    assert [(t["type"], t["date"]) for t in gt] == [(t["type"], t["date"]) for t in rt], (
+        f"{what}: graph backtest trades differ from the rule backtest "
+        f"(rule {len(rt)} trades, graph {len(gt)})"
+    )
+    assert graph_result.summary["final_value"] == pytest.approx(
+        rule_result["summary"]["final_value"], rel=_REL
+    )
+    return rt
 
 
 # ---------------------------------------------------------------------------
@@ -230,39 +236,13 @@ def _refusal_reason(graph) -> str | None:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("indicator,condition,negated,side,direction", _CASES, ids=_IDS)
-def test_graph_matches_rule_or_refuses(indicator, condition, negated, side, direction):
+def test_graph_matches_rule(indicator, condition, negated, side, direction):
     rule = _make_rule(indicator, condition, negated)
-    req = _request(rule, side, direction)
-
-    # The rule backtest accepts every pair today.  An exception here is a
-    # regression in the rule engine and fails the test (never a skip).
-    rule_result = run_backtest(req, include_spy_correlation=False, df=_DF.copy())
-
-    graph_req = _graph_request(req)
-
-    reason = _refusal_reason(graph_req.graph)
-    if reason is not None:
-        # Refused out loud with the node named; the route turns this into a
-        # 400 with node_id.  Never a silent run with part of the rule missing.
-        with pytest.raises(UnsupportedNodeError) as info:
-            run_graph_backtest(graph_req, df=_DF.copy())
-        assert info.value.node_id in graph_req.graph.nodes, reason
-        return
-
-    # Everything else must run and match the rule backtest exactly.
-    graph_result = run_graph_backtest(graph_req, df=_DF.copy())
-    rt, gt = rule_result["trades"], graph_result.trades
-    assert [(t["type"], t["date"]) for t in gt] == [(t["type"], t["date"]) for t in rt], (
-        "graph backtest trades differ from the rule backtest "
-        f"(rule {len(rt)} trades, graph {len(gt)})"
-    )
-    assert graph_result.summary["final_value"] == pytest.approx(
-        rule_result["summary"]["final_value"], rel=_REL
-    )
+    key = f"{indicator}-{condition}-{'not' if negated else 'plain'}"
+    rt = _assert_runs_like_the_rules(_request(rule, side, direction), key)
 
     # The match must not be vacuous: the tested rule has to fire, or two empty
     # trade lists would pass.  Exits are "sell" (long) or "cover" (short).
-    key = f"{indicator}-{condition}-{'not' if negated else 'plain'}"
     if side == "buy" and key not in _NEVER_FIRES_BUY:
         assert rt, f"{key} never entered on the synthetic data"
     if side == "sell" and key not in _NEVER_FIRES_SELL:
@@ -273,14 +253,18 @@ def test_graph_matches_rule_or_refuses(indicator, condition, negated, side, dire
 
 # ---------------------------------------------------------------------------
 # Variants the default-param sweep does not reach: missing params, other
-# bands, references to a second series.  Each one says whether the graph
-# must run (and match) or be refused, so a wrong refusal also fails.
+# bands and components, references to a second series, slope options, and
+# rules the rule engine can never fire.  expect is "run" (must match and
+# trade) or "never" (must match; the rule never fires on its own, so only
+# its NOT form trades).
 # ---------------------------------------------------------------------------
 
 _M = _MID_CLOSE
 _VARIANTS: list[tuple[str, str, Rule]] = [
     # ma with no type: the rule engine defaults to ema.
     ("ma-no-type", "run", Rule(indicator="ma", condition="above", value=_M, params={"period": 20})),
+    ("ma-rma", "run", Rule(indicator="ma", condition="above", value=_M,
+                           params={"period": 20, "type": "rma"})),
     # rsi with no type: the rule engine defaults to sma.
     ("rsi-no-type", "run", Rule(indicator="rsi", condition="below", value=45, params={"period": 14})),
     # bb width is "std" in the rule builder.
@@ -291,6 +275,10 @@ _VARIANTS: list[tuple[str, str, Rule]] = [
     ("bb-middle", "run", Rule(indicator="bb", condition="below", value=_M,
                               params={"period": 20, "std": 2.5}, param="middle")),
     ("bb-no-band", "run", Rule(indicator="bb", condition="above", value=_M, params={"period": 20})),
+    ("bb-bandwidth", "run", Rule(indicator="bb", condition="above", value=0.03,
+                                 params={"period": 20, "std": 2}, param="bandwidth")),
+    ("bb-pctb", "run", Rule(indicator="bb", condition="below", value=0.2,
+                            params={"period": 20, "std": 2}, param="pctb")),
     # MACD params are ignored by the rule engine (always 12/26/9).
     ("macd-custom-params", "run", Rule(indicator="macd", condition="crosses_above", param="signal",
                                        params={"fast": 5, "slow": 35, "signal": 5})),
@@ -302,45 +290,71 @@ _VARIANTS: list[tuple[str, str, Rule]] = [
                                 params={"period": 10, "type": "sma"})),
     ("legacy-ema20-over-ema50", "run", Rule(indicator="ema20", condition="crosses_above", param="ema50")),
     ("volume-raw", "run", Rule(indicator="volume", condition="above", value=1_000_000, param="raw")),
-    # Things the graph cannot draw the same way: refused, never guessed.
-    ("bb-bandwidth", "refuse", Rule(indicator="bb", condition="above", value=0.05,
-                                    params={"period": 20, "std": 2}, param="bandwidth")),
-    ("bb-pctb", "refuse", Rule(indicator="bb", condition="below", value=0.2,
-                               params={"period": 20, "std": 2}, param="pctb")),
-    ("volume-sma", "refuse", Rule(indicator="volume", condition="above", value=1_000_000,
-                                  params={"period": 20}, param="sma")),
-    ("atr-vs-atr-ref", "refuse", Rule(indicator="atr", condition="above", param="atr:20",
-                                      params={"period": 14})),
-    ("price-vs-bb-ref", "refuse", Rule(indicator="price", condition="above", param="bb:20:2:upper")),
-    ("price-vs-close", "refuse", Rule(indicator="price", condition="above", param="close")),
-    ("rsi-no-value", "refuse", Rule(indicator="rsi", condition="above", params={"period": 14, "type": "wilder"})),
-    ("atr-pct-custom-period", "refuse", Rule(indicator="atr_pct", condition="above", value=0.7,
-                                             params={"period": 10})),
+    ("volume-sma", "run", Rule(indicator="volume", condition="above", value=1_000_000,
+                               params={"period": 20}, param="sma")),
+    ("volume-vs-volume-sma-ref", "run", Rule(indicator="volume", condition="crosses_above",
+                                             param="volume_sma:10")),
+    ("atr-vs-atr-ref", "run", Rule(indicator="atr", condition="above", param="atr:20",
+                                   params={"period": 14})),
+    ("atr-pct-custom-period", "run", Rule(indicator="atr_pct", condition="above", value=0.7,
+                                          params={"period": 10})),
+    ("price-vs-bb-ref", "run", Rule(indicator="price", condition="above", param="bb:20:2:upper")),
+    ("price-vs-bb-pctb-ref", "run", Rule(indicator="rsi", condition="above", param="bb:20:2:pctb")),
+    ("stoch-k-crosses-d", "run", Rule(indicator="stochastic", condition="crosses_above", param="d",
+                                      params={"k_period": 14, "d_period": 3, "smooth_k": 3})),
+    ("rsi-vs-stoch-ref", "run", Rule(indicator="rsi", condition="below", param="stoch:14:3:3:d")),
+    ("adx-plus-di", "run", Rule(indicator="adx", condition="above", value=25,
+                                params={"period": 14}, param="plus_di")),
+    ("adx-vs-minus-di-ref", "run", Rule(indicator="adx", condition="above", param="adx:14:minus_di",
+                                        params={"period": 14})),
+    ("rsi-turns-up-2-bars-min-move", "run", Rule(indicator="rsi", condition="turns_up", value=2,
+                                                 threshold=1.0, params={"period": 14, "type": "wilder"})),
+    ("price-turns-down-min-move", "run", Rule(indicator="price", condition="turns_down", threshold=0.5)),
+    ("rsi-falling-over-default", "run", Rule(indicator="rsi", condition="falling_over")),
+    # Rules the rule engine can never fire.  Drawn as a "never" node, so the
+    # NOT form is True from bar 1, exactly as eval_rules inverts False.
+    ("price-vs-close", "never", Rule(indicator="price", condition="above", param="close")),
+    ("rsi-no-value", "never", Rule(indicator="rsi", condition="above",
+                                   params={"period": 14, "type": "wilder"})),
+    ("not-rsi-no-value", "run", Rule(indicator="rsi", condition="above", negated=True,
+                                     params={"period": 14, "type": "wilder"})),
+    ("rising-over-0-bars", "never", Rule(indicator="rsi", condition="rising_over", value=0)),
+    ("turns-up-below-no-value", "never", Rule(indicator="rsi", condition="turns_up_below")),
+    ("ma-no-params", "never", Rule(indicator="ma", condition="above", value=_M)),
+    ("bb-unknown-band", "never", Rule(indicator="bb", condition="above", value=_M, param="signal")),
+    # compute_indicators keys BB by int(period) but resolve_series looks up
+    # "20.0": the series is never found.
+    ("bb-float-period", "never", Rule(indicator="bb", condition="above", value=_M,
+                                      params={"period": 20.0, "std": 2})),
+    ("not-bb-float-period", "run", Rule(indicator="bb", condition="above", value=_M, negated=True,
+                                        params={"period": 20.0, "std": 2})),
 ]
 
 
 @pytest.mark.parametrize("side", ["buy", "sell"])
 @pytest.mark.parametrize("name,expect,rule", _VARIANTS, ids=[v[0] for v in _VARIANTS])
-def test_rule_variants_match_or_refuse(name, expect, rule, side):
-    req = _request(rule, side)
-    rule_result = run_backtest(req, include_spy_correlation=False, df=_DF.copy())
-    graph_req = _graph_request(req)
+def test_rule_variants_match(name, expect, rule, side):
+    rt = _assert_runs_like_the_rules(_request(rule, side), name)
+    fired = bool(rt) if side == "buy" else any(t["type"] == "sell" for t in rt)
+    if expect == "run":
+        assert fired, f"{name}: the rule never fires on this data, so the match proves nothing"
+    else:
+        assert not fired, f"{name}: the rule engine should never fire this rule"
 
-    reason = _refusal_reason(graph_req.graph)
-    assert (reason is not None) == (expect == "refuse"), f"{name}: refusal reason {reason!r}"
 
-    if reason is not None:
-        with pytest.raises(UnsupportedNodeError):
+def test_other_timeframe_rule_is_refused():
+    """A rule on another timeframe needs bars of that timeframe, which the
+    graph cannot fetch before W5.  Ignoring rule.timeframe would run it on the
+    base bars and trade differently, so compile refuses it, naming the node."""
+    for condition, value in (("above", 50.0), ("turns_up", None)):
+        rule = Rule(indicator="rsi", condition=condition, value=value, timeframe="1wk")
+        graph_req = _graph_request(_request(rule, "buy"))
+        marked = [n.id for n in graph_req.graph.nodes.values()
+                  if "condition_extra" in (n.params or {})]
+        assert marked == ["/cmp_buy_0"]
+        with pytest.raises(UnsupportedNodeError) as info:
             run_graph_backtest(graph_req, df=_DF.copy())
-        return
-
-    graph_result = run_graph_backtest(graph_req, df=_DF.copy())
-    rt, gt = rule_result["trades"], graph_result.trades
-    assert rt, f"{name}: the rule never trades on this data, so the match proves nothing"
-    assert [(t["type"], t["date"]) for t in gt] == [(t["type"], t["date"]) for t in rt]
-    assert graph_result.summary["final_value"] == pytest.approx(
-        rule_result["summary"]["final_value"], rel=_REL
-    )
+        assert info.value.node_id == "/cmp_buy_0"
 
 
 def test_muted_rule_is_left_out_like_the_rule_engine():

@@ -19,13 +19,14 @@ if TYPE_CHECKING:
     from bot_manager import BotConfig, BotState, BotManager
 
 from signal_engine import compute_indicators, eval_rules, migrate_rule
-from shared import _fetch, fetch_ohlcv_async
+from shared import _fetch, fetch_ohlcv_async, provider_max_days
 from broker import get_trading_provider, OrderRequest as BrokerOrderRequest, OrderResult
 from journal import _log_trade, compute_realized_pnl, compute_bidirectional_pnl
 from post_loss import is_post_loss_trigger
 from notifications import notify_entry, notify_exit, notify_error
 from pydantic import ValidationError
 from nodebuilder.models import GraphValidationError
+from nodebuilder.prepare import build_graph_attrs, live_fetch_start, window_cut_by_provider
 from regime import RegimeMixin
 from exits import ExitsMixin
 
@@ -70,40 +71,33 @@ def compile_bot_graph(graph, bot_id: str = ""):
     return nb_compile(graph)
 
 
-def build_graph_attrs(program, df, trailing_stop):
-    """Build the attrs dict a compiled graph reads, from the fetched bars.
+def graph_hash(graph) -> str:
+    """A stable hash of a graph, so the runner recompiles only on a change."""
+    import hashlib
+    import json as _json
+    dump = _json.dumps(graph.model_dump(mode='json'), sort_keys=True)
+    return hashlib.sha256(dump.encode()).hexdigest()
 
-    Mirrors steps 5 to 7 of nodebuilder.run.run_graph_backtest, so a live
-    graph bot sees the same series as its backtest.  This is CPU work; the
-    runner calls it through _run_in_executor so it never blocks the loop.
+
+class GraphCookError(RuntimeError):
+    """A graph bot's cook raised on a tick.  The tick restores the bar and
+    re-raises this, so run() counts it toward MAX_CONSEC_ERRORS."""
+
+
+def cook_graph_bar(program, df, trailing_stop):
+    """Cook a compiled graph over the fetched bars and read its last bar.
+
+    Returns (attrs, {"entry": bool, "exit": bool}).  attrs is the dict the
+    exit helpers read (ATR for an ATR trailing stop).  The whole cook
+    (indicator work and evaluation) is CPU work: the runner passes this
+    function to _run_in_executor, so it never runs on the polling loop
+    (Key Bugs Fixed).  Bar data comes from nodebuilder.prepare, the same
+    prep the graph backtest uses.
     """
-    import numpy as np
-    import pandas as _pd
-    from indicators import OHLCVSeries, compute_instance
-    from nodebuilder.evaluator import compute_indicators_from_specs
-
-    vol_series = df['Volume'] if 'Volume' in df.columns else _pd.Series(0, index=df.index)
-    ohlcv = OHLCVSeries(
-        close=df['Close'], high=df['High'], low=df['Low'], volume=vol_series
-    )
-    attrs = compute_indicators_from_specs(program.indicator_specs, ohlcv)
-    attrs['@close'] = df['Close']
-    attrs['@open'] = df['Open']
-    attrs['@high'] = df['High']
-    attrs['@low'] = df['Low']
-    attrs['@volume'] = vol_series
-    # The exit sentinel compile() uses when nothing is wired into Exit.
-    attrs['@always_false'] = _pd.Series(0.0, index=df.index, dtype='float64')
-    # An ATR trailing stop needs attrs["atr"], which the exit checks read.
-    # The backtest computes ATR(14) when the graph has none; do the same, or
-    # the live trailing stop would never be set.
-    if trailing_stop is not None and getattr(trailing_stop, 'type', None) == 'atr' and 'atr' not in attrs:
-        attrs['atr'] = compute_instance('atr', {'period': 14}, ohlcv)['atr']
-    # Pre-allocate op-output series
-    for op in program.per_bar_program:
-        if op.writes not in attrs:
-            attrs[op.writes] = _pd.Series(np.nan, index=df.index, dtype='float64')
-    return attrs
+    from nodebuilder import evaluator as _evaluator
+    attrs = build_graph_attrs(program, df, trailing_stop)
+    sigs = _evaluator.evaluate_graph(program, attrs, len(df) - 1)
+    return attrs, sigs
 
 
 class BotRunner(RegimeMixin, ExitsMixin):
@@ -115,6 +109,8 @@ class BotRunner(RegimeMixin, ExitsMixin):
         self._active_order_ids: set[str] = set()  # order IDs placed by this bot
         self._last_broker_qty: int | None = None  # for partial-position reconciliation
         self._loop: asyncio.AbstractEventLoop | None = None  # set in run() for thread-safe scheduling
+        self._short_window_warned: str | None = None  # graph hash already warned about a short fetch
+        self._window_cut_warned: str | None = None  # graph hash already warned about a provider limit
 
     def _log(self, level: str, msg: str):
         entry = {"time": datetime.now(timezone.utc).isoformat(), "msg": msg, "level": level}
@@ -265,9 +261,21 @@ class BotRunner(RegimeMixin, ExitsMixin):
 
         Raises HTFGraphNotSupportedError if any node has a non-base timeframe param.
         Raises RegimeUnsupportedError if /regime/ nodes are present (from compile()).
-        _tick() runs it through _run_in_executor; errors propagate to the run() error handler.
         """
         return compile_bot_graph(cfg.graph, cfg.bot_id)
+
+    def _graph_program(self, cfg):
+        """(program, hash) for cfg.graph; compiles only when the hash changed.
+
+        Runs in the executor (_tick passes it to _run_in_executor): hashing
+        and compiling are CPU work.  It only reads state; _tick stores the
+        result back on the loop.  Compile errors propagate to _tick.
+        """
+        current_hash = graph_hash(cfg.graph)
+        cached = self.state.compiled_program
+        if cached is not None and current_hash == self.state.graph_hash:
+            return cached, current_hash
+        return self._compile_graph_program(cfg), current_hash
 
     async def _tick(self):
         cfg = self.config
@@ -300,40 +308,13 @@ class BotRunner(RegimeMixin, ExitsMixin):
         if not in_hours and state.entry_price is None:
             return
 
-        # 2. Fetch bars (30 days back for indicator warmup)
+        # 2. Fetch bars.  Rule bots fetch 30 days back for indicator warmup.
+        # A graph bot compiles first (only when its graph changed) and
+        # fetches the window its program needs (plan D5, critic 9).
         from datetime import timedelta, date
         end_date = date.today().isoformat()
         start_date = (date.today() - timedelta(days=30)).isoformat()
-
-        try:
-            df = await fetch_ohlcv_async(
-                cfg.symbol, start_date, end_date, cfg.interval, cfg.data_source
-            )
-        except Exception as e:
-            self._log("WARN", f"Fetch failed: {e}")
-            return
-
-        if df is None or len(df) < 2:
-            self._log("WARN", "Not enough bars returned")
-            return
-
-        # 3. New bar detection
-        last_bar = str(df.index[-1])
-        if last_bar == state.last_bar_time:
-            return  # same bar, nothing to do
-        prev_bar_time = state.last_bar_time
-        state.last_bar_time = last_bar
-        self._log("INFO", f"New bar: {last_bar} | close={df['Close'].iloc[-1]:.2f}")
-
-        # 4. Compute indicators (rule-mode) OR compile+evaluate graph (graph-mode)
-        i = len(df) - 1
-        price = float(df["Close"].iloc[-1])
-        state.last_price = price
-
-        # Pre-initialize signal variables; graph mode computes them in section 4,
-        # rule mode computes them lazily in sections 6 and 7.
-        buy_signal: bool = False
-        sell_signal: bool = False
+        program = None
 
         if cfg.kind == "graph":
             if cfg.graph is None:
@@ -349,22 +330,18 @@ class BotRunner(RegimeMixin, ExitsMixin):
                 self.state.error_message = self.state.pause_reason
                 self.manager.save()
                 return
-            # Compute hash; recompile only when it differs from the cached hash
-            import hashlib, json as _json
-            graph_dump = _json.dumps(cfg.graph.model_dump(mode='json'), sort_keys=True)
-            current_hash = hashlib.sha256(graph_dump.encode()).hexdigest()
             # A graph that does not compile, or whose settings the bot config
-            # refuses, cannot recover by retrying.  Every later tick of this
-            # bar would return early as "same bar" and skip the exit checks
-            # without a word, so pause the bot and alert, as for graph=None.
+            # refuses, cannot recover by retrying.  Every later tick would
+            # skip the exit checks without a word, so pause the bot and
+            # alert, as for graph=None.
             from nodebuilder.sim_settings import apply_to_bot_config
             try:
-                if current_hash != state.graph_hash or state.compiled_program is None:
-                    state.compiled_program = await self._run_in_executor(
-                        lambda: self._compile_graph_program(cfg)
-                    )
-                    state.graph_hash = current_hash
-                program = state.compiled_program
+                # Hashing and compiling run in the executor, never on the loop.
+                program, current_hash = await self._run_in_executor(
+                    self._graph_program, cfg
+                )
+                state.compiled_program = program
+                state.graph_hash = current_hash
 
                 # The graph wins: its Settings nodes (size, stop, trailing stop,
                 # slippage) replace the bot config's values for the rest of this
@@ -388,47 +365,103 @@ class BotRunner(RegimeMixin, ExitsMixin):
                 ))
                 self.manager.save()
                 return
-            except Exception:
-                # Anything else (a compile bug, an executor error) may pass.
-                # Retry this bar on the next tick so repeated failures reach
-                # MAX_CONSEC_ERRORS and alert, instead of the next tick seeing
-                # "same bar" and skipping the exit checks without a word.
-                state.last_bar_time = prev_bar_time
-                raise
+            # Anything else (a compile bug, an executor error) propagates.  No
+            # bar has been marked done yet, so the next tick retries this bar
+            # and repeated failures reach MAX_CONSEC_ERRORS and alert.
 
-            from nodebuilder.evaluator import evaluate_graph
+            # The window holds the program's required_lookback_bars (with
+            # margin), and never less than the 30 days every bot used before,
+            # but never more than the bot's data provider serves for this
+            # interval (F435 W2 LT-4).  Warn once per graph when that limit
+            # cuts the window.
+            max_days = provider_max_days(cfg.data_source, cfg.interval)
+            start_date = live_fetch_start(program, cfg.interval, cfg.trailing_stop,
+                                          max_days=max_days)
+            if (self._window_cut_warned != state.graph_hash
+                    and window_cut_by_provider(program, cfg.interval, cfg.trailing_stop, max_days)):
+                self._window_cut_warned = state.graph_hash
+                self._log(
+                    "WARN",
+                    f"{cfg.data_source} serves at most {max_days} days of {cfg.interval} bars, "
+                    f"less than this graph's live window; the live signal may differ "
+                    f"from the backtest.",
+                )
+
+        try:
+            df = await fetch_ohlcv_async(
+                cfg.symbol, start_date, end_date, cfg.interval, cfg.data_source
+            )
+        except Exception as e:
+            self._log("WARN", f"Fetch failed: {e}")
+            return
+
+        if df is None or len(df) < 2:
+            self._log("WARN", "Not enough bars returned")
+            return
+
+        # 3. New bar detection
+        last_bar = str(df.index[-1])
+        if last_bar == state.last_bar_time:
+            return  # same bar, nothing to do
+        prev_bar_time = state.last_bar_time
+        state.last_bar_time = last_bar
+        self._log("INFO", f"New bar: {last_bar} | close={df['Close'].iloc[-1]:.2f}")
+
+        # 4. Compute indicators (rule-mode) OR cook the graph (graph-mode)
+        i = len(df) - 1
+        price = float(df["Close"].iloc[-1])
+        state.last_price = price
+
+        # Pre-initialize signal variables; graph mode computes them in section 4,
+        # rule mode computes them lazily in sections 6 and 7.
+        buy_signal: bool = False
+        sell_signal: bool = False
+
+        if cfg.kind == "graph":
+            # The frame can come back shorter than the graph needs (the
+            # provider clamps intraday history).  Warn once per graph.
+            # Same rule as the fetch window (F435 W2 LT-5): fewer than
+            # LIVE_LOOKBACK_FACTOR x the lookback and recursive indicators
+            # (Wilder RSI, EMA) may not have settled to the backtest's values.
+            from nodebuilder.prepare import graph_lookback_bars, short_history_bars
+            need = short_history_bars(graph_lookback_bars(program, cfg.trailing_stop))
+            if len(df) < need and self._short_window_warned != state.graph_hash:
+                self._short_window_warned = state.graph_hash
+                self._log(
+                    "WARN",
+                    f"Graph wants {need} bars of history but the fetch returned {len(df)} "
+                    f"({cfg.interval}, {cfg.data_source}); the live signal may differ "
+                    f"from the backtest.",
+                )
 
             # F6: graph compares against @volume become silent zeros if the
             # provider didn't return a Volume column. Warn so the operator
             # notices instead of trading on bogus data.
-            if 'Volume' not in df.columns:
-                references_volume = any(
-                    "@volume" in op.reads for op in program.per_bar_program
+            if 'Volume' not in df.columns and program.reads_attr("@volume"):
+                self._log(
+                    "WARN",
+                    f"Graph references @volume but DataFrame lacks Volume column "
+                    f"(provider={cfg.data_source}); zero-filling — comparisons against "
+                    f"@volume will be False.",
                 )
-                if references_volume:
-                    self._log(
-                        "WARN",
-                        f"Graph references @volume but DataFrame lacks Volume column "
-                        f"(provider={cfg.data_source}); zero-filling — comparisons against "
-                        f"@volume will be False.",
-                    )
-            # Key Bugs Fixed: never block the polling loop.  Indicator work and
-            # the per-bar evaluation both run in the executor.
+            # Key Bugs Fixed: never block the polling loop.  The whole cook
+            # (indicator work and evaluation) runs in the executor.
             try:
-                indicator_attrs = await self._run_in_executor(
-                    build_graph_attrs, program, df, cfg.trailing_stop
+                indicators, sigs = await self._run_in_executor(
+                    cook_graph_bar, program, df, cfg.trailing_stop
                 )
             except Exception as e:
-                self._log("WARN", f"Graph indicator error: {e}")
                 # Retry this bar on the next tick instead of skipping it (and
                 # its exit checks) as "same bar".
                 state.last_bar_time = prev_bar_time
-                return
-
-            sigs = await self._run_in_executor(evaluate_graph, program, indicator_attrs, i)
-            buy_signal  = sigs['entry']
+                # Every cook failure counts (F435 W2 LT-1): raise, so run()'s
+                # consecutive-error counter sees it and alerts (create_task)
+                # at MAX_CONSEC_ERRORS.  Returning quietly here hid a cook
+                # that failed on every tick, with exits and stops unmanaged.
+                held = " (open position, stops not managed)" if state.entry_price is not None else ""
+                raise GraphCookError(f"Graph cook failed: {e}{held}") from e
+            buy_signal = sigs['entry']
             sell_signal = sigs['exit']
-            indicators = indicator_attrs  # pass attrs dict to downstream helpers that expect it
         else:
             try:
                 vol = df["Volume"] if "Volume" in df.columns else None

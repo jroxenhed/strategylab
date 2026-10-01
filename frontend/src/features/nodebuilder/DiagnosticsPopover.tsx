@@ -3,17 +3,18 @@
  * A3). The toolbar chip and the status-bar segment open it.
  *
  * Rows are grouped by node (the node's name; `Graph` for problems with no
- * node). A row click hands the node id to `onSelectNode`, which selects it
- * (framing it waits for the W3 F command); graph-level rows do nothing. Problems on a wire (`port` set or
- * `dangling_wire`) also go to their node for now: the shared contract only
- * carries a node id. Arrow keys move between rows; Esc closes (the shell).
+ * node). A row click on a problem about a wire (`port` set, or
+ * `dangling_wire`) selects that wire (focusDiagnosticWire, W2); any other row
+ * hands the node id to `onSelectNode`, which selects it (framing it waits for
+ * the W3 F command); graph-level rows do nothing. Arrow keys move between
+ * rows; Esc closes (the shell).
  */
 
 import { useMemo, useRef } from 'react'
 import type { KeyboardEvent } from 'react'
 import { Popover } from './ui/Popover'
 import { useNodeBuilderStore } from './store'
-import { useDiagnostics } from './useDiagnostics'
+import { focusDiagnosticWire, useDiagnostics } from './useDiagnostics'
 import type { Diagnostic } from '../../api/nodebuilderValidate'
 import './diagnostics.css'
 
@@ -122,7 +123,7 @@ export function DiagnosticsPopover({ open, anchorEl, onClose, onSelectNode }: Di
                   data-nb-diag-row=""
                   data-testid={`nb-diag-row-${index}`}
                   className={g.nodeId ? 'nb-diag-pop__row' : 'nb-diag-pop__row nb-diag-pop__row--static'}
-                  onClick={() => { if (g.nodeId) onSelectNode(g.nodeId) }}
+                  onClick={() => { if (focusDiagnosticWire(d)) return; if (g.nodeId) onSelectNode(g.nodeId) }}
                 >
                   <span className={`nb-diag-pop__dot nb-diag-pop__dot--${d.severity}`} aria-hidden="true" />
                   <span className="nb-diag-pop__msg">{d.message}</span>

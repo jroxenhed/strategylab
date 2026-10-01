@@ -23,6 +23,7 @@ import {
   useDiagnosticsController,
   setServerDiagnostics,
   resetDiagnostics,
+  useWireFocus,
   VALIDATE_DEBOUNCE_MS,
   type DiagnosticsState,
 } from '../useDiagnostics'
@@ -512,6 +513,28 @@ describe('DiagnosticsPopover', () => {
     expect(document.activeElement).toBe(screen.getByTestId('nb-diag-row-1'))
     fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' })
     expect(document.activeElement).toBe(row0)
+  })
+
+  it('a row about a wire selects the wire, not the node', async () => {
+    // The RSI's input wire w_1 sits on port in0; a problem naming that port
+    // is about the wire (S05 / S11).
+    validateMock.mockResolvedValue(ok([
+      diag({ node_id: 'n_rsi', path: '/rsi', code: 'attr_missing', port: 'in0', message: 'No @close on this wire.' }),
+    ]))
+    let focus: { wireId: string; seq: number } | null = null
+    function FocusProbe() {
+      focus = useWireFocus()
+      return null
+    }
+    const onSelectNode = vi.fn()
+    render(<><FocusProbe /><PopoverHarness onSelectNode={onSelectNode} onClose={() => {}} /></>)
+    await flush()
+    const before = focus as { wireId: string; seq: number } | null
+    fireEvent.click(screen.getByTestId('nb-diag-row-0'))
+    expect(onSelectNode).not.toHaveBeenCalled()
+    const after = focus as { wireId: string; seq: number } | null
+    expect(after?.wireId).toBe('w_1')
+    expect(after?.seq).toBe((before?.seq ?? 0) + 1)
   })
 
   it('says so when the graph is clean, and is not rendered when closed', async () => {

@@ -125,7 +125,9 @@ def test_regime_node_is_400_with_node_id(client):
     _assert_graph_error(client.post(URL, json=body), "/regime/ticker")
 
 
-def test_crossover_of_derived_signal_is_400(client):
+def test_crossover_of_derived_signal_runs(client):
+    """W1 refused this with a 400; W2 allows a crossover of a derived bool
+    (plan 2.A, critic 26), so the route runs it."""
     body = _body(
         [
             _n("/ticker", "ticker"), _n("/rsi", "rsi"),
@@ -137,7 +139,8 @@ def test_crossover_of_derived_signal_is_400(client):
             _w("w4", "/b1", "/x"), _w("w5", "/b2", "/x"), _w("w6", "/x", "/entry"),
         ],
     )
-    _assert_graph_error(client.post(URL, json=body), "/x")
+    resp = client.post(URL, json=body)
+    assert resp.status_code == 200, resp.text
 
 
 def test_price_into_entry_names_the_source(client):
@@ -179,10 +182,10 @@ def test_unsupported_condition_extra_is_400(client):
 
 
 def test_unsupported_node_type_is_400_with_node_id(client):
-    """A node compile cannot run (here a slope condition feeding Exit) is
-    refused, not skipped into an Exit that never fires."""
+    """A node compile cannot run (a rule name no node registers; rising is a
+    real type since W2) is refused, not skipped into a signal that never fires."""
     body = _rsi_entry()
-    body["graph"]["nodes"]["/above"]["type"] = "rising"
+    body["graph"]["nodes"]["/above"]["type"] = "is_above_signal"
     _assert_graph_error(client.post(URL, json=body), "/above")
 
 

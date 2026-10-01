@@ -307,7 +307,21 @@ class GraphStore:
         return items
 
     def get(self, graph_id: str) -> dict:
-        return self._read(graph_id)
+        """The stored envelope, with its graph in the current version.
+
+        A graph saved by older code is migrated on the way out (F435 W2,
+        MD-02), so the editor never edits an un-migrated graph (v2 left write
+        names to be re-derived on every save).  The file itself is rewritten
+        only by the next save.  A graph that does not load is returned as
+        stored; /validate then reports why.
+        """
+        env = self._read(graph_id)
+        try:
+            graph = canonical_graph(env["graph"])
+        except (GraphValidationError, ValidationError, ValueError, TypeError) as exc:
+            logger.warning("graph %s does not load, returned as stored: %s", graph_id, exc)
+            return env
+        return {**env, "graph": graph}
 
     def create(
         self,

@@ -30,6 +30,7 @@ import {
   Controls,
   MiniMap,
   useReactFlow,
+  useStore,
   applyNodeChanges,
   applyEdgeChanges,
   type Node as RFNode,
@@ -49,10 +50,23 @@ import {
   newWireId,
   removeNodes as opRemoveNodes,
   removeNodesWithRewire as opRemoveNodesWithRewire,
-  removeWires as opRemoveWires,
   uniqueName,
-  wouldCreateCycle,
 } from './operations'
+import { useDiagnostics, useStreams, useStreamsFresh, useWireFocus } from './useDiagnostics'
+import {
+  connectedPortsByNode,
+  connectionProblem,
+  connectWire,
+  placeLabels,
+  portsOf,
+  portsSpecOf,
+  removeWiresWithTerms,
+  wireDiagnostics,
+  wireLabels,
+  withUniqueWrites,
+  type ConnectionLike,
+  type Rect,
+} from './streamLabels'
 import { dispatchKey, registerCommands, type CommandScope } from './commands'
 import { closeActivePopover, isPopoverOpen } from './ui/Popover'
 import TabMenu from './TabMenu'
@@ -60,6 +74,7 @@ import {
   alignSelection,
   dragStopMoves,
   isTypingTarget,
+  markHotEdges,
   menuScreenPoint,
   mergeLocalNodes,
   newNodePosition,
@@ -67,7 +82,6 @@ import {
   nudgeFree,
   outermostRoot,
   planDeletion,
-  primaryAttrFor,
   primarySelection,
   selectOnly,
   shouldHandleCanvasKey,
@@ -84,7 +98,7 @@ import SettingsNode from './nodes/SettingsNode'
 import OutputNode from './nodes/OutputNode'
 
 // ── Custom edge renderer ─────────────────────────────────────────────────────
-import AttrEdge from './edges/AttrEdge'
+import AttrEdge, { type AttrEdgeData } from './edges/AttrEdge'
 
 // ---------------------------------------------------------------------------
 // nodeTypes / edgeTypes — defined outside component to avoid re-registration
@@ -121,6 +135,10 @@ const HOME_VIEWPORT = { x: 0, y: 0, zoom: 1 }
 // useGlobalKeys, in every mode; the canvas only runs its own.
 const CANVAS_SCOPES: ReadonlySet<CommandScope> = new Set<CommandScope>(['canvas'])
 const MINIMAP_STYLE = { background: 'oklch(0.18 0.014 250)', border: '1px solid oklch(0.30 0.018 250)' }
+// Wire labels hide at rest below this zoom (foundation 5.2).
+const LABEL_ZOOM = 0.6
+// Node box used for label placement until React Flow has measured a node.
+const DEFAULT_NODE_SIZE = { w: 176, h: 60 }
 
 // ---------------------------------------------------------------------------
 // Category → RF node type mapping
@@ -163,10 +181,8 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   const storeMoveNodes = useNodeBuilderStore(s => s.moveNodes)
   const storeSetViewport = useNodeBuilderStore(s => s.setViewport)
   const storeAddNode = useNodeBuilderStore(s => s.addNode)
-  const storeAddWire = useNodeBuilderStore(s => s.addWire)
   const storeRemoveNodesWithRewire = useNodeBuilderStore(s => s.removeNodesWithRewire)
   const storeRemoveNodes = useNodeBuilderStore(s => s.removeNodes)
-  const storeRemoveWire = useNodeBuilderStore(s => s.removeWire)
   const storeCommit = useNodeBuilderStore(s => s.commit)
   const storeBeginBatch = useNodeBuilderStore(s => s.beginBatch)
   const storeEndBatch = useNodeBuilderStore(s => s.endBatch)
@@ -185,7 +201,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   // Houdini-style: when a port-drag ends in empty space, remember which node
   // and port it came from so the next node we create from TabMenu auto-wires
   // to it. Cleared on TabMenu close (Esc, outside click or successful create).
-  const pendingWireRef = useRef<{ fromNodeId: string; handleType: 'source' | 'target' } | null>(null)
+  const pendingWireRef = useRef<{ fromNodeId: string; handleType: 'source' | 'target'; handleId: string | null } | null>(null)
   // Last pointer position over the canvas, in screen pixels. Tab opens here.
   const lastPointerRef = useRef<XY | null>(null)
   // Puts back the page's text selection setting after a wire drag.
@@ -265,7 +281,49 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
     return result
   }, [graph.nodes, editable])
 
-  // Per-edge cache, same pattern.
+  // ── Wires (spec S11) ──────────────────────────────────────────────────────
+  // Each wire's label is what its consumer reads through it, from the last
+  // /validate streams. Placement (fan-out, fan-in, overlap) runs on graph
+  // changes, node drag end and node size changes only, never per frame.
+  const streams = useStreams()
+  const { diagnostics } = useDiagnostics()
+  const wireFocus = useWireFocus()
+  // A boolean selector, so panning and zooming re-render only at the band edge.
+  const lowZoom = useStore(s => s.transform[2] < LABEL_ZOOM)
+  // Streams answer an older graph between a commit and its validate:
+  // labels then also trust the static guess (a rename shows at once).
+  const streamsFresh = useStreamsFresh()
+  // The node under the pointer: its wires go "hot". Kept in a ref and
+  // patched onto the local edge mirror (markHotEdges), so hover never
+  // re-runs the edge build below.
+  const hoveredNodeRef = useRef<string | null>(null)
+  // Measured node sizes, for label placement. `sizesVersion` bumps when one changes.
+  const sizesRef = useRef<Map<string, { w: number; h: number }>>(new Map())
+  const [sizesVersion, setSizesVersion] = useState(0)
+
+  const labels = useMemo(() => wireLabels(graph, streams, streamsFresh), [graph, streams, streamsFresh])
+  const connectedPorts = useMemo(() => connectedPortsByNode(graph.wires), [graph.wires])
+  const placements = useMemo(() => {
+    const rects: Record<string, Rect> = {}
+    const portCounts: Record<string, number> = {}
+    const dynamicNodes = new Set<string>()
+    for (const n of Object.values(graph.nodes)) {
+      const size = sizesRef.current.get(n.id) ?? DEFAULT_NODE_SIZE
+      rects[n.id] = { x: n.position[0], y: n.position[1], w: size.w, h: size.h }
+      portCounts[n.id] = portsOf(n.type, connectedPorts.get(n.id) ?? []).length
+      if (portsSpecOf(n.type)?.dynamic) dynamicNodes.add(n.id)
+    }
+    const items = graph.wires.map(w => ({
+      id: w.id, from: w.from, to: w.to, toPort: w.to_port, text: labels[w.id]?.text ?? '',
+    }))
+    return placeLabels(items, rects, portCounts, dynamicNodes)
+    // sizesVersion: re-place when React Flow reports a new node size.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graph.nodes, graph.wires, labels, connectedPorts, sizesVersion])
+  const diagByWire = useMemo(() => wireDiagnostics(diagnostics, graph), [diagnostics, graph])
+
+  // Per-edge cache, same pattern as the nodes: an edge object (and its
+  // `data`) only changes when something it shows changed.
   const rfEdgeCacheRef = useRef<Map<string, { sig: string; rfEdge: RFEdge }>>(new Map())
   const prevRfEdgesRef = useRef<RFEdge[] | null>(null)
   const rfEdges: RFEdge[] = useMemo(() => {
@@ -275,7 +333,28 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
     for (const w of graph.wires) {
       seen.add(w.id)
       const selected = w.id === selectedWireId
-      const sig = `${w.from}|${w.to}|${w.attr ?? ''}|${selected ? 1 : 0}`
+      const label = labels[w.id]
+      const place = placements[w.id] ?? { t: 0.5, dx: 0, hidden: null }
+      const consumer = graph.nodes[w.to]
+      const portLabel = portsSpecOf(consumer?.type)?.ports[Number(w.to_port.slice(2))]?.label ?? w.to_port
+      const data: AttrEdgeData = {
+        from: w.from,
+        to: w.to,
+        text: label?.text ?? '',
+        placeholder: label?.placeholder ?? false,
+        reads: label?.reads ?? [],
+        t: place.t,
+        dx: place.dx,
+        hidden: place.hidden,
+        lowZoom,
+        // Set on the local mirror by markHotEdges (node hover).
+        hot: false,
+        diag: diagByWire.get(w.id)?.message ?? null,
+        fromName: graph.nodes[w.from]?.name ?? w.from,
+        toName: consumer?.name ?? w.to,
+        portLabel,
+      }
+      const sig = `${w.from}|${w.to}|${w.to_port}|${selected ? 1 : 0}|${JSON.stringify(data)}`
       const cached = cache.get(w.id)
       if (cached && cached.sig === sig) {
         result.push(cached.rfEdge)
@@ -285,9 +364,12 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
         id: w.id,
         source: w.from,
         target: w.to,
-        label: w.attr ?? undefined,
+        // Handle ids: the one output is 'out'; inputs are 'in0', 'in1', ...
+        sourceHandle: 'out',
+        targetHandle: w.to_port,
         type: 'attr',
         selected,
+        data,
       }
       cache.set(w.id, { sig, rfEdge })
       result.push(rfEdge)
@@ -301,7 +383,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
     }
     prevRfEdgesRef.current = result
     return result
-  }, [graph.wires, selectedWireId])
+  }, [graph.wires, graph.nodes, selectedWireId, labels, placements, lowZoom, diagByWire])
 
   // Local mirror of nodes/edges so React Flow can update positions LIVE during
   // a drag (and selection during a click) without round-tripping through the
@@ -327,19 +409,65 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   useEffect(() => {
     setLocalNodes(curr => alignSelection(curr, selectedNodeId))
   }, [selectedNodeId])
+  // React Flow owns wire selection locally (click, Shift-click), so an edge
+  // that is already shown keeps its local `selected` flag; everything else
+  // comes from the store. A diagnostic that selects a wire sets it below.
   useEffect(() => {
     setLocalEdges(curr => {
-      if (curr.length !== rfEdges.length) return rfEdges
-      const onlySelectionDiffers = curr.every((e, i) => {
-        const r = rfEdges[i]
-        return e.id === r.id && e.source === r.source && e.target === r.target && e.label === r.label && e.type === r.type
+      const selectedById = new Map(curr.map(e => [e.id, e.selected]))
+      const next = markHotEdges(rfEdges.map(r => {
+        const sel = selectedById.get(r.id)
+        return sel === undefined || !!sel === !!r.selected ? r : { ...r, selected: sel }
+      }), hoveredNodeRef.current)
+      const same = next.length === curr.length && next.every((e, i) => {
+        const c = curr[i]
+        return e === c || (e.id === c.id && e.data === c.data && e.selected === c.selected
+          && e.source === c.source && e.target === c.target && e.targetHandle === c.targetHandle)
       })
-      return onlySelectionDiffers ? curr : rfEdges
+      return same ? curr : next
     })
   }, [rfEdges])
 
+  // A diagnostic about a wire (popover row, badge) selects that wire only.
+  // A request made before this canvas mounted is not replayed.
+  const seenFocusSeq = useRef(wireFocus?.seq ?? 0)
+  useEffect(() => {
+    if (!wireFocus || wireFocus.seq === seenFocusSeq.current) return
+    seenFocusSeq.current = wireFocus.seq
+    const { wireId } = wireFocus
+    setSelectedWireId(wireId)
+    storeSelect(null)
+    setLocalNodes(curr => curr.some(n => n.selected) ? curr.map(n => (n.selected ? { ...n, selected: false } : n)) : curr)
+    setLocalEdges(curr => curr.map(e => (!!e.selected === (e.id === wireId) ? e : { ...e, selected: e.id === wireId })))
+    // Only a new request (seq) acts; the store function is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wireFocus?.seq])
+
   const handleNodesChange = useCallback((changes: NodeChange[]) => {
     setLocalNodes(nds => applyNodeChanges(changes, nds))
+    // Keep measured sizes for wire label placement (not per drag frame:
+    // dimension changes come on mount and on real size changes).
+    let sizeChanged = false
+    for (const c of changes) {
+      if (c.type !== 'dimensions' || !c.dimensions) continue
+      const prev = sizesRef.current.get(c.id)
+      const w = Math.round(c.dimensions.width)
+      const h = Math.round(c.dimensions.height)
+      if (!prev || prev.w !== w || prev.h !== h) {
+        sizesRef.current.set(c.id, { w, h })
+        sizeChanged = true
+      }
+    }
+    if (sizeChanged) setSizesVersion(v => v + 1)
+  }, [])
+
+  const handleNodeMouseEnter = useCallback((_e: React.MouseEvent, node: RFNode) => {
+    hoveredNodeRef.current = node.id
+    setLocalEdges(curr => markHotEdges(curr, node.id))
+  }, [])
+  const handleNodeMouseLeave = useCallback(() => {
+    hoveredNodeRef.current = null
+    setLocalEdges(curr => markHotEdges(curr, null))
   }, [])
   const handleEdgesChange = useCallback((changes: EdgeChange[]) => {
     setLocalEdges(eds => applyEdgeChanges(changes, eds))
@@ -480,7 +608,8 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
     } else {
       const label = plan.nodeIds.length > 0 ? 'delete selection' : 'delete wire'
       storeCommit(label, g => {
-        const withoutWires = opRemoveWires(g, plan.wireIds)
+        // A wire into AND / OR / XOR also takes back the term it added.
+        const withoutWires = removeWiresWithTerms(g, plan.wireIds)
         if (plan.nodeIds.length === 0) return withoutWires
         return rewire
           ? opRemoveNodesWithRewire(withoutWires, plan.nodeIds)
@@ -627,36 +756,38 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   }, [])
 
   // ── onConnect: wire drag creates a wire ───────────────────────────────────
+  // The wire goes exactly port to port (spec S08): `sourceHandle` is 'out',
+  // `targetHandle` the input port ('in1'). React Flow hands the ends over in
+  // that order even when the drag started at the input. The new wire and the
+  // consumer's default read (an empty `attr` param takes the source's
+  // primary write) are one commit, so one undo step.
 
   const handleConnect = useCallback(
     (params: Connection) => {
-      if (!params.source || !params.target) return
-      // The wire carries the source node's default attribute (@close for a Ticker).
-      const attr = primaryAttrFor(graphRef.current.nodes[params.source]?.type)
+      const g = graphRef.current
+      if (connectionProblem(g, params) !== null) return
       try {
-        // The store picks the lowest free input port on the target.
-        storeAddWire({
+        storeCommit('add wire', graph => connectWire(graph, {
           id: newWireId(),
           from: params.source,
           to: params.target,
-          attr,
-        })
+          to_port: params.targetHandle ?? undefined,
+        }))
       } catch {
         // Refused (a cycle, or no port at one end). isValidConnection below
         // already showed the drag as invalid, so there is nothing to add.
       }
     },
-    [storeAddWire],
+    [storeCommit],
   )
 
-  // Tells React Flow, during the drag, whether a wire may be dropped here, so
-  // a wire that would close a cycle shows as invalid instead of vanishing.
-  const isValidConnection = useCallback((c: { source: string | null; target: string | null }) => {
-    const g = graphRef.current
-    if (!c.source || !c.target || c.source === c.target) return false
-    if (!canWire(g.nodes[c.source]?.type, g.nodes[c.target]?.type)) return false
-    return !wouldCreateCycle(g, c.source, c.target)
-  }, [])
+  // Tells React Flow, during the drag, whether a wire may be dropped here:
+  // no self-loop, no cycle, no second wire into a port that has one, no
+  // port past the node's last one.
+  const isValidConnection = useCallback(
+    (c: ConnectionLike) => connectionProblem(graphRef.current, c) === null,
+    [],
+  )
 
   // ── Node click → select ───────────────────────────────────────────────────
 
@@ -700,7 +831,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   // (not on a handle), we open the TabMenu at the drop point.
 
   const handleConnectStart = useCallback(
-    (_event: unknown, params: { nodeId: string | null; handleType: 'source' | 'target' | null }) => {
+    (_event: unknown, params: { nodeId: string | null; handleId: string | null; handleType: 'source' | 'target' | null }) => {
       // No text selection on the page while the wire follows the pointer.
       restoreSelectRef.current?.()
       restoreSelectRef.current = suppressTextSelection()
@@ -708,7 +839,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
         pendingWireRef.current = null
         return
       }
-      pendingWireRef.current = { fromNodeId: params.nodeId, handleType: params.handleType }
+      pendingWireRef.current = { fromNodeId: params.nodeId, handleType: params.handleType, handleId: params.handleId }
     },
     [editable],
   )
@@ -763,7 +894,12 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
         type: catalogEntry.name,
         name: uniqueName(graphRef.current, catalogEntry.name, null),
         parent: null,
-        params: { ...catalogEntry.defaults.params } as GraphNode['params'],
+        // Write names are made unique in the graph (@rsi, then @rsi_2).
+        params: withUniqueWrites(
+          graphRef.current,
+          catalogEntry.name,
+          { ...catalogEntry.defaults.params } as GraphNode['params'],
+        ),
         position: [pos.x, pos.y],
         display: false,
         bypass: false,
@@ -790,9 +926,12 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
           // has no input, Entry/Exit and Settings nodes no output).
           if (canWire(sourceType, targetType)) {
             try {
-              storeAddWire({ id: newWireId(), from: fromId, to: toId, attr: primaryAttrFor(sourceType) })
+              // A drag that started at an input wires into that very port.
+              const toPort = !isFromSource ? pending.handleId ?? undefined : undefined
+              storeCommit('add wire', g => connectWire(g, { id: newWireId(), from: fromId, to: toId, to_port: toPort }))
             } catch {
-              // Cycle — skip auto-wire silently
+              // A cycle, or the dragged input port already has a wire
+              // (connectWire refuses a full port): skip the auto-wire.
             }
           }
         } else if (
@@ -802,12 +941,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
           && canWire(nodes[selectedNodeId]?.type, newNode.type)
         ) {
           try {
-            storeAddWire({
-              id: newWireId(),
-              from: selectedNodeId,
-              to: id,
-              attr: primaryAttrFor(nodes[selectedNodeId]?.type),
-            })
+            storeCommit('add wire', g => connectWire(g, { id: newWireId(), from: selectedNodeId, to: id }))
           } catch {
             // Cycle — skip auto-wire silently
           }
@@ -818,7 +952,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
 
       storeSelect(id)
     },
-    [tabMenuGraph, storeAddNode, storeAddWire, storeBeginBatch, storeEndBatch, storeSelect, selectedNodeId],
+    [tabMenuGraph, storeAddNode, storeCommit, storeBeginBatch, storeEndBatch, storeSelect, selectedNodeId],
   )
 
   const handleTabMenuClose = useCallback(() => {
@@ -844,12 +978,12 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
 
   const handleEdgesDelete = useCallback(
     (edges: RFEdge[]) => {
-      for (const e of edges) {
-        storeRemoveWire(e.id)
+      if (edges.length > 0) {
+        storeCommit('delete wire', g => removeWiresWithTerms(g, edges.map(e => e.id)))
       }
       setSelectedWireId(null)
     },
-    [storeRemoveWire],
+    [storeCommit],
   )
 
   // The node the Tab menu would auto-wire from: none for a wire-drop menu
@@ -888,6 +1022,8 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
         onConnectStart={editable ? handleConnectStart : undefined}
         onConnectEnd={editable ? handleConnectEnd : undefined}
         onNodeClick={handleNodeClick}
+        onNodeMouseEnter={handleNodeMouseEnter}
+        onNodeMouseLeave={handleNodeMouseLeave}
         onEdgeClick={editable ? handleEdgeClick : undefined}
         onPaneClick={handlePaneClick}
         onNodesDelete={editable ? handleNodesDelete : undefined}

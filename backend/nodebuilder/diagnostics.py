@@ -61,9 +61,19 @@ SEVERITY_BY_CODE: dict[str, Severity] = {
     # Ticker) or out of a node with no output.
     "attr_type": "error",
     "port_unknown": "error",
+    # W2 attribute checks (plan D4).  attr_missing: a param reads a name no
+    # input provides.  attr_clash: a param reads a name two different nodes
+    # write.  prims_no_producer: a read of a primitive attribute
+    # (@trade.pnl), which nothing produces before W8.
+    "attr_missing": "error",
+    "attr_clash": "error",
+    "prims_no_producer": "error",
     # W1 warnings
     "exit_unconnected": "warning",
     "size_unit_suspect": "warning",
+    # W2 warning: a clash nothing reads (the name is hidden below the node),
+    # or a node writing a name that replaces one from upstream.
+    "attr_shadowed": "warning",
 }
 
 CODES: frozenset[str] = frozenset(SEVERITY_BY_CODE)
@@ -186,8 +196,28 @@ def error_body(exc: BaseException, diagnostics: list[Diagnostic]) -> dict[str, A
 # ---------------------------------------------------------------------------
 
 
+class ValidateResult(BaseModel):
+    """What /validate reports: every problem, and each node's output stream.
+
+    streams maps node id to the StreamSchema of that node's OUTPUT (plan
+    3.3 form).  A node missing from it could not be checked (it has an
+    error, or reads from a node that has one).
+    """
+
+    diagnostics: list[Diagnostic]
+    streams: dict[str, dict[str, Any]] = {}
+
+
 def validate_graph_data(data: Any) -> list[Diagnostic]:
     """Every problem in a raw graph (a dict as the API receives it).
+
+    See validate_graph_full, which also returns the node streams.
+    """
+    return validate_graph_full(data).diagnostics
+
+
+def validate_graph_full(data: Any) -> ValidateResult:
+    """Every problem in a raw graph, plus each node's output stream.
 
     Steps: run the migration chain; check the structure piece by piece (so a
     bad name, a dangling wire and a cycle are all listed, not only the
@@ -200,13 +230,15 @@ def validate_graph_data(data: Any) -> list[Diagnostic]:
     from nodebuilder.migrate import migrate_graph_data
 
     if not isinstance(data, dict):
-        return [make("graph_invalid", "The graph must be a JSON object.")]
+        return ValidateResult(diagnostics=[make("graph_invalid", "The graph must be a JSON object.")])
     try:
         migrated = migrate_graph_data(data)
     except GraphValidationError as exc:
-        return [from_error(exc)]
+        return ValidateResult(diagnostics=[from_error(exc)])
     except Exception as exc:  # garbage shapes (nodes as a list, say)
-        return [make("graph_invalid", f"The graph does not parse: {error_message(exc)}")]
+        return ValidateResult(diagnostics=[
+            make("graph_invalid", f"The graph does not parse: {error_message(exc)}")
+        ])
 
     graph: Optional[Graph] = None
     parse_error: Optional[BaseException] = None
@@ -220,20 +252,22 @@ def validate_graph_data(data: Any) -> list[Diagnostic]:
         # The piece-by-piece check missed what the model refused; say so.
         diagnostics.append(from_error(parse_error))
 
+    streams: dict[str, dict[str, Any]] = {}
     if can_compile:
-        from nodebuilder.compile import compile_with_diagnostics
+        from nodebuilder.compile import check_graph
 
         target = graph if graph is not None else Graph.model_construct(nodes=nodes, wires=wires)
-        _program, compile_diags = compile_with_diagnostics(target)
+        result = check_graph(target)
+        streams = result.streams_json()
         # Compile checks ports too (so every path agrees); the structure
         # check above already listed those, so list each one once.
         listed = {(d.code, d.node_id, d.port) for d in diagnostics if d.code == "port_duplicate"}
         diagnostics.extend(
-            d for d in compile_diags if (d.code, d.node_id, d.port) not in listed
+            d for d in result.diagnostics if (d.code, d.node_id, d.port) not in listed
         )
 
     _fill_paths(diagnostics, nodes or {})
-    return diagnostics
+    return ValidateResult(diagnostics=diagnostics, streams=streams)
 
 
 def _check_structure(

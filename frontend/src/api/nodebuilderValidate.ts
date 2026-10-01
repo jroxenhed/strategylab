@@ -9,7 +9,7 @@
 
 import axios from 'axios'
 import { api } from './client'
-import type { Graph } from './nodebuilder'
+import type { AttrInfo, Graph, StreamSchema } from './nodebuilder'
 
 export type Severity = 'error' | 'warning' | 'info'
 
@@ -51,8 +51,54 @@ export interface Diagnostic {
 export interface ValidateResponse {
   ok: boolean
   diagnostics: Diagnostic[]
-  /** Filled from W2 (stream per wire); empty in W1. */
-  streams: Record<string, unknown>
+  /**
+   * Each node's OUTPUT stream, keyed by node id (plan 3.3, filled from W2).
+   * A node missing here has no known stream (it could not be checked).
+   */
+  streams: Record<string, StreamSchema>
+}
+
+function readAttrs(raw: unknown): AttrInfo[] {
+  if (!Array.isArray(raw)) return []
+  const out: AttrInfo[] = []
+  for (const a of raw) {
+    if (!a || typeof a !== 'object') continue
+    const { name, dtype, written_by } = a as Record<string, unknown>
+    if (typeof name !== 'string' || !name) continue
+    out.push({
+      name,
+      dtype: (typeof dtype === 'string' ? dtype : 'any') as AttrInfo['dtype'],
+      written_by: typeof written_by === 'string' ? written_by : null,
+    })
+  }
+  return out
+}
+
+/**
+ * The `streams` map from a validate reply, with every entry checked. A
+ * server that sends no streams (W1) or a broken entry gives an empty map
+ * or skips that entry; it never throws.
+ */
+export function readStreams(raw: unknown): Record<string, StreamSchema> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: Record<string, StreamSchema> = {}
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!value || typeof value !== 'object') continue
+    const v = value as Record<string, unknown>
+    out[id] = {
+      stream_schema: typeof v.stream_schema === 'number' ? v.stream_schema : 1,
+      points: readAttrs(v.points),
+      detail: readAttrs(v.detail),
+      prims: Array.isArray(v.prims)
+        ? (v.prims as unknown[]).flatMap(p => {
+            if (!p || typeof p !== 'object') return []
+            const kind = (p as Record<string, unknown>).kind
+            return typeof kind === 'string' ? [{ kind, attrs: readAttrs((p as Record<string, unknown>).attrs) }] : []
+          })
+        : [],
+    }
+  }
+  return out
 }
 
 /**
@@ -64,7 +110,7 @@ export async function validateGraph(graph: Graph, signal?: AbortSignal): Promise
   return {
     ok: data?.ok ?? true,
     diagnostics: Array.isArray(data?.diagnostics) ? data.diagnostics : [],
-    streams: data?.streams ?? {},
+    streams: readStreams(data?.streams),
   }
 }
 

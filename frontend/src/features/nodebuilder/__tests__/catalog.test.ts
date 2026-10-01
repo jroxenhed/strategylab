@@ -47,8 +47,14 @@ describe("NODE_CATALOG integrity", () => {
   });
 
   it("every entry has non-empty reads OR non-empty writes", () => {
+    // merge (W2) is a pass-through: no params, it hands on the union of its
+    // inputs, so it has nothing of its own to read or write.
+    const passThrough = new Set(["merge"]);
+    for (const name of passThrough) {
+      expect(Object.keys(getNode(name).defaults.params)).toEqual([]);
+    }
     const bothEmpty = NODE_CATALOG.filter(
-      (e) => e.reads.length === 0 && e.writes.length === 0
+      (e) => e.reads.length === 0 && e.writes.length === 0 && !passThrough.has(e.name)
     );
     expect(bothEmpty).toEqual([]);
   });
@@ -185,7 +191,10 @@ describe("catalog honesty (F435 0.G)", () => {
   it("offers only the data providers the backend registers (no polygon)", () => {
     expect(SOURCE_OPTIONS).not.toContain("polygon");
     expect([...SOURCE_OPTIONS]).toEqual(["yahoo", "alpaca", "alpaca-iex", "ibkr"]);
-    expect(getNode("ticker").paramTypes?.source?.options).not.toContain("polygon");
+    // Since W2 the Ticker has no source param: the sidebar (backtest) and the
+    // spawn dialog (bots) own the data source (plan D11).
+    expect(getNode("ticker").paramTypes?.source).toBeUndefined();
+    expect(getNode("ticker").defaults.params).not.toHaveProperty("source");
   });
 
   it("RSI type options are exactly what compute_rsi accepts", () => {
@@ -205,6 +214,15 @@ describe("catalog honesty (F435 0.G)", () => {
     for (const entry of NODE_CATALOG) {
       for (const [key, spec] of Object.entries(entry.paramTypes ?? {})) {
         if (spec.type !== "select") continue;
+        const value = entry.defaults.params[key];
+        if (Array.isArray(value)) {
+          // A multi-select (day_of_week.days): every item is an option.
+          for (const item of value) {
+            expect(spec.options, `node "${entry.name}" default item for "${key}" is not an option`)
+              .toContain(String(item));
+          }
+          continue;
+        }
         expect(
           spec.options,
           `node "${entry.name}" default for "${key}" is not an option`,
@@ -251,10 +269,15 @@ describe("trailing_stop settings node (F435 0.A)", () => {
     expect(ts.cat).toBe("settings");
     expect(ts.compileActive).toBe(true);
     expect(ts.defaults.setting_key).toBe("trailing_stop");
-    expect(ts.defaults.params).toEqual({
+    // Since W2 a settings node also writes its value as a detail attribute
+    // (the `write` param out); the config fields are the rest.
+    const { out, ...config } = ts.defaults.params;
+    expect(out).toBe("@trail_value");
+    expect(ts.params?.find((p) => p.name === "out")?.type).toBe("write");
+    expect(config).toEqual({
       type: "pct", value: 5, source: "high", activate_on_profit: false, activate_pct: 0,
     });
-    expect(ts.defaults.params).toEqual({ ...TRAILING_STOP_DEFAULTS });
+    expect(config).toEqual({ ...TRAILING_STOP_DEFAULTS });
   });
 
   it("offers only the types and sources the simulator reads", () => {

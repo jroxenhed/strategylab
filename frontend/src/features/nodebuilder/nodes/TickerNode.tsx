@@ -1,7 +1,9 @@
 /**
  * TickerNode — renders source/ticker nodes (cyan stripe).
  *
- * Title = symbol. Subtitle = "{interval} · {source}".
+ * Title = symbol. Subtitle = "{interval}". The data source is not a node
+ * param (plan D11: the sidebar and the spawn dialog own it), so a stale
+ * `source` left on an older graph is not shown.
  * Writes: @open @high @low @close @volume.
  * In edit mode, subtitle is hidden and params render as inline inputs.
  * A Ticker is a data source, so it has no input handle.
@@ -18,10 +20,7 @@ export default function TickerNode({ id, data }: NodeProps) {
 
   const symbol = typeof params.symbol === 'string' ? params.symbol : (d.backendType ?? 'Ticker')
   const interval = typeof params.interval === 'string' ? params.interval : ''
-  const source = typeof params.source === 'string' ? params.source : ''
-  const subtitle = editable
-    ? undefined
-    : (interval && source ? `${interval} · ${source}` : interval || source || undefined)
+  const subtitle = editable ? undefined : interval || undefined
 
   const writes = d.catalog?.writes ?? ['@open', '@high', '@low', '@close', '@volume']
 

@@ -17,6 +17,16 @@
  * - A new commit cancels the request in flight; its late answer is dropped.
  * - The last result stays on screen while the next one is pending.
  * - A failed request keeps the last result and sets `offline`.
+ *
+ * Streams (W2, plan 3.3): the same validate answer carries each node's
+ * output stream. They live in this store too, so there is still exactly
+ * one request per commit. A failed request or a failed Run keeps the last
+ * streams. `useStreams()` and `useNodeStream(id)` read them.
+ *
+ * Wire focus (spec S05/S11): a diagnostic about a wire (a `port` is set,
+ * or `dangling_wire`) selects that wire instead of the node.
+ * `focusDiagnosticWire(d)` asks for it; the canvas listens with
+ * `useWireFocus()`.
  */
 
 import { useEffect } from 'react'
@@ -29,6 +39,8 @@ import {
   describeValidateError,
   type Diagnostic,
 } from '../../api/nodebuilderValidate'
+import type { StreamSchema } from '../../api/nodebuilder'
+import { wireIdForDiagnostic } from './streamLabels'
 
 export type { Diagnostic, Severity, DiagnosticCode } from '../../api/nodebuilderValidate'
 
@@ -64,6 +76,10 @@ interface DiagStore {
   local: Record<string, Diagnostic>
   /** The store commitSeq the current server list belongs to (-1 = none). */
   validatedSeq: number
+  /** Each node's output stream from the last validate answer. */
+  streams: Record<string, StreamSchema>
+  /** The last wire a diagnostic asked to select; `seq` changes on every ask. */
+  wireFocus: { wireId: string; seq: number } | null
 }
 
 const EMPTY_VIEW: DiagnosticsState = {
@@ -77,11 +93,15 @@ const EMPTY_VIEW: DiagnosticsState = {
   hasResult: false,
 }
 
+const NO_STREAMS: Record<string, StreamSchema> = {}
+
 const useDiagStore = create<DiagStore>()(() => ({
   view: EMPTY_VIEW,
   server: [],
   local: {},
   validatedSeq: -1,
+  streams: NO_STREAMS,
+  wireFocus: null,
 }))
 
 function localKey(nodeId: string, param: string): string {
@@ -125,12 +145,14 @@ function derive(server: Diagnostic[], local: Record<string, Diagnostic>, prevByN
 type ViewFlags = Pick<DiagnosticsState, 'pending' | 'offline' | 'offlineDetail' | 'hasResult'>
 
 /** Update the store; the derived lists are rebuilt only when a list changed. */
-function update(patch: Partial<Omit<DiagStore, 'view'>> & { flags?: Partial<ViewFlags> }) {
+function update(patch: Partial<Omit<DiagStore, 'view' | 'wireFocus'>> & { flags?: Partial<ViewFlags> }) {
   useDiagStore.setState(s => {
     const flags = patch.flags ?? {}
     const flagsChange = (Object.keys(flags) as (keyof ViewFlags)[]).some(k => s.view[k] !== flags[k])
+    const streams = patch.streams ? keepSameStreams(s.streams, patch.streams) : s.streams
     // Nothing would change: keep the same state, so no subscriber re-renders.
-    if (!patch.server && !patch.local && !flagsChange && (patch.validatedSeq ?? s.validatedSeq) === s.validatedSeq) {
+    if (!patch.server && !patch.local && !flagsChange && streams === s.streams
+      && (patch.validatedSeq ?? s.validatedSeq) === s.validatedSeq) {
       return s
     }
     const server = patch.server ?? s.server
@@ -142,8 +164,48 @@ function update(patch: Partial<Omit<DiagStore, 'view'>> & { flags?: Partial<View
       local,
       validatedSeq: patch.validatedSeq ?? s.validatedSeq,
       view,
+      streams,
     }
   })
+}
+
+/** Same attribute list, field by field. */
+function sameAttrs(a: StreamSchema['points'], b: StreamSchema['points']): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].name !== b[i].name || a[i].dtype !== b[i].dtype || a[i].written_by !== b[i].written_by) return false
+  }
+  return true
+}
+
+function sameStream(a: StreamSchema, b: StreamSchema): boolean {
+  return a.stream_schema === b.stream_schema
+    && sameAttrs(a.points, b.points)
+    && sameAttrs(a.detail, b.detail)
+    && a.prims.length === b.prims.length
+}
+
+/**
+ * The new streams map, reusing the old entry for every node whose stream
+ * did not change (and the old map when none did), so wire labels and
+ * pickers only re-render when their stream really changed.
+ */
+function keepSameStreams(
+  prev: Record<string, StreamSchema>,
+  next: Record<string, StreamSchema>,
+): Record<string, StreamSchema> {
+  const out: Record<string, StreamSchema> = {}
+  let changed = Object.keys(prev).length !== Object.keys(next).length
+  for (const [id, stream] of Object.entries(next)) {
+    const old = prev[id]
+    if (old && sameStream(old, stream)) {
+      out[id] = old
+    } else {
+      out[id] = stream
+      changed = true
+    }
+  }
+  return changed ? out : prev
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +240,7 @@ async function runValidate(): Promise<void> {
   // Nothing to check: no graph, or the read-only auto-render view (the rule
   // backtester runs that one, and its gaps are shown by the notices).
   if (!graph || graph.readOnly) {
-    update({ server: [], validatedSeq: commitSeq, flags: { pending: false, offline: false, offlineDetail: null } })
+    update({ server: [], streams: NO_STREAMS, validatedSeq: commitSeq, flags: { pending: false, offline: false, offlineDetail: null } })
     return
   }
   const id = requestId
@@ -191,6 +253,7 @@ async function runValidate(): Promise<void> {
     inFlight = null
     update({
       server: res.diagnostics,
+      streams: res.streams,
       validatedSeq: commitSeq,
       flags: { pending: false, offline: false, offlineDetail: null, hasResult: true },
     })
@@ -244,6 +307,68 @@ export function getDiagnosticsView(): DiagnosticsState {
 }
 
 const NO_DIAGNOSTICS: Diagnostic[] = []
+
+/** Every node's output stream from the last validate (empty before the first). */
+export function useStreams(): Record<string, StreamSchema> {
+  return useDiagStore(s => s.streams)
+}
+
+/** The streams, read outside React (event handlers, tooltips). */
+export function getStreams(): Record<string, StreamSchema> {
+  return useDiagStore.getState().streams
+}
+
+/** One node's output stream, or null when the server has not described it. */
+export function useNodeStream(nodeId: string | null | undefined): StreamSchema | null {
+  return useDiagStore(s => (nodeId ? s.streams[nodeId] : undefined) ?? null)
+}
+
+/**
+ * True when the streams belong to the graph on screen (the last validate
+ * answered the current commit). False between a commit and its answer, and
+ * while offline: labels and the picker then also trust the static guess
+ * (`staticOutputNames`), so a rename shows on the same render.
+ */
+export function useStreamsFresh(): boolean {
+  const validatedSeq = useDiagStore(s => s.validatedSeq)
+  const commitSeq = useNodeBuilderStore(s => s.commitSeq)
+  return validatedSeq === commitSeq
+}
+
+/** The server's diagnostics only (a new list only when a validate answers). */
+export function useServerDiagnostics(): Diagnostic[] {
+  return useDiagStore(s => s.server)
+}
+
+/**
+ * Put streams in place without a request, as if a validate had just answered
+ * the graph on screen. For tests and tools; the normal path is the validate
+ * answer.
+ */
+export function setStreams(streams: Record<string, StreamSchema>): void {
+  update({ streams, validatedSeq: useNodeBuilderStore.getState().commitSeq })
+}
+
+/** The wire a diagnostic is about (see streamLabels.ts). */
+export { wireIdForDiagnostic }
+
+/**
+ * Select the wire a diagnostic is about (popover row or badge click).
+ * Returns false when the diagnostic is not about a wire, so the caller
+ * selects the node instead.
+ */
+export function focusDiagnosticWire(d: Diagnostic): boolean {
+  const wireId = wireIdForDiagnostic(d, useNodeBuilderStore.getState().graph)
+  if (!wireId) return false
+  const prev = useDiagStore.getState().wireFocus
+  useDiagStore.setState({ wireFocus: { wireId, seq: (prev?.seq ?? 0) + 1 } })
+  return true
+}
+
+/** The last wire a diagnostic asked to select (the canvas acts on a new `seq`). */
+export function useWireFocus(): { wireId: string; seq: number } | null {
+  return useDiagStore(s => s.wireFocus)
+}
 
 /** Problems on one node (a stable empty list when there are none). */
 export function useNodeDiagnostics(nodeId: string | null | undefined): Diagnostic[] {
@@ -339,5 +464,5 @@ export function setLocalParamInvalid(nodeId: string, param: string, message: str
 export function resetDiagnostics(): void {
   cancelTimer()
   cancelInFlight()
-  useDiagStore.setState({ view: EMPTY_VIEW, server: [], local: {}, validatedSeq: -1 })
+  useDiagStore.setState({ view: EMPTY_VIEW, server: [], local: {}, validatedSeq: -1, streams: NO_STREAMS, wireFocus: null })
 }

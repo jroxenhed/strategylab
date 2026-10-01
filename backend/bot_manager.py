@@ -747,7 +747,12 @@ class BotManager:
             return
         try:
             with open(DATA_PATH) as f:
-                data = json.load(f)
+                raw_text = f.read()
+            data = json.loads(raw_text)
+            # F435 W2 (MD-01): the save below rewrites every graph as v3,
+            # which Wave 1 code refuses.  Keep the file as it was, once, so
+            # a rollback has a copy it can read.
+            self._write_pre_w2_copy(data, raw_text)
             self.bot_fund = data.get("bot_fund", 0.0)
             self._unloaded = []
             previous: Optional[str] = None  # the last bot that loaded
@@ -771,8 +776,63 @@ class BotManager:
                 previous = config.bot_id
             if self.bots:
                 self.save()
+            self._alert_unloaded()
         except Exception:
             logger.exception("Failed to load bots.json")
+
+    @staticmethod
+    def _write_pre_w2_copy(data: Any, raw_text: str) -> None:
+        """Copy bots.json to bots.json.pre-w2 when it holds a graph saved
+        before graph version 3 (F435 W2, MD-01 / LT-3).
+
+        Written once: an existing copy is never overwritten, so it stays the
+        last file Wave 1 code wrote.  To roll back to Wave 1, stop the server
+        and put this copy back as bots.json (state written since is lost).
+        """
+        from nodebuilder.migrate import CURRENT_GRAPH_VERSION
+
+        path = DATA_PATH + ".pre-w2"
+        if os.path.exists(path):
+            return
+        rows = data.get("bots", []) if isinstance(data, dict) else []
+        old = False
+        for row in rows if isinstance(rows, list) else []:
+            cfg = row.get("config") if isinstance(row, dict) else None
+            graph = cfg.get("graph") if isinstance(cfg, dict) else None
+            if not isinstance(graph, dict):
+                continue
+            version = graph.get("_version", graph.get("version", 1))
+            if not isinstance(version, int) or isinstance(version, bool) or version < CURRENT_GRAPH_VERSION:
+                old = True
+                break
+        if not old:
+            return
+        try:
+            atomic_write_text(path, raw_text, backup_depth=0)
+            logger.info("Wrote %s before rewriting graphs as version %d", path, CURRENT_GRAPH_VERSION)
+        except Exception:
+            logger.exception("Could not write %s", path)
+
+    def _alert_unloaded(self) -> None:
+        """One alert naming every bots.json row load() could not read
+        (F435 W2, LT-3).  Such a bot is not listed, not resumed and not
+        watched, so without this a refused row (a rollback, a bad graph) is
+        silent.  Fire-and-forget: create_task when a loop runs, else log."""
+        if not self._unloaded:
+            return
+        ids = []
+        for _anchor, raw in self._unloaded:
+            cfg = raw.get("config") if isinstance(raw, dict) else None
+            ids.append(str(cfg.get("bot_id", "unknown")) if isinstance(cfg, dict) else "unknown")
+        msg = (f"{len(ids)} bot(s) in bots.json did not load and are not running: "
+               f"{', '.join(ids)}.  Their rows are kept unchanged; see the server log.")
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            logger.error("%s (no event loop, no alert sent)", msg)
+            return
+        from notifications import notify_error
+        asyncio.create_task(notify_error(symbol="bots.json", error_msg=msg, bot_id=",".join(ids)))
 
     @staticmethod
     def _load_entry(entry: dict) -> tuple["BotConfig", "BotState"]:

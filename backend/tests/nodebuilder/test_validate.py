@@ -31,7 +31,7 @@ import shared
 from nodebuilder import evaluator as evaluator_mod
 from nodebuilder import run as run_mod
 from nodebuilder.compile import compile as compile_graph
-from nodebuilder.compile import compile_with_diagnostics
+from nodebuilder.compile import check_graph, compile_with_diagnostics
 from nodebuilder.diagnostics import CODES, SEVERITY_BY_CODE, validate_graph_data
 from nodebuilder.evaluator import (
     GraphTypeError,
@@ -39,6 +39,7 @@ from nodebuilder.evaluator import (
     UnknownNodeTypeError,
     UnsupportedNodeError,
 )
+from nodebuilder.migrate import CURRENT_GRAPH_VERSION
 from nodebuilder.models import Graph
 from routes.graphs import router as graphs_router
 from routes.nodebuilder import router as nodebuilder_router
@@ -123,11 +124,13 @@ def no_data(monkeypatch):
 
     monkeypatch.setattr(shared, "_fetch", _boom)
     monkeypatch.setattr(run_mod, "run_graph_backtest", _boom)
-    monkeypatch.setattr(evaluator_mod, "compute_indicators_from_specs", _boom)
+    # Since W2 a cook is bar prep (prepare.build_graph_attrs) plus the column
+    # engine (evaluator.cook_program, which evaluate_graph goes through).
+    monkeypatch.setattr(evaluator_mod, "cook_program", _boom)
     # The names the callers actually bound at import (BC-11): patching only
     # the defining modules would never intercept these calls.
     monkeypatch.setattr(routes_mod, "run_graph_backtest", _boom)
-    monkeypatch.setattr(run_mod, "compute_indicators_from_specs", _boom)
+    monkeypatch.setattr(run_mod, "build_graph_attrs", _boom)
 
 
 @pytest.fixture
@@ -163,9 +166,11 @@ def test_unconnected_entry_is_missing_input_with_entry_node_id(client):
     r = client.post(VALIDATE, json={"graph": graph})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert set(body) == {"ok", "diagnostics", "streams"}
+    assert set(body) == {"ok", "diagnostics", "streams", "stream_schema"}
     assert body["ok"] is False
-    assert body["streams"] == {}
+    assert body["stream_schema"] == 1
+    # The nodes above the unwired Entry are still described (plan 3.3 shape).
+    assert {a["name"] for a in body["streams"]["/rsi"]["points"]} >= {"@close", "@rsi"}
     hits = [d for d in body["diagnostics"] if d["code"] == "missing_input"]
     assert hits and hits[0]["node_id"] == "/entry"
     assert hits[0]["severity"] == "error"
@@ -178,7 +183,15 @@ def test_unconnected_entry_is_missing_input_with_entry_node_id(client):
 def test_valid_graph_is_ok_with_no_diagnostics(client):
     r = client.post(VALIDATE, json={"graph": _rsi_graph()})
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "diagnostics": [], "streams": {}}
+    body = r.json()
+    assert set(body) == {"ok", "diagnostics", "streams", "stream_schema"}
+    assert body["ok"] is True and body["diagnostics"] == [] and body["stream_schema"] == 1
+    graph = _rsi_graph()
+    assert set(body["streams"]) == set(graph["nodes"])
+    for schema in body["streams"].values():
+        assert {"stream_schema", "points", "detail", "prims"} <= set(schema)
+        assert schema["stream_schema"] == 1
+    assert {"name": "@rsi", "dtype": "float", "written_by": "/rsi"} in body["streams"]["/rsi"]["points"]
 
 
 def test_warnings_alone_keep_ok_true(client):
@@ -252,7 +265,7 @@ def test_code_missing_input_entry_fed_only_by_bypassed_node():
 def test_code_unsupported_node():
     """A rule condition auto_render emits but compile cannot run yet."""
     graph = _rsi_graph()
-    graph["nodes"]["/above"]["type"] = "rising"
+    graph["nodes"]["/above"]["type"] = "is_above_signal"  # a rule name no node registers (rising is real since W2)
     d = _find(validate_graph_data(graph), "unsupported_node")
     assert d.node_id == "/above"
     assert "unknown_node_type" not in _codes(validate_graph_data(graph))
@@ -408,12 +421,16 @@ def test_code_attr_type_price_into_entry():
     assert d.node_id == "/ticker"
 
 
-def test_code_attr_type_indicator_of_indicator():
+def test_indicator_of_indicator_is_not_attr_type():
+    """Since W2 an indicator reads its wired source (plan 2.A), so SMA of RSI
+    is allowed: no attr_type, and the SMA is computed over @rsi."""
     graph = _rsi_graph()
     graph["nodes"]["/sma"] = _n("/sma", "sma", period=20)
     graph["wires"].append(_w("ws", "/rsi", "/sma"))
-    d = _find(validate_graph_data(graph), "attr_type")
-    assert d.node_id == "/sma" and d.port == "in0"
+    assert "attr_type" not in _codes(validate_graph_data(graph))
+    assert tuple(compile_graph(Graph.model_validate(graph)).step("/sma").reads) == ("@rsi",)
+    points = check_graph(Graph.model_validate(graph)).streams_json()["/sma"]["points"]
+    assert {"name": "@sma", "dtype": "float", "written_by": "/sma"} in points
 
 
 def test_code_port_unknown_third_comparison_input():
@@ -495,7 +512,7 @@ def test_an_upstream_error_does_not_cascade():
 
 def test_compile_raises_the_first_error_with_its_wave0_class():
     graph = _rsi_graph()
-    graph["nodes"]["/above"]["type"] = "rising"
+    graph["nodes"]["/above"]["type"] = "is_above_signal"  # a rule name no node registers
     graph["nodes"]["/z_sl"] = _n("/z_sl", "stop_loss", pct=-2.0)
     g = Graph.model_validate(graph)
     program, diags = compile_with_diagnostics(g)
@@ -565,8 +582,7 @@ def _rsi_above_sma() -> dict:
 
 def _comparison_reads(graph: dict) -> tuple:
     program = compile_graph(Graph.model_validate(graph))
-    (op,) = [o for o in program.per_bar_program if o.node_path == "/above"]
-    return op.reads
+    return tuple(program.step("/above").reads)
 
 
 def test_redrawn_left_wire_does_not_flip_the_comparison():
@@ -811,7 +827,7 @@ def test_badly_typed_graph_on_backtest_is_the_graphs_400(backtest_client):
 
 def test_newer_graph_version_is_400_graph_invalid(graphs_client, client):
     """BC-10 / DI-04: a newer graph is refused on save with a clear message."""
-    graph = {**_rsi_graph(), "_version": 3}
+    graph = {**_rsi_graph(), "_version": CURRENT_GRAPH_VERSION + 1}
     r = graphs_client.post(GRAPHS, json={"name": "future", "graph": graph})
     assert r.status_code == 400, r.text
     assert r.json()["code"] == "graph_invalid"

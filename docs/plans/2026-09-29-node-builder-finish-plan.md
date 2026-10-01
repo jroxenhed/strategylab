@@ -559,6 +559,8 @@ POST /api/nodebuilder/validate   body {"graph": Graph}
 
 ### Wave 2: Columnar kernel and universal stream
 
+**Status: done (2026-10-01).** Items 2.0 to 2.E are in. The 500,000-bar benchmark cooks in 0.22 s on mfcore01 (86.4 s on the per-bar engine). A four-reviewer wave found 35 findings, and all 6 P0/P1 were confirmed and fixed. Wave 1 graphs keep their signals: `fixtures/w1_goldens.json` holds reference signals from the committed Wave 1 engine, and Wave 2 matches all 130 cases Wave 1 could run. The deferred items are in section 10.
+
 **Goal.** Implement D4, D5 and the section 3 stream. Named ports, attribute pickers and signals-of-signals work. The graph language covers every rule-builder condition and indicator. The engine is fast and ready for code.
 
 **Order.**
@@ -1347,3 +1349,15 @@ Also ask after W2 and after W5: does the graph now beat the rule builder for the
 - **One error can hide another in compile.** Only checks that depend on a broken input should be skipped. That reshapes the compile walk and the diagnostics lists.
 - **Two migration-parity cases compare error names.** The per-direction and regime-mode strategies end in RegimeUnsupportedError; they become real signal checks when W5 adds regime.
 - **Rollback note.** Wave 0 code loads a v2 graph: it ignores the new fields, accepts `_version: 2`, and reads wires in list order, which W1 writes in port order. So no `bots.json.pre-v2` copy is written.
+
+**Deferred from the Wave 2 review (2026-10-01).** Full notes: `.run/F435/w2/integration.md`, `fix-backend.md` and `fix-frontend.md` (local only).
+
+- **Real IBKR window sizes.** The graph-bot fetch window is limited to 30 days for IBKR intraday, the largest request bots send today, not a measured Gateway limit. Probe a real Gateway per interval (F338) before a graph bot runs on IBKR intraday data with a long lookback.
+- **Rollback from Wave 2.** Wave 1 refuses a v3 graph, so a rollback must restore `bots.json.pre-w2`, which the first Wave 2 boot writes before any v3 rewrite.
+- **Settings nodes have no output port.** Drawing one needs backend ports, terminal reads of detail attributes and the catalog exporting `has_output`.
+- **Dropped Wave 1 labels.** A wire label that Wave 1 ignored (for example `@high` on a Ticker to SMA wire) is dropped without a note. The signals are right; telling the user needs a diagnostic code.
+- **Stored bytes.** `Wire` still writes `"attr": null`, and `Graph.version` defaults to 2 in models.py. Dropping them changes the bytes of every stored graph, so it needs its own check.
+- **"Never true" warning.** An empty `days`, or `time_of_day` and `session_bar` on daily bars, never fires and says nothing. This needs a new diagnostic code and the interval at compile time.
+- **Bool through shift or rolling** writes float 0/1, because write types are static. This is a design choice.
+- **UI polish (W3).** The S13 unsupported-node card, the long-wire fade, wire reconnect and splice, the port tooltip, values in the stream popover, and a notice when a drag from a full port ends on empty canvas.
+- **Daily graphs with long lookbacks** fetch years of bars for recursive indicators. Check IBKR daily history before such a bot runs. W7 adds the `asyncio.wait_for` guard around `cook_graph_bar`.

@@ -21,9 +21,9 @@ from pydantic import ValidationError
 
 from models import StrategyRequest
 from nodebuilder.api_models import AutoRenderResponse, GraphBacktestRequest, GraphBacktestResponse
-from nodebuilder.diagnostics import error_body, has_errors, validate_graph_data
+from nodebuilder.diagnostics import error_body, has_errors, validate_graph_data, validate_graph_full
 from nodebuilder.from_rules import auto_render
-from nodebuilder.models import GraphValidationError
+from nodebuilder.models import STREAM_SCHEMA_VERSION, GraphValidationError
 
 # The backtest core moved to nodebuilder/run.py so bot code can call it
 # without importing a routes module.  These names are re-exported for the
@@ -65,22 +65,29 @@ def _graph_error(exc: BaseException, graph_data: Any) -> JSONResponse:
 
 @router.post("/validate")
 def post_validate(payload: dict[str, Any] = Body(...)):
-    """Check a graph without running it: {"ok", "diagnostics", "streams"}.
+    """Check a graph without running it.
 
-    ok is False when any diagnostic is an error.  Never fetches market data
-    and never runs a backtest.  A graph that does not parse is still a 200
-    here, with graph_invalid (or the matching code) in the list; only a body
-    without a "graph" key is a 422.  "streams" is filled from W2.
+    Returns {"ok", "diagnostics", "streams", "stream_schema"}.  ok is False
+    when any diagnostic is an error.  streams maps each node id to the
+    StreamSchema of that node's OUTPUT (plan 3.3 form); the editor derives a
+    node's input stream from its upstream outputs and the wires.  A node
+    missing from streams could not be checked (it has an error, or reads
+    from a node that has one).  stream_schema is the stream format version.
+
+    Never fetches market data and never runs a backtest.  A graph that does
+    not parse is still a 200 here, with graph_invalid (or the matching code)
+    in the list and no streams; only a body without a "graph" key is a 422.
     """
     if "graph" not in payload:
         raise RequestValidationError(
             [{"type": "missing", "loc": ("body", "graph"), "msg": "Field required", "input": payload}]
         )
-    diagnostics = validate_graph_data(payload["graph"])
+    result = validate_graph_full(payload["graph"])
     return {
-        "ok": not has_errors(diagnostics),
-        "diagnostics": [d.model_dump() for d in diagnostics],
-        "streams": {},
+        "ok": not has_errors(result.diagnostics),
+        "diagnostics": [d.model_dump() for d in result.diagnostics],
+        "streams": result.streams,
+        "stream_schema": STREAM_SCHEMA_VERSION,
     }
 
 

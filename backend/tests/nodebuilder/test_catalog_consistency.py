@@ -1,4 +1,7 @@
-"""Unit 2 backend tests: NODE_CATALOG consistency + cross-language parity.
+"""Node catalog consistency + cross-language parity.
+
+Since F435 W2 the catalog is read from the kernel registry: every module in
+backend/nodebuilder/trading/ registers its node types on import.
 
 Runs with: pytest backend/tests/nodebuilder/test_catalog_consistency.py -v
 """
@@ -46,6 +49,11 @@ def _names() -> list[str]:
 # Tests
 # ---------------------------------------------------------------------------
 
+# Params that are required and have no default on purpose (see
+# test_param_kinds_units_and_names_are_valid).
+REQUIRED_WITHOUT_DEFAULT = {("turns_up_below", "threshold"), ("turns_down_above", "threshold")}
+
+
 class TestCatalogIntegrity:
 
     def test_catalog_nonempty(self):
@@ -77,11 +85,17 @@ class TestCatalogIntegrity:
         - Source nodes (ticker): writes only, reads empty. OK.
         - Terminal nodes (entry/exit/size/stop): reads only, writes empty. OK.
         - Settings nodes: writes ("@setting",), reads empty. OK.
+        - Pass-through nodes (merge, W2): no params, so nothing of their
+          own to read or write; they pass the union of their inputs on.
         - All others: both non-empty is expected but any one suffices.
         """
+        pass_through = {"merge"}
+        for name in pass_through:
+            entry = next(e for e in NODE_CATALOG if e.name == name)
+            assert not entry.params, f"{name} is exempt only while it has no params"
         both_empty = [
             e.name for e in NODE_CATALOG
-            if not e.reads and not e.writes
+            if not e.reads and not e.writes and e.name not in pass_through
         ]
         assert not both_empty, (
             f"These entries have empty reads AND writes: {both_empty}"
@@ -300,7 +314,10 @@ class TestRsiAndSourceOptions:
         assert "polygon" not in self._ts_const_list("SOURCE_OPTIONS")
 
     def test_backend_sources_are_real_providers(self):
-        """Every offered source is a provider name backend/shared.py registers."""
+        """Every offered source is a provider name backend/shared.py registers.
+
+        Since W2 the data source is the sidebar's (or the spawn dialog's), not
+        a Ticker param (plan D11); the list stays for the frontend."""
         from nodebuilder.nodes import SOURCE_OPTIONS
         shared_py = (REPO_ROOT / "backend" / "shared.py").read_text(encoding="utf-8")
         registered = set(re.findall(r'_providers\["([^"]+)"\]', shared_py))
@@ -311,8 +328,7 @@ class TestRsiAndSourceOptions:
         assert set(SOURCE_OPTIONS) <= registered, (
             f"sources not registered in shared.py: {set(SOURCE_OPTIONS) - registered}"
         )
-        ticker_source = next(p for p in get_node("ticker").params if p.name == "source")
-        assert ticker_source.options == SOURCE_OPTIONS
+        assert "source" not in {p.name for p in get_node("ticker").params}
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +353,9 @@ class TestTrailingStopCatalog:
         assert TRAILING_STOP_DEFAULTS == TrailingStopConfig().model_dump()
         entry = get_node("trailing_stop")
         assert entry.cat == "settings" and entry.compile_active
-        assert entry.defaults["params"] == TRAILING_STOP_DEFAULTS
+        assert {k: v for k, v in entry.defaults["params"].items() if k in TRAILING_STOP_DEFAULTS} == (
+            TRAILING_STOP_DEFAULTS
+        )
         assert entry.defaults["setting_key"] == "trailing_stop"
         assert tuple(entry.defaults["param_options"]["type"]) == TRAILING_STOP_TYPE_OPTIONS
         assert tuple(entry.defaults["param_options"]["source"]) == TRAILING_STOP_SOURCE_OPTIONS
@@ -372,6 +390,13 @@ class TestParamAndPortSpecs:
             assert isinstance(entry.inputs, PortsSpec), entry.name
             assert all(isinstance(p, ParamSpec) for p in entry.params), entry.name
 
+    def test_required_without_default_list_is_exact(self):
+        """The exemption below names real, required, default-less params only."""
+        for type_name, param_name in REQUIRED_WITHOUT_DEFAULT:
+            entry = next(e for e in NODE_CATALOG if e.name == type_name)
+            spec = next(p for p in entry.params if p.name == param_name)
+            assert spec.default is None and not spec.optional
+
     def test_param_kinds_units_and_names_are_valid(self):
         from nodebuilder.nodes import PARAM_DTYPES, PARAM_TYPES, PARAM_UNITS
         for entry in NODE_CATALOG:
@@ -385,7 +410,11 @@ class TestParamAndPortSpecs:
                 assert p.label, where
                 if p.type == "select":
                     assert p.options, f"{where}: a select needs options"
-                    assert p.default in p.options, f"{where}: default is not an option"
+                    if isinstance(p.default, list):
+                        # A multi-select (day_of_week.days, W2): every item is an option.
+                        assert all(d in p.options for d in p.default), f"{where}: default item is not an option"
+                    else:
+                        assert p.default in p.options, f"{where}: default is not an option"
                 else:
                     assert p.options is None, f"{where}: only a select has options"
                 if p.min is not None and p.max is not None:
@@ -395,8 +424,20 @@ class TestParamAndPortSpecs:
                     assert p.max is None or p.default <= p.max, where
                 if p.type == "int" and p.default is not None:
                     assert isinstance(p.default, int), where
-                if p.default is None:
+                if p.default is None and p.type not in ("attr", "attr_list"):
+                    # An attr param with no default reads what the wired node
+                    # writes first (plan D4), so it may still be required.
+                    # The turn-at thresholds (W2) are required on purpose: the
+                    # rule engine is never true without one, so a fresh node
+                    # shows param_invalid until a value is typed
+                    # (test_nodes_slope pins that).
+                    if (entry.name, p.name) in REQUIRED_WITHOUT_DEFAULT:
+                        continue
                     assert p.optional, f"{where}: a param with no default must be optional"
+                if p.type in ("attr", "attr_list", "write"):
+                    assert p.dtype in ("float", "bool", "any"), f"{where}: say what type it reads or writes"
+                if p.type == "write":
+                    assert re.match(r"^@[a-z_][a-z0-9_]{0,63}$", p.default), where
 
     def test_defaults_params_come_from_specs(self):
         """compile reads defaults['params']; it must equal the spec defaults, in order."""
@@ -449,38 +490,56 @@ class TestParamAndPortSpecs:
             if entry.name != "ticker":
                 assert all(p.code_able for p in entry.params), entry.name
 
-    def test_int_limits_match_the_impls(self):
-        """A period at min and max is accepted; one step outside is refused."""
-        from nodebuilder.nodes import NODE_IMPLS
+    def test_int_limits_match_what_compile_accepts(self):
+        """A period at min and max compiles; one step outside is refused."""
+        from nodebuilder.compile import compile_with_diagnostics
+        from nodebuilder.models import Graph
+
+        def _codes(node_type, params):
+            graph = Graph.model_validate({
+                "_version": 2,
+                "nodes": {
+                    "/t": {"id": "/t", "type": "ticker", "params": {}},
+                    "/n": {"id": "/n", "type": node_type, "params": params},
+                },
+                "wires": [{"id": "w", "from": "/t", "to": "/n", "to_port": "in0"}],
+            })
+            _program, diags = compile_with_diagnostics(graph)
+            return {(d.code, d.param) for d in diags if d.node_id == "/n"}
+
+        checked = 0
         for entry in NODE_CATALOG:
+            if entry.cat != "indicator":
+                continue
+            base = {p.name: p.default for p in entry.params if p.type in ("int", "number", "select")}
             for p in entry.params:
                 if p.type != "int" or p.min is None or p.max is None:
                     continue
-                impl = NODE_IMPLS[entry.name]
-                base = dict(entry.defaults["params"])
-                impl({**base, p.name: int(p.min)})
-                impl({**base, p.name: int(p.max)})
-                with pytest.raises(ValueError):
-                    impl({**base, p.name: int(p.min) - 1})
-                with pytest.raises(ValueError):
-                    impl({**base, p.name: int(p.max) + 1})
+                checked += 1
+                assert not _codes(entry.name, {**base, p.name: int(p.min)}), (entry.name, p.name)
+                assert not _codes(entry.name, {**base, p.name: int(p.max)}), (entry.name, p.name)
+                assert ("param_out_of_range", p.name) in _codes(entry.name, {**base, p.name: int(p.min) - 1})
+                assert ("param_out_of_range", p.name) in _codes(entry.name, {**base, p.name: int(p.max) + 1})
+        assert checked >= 8
 
-    def test_setting_limits_match_the_impls(self):
-        from nodebuilder.nodes import NODE_IMPLS
-        size = NODE_IMPLS["position_size"]
-        size({"size": 1.0})
-        with pytest.raises(ValueError):
-            size({"size": 1.01})
-        with pytest.raises(ValueError):
-            size({"size": 0.0})  # spec min 0 is the bound; 0 itself is refused
-        with pytest.raises(ValueError):
-            NODE_IMPLS["slippage"]({"bps": -0.1})
-        with pytest.raises(ValueError):
-            NODE_IMPLS["commission"]({"per_share_rate": -0.01})
-        with pytest.raises(ValueError):
-            NODE_IMPLS["bollinger"]({"period": 20, "stddev": 5.1})
-        # An empty stop-loss turns the stop off, so pct is optional.
-        assert NODE_IMPLS["stop_loss"]({"pct": None}).value is None
+    def test_setting_limits_match_what_compile_accepts(self):
+        from nodebuilder.compile import compile_with_diagnostics
+        from nodebuilder.models import Graph
+
+        def _diags(node_type, params):
+            graph = Graph.model_validate({"_version": 2, "nodes": {
+                "/s": {"id": "/s", "type": node_type, "params": params}}, "wires": []})
+            return {(d.code, d.param, d.severity)
+                    for d in compile_with_diagnostics(graph)[1] if d.node_id == "/s"}
+
+        assert not _diags("position_size", {"size": 1.0})
+        assert ("size_unit_suspect", "size", "warning") in _diags("position_size", {"size": 1.01})
+        assert ("param_out_of_range", "size", "error") in _diags("position_size", {"size": 0.0})
+        assert ("param_out_of_range", "bps", "error") in _diags("slippage", {"bps": -0.1})
+        assert ("param_out_of_range", "per_share_rate", "error") in _diags(
+            "commission", {"per_share_rate": -0.01})
+        # An empty stop-loss field turns the stop off in the editor, so the
+        # spec says optional; a stored None is refused by compile.
         assert next(p for p in get_node("stop_loss").params if p.name == "pct").optional
 
     def test_every_numeric_settings_param_has_a_unit(self):
@@ -511,6 +570,71 @@ class TestParamAndPortSpecs:
             "dynamic": False, "min": 1, "max": 2,
         }
         assert cmp["params"] == [
+            {"name": "a", "type": "attr", "label": "a", "default": None, "dtype": "float"},
+            {"name": "b", "type": "attr", "label": "b", "default": None, "dtype": "float",
+             "optional": True},
             {"name": "threshold", "type": "number", "label": "threshold", "default": None, "optional": True},
+            {"name": "out", "type": "write", "label": "out", "default": "@xa", "dtype": "bool"},
         ]
         json.dumps([e.to_json() for e in NODE_CATALOG])  # plain JSON all the way down
+
+
+# ---------------------------------------------------------------------------
+# F435 W2 (2.A): the registry is the single source of node types
+# ---------------------------------------------------------------------------
+
+
+class TestRegistryIsTheSource:
+
+    def test_catalog_is_the_registry_in_category_order(self):
+        from nodebuilder.kernel import registry
+        from nodebuilder.nodes import NODE_CATEGORIES, catalog_entries
+
+        registered = {t.name for t in registry.all_types()}
+        assert {e.name for e in catalog_entries()} == registered
+        ranks = [list(NODE_CATEGORIES).index(e.cat) for e in catalog_entries()]
+        assert ranks == sorted(ranks)
+
+    def test_every_compile_active_type_runs_or_passes_its_input_on(self):
+        from nodebuilder.kernel import registry
+
+        for t in registry.all_types():
+            if t.compile_active and t.has_output:
+                assert t.impl is not None, f"{t.name} writes something, so it needs an impl"
+
+    def test_a_new_module_needs_no_edit_anywhere_else(self):
+        """Registering a type is enough for compile, the catalog and the export."""
+        from nodebuilder.compile import compile_with_diagnostics
+        from nodebuilder.kernel import registry
+        from nodebuilder.kernel.registry import ParamSpec, PortSpec, PortsSpec
+        from nodebuilder.models import Graph
+        from nodebuilder.nodes import catalog_json
+
+        def _double(inputs, params):
+            return inputs.with_point(params["out"], inputs.column(params["a"]) * 2,
+                                     params.node_id, "float")
+
+        registry.register_node(
+            name="zz_double", cat="signal", desc="Twice a.",
+            params=(ParamSpec("a", "attr", "a", None, dtype="float"),
+                    ParamSpec("out", "write", "out", "@double", dtype="float")),
+            inputs=PortsSpec(ports=(PortSpec("a"),), dynamic=False, min=1, max=1),
+            impl=_double, module="test_catalog_consistency",
+        )
+        try:
+            assert "zz_double" in {e["name"] for e in catalog_json()}
+            assert '"name": "zz_double"' in _load_export_script().render_catalog_ts()
+            graph = Graph.model_validate({"_version": 2, "nodes": {
+                "/t": {"id": "/t", "type": "ticker", "params": {}},
+                "/d": {"id": "/d", "type": "zz_double", "params": {}},
+            }, "wires": [{"id": "w", "from": "/t", "to": "/d", "to_port": "in0"}]})
+            diags = compile_with_diagnostics(graph)[1]
+            assert not [d for d in diags if d.node_id == "/d"]
+        finally:
+            registry.unregister("zz_double")
+
+    def test_two_modules_cannot_claim_one_type(self):
+        from nodebuilder.kernel import registry
+
+        with pytest.raises(ValueError, match="registered by both"):
+            registry.register_node(name="rsi", cat="indicator", desc="x", module="somewhere_else")

@@ -1,4 +1,8 @@
-"""Unit 7a tests — compile() and related errors."""
+"""compile() and its errors.
+
+Since F435 W2 a CompiledProgram is a list of kernel Steps (one per node);
+each Step names what the node reads and writes.
+"""
 from __future__ import annotations
 
 import sys
@@ -16,11 +20,9 @@ from nodebuilder.compile import compile as nb_compile
 from nodebuilder.evaluator import (
     CompiledProgram,
     FamilyCapExceededError,
-    IndicatorSpec,
     MissingTerminalError,
-    PerBarOp,
     RegimeUnsupportedError,
-    SimulatorSetting,
+    cook_program,
 )
 
 
@@ -62,23 +64,22 @@ def _rsi_entry_graph(rsi_params: dict | None = None) -> Graph:
 # ---------------------------------------------------------------------------
 
 def test_compile_simple_rsi_long():
-    """Ticker → RSI → Below → Entry produces 1 IndicatorSpec, 1 PerBarOp (below), entry_attr set."""
+    """Ticker → RSI → Below → Entry: one step per node, reads and writes named."""
     g = _rsi_entry_graph()
     prog = nb_compile(g)
 
     assert isinstance(prog, CompiledProgram)
-    assert len(prog.indicator_specs) == 1
-    spec = prog.indicator_specs[0]
-    assert spec.catalog_name == "rsi"
-    assert spec.params.get("period") == 14
+    assert [s.node_id for s in prog.steps] == ["/ticker", "/rsi", "/below", "/entry"]
+    rsi = prog.step("/rsi")
+    assert rsi.params["period"] == 14 and rsi.reads == ("@close",) and rsi.writes == ("@rsi",)
+    below = prog.step("/below")
+    assert below.reads == ("@rsi",) and below.writes == ("@below",)
 
-    # The below comparison becomes 1 PerBarOp
-    assert len(prog.per_bar_program) == 1
-    op = prog.per_bar_program[0]
-    assert op.node_path == "/below"
-
-    assert prog.entry_attr.startswith("@")
+    assert prog.entry_attr == "@below" and prog.entry_node == "/entry"
     assert prog.exit_attr == "@always_false"
+    # The legacy views are empty: nothing is computed outside the steps.
+    assert prog.indicator_specs == () and prog.per_bar_program == ()
+    assert prog.stream_schema == 1
 
 
 # ---------------------------------------------------------------------------
@@ -105,11 +106,9 @@ def test_indicator_dedup_across_compares():
     g = _make_graph(nodes, wires)
     prog = nb_compile(g)
 
-    assert len(prog.indicator_specs) == 1, "Only one RSI spec expected (dedup)"
-    assert len(prog.per_bar_program) == 2, "below + above comparison ops"
-    assert prog.entry_attr.startswith("@")
-    assert prog.exit_attr.startswith("@")
-    assert prog.exit_attr != "@always_false"
+    assert [s.node_id for s in prog.steps if s.type == "rsi"] == ["/rsi"]
+    assert prog.step("/below").reads == ("@rsi",) and prog.step("/above").reads == ("@rsi",)
+    assert (prog.entry_attr, prog.exit_attr) == ("@below", "@above")
 
 
 # ---------------------------------------------------------------------------
@@ -216,10 +215,9 @@ def test_bypassed_node_skipped():
     g = _make_graph(nodes, wires)
     prog = nb_compile(g)
 
-    # /below is bypassed — only /below2's op should appear
-    op_paths = [op.node_path for op in prog.per_bar_program]
-    assert "/below" not in op_paths, "Bypassed node must not appear in per_bar_program"
-    assert "/below2" in op_paths
+    # /below is bypassed: it passes its input on and runs nothing.
+    assert prog.step("/below").mode == "pass" and prog.step("/below").impl is None
+    assert prog.step("/below2").mode == "run"
 
 
 # ---------------------------------------------------------------------------
@@ -257,9 +255,29 @@ def test_size_stop_terminals_no_op():
 # test_family_cap_at_compile_or_dispatch
 # ---------------------------------------------------------------------------
 
-def test_family_cap_at_compile_or_dispatch():
+def test_family_cap_at_compile():
+    """21 distinct RSIs on one source: compile refuses the 21st."""
+    g = _rsi_entry_graph()
+    nodes = dict(g.nodes)
+    wires = list(g.wires)
+    for p in range(2, 23):  # with the graph's own RSI(14): 21 distinct
+        nodes[f"/r{p}"] = _node(f"/r{p}", "rsi", {"period": p, "type": "sma"})
+        wires.append(_wire(f"wr{p}", "/ticker", f"/r{p}"))
+    with pytest.raises(FamilyCapExceededError) as info:
+        nb_compile(_make_graph(nodes, wires))
+    assert info.value.node_id.startswith("/r")
+    # Identical RSIs are one spec: twenty copies of RSI(14) are fine.
+    nodes = dict(g.nodes)
+    wires = list(g.wires)
+    for k in range(25):
+        nodes[f"/same{k}"] = _node(f"/same{k}", "rsi", {"period": 14, "type": "sma"})
+        wires.append(_wire(f"ws{k}", "/ticker", f"/same{k}"))
+    nb_compile(_make_graph(nodes, wires))
+
+
+def test_family_cap_in_the_legacy_dispatcher():
     """21 distinct RSI specs → FamilyCapExceededError at compute_indicators_from_specs."""
-    from nodebuilder.evaluator import compute_indicators_from_specs, IndicatorSpec
+    from nodebuilder.evaluator import IndicatorSpec, compute_indicators_from_specs
     from indicators import OHLCVSeries
     import pandas as pd
     import numpy as np
@@ -337,15 +355,12 @@ def test_comparison_honors_multi_output_wire_attr():
         _wire("w4", "/cmp", "/entry"),
     ]
     prog = nb_compile(_make_graph(nodes, wires))
-    cmp_op = next(op for op in prog.per_bar_program if op.node_path == "/cmp")
-    assert cmp_op.reads == ("@macd_signal",)
+    assert prog.step("/cmp").reads == ("@macd_signal",)
 
 
-def test_crossover_on_derived_signal_rejected():
-    """Crossovers need iloc[i-1]; per-bar derived attrs only get iloc[i] populated.
-
-    (Review finding F2: silently never-firing crossovers on op outputs.)
-    """
+def test_crossover_on_derived_signal_compiles():
+    """W2: a signal is a full column, so a crossover of a derived signal has
+    its history (the per-bar engine had none and refused it)."""
     # Build Ticker → RSI → Below(30) → [crosses_above on the resulting bool] → Entry
     nodes = {
         "/ticker": _node("/ticker", "ticker"),
@@ -357,12 +372,11 @@ def test_crossover_on_derived_signal_rejected():
     wires = [
         _wire("w1", "/ticker", "/rsi"),
         _wire("w2", "/rsi", "/below"),
-        _wire("w3", "/below", "/cross"),  # @bool_N → crosses_above (FORBIDDEN)
+        _wire("w3", "/below", "/cross"),
         _wire("w4", "/cross", "/entry"),
     ]
-    g = _make_graph(nodes, wires)
-    with pytest.raises(TypeError, match="derived signal"):
-        nb_compile(g)
+    prog = nb_compile(_make_graph(nodes, wires))
+    assert prog.step("/cross").reads == ("@below",)
 
 
 # ---------------------------------------------------------------------------
@@ -393,33 +407,36 @@ def test_two_rsis_with_different_params_do_not_share_an_attr():
     """Before the fix both wrote @rsi and the second overwrote the first."""
     prog = nb_compile(_two_indicator_graph(
         "rsi", {"period": 14, "type": "sma"}, {"period": 14, "type": "wilder"}))
-    attrs = [s.write_attr for s in prog.indicator_specs]
-    assert attrs == ["@rsi", "@rsi_2"]
-    assert prog.per_bar_program[0].reads == ("@rsi", "@rsi_2")
+    assert (prog.step("/a").writes, prog.step("/b").writes) == (("@rsi",), ("@rsi_2",))
+    assert prog.step("/above").reads == ("@rsi", "@rsi_2")
 
 
-def test_same_params_still_dedup_to_one_spec():
-    prog = nb_compile(_two_indicator_graph(
-        "ema", {"period": 20}, {"period": 20}))
-    assert [s.write_attr for s in prog.indicator_specs] == ["@ema"]
+def test_same_params_share_one_computation():
+    """Two EMA(20) nodes write their own names but share one column."""
+    import numpy as np
+    import pandas as pd
+
+    prog = nb_compile(_two_indicator_graph("ema", {"period": 20}, {"period": 20}))
+    assert prog.step("/above").reads == ("@ema", "@ema_2")
+    close = 100 + np.cumsum(np.random.default_rng(2).normal(0, 1, 80))
+    df = pd.DataFrame({"Open": close, "High": close, "Low": close, "Close": close, "Volume": 1.0})
+    result = cook_program(prog, df, keep={"/above"})
+    stream = result.stream("/above")
+    assert stream.column_key("@ema") == stream.column_key("@ema_2")
 
 
 def test_two_macds_keep_their_own_sub_outputs():
     prog = nb_compile(_two_indicator_graph(
         "macd", {"fast": 12, "slow": 26, "signal": 9}, {"fast": 5, "slow": 35, "signal": 5},
         attr_a="@macd_line", attr_b="@macd_signal"))
-    assert [s.attr_suffix for s in prog.indicator_specs] == ["", "_2"]
-    assert prog.per_bar_program[0].reads == ("@macd_line", "@macd_signal_2")
+    assert prog.step("/above").reads == ("@macd_line", "@macd_signal_2")
 
     import numpy as np
     import pandas as pd
-    from indicators import OHLCVSeries
-    from nodebuilder.evaluator import compute_indicators_from_specs
-    close = pd.Series(100 + np.cumsum(np.random.default_rng(3).normal(0, 1, 120)))
-    ohlcv = OHLCVSeries(close=close, high=close, low=close, volume=close * 0)
-    out = compute_indicators_from_specs(prog.indicator_specs, ohlcv)
-    assert {"@macd_line", "@macd_signal_2"} <= set(out)
-    assert not out["@macd_signal"].equals(out["@macd_signal_2"])
+    close = 100 + np.cumsum(np.random.default_rng(3).normal(0, 1, 120))
+    df = pd.DataFrame({"Open": close, "High": close, "Low": close, "Close": close, "Volume": 0.0})
+    stream = cook_program(prog, df, keep_all=True).stream("/above")
+    assert not np.array_equal(stream.column("@macd_signal"), stream.column("@macd_signal_2"))
 
 
 def test_ticker_wire_reads_the_named_field():
@@ -434,7 +451,8 @@ def test_ticker_wire_reads_the_named_field():
         _wire("w2", "/above", "/entry"),
     ]
     prog = nb_compile(_make_graph(nodes, wires))
-    assert prog.per_bar_program[0].reads == ("@volume",)
+    assert prog.step("/above").reads == ("@volume",)
+    assert prog.reads_attr("@volume")
 
 
 def test_ticker_wire_without_field_label_reads_close():
@@ -445,7 +463,7 @@ def test_ticker_wire_without_field_label_reads_close():
     }
     wires = [_wire("w1", "/ticker", "/above"), _wire("w2", "/above", "/entry")]
     prog = nb_compile(_make_graph(nodes, wires))
-    assert prog.per_bar_program[0].reads == ("@close",)
+    assert prog.step("/above").reads == ("@close",)
 
 
 def test_ticker_volume_into_entry_raises():
@@ -543,7 +561,10 @@ def test_wired_size_stop_terminal_is_refused(terminal):
     assert info.value.node_id == f"/{terminal}"
 
 
-@pytest.mark.parametrize("node_type", ["rising", "turns_up", "stochastic", "adx", "no_such_node"])
+# Wave 2 registered rising / turns_up / stochastic / adx as real types, so the
+# examples are rule names no node registers, or names that do not exist.  (Unwired size / stop are ignored on
+# purpose; test_wired_size_stop_terminal_is_refused covers them.)
+@pytest.mark.parametrize("node_type", ["is_above_signal", "crossover_up", "stochastic_rising", "no_such_node"])
 @pytest.mark.parametrize("bypass", [False, True])
 def test_non_compile_active_types_are_refused(node_type, bypass):
     """Unknown types used to be skipped, so an unsupported Exit never fired."""
@@ -555,12 +576,12 @@ def test_non_compile_active_types_are_refused(node_type, bypass):
 
 def test_unsupported_node_feeding_exit_is_refused_not_never_exit():
     g = _with_extra(
-        {"/rising": _node("/rising", "rising"), "/exit": _node("/exit", "exit")},
-        [_wire("wr", "/rsi", "/rising"), _wire("wx", "/rising", "/exit")],
+        {"/odd": _node("/odd", "stochastic_rising"), "/exit": _node("/exit", "exit")},
+        [_wire("wr", "/rsi", "/odd"), _wire("wx", "/odd", "/exit")],
     )
     with pytest.raises(UnsupportedNodeError) as info:
         nb_compile(g)
-    assert info.value.node_id == "/rising"
+    assert info.value.node_id == "/odd"
 
 
 # ---------------------------------------------------------------------------
@@ -666,7 +687,8 @@ def test_comparison_threshold_given_as_text_is_read():
     g = _rsi_entry_graph()
     g.nodes["/below"].params["threshold"] = "30"
     prog = nb_compile(g)
-    assert prog.per_bar_program[0].reads == ("@rsi",)
+    assert prog.step("/below").reads == ("@rsi",)
+    assert prog.step("/below").params["threshold"] == 30.0
 
 
 def test_logic_node_with_no_inputs_is_refused():
@@ -759,10 +781,8 @@ def test_bypassed_macd_sub_output_is_left_out():
         _wire("w7", "/and", "/entry"),
     ]
     prog = nb_compile(_make_graph(nodes, wires))
-    paths = [op.node_path for op in prog.per_bar_program]
-    assert "/macd_neg" not in paths
-    and_op = next(op for op in prog.per_bar_program if op.node_path == "/and")
-    assert len(and_op.reads) == 1
+    assert prog.step("/macd_neg").mode == "pass"  # its a comes from the bypassed MACD
+    assert prog.step("/and").reads == prog.step("/rsi_low").writes
 
 
 def test_entry_fed_only_by_bypassed_node_names_the_entry():
@@ -857,15 +877,33 @@ def test_wire_into_ticker_is_refused():
     assert info.value.node_id == "/ticker"
 
 
-def test_indicator_fed_by_another_indicator_is_refused():
+def test_indicator_reads_its_wired_source():
+    """W2: an indicator reads the primary write of the node wired in, so an
+    SMA fed by an RSI is an SMA of the RSI (Wave 0 refused it)."""
     g = _with_extra(
         {"/sma": _node("/sma", "sma", {"period": 5}),
          "/b2": _node("/b2", "below", {"threshold": 20.0}), "/exit": _node("/exit", "exit")},
         [_wire("wa", "/rsi", "/sma"), _wire("wb", "/sma", "/b2"), _wire("wc", "/b2", "/exit")],
     )
-    with pytest.raises(GraphTypeError) as info:
-        nb_compile(g)
-    assert info.value.node_id == "/sma"
+    prog = nb_compile(g)
+    assert prog.step("/sma").reads == ("@rsi",)
+    assert prog.step("/b2").reads == ("@sma",)
+
+
+def test_unwired_indicator_is_missing_input():
+    """W2: an indicator reads its input stream, so it needs a wire (the
+    per-bar engine read the Ticker's bars behind the canvas's back)."""
+    from nodebuilder.compile import compile_with_diagnostics
+
+    # A v3 graph: Graph(nodes=, wires=) carries no version, so it loads as a
+    # stored v1 graph, and the v2 -> v3 migration wires a Wave 1 indicator
+    # with no input from the Ticker (F435 W2 LT-2, test_w2_migration_fixes).
+    data = _with_extra({"/lonely": _node("/lonely", "ema", {"period": 5})}).model_dump(by_alias=True)
+    data["wires"] = [w for w in data["wires"] if w["to"] != "/lonely"]
+    g = Graph.model_validate(data)
+    _prog, diags = compile_with_diagnostics(g)
+    [d] = [d for d in diags if d.node_id == "/lonely"]
+    assert (d.code, d.port) == ("missing_input", "in0")
 
 
 @pytest.mark.parametrize("rsi_type", ["ema", "SMA", None])

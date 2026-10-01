@@ -1,9 +1,10 @@
 """Write the node builder catalog out as TypeScript for the frontend.
 
-The backend catalog (backend/nodebuilder/nodes.py) is the one source of
-truth (plan decision D9).  This script turns it into
-frontend/src/features/nodebuilder/catalog.generated.ts, which catalog.ts
-reads.  backend/tests/nodebuilder/test_catalog_consistency.py renders the
+The backend node registry is the one source of truth (plan decision D9):
+every module in backend/nodebuilder/trading/ registers its node types, and
+backend/nodebuilder/nodes.py lists them in catalog order.  This script turns
+that into frontend/src/features/nodebuilder/catalog.generated.ts, which
+catalog.ts reads.  A new node module needs no edit here.  backend/tests/nodebuilder/test_catalog_consistency.py renders the
 file again in memory and fails when the committed copy is stale.
 
 Usage (from the repo root):
@@ -30,7 +31,8 @@ from nodebuilder import nodes  # noqa: E402
 HEADER = """\
 // GENERATED FILE. Do not edit by hand.
 //
-// Source: backend/nodebuilder/nodes.py (the node catalog, plan decision D9).
+// Source: the backend node registry (backend/nodebuilder/trading/nodes_*.py,
+// listed by backend/nodebuilder/nodes.py; plan decision D9).
 // Regenerate from the repo root with:
 //   backend/venv/bin/python backend/scripts/export_nodebuilder_catalog.py
 // backend/tests/nodebuilder/test_catalog_consistency.py fails when this file
@@ -111,7 +113,7 @@ def render_catalog_ts() -> str:
         "  max: number;",
         "}",
         "",
-        "/** A backend catalog entry, as nodes.NodeCatalogEntry.to_json() gives it. */",
+        "/** A backend catalog entry, as NodeCatalogEntry.to_json() gives it. */",
         "export interface GeneratedCatalogEntry {",
         "  name: string;",
         "  cat: string;",

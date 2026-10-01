@@ -234,12 +234,12 @@ describe('commitSeq, dirty and loading', () => {
     expect(s().graph!.readOnly).toBe(false)
   })
 
-  it('newGraph starts an empty v2 graph with no meta and a new layout epoch', () => {
+  it('newGraph starts an empty graph at the current version with no meta and a new layout epoch', () => {
     const epoch = s().layoutEpoch
     s().moveNode('t', [5, 5])
     s().newGraph()
     const g = s().graph!
-    expect(g).toMatchObject({ _version: 2, stream_schema: 1, readOnly: false, meta: {} })
+    expect(g).toMatchObject({ _version: 3, stream_schema: 1, readOnly: false, meta: {} })
     expect(g.annotations).toEqual({ boxes: [], notes: [] })
     expect(Object.keys(g.nodes)).toHaveLength(0)
     expect(s().graphMeta).toBeNull()

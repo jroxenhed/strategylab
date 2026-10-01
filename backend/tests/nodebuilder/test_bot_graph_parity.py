@@ -644,12 +644,75 @@ def test_tick_pauses_and_alerts_when_the_stored_graph_no_longer_compiles():
 
 def test_tick_retries_the_bar_after_a_graph_indicator_error():
     """BC-3: after an indicator error the next tick saw 'same bar' and skipped
-    the exit checks for the whole bar."""
+    the exit checks for the whole bar.  F435 W2 LT-1: the tick also raises, so
+    run() counts the failure toward MAX_CONSEC_ERRORS (it used to return
+    quietly, and a cook failing on every tick never alerted)."""
+    from bot_runner import GraphCookError
+
     state, provider = _in_position(100.0)
     state.last_bar_time = "earlier"
-    _run_tick(_bot_config(_graph()), state, _tick_df(100.0), provider,
-              extra_patches=[patch("bot_runner.build_graph_attrs", side_effect=RuntimeError("boom"))])
+    with pytest.raises(GraphCookError) as info:
+        _run_tick(_bot_config(_graph()), state, _tick_df(100.0), provider,
+                  extra_patches=[patch("bot_runner.build_graph_attrs", side_effect=RuntimeError("boom"))])
     assert state.last_bar_time == "earlier"
+    assert "boom" in str(info.value) and "open position" in str(info.value)
+    provider.submit_order.assert_not_called()
+
+
+def test_a_cook_that_always_fails_alerts_once_at_the_limit():
+    """F435 W2 LT-1: run() with a cook that raises on every tick.  Each tick
+    retries the bar; the fifth failure in a row sends exactly one alert
+    (create_task, never awaited) and backs off."""
+    from bot_runner import BotRunner
+
+    cfg = _bot_config(_graph())
+    state, provider = _in_position(100.0)
+    state.last_bar_time = "earlier"
+    runner = BotRunner(cfg, state, _Manager())
+    cook = MagicMock(side_effect=RuntimeError("kernel boom"))
+    notify = AsyncMock()
+    sleeps: list[float] = []
+
+    async def fake_sleep(secs, *a, **k):
+        sleeps.append(secs)
+        if notify.called:  # the backoff after the alert: stop the loop here
+            raise asyncio.CancelledError
+        if len(sleeps) > 20:  # never alerted: stop instead of looping forever
+            raise asyncio.CancelledError
+
+    patches = [
+        patch("bot_runner.fetch_ohlcv_async", new_callable=AsyncMock, return_value=_tick_df(100.0)),
+        patch("bot_runner.get_trading_provider", return_value=provider),
+        patch("bot_runner.cook_graph_bar", cook),
+        patch("bot_runner.notify_error", notify),
+        patch("bot_runner.notify_entry", new_callable=AsyncMock),
+        patch("bot_runner.notify_exit", new_callable=AsyncMock),
+        patch("bot_runner._log_trade"),
+        patch("asyncio.sleep", side_effect=fake_sleep),
+    ]
+
+    async def go():
+        for p in patches:
+            p.start()
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await runner.run()
+            await asyncio.gather(*[t for t in asyncio.all_tasks()
+                                   if t is not asyncio.current_task()], return_exceptions=True)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+    asyncio.run(go())
+    assert cook.call_count == 5          # the same bar, retried every tick
+    assert state.last_bar_time == "earlier"
+    notify.assert_called_once()
+    msg = notify.call_args.kwargs["error_msg"]
+    assert "5 consecutive tick failures" in msg and "kernel boom" in msg
+    assert "open position" in msg
+    provider.submit_order.assert_not_called()
+    fails = [e["msg"] for e in state.activity_log if "Tick failed" in e["msg"]]
+    assert len(fails) == 5
 
 
 def test_tick_retries_the_bar_after_an_unexpected_compile_error():

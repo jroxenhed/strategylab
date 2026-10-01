@@ -436,6 +436,23 @@ describe('W1 fix pass: global keys and banners in NodeBuilder', () => {
     input.remove()
   })
 
+  it('Run takes the data source from the sidebar, never from a stale Ticker source param (MD-07)', async () => {
+    const g = smallGraph()
+    g.nodes.n_t = { ...g.nodes.n_t, params: { symbol: 'AAPL', interval: '1d', source: 'ibkr' } }
+    useNodeBuilderStore.getState().openGraph(g, { id: 'g_1', rev: 2, name: 'alpha' })
+    vi.mocked(fetchGraphBacktest).mockReturnValue(new Promise(() => {}) as never)
+    renderNodeBuilder()
+    const root = builderRoot()
+    const input = document.createElement('input')
+    root.appendChild(input)
+    input.focus()
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter', metaKey: true }) })
+    expect(fetchGraphBacktest).toHaveBeenCalledTimes(1)
+    // request is null here, so the sidebar default applies.
+    expect(vi.mocked(fetchGraphBacktest).mock.calls[0][0].source).toBe('yahoo')
+    input.remove()
+  })
+
   it('a Run 400 landing after an edit leaves diagnostics alone; its banner survives a save error (FC-1, FC-10)', async () => {
     useNodeBuilderStore.getState().openGraph(smallGraph(), { id: 'g_1', rev: 2, name: 'alpha' })
     let reject!: (e: unknown) => void

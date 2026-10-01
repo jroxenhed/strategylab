@@ -240,10 +240,15 @@ def test_macd_signal_two_wire_comparison():
     cmp_path = "/cmp_buy_0"
     assert cmp_path in g.nodes, "Comparison node must exist"
 
+    # v3 (W2): the operands are the comparison's a / b params; one wire from
+    # the MACD node carries both, and no wire holds an attr.
+    cmp = g.nodes[cmp_path]
+    assert cmp.params["a"] == "@macd_line", "a must read the MACD line"
+    assert cmp.params["b"] == "@macd_signal", "b must read the MACD signal line"
     incoming = [w for w in g.wires if w.to_path == cmp_path]
-    attrs = {w.attr for w in incoming}
-    assert "@macd_line" in attrs, "macd_line wire must exist into comparison"
-    assert "@macd_signal" in attrs, "macd_signal wire must exist into comparison"
+    macd_ids = {n.id for n in g.nodes.values() if n.type == "macd"}
+    assert {w.from_path for w in incoming} == macd_ids and len(macd_ids) == 1
+    assert all(w.attr is None for w in incoming)
 
 
 # ---------------------------------------------------------------------------
@@ -267,10 +272,12 @@ def test_ma_with_param_other_indicator():
     ema_node = ema_nodes[0]
     assert ema_node.params.get("period") == 200
 
-    # Two incoming wires to comparison
-    incoming = [w for w in g.wires if w.to_path == cmp_path]
-    attrs = {w.attr for w in incoming}
-    assert "@close" in attrs or "@ema" in attrs, f"Expected ticker/@close or ema/@ema wires, got {attrs}"
+    # v3 (W2): price (a Price node reading @close) is a, the EMA is b.
+    cmp = g.nodes[cmp_path]
+    price_nodes = [n for n in g.nodes.values() if n.type == "price"]
+    assert len(price_nodes) == 1
+    assert (cmp.params["a"], cmp.params["b"]) == (price_nodes[0].params["out"], ema_node.params["out"])
+    assert price_nodes[0].params.get("field", "@close") == "@close"
     # Specifically the EMA wire must exist
     ema_wires = [w for w in g.wires if w.to_path == cmp_path and w.from_path == ema_node.id]
     assert ema_wires, "Wire from EMA node to comparison must exist"
@@ -429,12 +436,14 @@ def _v2_req() -> StrategyRequest:
     )
 
 
-def test_auto_render_emits_v2():
+def test_auto_render_emits_current_version():
+    from nodebuilder.migrate import CURRENT_GRAPH_VERSION
+
     g = auto_render(_v2_req())
-    assert g.version == 2
+    assert g.version == CURRENT_GRAPH_VERSION == 3
     assert g.stream_schema == 1
     dumped = g.model_dump(by_alias=True)
-    assert dumped["_version"] == 2
+    assert dumped["_version"] == CURRENT_GRAPH_VERSION
     assert dumped["meta"] == {} and dumped["annotations"] == {"boxes": [], "notes": []}
 
 
@@ -461,14 +470,14 @@ def test_auto_render_ports_follow_wire_order():
     assert max(count.values()) >= 2
 
 
-def test_auto_render_route_returns_v2_fields():
+def test_auto_render_route_returns_current_version_fields():
     from main import app
 
     client = TestClient(app)
     resp = client.post("/api/nodebuilder/auto_render", json=_v2_req().model_dump())
     assert resp.status_code == 200, resp.text
     graph = resp.json()["graph"]
-    assert graph["_version"] == 2
+    assert graph["_version"] == 3
     node = next(iter(graph["nodes"].values()))
     assert node["name"] and "parent" in node and "subgraph" not in node
     assert all(w["to_port"].startswith("in") and w["from_port"] == "out" for w in graph["wires"])
