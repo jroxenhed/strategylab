@@ -1,14 +1,15 @@
 """
 Unit 8b: R2 parity tests — graph backtest vs rule backtest.
 
-For 8 of 10 fixture strategies the graph path must produce numerically identical
+For all 10 fixture strategies the graph path must produce numerically identical
 results to the rule path (rel=1e-4 for FP drift across two evaluation pipelines).
-regime_mode and per_direction_b23 are explicitly skipped (T2 scope).
+regime_mode and per_direction_b23 run since W5 (regime in the graph, plan D8);
+like the rule path, they fetch the regime's own bars.
 
 Additional tests:
   - test_response_shape_keys_only      — response keys are exactly the 4 required
   - test_unwired_size_stop_terminals_no_override — unwired Size/Stop → no override
-  - test_regime_graph_returns_400      — /regime/ node → 400
+  - test_stray_regime_node_compiles    — a /regime/ node is no longer refused
   - test_zero_trades                   — no-signal graph → summary.num_trades==0
   - test_short_only_graph              — direction="short" → correct trade types
   - test_bypassed_node_skipped         — bypass=True comparison → absent from result
@@ -34,10 +35,10 @@ from nodebuilder.compile import compile as _compile_graph
 from nodebuilder.evaluator import (
     compute_indicators_from_specs,
     evaluate_graph,
-    RegimeUnsupportedError,
 )
 from nodebuilder.from_rules import auto_render
 from nodebuilder.models import Graph, Node, Wire
+from nodebuilder.run import GRAPH_ONLY_SUMMARY_KEYS
 from routes.backtest import _run_simulation, run_backtest
 from routes.nodebuilder import (
     _apply_settings_overrides,
@@ -239,10 +240,12 @@ def _compare_results(rule_result: dict, graph_result: dict, name: str) -> None:
     The rule path (run_backtest) adds extra keys that the graph path intentionally
     omits (beta, r_squared from SPY correlation; session_analytics).  We compare
     only the keys present in the graph result's summary — it must be a subset of
-    the rule result.  Keys present in graph but absent from rule are an error.
+    the rule result.  Keys present in graph but absent from rule are an error,
+    except the documented graph-only keys (open_position, exit_connected).
     """
     # summary — compare keys present in the graph result against the rule result
-    rs, gs = rule_result["summary"], graph_result["summary"]
+    rs = rule_result["summary"]
+    gs = {k: v for k, v in graph_result["summary"].items() if k not in GRAPH_ONLY_SUMMARY_KEYS}
     missing_from_rule = set(gs.keys()) - set(rs.keys())
     assert not missing_from_rule, (
         f"{name}: summary keys in graph but absent from rule: {missing_from_rule}"
@@ -285,16 +288,14 @@ def _compare_results(rule_result: dict, graph_result: dict, name: str) -> None:
 # Parametrized parity tests
 # ---------------------------------------------------------------------------
 
-_SKIP_REASON = "T2 scope: regime evaluator not supported (graph compile raises RegimeUnsupportedError)"
+# The two fixtures with a regime filter.  They run like the others since W5;
+# the name stays for test_terminal_rule_parity.py, which leaves them out.
 _REGIME_NAMES = {"regime_mode", "per_direction_b23"}
 
 
 @pytest.mark.parametrize("name,req", _STRATEGIES, ids=_STRATEGY_IDS)
 def test_graph_backtest_parity(name, req):
     """Graph path must produce numerically identical results to the rule path."""
-    if name in _REGIME_NAMES:
-        pytest.skip(_SKIP_REASON)
-
     df = _load_df(name)
     rule_result = _run_rule_path(req, df)
     graph_result = _run_graph_path(req, df)
@@ -374,8 +375,9 @@ def test_unwired_size_stop_terminals_no_override():
     )
 
 
-def test_regime_graph_returns_400():
-    """A graph containing a /regime/ node raises RegimeUnsupportedError (→ HTTP 400)."""
+def test_stray_regime_node_compiles():
+    """A /regime/ node is no longer refused (W5, plan D8).  An unwired Ticker
+    with no prefix reads the request's frame, so the result is unchanged."""
     name = "simple_long_rsi"
     req = next(r for n, r in _STRATEGIES if n == name)
     df = _load_df(name)
@@ -398,8 +400,9 @@ def test_regime_graph_returns_400():
         graph=regime_graph, ticker=req.ticker, start=req.start, end=req.end,
         interval=req.interval, source=req.source,
     )
-    with pytest.raises(RegimeUnsupportedError):
-        run_graph_backtest(graph_req, df=df)
+    plain_req = graph_req.model_copy(update={"graph": graph})
+    assert run_graph_backtest(graph_req, df=df).summary == \
+        run_graph_backtest(plain_req, df=df).summary
 
 
 def test_zero_trades():
@@ -522,3 +525,59 @@ def test_bypassed_node_skipped():
     assert len(bypassed_sells) <= len(unmodified_sells), (
         f"Bypassed sell should have fewer sells: {len(bypassed_sells)} vs {len(unmodified_sells)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# F435 0.A: the trailing_stop node drives the trailing stop on its own
+# ---------------------------------------------------------------------------
+
+def _graph_only_result(graph: Graph, req: StrategyRequest, df: pd.DataFrame, **overrides) -> dict:
+    """Run a graph with a request that carries NO strategy settings of its own
+    (no trailing stop), so anything the result shows came from the graph."""
+    graph_req = GraphBacktestRequest(
+        graph=graph, ticker=req.ticker, start=req.start, end=req.end,
+        interval=req.interval, source=req.source, **overrides,
+    )
+    result = run_graph_backtest(graph_req, df=df)
+    return {
+        "summary": result.summary, "trades": result.trades,
+        "equity_curve": result.equity_curve, "baseline_curve": result.baseline_curve,
+    }
+
+
+@pytest.mark.parametrize("name", ["trailing_stop_pct", "atr_trailing_stop"])
+def test_trailing_stop_node_alone_matches_rule_backtest(name):
+    req = next(r for n, r in _STRATEGIES if n == name)
+    df = _load_df(name)
+    rule_result = _run_rule_path(req, df)
+    graph = auto_render(req)
+    assert graph.nodes["/setting_trailing_stop"].type == "trailing_stop"
+
+    # The request has trailing_stop=None: the graph node must supply it.
+    _compare_results(rule_result, _graph_only_result(graph, req, df), name)
+
+    # Control: without the node the same request gives a different result,
+    # so the match above really comes from the node.
+    nodes = {k: v.model_dump(by_alias=False) for k, v in graph.nodes.items()
+             if k != "/setting_trailing_stop"}
+    bare = Graph.model_validate({
+        "_version": 1, "readOnly": True, "nodes": nodes,
+        "wires": [w.model_dump(by_alias=False) for w in graph.wires],
+    })
+    bare_result = _graph_only_result(bare, req, df)
+    assert [(t["type"], t["date"]) for t in bare_result["trades"]] != [
+        (t["type"], t["date"]) for t in rule_result["trades"]
+    ], f"{name}: fixture never hits its trailing stop, so it proves nothing"
+
+
+def test_trailing_stop_node_wins_over_request():
+    """The graph wins: a different trailing stop on the request is replaced."""
+    name = "trailing_stop_pct"
+    req = next(r for n, r in _STRATEGIES if n == name)
+    df = _load_df(name)
+    rule_result = _run_rule_path(req, df)
+    graph_result = _graph_only_result(
+        auto_render(req), req, df,
+        trailing_stop=TrailingStopConfig(type="pct", value=40.0),
+    )
+    _compare_results(rule_result, graph_result, name)

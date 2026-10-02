@@ -1,0 +1,163 @@
+/* Network boxes (S17) and sticky notes (S18), item 3.E.
+ *
+ * Both sit under wires and graph nodes. React Flow lifts a selected node by
+ * 1000 in z-index, which would put a selected box over its own members and
+ * catch their clicks. The !important rules keep boxes at -2 and notes at -1
+ * whatever React Flow writes inline. */
+.nodebuilder-root .react-flow__node.react-flow__node-nbBox { z-index: -2 !important; }
+.nodebuilder-root .react-flow__node.react-flow__node-nbNote { z-index: -1 !important; }
+
+/* The node ring from tokens.css is for graph nodes; boxes and notes draw
+   their own selection on the inner element. */
+.nodebuilder-root .react-flow__node.react-flow__node-nbBox.selected,
+.nodebuilder-root .react-flow__node.react-flow__node-nbNote.selected {
+  box-shadow: none;
+}
+
+/* ── Network box ───────────────────────────────────────────────────────── */
+
+.nb-box {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 1px dashed color-mix(in srgb, var(--nb-box-tint) 45%, transparent);
+  background: color-mix(in srgb, var(--nb-box-tint) 4%, transparent);
+  border-radius: var(--nb-radius-frame);
+}
+.nb-box:hover { border-color: color-mix(in srgb, var(--nb-box-tint) 70%, transparent); }
+.nb-box--selected { box-shadow: 0 0 0 1.5px var(--nb-selection); }
+/* A dragged node's center is inside: it will join on drop. */
+.nb-box--hot {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--nb-box-tint) 80%, transparent);
+}
+.react-flow__node-nbBox.dragging .nb-box { cursor: grabbing; }
+
+.nb-box__tab {
+  position: absolute;
+  top: -8px;
+  left: 10px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  background: var(--nb-bg);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--nb-box-tint);
+  font: 600 10px/1 var(--nb-font-sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  user-select: none;
+}
+.nb-box--selected .nb-box__tab { border-color: var(--nb-selection); }
+.nb-box__tab--empty { color: var(--nb-text-dim); }
+.nb-box__input {
+  height: 14px;
+  min-width: 40px;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--nb-box-tint);
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: uppercase;
+}
+
+/* Resize grips: 8px squares at the corners, shown on hover or selection.
+   The edge lines are invisible but can still be dragged. */
+.nb-box .nb-box__grip.react-flow__resize-control.handle {
+  width: 8px;
+  height: 8px;
+  border-radius: 0;
+  background: var(--nb-bg);
+  border: 1px solid var(--nb-box-tint);
+  opacity: 0;
+}
+.nb-box:hover .nb-box__grip.react-flow__resize-control.handle,
+.nb-box--selected .nb-box__grip.react-flow__resize-control.handle { opacity: 1; }
+.nb-box .nb-box__edge.react-flow__resize-control.line { border-color: transparent; }
+.nb-box__grip-mark { position: absolute; inset: 0; pointer-events: none; }
+
+/* ── Sticky note ───────────────────────────────────────────────────────── */
+
+.nb-note {
+  --nb-note-c-bg: var(--nb-note-bg);
+  --nb-note-c-border: var(--nb-note-border);
+  --nb-note-c-text: var(--nb-note-text);
+  position: relative;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  background: var(--nb-note-c-bg);
+  border: 1px solid var(--nb-note-c-border);
+  border-radius: 6px;
+  color: var(--nb-note-c-text);
+  font: 12px/1.45 var(--nb-font-sans);
+  overflow: hidden;
+  cursor: grab;
+}
+.nb-note--blue  { --nb-note-c-bg: #12243a; --nb-note-c-border: rgba(56, 189, 248, 0.4); --nb-note-c-text: #bae6fd; }
+.nb-note--green { --nb-note-c-bg: #12301f; --nb-note-c-border: rgba(52, 211, 153, 0.4); --nb-note-c-text: #bbf7d0; }
+.nb-note--grey  { --nb-note-c-bg: #1a1f28; --nb-note-c-border: var(--nb-border-strong); --nb-note-c-text: var(--nb-text-secondary); }
+.nb-note:hover { border-color: color-mix(in srgb, var(--nb-note-c-border) 70%, var(--nb-note-c-text) 30%); }
+.nb-note--selected { box-shadow: 0 0 0 1.5px var(--nb-selection); }
+.nb-note--editing { border-color: var(--nb-border-focus); cursor: default; }
+
+.nb-note__text {
+  height: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  cursor: default;
+}
+.nb-note__text--empty { opacity: 0.5; }
+/* A 12px fade at the bottom hints at text beyond the box. */
+.nb-note__fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 12px;
+  background: linear-gradient(to bottom, transparent, var(--nb-note-c-bg));
+  pointer-events: none;
+}
+.nb-note__textarea {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: inherit;
+  caret-color: var(--nb-note-c-text);
+  font: inherit;
+}
+
+.nb-note .nb-note__grip.react-flow__resize-control.handle {
+  width: 8px;
+  height: 8px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  transform: translate(-100%, -100%);
+  opacity: 0;
+}
+.nb-note:hover .nb-note__grip.react-flow__resize-control.handle,
+.nb-note--selected .nb-note__grip.react-flow__resize-control.handle { opacity: 1; }
+/* The grip: an 8px triangle in the note's border color. */
+.nb-note__grip-mark {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, transparent 50%, var(--nb-note-c-border) 50%);
+  pointer-events: none;
+}

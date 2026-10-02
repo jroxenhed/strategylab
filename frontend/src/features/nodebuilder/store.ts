@@ -1,270 +1,94 @@
 /**
- * store.ts — Zustand store for the Node Strategy Builder (Unit 5).
+ * store.ts — Zustand store for the Node Strategy Builder.
  *
- * Manages the editable graph state, selection, viewport, and persistence.
- * All mutation operations delegate to pure functions in operations.ts and
- * throw ReadOnlyGraphError when graph.readOnly is true.
+ * One store, built from slices (W3 pre-step 3.0). Each slice lives in its
+ * own file under store/ and owns its fields and actions:
+ *
+ * - store/graph.ts        the graph, `commit`, undo and redo, loading
+ * - store/selection.ts    selected nodes, wires and boxes/notes
+ * - store/view.ts         pan and zoom per network
+ * - store/status.ts       status-bar flash and cook state
+ * - store/annotations.ts  network boxes and sticky notes (3.E)
+ * - store/clipboard.ts    copy and paste (3.C)
+ *
+ * Every graph edit, in any slice, goes through `commit(label, recipe)` on
+ * the graph slice, so it is one undo step. Boxes, notes and the flags live
+ * inside the graph, so undo covers them too.
+ *
+ * `loadFromAutoRender` stays in this file: item 3.F owns it in Wave 3.
  *
  * Viewing auto-render results uses TanStack Query, NOT this store.
  * The store is only populated when the user explicitly enters edit mode.
  */
 
 import { create } from 'zustand'
-import type { Graph, GraphNode, GraphWire } from '../../api/nodebuilder'
-import {
-  addNode as opAddNode,
-  removeNodeWithRewire as opRemoveNodeWithRewire,
-  addWire as opAddWire,
-  removeWire as opRemoveWire,
-  moveNode as opMoveNode,
-  updateNodeParams as opUpdateNodeParams,
-  spliceNodeOntoWire as opSpliceNodeOntoWire,
-  MIN_SUPPORTED_VERSION,
-  IncompatibleGraphVersionError,
-} from './operations'
+import type { Graph } from '../../api/nodebuilder'
+import { prepareEditableCopy } from './editNotices'
+import { tidyGraph } from './layout'
+import { createGraphSlice, loadedGraphState, type GraphSlice } from './store/graph'
+import { createSelectionSlice, type SelectionSlice } from './store/selection'
+import { createViewSlice, type ViewSlice } from './store/view'
+import { createStatusSlice, type StatusSlice } from './store/status'
+import { createAnnotationsSlice, type AnnotationsSlice } from './store/annotations'
+import { createClipboardSlice, type ClipboardSlice } from './store/clipboard'
 
-// ---------------------------------------------------------------------------
-// Persistence key
-// ---------------------------------------------------------------------------
+export { HISTORY_CAP, hasEdits } from './store/graph'
+export type { GraphMeta, GraphRecipe, HistoryEntry } from './store/graph'
+export type { SelectionInput } from './store/selection'
+export type { Viewport } from './store/view'
+export type { CookKind, CookPhase, CookStatus, CookStatuses, PreviewState } from './store/status'
 
-const SAVED_GRAPHS_KEY = 'strategylab-saved-graphs'
-
-function loadSavedGraphs(): Record<string, Graph> {
-  try {
-    const raw = localStorage.getItem(SAVED_GRAPHS_KEY)
-    if (!raw) return {}
-    return JSON.parse(raw) as Record<string, Graph>
-  } catch {
-    return {}
-  }
-}
-
-function saveSavedGraphs(graphs: Record<string, Graph>): void {
-  localStorage.setItem(SAVED_GRAPHS_KEY, JSON.stringify(graphs))
-}
-
-// ---------------------------------------------------------------------------
-// Simple hash for change detection (djb2 over JSON string)
-// ---------------------------------------------------------------------------
-
-function hashGraph(g: Graph | null): string | null {
-  if (g === null) return null
-  const s = JSON.stringify(g)
-  let h = 5381
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) + h) ^ s.charCodeAt(i)
-  }
-  return (h >>> 0).toString(16)
-}
-
-// ---------------------------------------------------------------------------
-// State shape
-// ---------------------------------------------------------------------------
-
-export interface NodeBuilderState {
-  // Current editable graph (null = no graph loaded; view auto-render via TanStack Query)
-  graph: Graph | null
-
-  // Selection / display / bypass per-node UI state
-  selectedNodeId: string | null
-  displayNodeId: string | null
-  bypassedNodeIds: Set<string>
-
-  // Cached hash for change detection
-  graphHash: string | null
-
-  // Pan / zoom
-  viewport: { x: number; y: number; zoom: number }
-
-  // ── Setters ──────────────────────────────────────────────────────────────
-
-  setGraph(g: Graph | null): void
-  select(id: string | null): void
-  setDisplay(id: string | null): void
-  toggleBypass(id: string): void
-  setViewport(v: { x: number; y: number; zoom: number }): void
-
-  // ── Mutation operations (reject when graph.readOnly is true) ─────────────
-
-  addNode(node: GraphNode): void
-  removeNodeWithRewire(nodeId: string): void
-  addWire(wire: GraphWire): void
-  removeWire(wireId: string): void
-  moveNode(nodeId: string, position: [number, number]): void
-  updateNodeParams(nodeId: string, partial: Record<string, unknown>): void
-  spliceNodeOntoWire(nodeId: string, wireId: string): void
-
-  // ── Persistence ──────────────────────────────────────────────────────────
-
-  /** Write current graph to localStorage under its name (graph._version ensured). */
-  saveCurrentGraph(): void
-
-  /** Load a named graph from localStorage. Throws IncompatibleGraphVersionError if too old. */
-  loadGraph(name: string): void
-
+/** Actions defined in this file rather than in a slice. */
+export interface LoadActions {
   /** Copy an auto-render graph into the store as editable (readOnly=false). */
   loadFromAutoRender(graph: Graph): void
-
-  /** Create a new, empty editable graph and enter edit mode. */
-  newEmptyGraph(): void
 }
 
-// ---------------------------------------------------------------------------
-// Store
-// ---------------------------------------------------------------------------
+export type NodeBuilderState =
+  GraphSlice & SelectionSlice & ViewSlice & StatusSlice & AnnotationsSlice & ClipboardSlice & LoadActions
 
-export const useNodeBuilderStore = create<NodeBuilderState>()((set, get) => ({
-  graph: null,
-  selectedNodeId: null,
-  displayNodeId: null,
-  bypassedNodeIds: new Set(),
-  graphHash: null,
-  viewport: { x: 0, y: 0, zoom: 1 },
-
-  // ── Setters ───────────────────────────────────────────────────────────────
-
-  setGraph(g) {
-    set({ graph: g, graphHash: hashGraph(g) })
-  },
-
-  select(id) {
-    set({ selectedNodeId: id })
-  },
-
-  setDisplay(id) {
-    set({ displayNodeId: id })
-  },
-
-  toggleBypass(id) {
-    set(state => {
-      const next = new Set(state.bypassedNodeIds)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return { bypassedNodeIds: next }
-    })
-  },
-
-  setViewport(v) {
-    set({ viewport: v })
-  },
-
-  // ── Mutation operations ───────────────────────────────────────────────────
-
-  addNode(node) {
-    const { graph } = get()
-    if (!graph) return
-    const next = opAddNode(graph, node)
-    set({ graph: next, graphHash: hashGraph(next) })
-  },
-
-  removeNodeWithRewire(nodeId) {
-    const { graph } = get()
-    if (!graph) return
-    const next = opRemoveNodeWithRewire(graph, nodeId)
-    set({ graph: next, graphHash: hashGraph(next) })
-  },
-
-  addWire(wire) {
-    const { graph } = get()
-    if (!graph) return
-    const next = opAddWire(graph, wire)
-    set({ graph: next, graphHash: hashGraph(next) })
-  },
-
-  removeWire(wireId) {
-    const { graph } = get()
-    if (!graph) return
-    const next = opRemoveWire(graph, wireId)
-    set({ graph: next, graphHash: hashGraph(next) })
-  },
-
-  moveNode(nodeId, position) {
-    const { graph } = get()
-    if (!graph) return
-    const next = opMoveNode(graph, nodeId, position)
-    set({ graph: next, graphHash: hashGraph(next) })
-  },
-
-  updateNodeParams(nodeId, partial) {
-    const { graph } = get()
-    if (!graph) return
-    const next = opUpdateNodeParams(graph, nodeId, partial)
-    set({ graph: next, graphHash: hashGraph(next) })
-  },
-
-  spliceNodeOntoWire(nodeId, wireId) {
-    const { graph } = get()
-    if (!graph) return
-    const next = opSpliceNodeOntoWire(graph, nodeId, wireId)
-    set({ graph: next, graphHash: hashGraph(next) })
-  },
-
-  // ── Persistence ───────────────────────────────────────────────────────────
-
-  saveCurrentGraph() {
-    const { graph } = get()
-    if (!graph) return
-    const graphName = (graph.nodes['output'] as GraphNode | undefined)?.params?.name as string
-      ?? 'unnamed'
-    const withVersion: Graph = { ...graph, _version: graph._version || 1 }
-    const saved = loadSavedGraphs()
-    saved[graphName] = withVersion
-    saveSavedGraphs(saved)
-  },
-
-  loadGraph(name) {
-    const saved = loadSavedGraphs()
-    const g = saved[name]
-    if (!g) throw new Error(`Graph "${name}" not found in saved graphs.`)
-    const version = g._version ?? 0
-    if (version < MIN_SUPPORTED_VERSION) {
-      throw new IncompatibleGraphVersionError(version, MIN_SUPPORTED_VERSION)
-    }
-    set({ graph: g, graphHash: hashGraph(g), selectedNodeId: null, displayNodeId: null })
-  },
+export const useNodeBuilderStore = create<NodeBuilderState>()((set, get, api) => ({
+  ...createGraphSlice(set, get, api),
+  ...createSelectionSlice(set, get, api),
+  ...createViewSlice(set, get, api),
+  ...createStatusSlice(set, get, api),
+  ...createAnnotationsSlice(set, get, api),
+  ...createClipboardSlice(set, get, api),
 
   loadFromAutoRender(graph) {
-    // Strip /regime/* nodes + incident wires. The T2 graph evaluator returns
-    // 400 on regime nodes ("Regime is not supported"), and WFA already strips
-    // them at its boundary (see CLAUDE.md WFA §"Regime is unconditionally
-    // stripped"). T1 read-only view still shows them; the editable copy must
-    // not, otherwise Run Backtest 400s every time.
-    const filteredNodes: Record<string, GraphNode> = {}
-    for (const [id, n] of Object.entries(graph.nodes)) {
-      if (!id.startsWith('/regime/')) filteredNodes[id] = n
-    }
-    const filteredWires = graph.wires.filter(
-      w => !w.from.startsWith('/regime/') && !w.to.startsWith('/regime/'),
-    )
-    const editable: Graph = {
-      ...graph,
-      readOnly: false,
-      nodes: filteredNodes,
-      wires: filteredWires,
-    }
-    set({
-      graph: editable,
-      graphHash: hashGraph(editable),
-      selectedNodeId: null,
-      displayNodeId: null,
-      bypassedNodeIds: new Set(),
-    })
-  },
+    // The copy keeps every node, regime included: since W5 the graph runs
+    // regime (the regime_net network and the regime terminal).
+    const { graph: editable } = prepareEditableCopy(graph)
+    set({ ...loadedGraphState(get(), editable, { graphMeta: null }), layoutPending: true })
 
-  newEmptyGraph() {
-    const empty: Graph = {
-      _version: 1,
-      readOnly: false,
-      nodes: {},
-      wires: [],
+    // Edit mode draws param rows, so nodes grow and the read-only layout
+    // overlaps (bug 8). Tidy the copy with elk (3.F). The copy above already
+    // has its rows spread apart, which holds until elk is done (it loads on
+    // first use) or if it fails. The tidy is part of the load: not an undo
+    // step and not an edit. It only lands while the copy is untouched, so it
+    // never moves nodes under the user or replaces a graph loaded since.
+    const epoch = get().layoutEpoch
+    // The canvas waits for this tidy before its first fit; any end of it
+    // (landed, dropped, failed) lets it fit. A later load resets the flag.
+    const settle = () => {
+      const s = get()
+      if (s.layoutEpoch === epoch && s.layoutPending) set({ layoutPending: false })
     }
-    set({
-      graph: empty,
-      graphHash: hashGraph(empty),
-      selectedNodeId: null,
-      displayNodeId: null,
-      bypassedNodeIds: new Set(),
-      viewport: { x: 0, y: 0, zoom: 1 },
-    })
+    tidyGraph(editable)
+      .then(tidy => {
+        const s = get()
+        const untouched =
+          s.graph === editable && s.savedGraph === editable && s.past.length === 0 && s.future.length === 0
+        if (!untouched || tidy === editable) { settle(); return }
+        // layoutEpoch makes the canvas fit the view to the new positions.
+        set({ graph: tidy, savedGraph: tidy, commitSeq: s.commitSeq + 1, layoutEpoch: s.layoutEpoch + 1, layoutPending: false })
+      })
+      .catch(err => {
+        settle()
+        console.error('nodebuilder: tidy layout of the edit copy failed', err)
+      })
   },
 }))
+
+/** The store hook, which is also the store API (getState, setState, subscribe). */
+export type NodeBuilderStoreApi = typeof useNodeBuilderStore

@@ -1,4 +1,4 @@
-from typing import Protocol
+from typing import Optional, Protocol
 from collections import deque
 from fastapi import HTTPException
 import asyncio
@@ -44,6 +44,29 @@ _INTERVAL_MAX_DAYS = {
     '1m': 7, '2m': 60, '5m': 60, '15m': 60, '30m': 60,
     '60m': 730, '90m': 60, '1h': 730,
 }
+
+# The longest intraday window a live bot asks IBKR for (calendar days).  Every
+# bot has fetched 30 days since before F435 W2, so 30 is the largest intraday
+# request the Gateway is known to serve for the bots.  IBKR documents smaller
+# duration steps per bar size and paces large requests; raise this only after
+# a real-Gateway probe of the bigger window (F338).  Daily and longer bars are
+# not capped.
+_IBKR_INTRADAY_MAX_DAYS = 30
+
+
+def provider_max_days(source: str, interval: str) -> Optional[int]:
+    """The most calendar days of *interval* bars *source* serves to a live bot,
+    or None when it has no limit we know of.
+
+    yahoo uses the same table YahooProvider clamps to; ibkr caps intraday at
+    _IBKR_INTRADAY_MAX_DAYS; Alpaca (SIP and IEX) serves years at every
+    interval.
+    """
+    if source == "yahoo":
+        return _INTERVAL_MAX_DAYS.get(interval)
+    if source == "ibkr" and interval in _INTRADAY_INTERVALS:
+        return _IBKR_INTRADAY_MAX_DAYS
+    return None
 
 
 class DataProvider(Protocol):
@@ -232,7 +255,10 @@ class IBKRDataProvider:
         elif days <= 365:
             duration = f"{days} D"
         else:
-            years = max(1, days // 365)
+            # Round up (F435 W2 LT-4): 788 days used to become "2 Y", about
+            # 504 daily bars where 530 were asked for.  The extra bars before
+            # start are trimmed below.
+            years = -(-days // 365)
             duration = f"{years} Y"
 
         if not self._ib.isConnected():
@@ -273,6 +299,12 @@ class IBKRDataProvider:
 
         df = pd.DataFrame(rows)
         df.index = pd.to_datetime(df.pop("timestamp"))
+        if duration.endswith(" Y") and len(df):
+            # A whole-year duration reaches back past start; keep the asked range.
+            first = pd.Timestamp(start_dt)
+            if df.index.tz is not None:
+                first = first.tz_localize(df.index.tz)
+            df = df[df.index >= first]
         return df
 
 

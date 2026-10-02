@@ -23,6 +23,8 @@ export function apiErrorDetail(e: unknown, fallback: string): string {
       if (typeof reason === 'string' && reason) return reason
       const error = (detail as { error?: unknown }).error
       if (typeof error === 'string' && error) return error
+      const detailMessage = (detail as { message?: unknown }).message
+      if (typeof detailMessage === 'string' && detailMessage) return detailMessage
     }
     const message = (e as { message?: unknown }).message
     if (typeof message === 'string' && message) return message

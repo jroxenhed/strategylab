@@ -1,0 +1,683 @@
+{
+ "_about": "Benchmark graph for backend/scripts/bench_graph_cook.py (F435 Wave 2 item 2.0). 30 nodes: ticker, 4 settings, 8 indicators, 9 comparisons, 6 logic, Entry, Exit.",
+ "_version": 2,
+ "readOnly": false,
+ "meta": {},
+ "nodes": {
+  "/ticker": {
+   "id": "/ticker",
+   "type": "ticker",
+   "name": "ticker",
+   "params": {
+    "symbol": "MSFT",
+    "interval": "1h",
+    "source": "yahoo"
+   },
+   "position": [
+    0,
+    0
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/position_size": {
+   "id": "/position_size",
+   "type": "position_size",
+   "name": "position_size",
+   "params": {
+    "size": 1.0
+   },
+   "position": [
+    -260,
+    0
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/slippage": {
+   "id": "/slippage",
+   "type": "slippage",
+   "name": "slippage",
+   "params": {
+    "bps": 2.0
+   },
+   "position": [
+    -260,
+    110
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/commission": {
+   "id": "/commission",
+   "type": "commission",
+   "name": "commission",
+   "params": {
+    "per_share_rate": 0.0,
+    "min_per_order": 0.0
+   },
+   "position": [
+    -260,
+    220
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/stop_loss": {
+   "id": "/stop_loss",
+   "type": "stop_loss",
+   "name": "stop_loss",
+   "params": {
+    "pct": 5.0
+   },
+   "position": [
+    -260,
+    330
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/rsi14": {
+   "id": "/rsi14",
+   "type": "rsi",
+   "name": "rsi14",
+   "params": {
+    "period": 14,
+    "type": "wilder"
+   },
+   "position": [
+    0,
+    160
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/rsi7": {
+   "id": "/rsi7",
+   "type": "rsi",
+   "name": "rsi7",
+   "params": {
+    "period": 7,
+    "type": "wilder"
+   },
+   "position": [
+    160,
+    160
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/sma50": {
+   "id": "/sma50",
+   "type": "sma",
+   "name": "sma50",
+   "params": {
+    "period": 50
+   },
+   "position": [
+    320,
+    160
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/sma200": {
+   "id": "/sma200",
+   "type": "sma",
+   "name": "sma200",
+   "params": {
+    "period": 200
+   },
+   "position": [
+    480,
+    160
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/ema20": {
+   "id": "/ema20",
+   "type": "ema",
+   "name": "ema20",
+   "params": {
+    "period": 20
+   },
+   "position": [
+    640,
+    160
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/macd": {
+   "id": "/macd",
+   "type": "macd",
+   "name": "macd",
+   "params": {
+    "fast": 12,
+    "slow": 26,
+    "signal": 9
+   },
+   "position": [
+    800,
+    160
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/bb": {
+   "id": "/bb",
+   "type": "bollinger",
+   "name": "bb",
+   "params": {
+    "period": 20,
+    "stddev": 2.0
+   },
+   "position": [
+    960,
+    160
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/atr": {
+   "id": "/atr",
+   "type": "atr",
+   "name": "atr",
+   "params": {
+    "period": 14
+   },
+   "position": [
+    1120,
+    160
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/c1_ema_x_sma50": {
+   "id": "/c1_ema_x_sma50",
+   "type": "crosses_above",
+   "name": "c1_ema_x_sma50",
+   "params": {},
+   "position": [
+    0,
+    340
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/c2_rsi_low": {
+   "id": "/c2_rsi_low",
+   "type": "below",
+   "name": "c2_rsi_low",
+   "params": {
+    "threshold": 40.0
+   },
+   "position": [
+    160,
+    340
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/c3_trend_up": {
+   "id": "/c3_trend_up",
+   "type": "above",
+   "name": "c3_trend_up",
+   "params": {},
+   "position": [
+    320,
+    340
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/c4_macd_up": {
+   "id": "/c4_macd_up",
+   "type": "above",
+   "name": "c4_macd_up",
+   "params": {},
+   "position": [
+    480,
+    340
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/c5_bb_dip": {
+   "id": "/c5_bb_dip",
+   "type": "below",
+   "name": "c5_bb_dip",
+   "params": {},
+   "position": [
+    640,
+    340
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/c6_ema_x_down": {
+   "id": "/c6_ema_x_down",
+   "type": "crosses_below",
+   "name": "c6_ema_x_down",
+   "params": {},
+   "position": [
+    800,
+    340
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/c7_rsi_high": {
+   "id": "/c7_rsi_high",
+   "type": "above",
+   "name": "c7_rsi_high",
+   "params": {
+    "threshold": 75.0
+   },
+   "position": [
+    960,
+    340
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/c8_atr_live": {
+   "id": "/c8_atr_live",
+   "type": "above",
+   "name": "c8_atr_live",
+   "params": {
+    "threshold": 0.05
+   },
+   "position": [
+    1120,
+    340
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/c9_bb_break": {
+   "id": "/c9_bb_break",
+   "type": "above",
+   "name": "c9_bb_break",
+   "params": {},
+   "position": [
+    1280,
+    340
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/l1_dip_or_cross": {
+   "id": "/l1_dip_or_cross",
+   "type": "or",
+   "name": "l1_dip_or_cross",
+   "params": {},
+   "position": [
+    0,
+    520
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/l2_buy": {
+   "id": "/l2_buy",
+   "type": "and",
+   "name": "l2_buy",
+   "params": {},
+   "position": [
+    0,
+    640
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/l3_weak": {
+   "id": "/l3_weak",
+   "type": "or",
+   "name": "l3_weak",
+   "params": {},
+   "position": [
+    400,
+    520
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/l4_macd_down": {
+   "id": "/l4_macd_down",
+   "type": "not",
+   "name": "l4_macd_down",
+   "params": {},
+   "position": [
+    600,
+    520
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/l5_blowoff": {
+   "id": "/l5_blowoff",
+   "type": "and",
+   "name": "l5_blowoff",
+   "params": {},
+   "position": [
+    600,
+    640
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/l6_sell": {
+   "id": "/l6_sell",
+   "type": "or",
+   "name": "l6_sell",
+   "params": {},
+   "position": [
+    400,
+    760
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/entry": {
+   "id": "/entry",
+   "type": "entry",
+   "name": "entry",
+   "params": {},
+   "position": [
+    0,
+    880
+   ],
+   "display": false,
+   "bypass": false
+  },
+  "/exit": {
+   "id": "/exit",
+   "type": "exit",
+   "name": "exit",
+   "params": {},
+   "position": [
+    400,
+    880
+   ],
+   "display": false,
+   "bypass": false
+  }
+ },
+ "wires": [
+  {
+   "id": "w_ticker_rsi14_in0",
+   "from": "/ticker",
+   "to": "/rsi14",
+   "to_port": "in0",
+   "attr": "@close"
+  },
+  {
+   "id": "w_ticker_rsi7_in0",
+   "from": "/ticker",
+   "to": "/rsi7",
+   "to_port": "in0",
+   "attr": "@close"
+  },
+  {
+   "id": "w_ticker_sma50_in0",
+   "from": "/ticker",
+   "to": "/sma50",
+   "to_port": "in0",
+   "attr": "@close"
+  },
+  {
+   "id": "w_ticker_sma200_in0",
+   "from": "/ticker",
+   "to": "/sma200",
+   "to_port": "in0",
+   "attr": "@close"
+  },
+  {
+   "id": "w_ticker_ema20_in0",
+   "from": "/ticker",
+   "to": "/ema20",
+   "to_port": "in0",
+   "attr": "@close"
+  },
+  {
+   "id": "w_ticker_macd_in0",
+   "from": "/ticker",
+   "to": "/macd",
+   "to_port": "in0",
+   "attr": "@close"
+  },
+  {
+   "id": "w_ticker_bb_in0",
+   "from": "/ticker",
+   "to": "/bb",
+   "to_port": "in0",
+   "attr": "@close"
+  },
+  {
+   "id": "w_ticker_atr_in0",
+   "from": "/ticker",
+   "to": "/atr",
+   "to_port": "in0",
+   "attr": "@close"
+  },
+  {
+   "id": "w_ema20_c1_ema_x_sma50_in0",
+   "from": "/ema20",
+   "to": "/c1_ema_x_sma50",
+   "to_port": "in0",
+   "attr": "@ma"
+  },
+  {
+   "id": "w_sma50_c1_ema_x_sma50_in1",
+   "from": "/sma50",
+   "to": "/c1_ema_x_sma50",
+   "to_port": "in1",
+   "attr": "@ma"
+  },
+  {
+   "id": "w_rsi14_c2_rsi_low_in0",
+   "from": "/rsi14",
+   "to": "/c2_rsi_low",
+   "to_port": "in0",
+   "attr": "@rsi"
+  },
+  {
+   "id": "w_ticker_c3_trend_up_in0",
+   "from": "/ticker",
+   "to": "/c3_trend_up",
+   "to_port": "in0",
+   "attr": "@close"
+  },
+  {
+   "id": "w_sma200_c3_trend_up_in1",
+   "from": "/sma200",
+   "to": "/c3_trend_up",
+   "to_port": "in1",
+   "attr": "@ma"
+  },
+  {
+   "id": "w_macd_c4_macd_up_in0",
+   "from": "/macd",
+   "to": "/c4_macd_up",
+   "to_port": "in0",
+   "attr": "@macd_line"
+  },
+  {
+   "id": "w_macd_c4_macd_up_in1",
+   "from": "/macd",
+   "to": "/c4_macd_up",
+   "to_port": "in1",
+   "attr": "@macd_signal"
+  },
+  {
+   "id": "w_ticker_c5_bb_dip_in0",
+   "from": "/ticker",
+   "to": "/c5_bb_dip",
+   "to_port": "in0",
+   "attr": "@close"
+  },
+  {
+   "id": "w_bb_c5_bb_dip_in1",
+   "from": "/bb",
+   "to": "/c5_bb_dip",
+   "to_port": "in1",
+   "attr": "@bb_lower"
+  },
+  {
+   "id": "w_ema20_c6_ema_x_down_in0",
+   "from": "/ema20",
+   "to": "/c6_ema_x_down",
+   "to_port": "in0",
+   "attr": "@ma"
+  },
+  {
+   "id": "w_sma50_c6_ema_x_down_in1",
+   "from": "/sma50",
+   "to": "/c6_ema_x_down",
+   "to_port": "in1",
+   "attr": "@ma"
+  },
+  {
+   "id": "w_rsi7_c7_rsi_high_in0",
+   "from": "/rsi7",
+   "to": "/c7_rsi_high",
+   "to_port": "in0",
+   "attr": "@rsi"
+  },
+  {
+   "id": "w_atr_c8_atr_live_in0",
+   "from": "/atr",
+   "to": "/c8_atr_live",
+   "to_port": "in0",
+   "attr": "@atr"
+  },
+  {
+   "id": "w_ticker_c9_bb_break_in0",
+   "from": "/ticker",
+   "to": "/c9_bb_break",
+   "to_port": "in0",
+   "attr": "@close"
+  },
+  {
+   "id": "w_bb_c9_bb_break_in1",
+   "from": "/bb",
+   "to": "/c9_bb_break",
+   "to_port": "in1",
+   "attr": "@bb_upper"
+  },
+  {
+   "id": "w_c1_ema_x_sma50_l1_dip_or_cross_in0",
+   "from": "/c1_ema_x_sma50",
+   "to": "/l1_dip_or_cross",
+   "to_port": "in0",
+   "attr": "@bool"
+  },
+  {
+   "id": "w_c5_bb_dip_l1_dip_or_cross_in1",
+   "from": "/c5_bb_dip",
+   "to": "/l1_dip_or_cross",
+   "to_port": "in1",
+   "attr": "@bool"
+  },
+  {
+   "id": "w_c2_rsi_low_l1_dip_or_cross_in2",
+   "from": "/c2_rsi_low",
+   "to": "/l1_dip_or_cross",
+   "to_port": "in2",
+   "attr": "@bool"
+  },
+  {
+   "id": "w_l1_dip_or_cross_l2_buy_in0",
+   "from": "/l1_dip_or_cross",
+   "to": "/l2_buy",
+   "to_port": "in0",
+   "attr": "@bool"
+  },
+  {
+   "id": "w_c3_trend_up_l2_buy_in1",
+   "from": "/c3_trend_up",
+   "to": "/l2_buy",
+   "to_port": "in1",
+   "attr": "@bool"
+  },
+  {
+   "id": "w_c4_macd_up_l2_buy_in2",
+   "from": "/c4_macd_up",
+   "to": "/l2_buy",
+   "to_port": "in2",
+   "attr": "@bool"
+  },
+  {
+   "id": "w_c8_atr_live_l2_buy_in3",
+   "from": "/c8_atr_live",
+   "to": "/l2_buy",
+   "to_port": "in3",
+   "attr": "@bool"
+  },
+  {
+   "id": "w_c6_ema_x_down_l3_weak_in0",
+   "from": "/c6_ema_x_down",
+   "to": "/l3_weak",
+   "to_port": "in0",
+   "attr": "@bool"
+  },
+  {
+   "id": "w_c7_rsi_high_l3_weak_in1",
+   "from": "/c7_rsi_high",
+   "to": "/l3_weak",
+   "to_port": "in1",
+   "attr": "@bool"
+  },
+  {
+   "id": "w_c4_macd_up_l4_macd_down_in0",
+   "from": "/c4_macd_up",
+   "to": "/l4_macd_down",
+   "to_port": "in0",
+   "attr": "@bool"
+  },
+  {
+   "id": "w_c9_bb_break_l5_blowoff_in0",
+   "from": "/c9_bb_break",
+   "to": "/l5_blowoff",
+   "to_port": "in0",
+   "attr": "@bool"
+  },
+  {
+   "id": "w_l4_macd_down_l5_blowoff_in1",
+   "from": "/l4_macd_down",
+   "to": "/l5_blowoff",
+   "to_port": "in1",
+   "attr": "@bool"
+  },
+  {
+   "id": "w_l3_weak_l6_sell_in0",
+   "from": "/l3_weak",
+   "to": "/l6_sell",
+   "to_port": "in0",
+   "attr": "@bool"
+  },
+  {
+   "id": "w_l5_blowoff_l6_sell_in1",
+   "from": "/l5_blowoff",
+   "to": "/l6_sell",
+   "to_port": "in1",
+   "attr": "@bool"
+  },
+  {
+   "id": "w_l2_buy_entry_in0",
+   "from": "/l2_buy",
+   "to": "/entry",
+   "to_port": "in0",
+   "attr": "@bool"
+  },
+  {
+   "id": "w_l6_sell_exit_in0",
+   "from": "/l6_sell",
+   "to": "/exit",
+   "to_port": "in0",
+   "attr": "@bool"
+  }
+ ]
+}

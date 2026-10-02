@@ -2,26 +2,56 @@
 
 POST /api/nodebuilder/auto_render  — Unit 3
 POST /api/nodebuilder/backtest     — Unit 8b
-POST /api/nodebuilder/validate     — Unit 8b
+POST /api/nodebuilder/validate     — W1 item 1.C
+POST /api/nodebuilder/inspect      — W4 item 4.A (the wire inspector, plan D6)
+POST /api/nodebuilder/preview      — W4 item 4.A (node sparklines, plan D6)
+
+Graph errors return HTTP 400 in the plan 4.4 shape:
+{"detail": <message>, "node_id": <id or null>, "code": <diagnostic code>,
+ "diagnostics": [Diagnostic]}, so the editor can show the message, badge the
+node at fault and every other problem the graph has.
 """
 from __future__ import annotations
 
 import logging
+from typing import Any, NamedTuple
 
-import numpy as np
-import pandas as pd
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
-from models import StrategyRequest, TrailingStopConfig
-from nodebuilder.api_models import AutoRenderResponse, GraphBacktestRequest, GraphBacktestResponse
-from nodebuilder.compile import compile as _compile_graph
-from nodebuilder.evaluator import (
-    RegimeUnsupportedError,
-    compute_indicators_from_specs,
-    evaluate_graph,
+from models import StrategyRequest
+from nodebuilder import cook_cache
+from nodebuilder.api_models import (
+    AutoRenderResponse,
+    GraphBacktestRequest,
+    GraphBacktestResponse,
+    GraphBacktestRouteResponse,
+    InspectRequest,
+    InspectResponse,
+    PreviewRequest,
+    PreviewResponse,
 )
+from nodebuilder.diagnostics import error_body, has_errors, validate_graph_data, validate_graph_full
 from nodebuilder.from_rules import auto_render
+from nodebuilder.compile import compile as compile_graph
+from nodebuilder.models import STREAM_SCHEMA_VERSION, Graph, GraphValidationError
+
+# The backtest core moved to nodebuilder/run.py so bot code can call it
+# without importing a routes module.  These names are re-exported for the
+# existing tests and callers that import them from here.
+from nodebuilder.run import (  # noqa: F401
+    _apply_settings_overrides,
+    _build_baseline_curve,
+    _make_cached_eval,
+    _settings_to_strategy_request,
+    cook_graph_window,
+    fetch_reference_frames,
+    window_program,
+    run_graph_backtest,
+    run_graph_backtest_cooked,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/nodebuilder", tags=["nodebuilder"])
@@ -38,232 +68,373 @@ def post_auto_render(req: StrategyRequest) -> AutoRenderResponse:
 # POST /api/nodebuilder/backtest  — Unit 8b
 # ---------------------------------------------------------------------------
 
-def _apply_settings_overrides(req: GraphBacktestRequest, simulator_settings: list) -> dict:
-    """Build a dict of simulator fields, applying graph SimulatorSettings as overrides.
+def _graph_error(exc: BaseException, graph_data: Any) -> JSONResponse:
+    """The 400 body the editor reads (plan 4.4): the error that stopped the
+    request on top, plus every diagnostic the graph has.
 
-    The GRAPH WINS: if the same field is specified in both the request and the graph,
-    the graph's compile-time SimulatorSetting takes precedence.  This reflects the
-    design intent: the graph is the authoritative specification at backtest time.
+    The full list comes from the same check /validate runs, so it never
+    fetches data.  Called from sync routes, which FastAPI runs off the event
+    loop.
     """
-    overrides: dict = {
-        "initial_capital": req.initial_capital,
-        "position_size": req.position_size,
-        "stop_loss_pct": req.stop_loss_pct,
-        "trailing_stop": req.trailing_stop,
-        "max_bars_held": req.max_bars_held,
-        "slippage_bps": req.slippage_bps,
-        "commission_pct": req.commission_pct,
-        "per_share_rate": req.per_share_rate,
-        "min_per_order": req.min_per_order,
-        "borrow_rate_annual": req.borrow_rate_annual,
-        "dynamic_sizing": req.dynamic_sizing,
-        "skip_after_stop": req.skip_after_stop,
-        "trading_hours": req.trading_hours,
-        "direction": req.direction,
+    diagnostics = validate_graph_data(graph_data) if isinstance(graph_data, dict) else []
+    return JSONResponse(status_code=400, content=error_body(exc, diagnostics))
+
+
+@router.post("/validate")
+def post_validate(payload: dict[str, Any] = Body(...)):
+    """Check a graph without running it.
+
+    Returns {"ok", "diagnostics", "streams", "stream_schema"}.  ok is False
+    when any diagnostic is an error.  streams maps each node id to the
+    StreamSchema of that node's OUTPUT (plan 3.3 form); the editor derives a
+    node's input stream from its upstream outputs and the wires.  A node
+    missing from streams could not be checked (it has an error, or reads
+    from a node that has one).  stream_schema is the stream format version.
+
+    Never fetches market data and never runs a backtest.  A graph that does
+    not parse is still a 200 here, with graph_invalid (or the matching code)
+    in the list and no streams; only a body without a "graph" key is a 422.
+    """
+    if "graph" not in payload:
+        raise RequestValidationError(
+            [{"type": "missing", "loc": ("body", "graph"), "msg": "Field required", "input": payload}]
+        )
+    result = validate_graph_full(payload["graph"])
+    return {
+        "ok": not has_errors(result.diagnostics),
+        "diagnostics": [d.model_dump() for d in result.diagnostics],
+        "streams": result.streams,
+        "stream_schema": STREAM_SCHEMA_VERSION,
     }
-    for setting in simulator_settings:
-        key = setting.key
-        val = setting.value
-        if key == "position_size":
-            overrides["position_size"] = float(val)
-        elif key == "stop_loss":
-            overrides["stop_loss_pct"] = float(val)
-        elif key == "slippage_bps":
-            overrides["slippage_bps"] = float(val)
-        elif key == "per_share_rate":
-            overrides["per_share_rate"] = float(val)
-        elif key == "min_per_order":
-            overrides["min_per_order"] = float(val)
-    return overrides
 
 
-def _settings_to_strategy_request(settings: dict, req: GraphBacktestRequest) -> StrategyRequest:
-    """Build a minimal StrategyRequest from the GraphBacktestRequest + settings dict.
-
-    The buy_rules / sell_rules are empty — _run_simulation reads simulator-level
-    fields, not rules.  b23_mode is False (graph mode never uses the dual-rule path).
-    """
-    return StrategyRequest(
-        ticker=req.ticker,
-        start=req.start,
-        end=req.end,
-        interval=req.interval,
-        source=req.source,
-        buy_rules=[],
-        sell_rules=[],
-        initial_capital=settings["initial_capital"],
-        position_size=settings["position_size"],
-        stop_loss_pct=settings["stop_loss_pct"],
-        trailing_stop=settings["trailing_stop"],
-        max_bars_held=settings["max_bars_held"],
-        slippage_bps=settings["slippage_bps"],
-        commission_pct=settings["commission_pct"],
-        per_share_rate=settings["per_share_rate"],
-        min_per_order=settings["min_per_order"],
-        borrow_rate_annual=settings["borrow_rate_annual"],
-        dynamic_sizing=settings["dynamic_sizing"],
-        skip_after_stop=settings["skip_after_stop"],
-        trading_hours=settings["trading_hours"],
-        direction=settings["direction"],
-    )
-
-
-def _make_cached_eval(program, attrs):
-    """Return a callable that evaluates the graph at bar i, memoised per bar.
-
-    evaluate_graph mutates attrs in-place.  Calling it twice per bar (once for
-    the buy fn and once for the sell fn) is safe — the second call overwrites
-    with identical values — but is wasteful.  The cache avoids the double call.
-    """
-    cache: dict[int, dict] = {}
-
-    def call(i: int) -> dict:
-        if i not in cache:
-            cache[i] = evaluate_graph(program, attrs, i)
-        return cache[i]
-
-    return call
-
-
-def _build_baseline_curve(df: pd.DataFrame, initial_capital: float, date_strs: list) -> list[dict]:
-    """Buy-and-hold baseline: initial_capital * close[i] / close[0]."""
-    close_arr = df["Close"].to_numpy(dtype=float, copy=False)
-    first_close = float(close_arr[0])
-    return [
-        {"time": date_strs[i], "value": round(initial_capital * close_arr[i] / first_close, 2)}
-        for i in range(len(df))
-    ]
-
-
-def run_graph_backtest(
-    req: GraphBacktestRequest,
-    df: pd.DataFrame | None = None,
-) -> GraphBacktestResponse:
-    """Core graph backtest logic — callable from both the route and tests.
-
-    Args:
-        req: GraphBacktestRequest with graph + simulator settings.
-        df: Optional pre-fetched DataFrame (bypasses _fetch; used in parity tests).
-
-    Raises:
-        RegimeUnsupportedError: propagated from compile() when graph has /regime/ nodes.
-        ValueError: invalid source or other data issues.
-        HTTPException: re-raised from _run_simulation.
-    """
-    from indicators import OHLCVSeries
-    from routes.backtest import _run_simulation
-    from shared import _fetch, _format_time_index, _INTRADAY_INTERVALS, require_valid_source
-
-    # 1. Validate source
-    source = require_valid_source(req.source)
-
-    # 2. Compile graph (raises RegimeUnsupportedError, MissingTerminalError, etc.)
-    program = _compile_graph(req.graph)
-
-    # 3. Apply settings-node overrides
-    settings = _apply_settings_overrides(req, program.simulator_settings)
-
-    # 4. Fetch OHLCV (or use the pre-fetched df passed in from tests)
-    if df is None:
-        df = _fetch(req.ticker, req.start, req.end, req.interval, source=source)
-
-    # 5. Build OHLCVSeries and compute indicators from graph specs
-    vol_series = df["Volume"] if "Volume" in df.columns else pd.Series(0, index=df.index)
-    ohlcv = OHLCVSeries(
-        close=df["Close"],
-        high=df["High"],
-        low=df["Low"],
-        volume=vol_series,
-    )
-    indicator_attrs = compute_indicators_from_specs(program.indicator_specs, ohlcv)
-
-    # 6. Seed raw OHLCV attrs so comparisons reading @close/@volume work
-    indicator_attrs["@close"] = df["Close"]
-    indicator_attrs["@open"] = df["Open"]
-    indicator_attrs["@high"] = df["High"]
-    indicator_attrs["@low"] = df["Low"]
-    indicator_attrs["@volume"] = vol_series
-    # Seed the always-false sentinel (used when no exit terminal is wired)
-    indicator_attrs["@always_false"] = pd.Series(0.0, index=df.index, dtype="float64")
-
-    # 6b. If trailing_stop is ATR-based and the graph has no explicit ATR node,
-    # compute ATR (period=14) so _run_simulation can use it for the trailing stop.
-    # Without this, indicators.get("atr") returns None and the ATR value is 0
-    # (trail_stop_price = trail_peak + 0 = trail_peak, triggering immediately).
-    ts_config = settings.get("trailing_stop")
-    if ts_config is not None and getattr(ts_config, "type", None) == "atr" and "atr" not in indicator_attrs:
-        from indicators import compute_instance
-        atr_result = compute_instance("atr", {"period": 14}, ohlcv)
-        indicator_attrs["atr"] = atr_result["atr"]
-
-    # 7. Pre-allocate per-op output series as float64 (default NaN)
-    for op in program.per_bar_program:
-        if op.writes not in indicator_attrs:
-            indicator_attrs[op.writes] = pd.Series(np.nan, index=df.index, dtype="float64")
-
-    # 8. Build memoising signal callables that match _run_simulation's signature:
-    #    buy_signal_fn(i, curr_regime_active) -> (fired, rules, direction)
-    #    sell_signal_fn(i, position_direction, curr_regime_active) -> (fired, rules)
-    cached_eval = _make_cached_eval(program, indicator_attrs)
-
-    direction = settings["direction"]
-
-    def buy_signal_fn(i: int, curr_regime_active: bool):
-        sigs = cached_eval(i)
-        fired = sigs["entry"]
-        return bool(fired), [], direction
-
-    def sell_signal_fn(i: int, position_direction, curr_regime_active: bool):
-        sigs = cached_eval(i)
-        fired = sigs["exit"]
-        return bool(fired), []
-
-    # 9. Build a StrategyRequest-shaped object for _run_simulation
-    sim_req = _settings_to_strategy_request(settings, req)
-
-    # 10. Build date_strs (required by _run_simulation)
-    date_strs = _format_time_index(df.index, req.interval)
-
-    # 11. Run the simulation loop
-    sim_result = _run_simulation(
-        df=df,
-        indicators=indicator_attrs,
-        buy_signal_fn=buy_signal_fn,
-        sell_signal_fn=sell_signal_fn,
-        req=sim_req,
-        b23_mode=False,
-        regime_active_series=None,
-        on_flip="hold",
-        date_strs=date_strs,
-    )
-
-    # 12. Build baseline_curve
-    baseline_curve = _build_baseline_curve(df, settings["initial_capital"], date_strs)
-
-    return GraphBacktestResponse(
-        summary=sim_result["summary"],
-        trades=sim_result["trades"],
-        equity_curve=sim_result["equity_curve"],
-        baseline_curve=baseline_curve,
-    )
-
-
-@router.post("/backtest", response_model=GraphBacktestResponse)
-def post_graph_backtest(req: GraphBacktestRequest) -> GraphBacktestResponse:
+@router.post(
+    "/backtest",
+    response_model=GraphBacktestRouteResponse,
+    responses={400: {"description": "Graph error: {detail, node_id, code, diagnostics}"}},
+)
+def post_graph_backtest(payload: dict[str, Any] = Body(...)):
     """Run a backtest using a compiled node graph.
 
-    Returns {summary, trades, equity_curve, baseline_curve}.
+    Returns {summary, trades, equity_curve, baseline_curve, groups,
+    combined, cook_id} (plan W5 contract).  groups has one result per
+    Output Group (the implicit "main" for a graph with none); combined is
+    every group together, with exposure_pct and gross_deployed_pct.  The
+    four legacy keys are the group's results when there is one group, and
+    the combined ones (with no trades) when there are more.  cook_id names
+    this run's cook in the cook cache (/inspect, /preview), or is null when
+    the cook was too big to keep.  Each summary also carries open_position
+    and exit_connected (graph backtest only).
     Rule-only debug fields (signal_trace, rule_signals, ema_overlays, regime_series)
     are intentionally absent from the graph backtest response.
+
+    The body is parsed here rather than by FastAPI, because a cycle or a
+    dangling wire is raised while the Graph model is being built.  Parsed by
+    FastAPI, those surfaced as a bare 500.
     """
+    graph_data = payload.get("graph")
     try:
-        return run_graph_backtest(req)
-    except RegimeUnsupportedError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        req = GraphBacktestRequest.model_validate(payload)
+    except GraphValidationError as exc:
+        return _graph_error(exc, graph_data)
+    except ValidationError as exc:
+        errors = exc.errors()
+        if isinstance(graph_data, dict) and errors and all(
+            tuple(err.get("loc", ()))[:1] == ("graph",) for err in errors
+        ):
+            # A graph that is there but badly typed (a node position "abc",
+            # 33 meta keys): the same 400 as /api/graphs gives for it.
+            return _graph_error(exc, graph_data)
+        # Any other bad field (ticker, dates, a missing graph) keeps
+        # FastAPI's usual 422 shape.
+        raise RequestValidationError(
+            [{**err, "loc": ("body", *err["loc"])} for err in errors]
+        )
+
+    try:
+        response, cook = run_graph_backtest_cooked(req)
+        return _with_cook_id(response, _cache_backtest_cook(req, cook))
+    except GraphValidationError as exc:
+        return _graph_error(exc, graph_data)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except HTTPException:
+        # Not a graph problem (no data, say): code request_invalid.
+        return _graph_error(exc, graph_data)
+    except HTTPException as exc:
+        # e.g. "Invalid source": keep one 400 shape for the editor.
+        if exc.status_code == 400:
+            return _graph_error(ValueError(str(exc.detail)), graph_data)
         raise
     except Exception:
         logger.exception("/api/nodebuilder/backtest failed")
         raise HTTPException(status_code=500, detail="graph backtest failed")
+
+
+# ---------------------------------------------------------------------------
+# The cook cache: the backtest's cook, /inspect and /preview (plan D6)
+# ---------------------------------------------------------------------------
+
+def _cache_backtest_cook(req: GraphBacktestRequest, cook) -> str | None:
+    """Keep the backtest's cook in the cook cache and return its id.
+
+    Only references are stored (O(1)).  A failure here never fails the
+    backtest: the response then has no cook_id and the inspector cooks
+    again from the graph.
+    """
+    try:
+        window = {"ticker": req.ticker, "start": req.start, "end": req.end,
+                  "interval": req.interval, "source": req.source}
+        key = cook_cache.key_for(req.graph, cook.frames, window)
+        entry = cook_cache.COOK_CACHE.put(
+            key=key, graph=req.graph, program=cook.program, result=cook.result, window=window,
+        )
+        return entry.cook_id if entry.cook_id in cook_cache.COOK_CACHE else None
+    except Exception:
+        logger.exception("could not cache the backtest cook")
+        return None
+
+
+def _with_cook_id(response: GraphBacktestResponse, cook_id: str | None) -> GraphBacktestRouteResponse:
+    """The route response: the backtest's fields, groups and combined result
+    (shared, not copied) plus cook_id."""
+    return GraphBacktestRouteResponse.model_construct(**dict(response), cook_id=cook_id)
+
+
+class _GraphProblem(Exception):
+    """A graph or data error on a cache miss: answered with the plan 4.4
+    400 body (_graph_error)."""
+
+    def __init__(self, exc: BaseException) -> None:
+        super().__init__(str(exc))
+        self.exc = exc
+
+
+class _Resolved(NamedTuple):
+    entry: Any
+    state: str          # "hit" | "miss"
+    graph: Any
+    stale_data: bool    # served from the last good cook: the fetch failed
+
+
+def _resolve_cook(cook_id: str | None, graph_data: dict | None, window) -> _Resolved:
+    """The cook for an /inspect or /preview request.
+
+    - Neither a cook id nor a graph: 422 cook_or_graph_required (a client
+      bug, not an expiry).
+    - No graph: the cook id must name a live entry, else 410 cook_expired.
+    - A graph: its frame is fetched (the TTL-cached _fetch, so this is cheap
+      while the data is fresh) and the cache is looked up by key, so a graph
+      edit or a new bar gives a fresh cook.  The window defaults to the cook
+      id's window.  A miss cooks the graph and stores it; two requests that
+      miss the same key at once cook it once (single flight).
+    - The fetch fails (the provider is down, or returns no bars): the last
+      good live cook of the same graph and window is served, marked
+      stale_data.  With none, a provider error is 502 data_unavailable and
+      no data stays the 400 graph-error body.
+
+    Runs on FastAPI's thread pool (the routes are sync), never on the event
+    loop.
+    """
+    from shared import _fetch, require_valid_source
+
+    if not cook_id and graph_data is None:
+        raise HTTPException(status_code=422, detail={
+            "code": "cook_or_graph_required",
+            "message": "Send the cook_id of a live cook, or a graph and window.",
+        })
+    entry = cook_cache.COOK_CACHE.get(cook_id) if cook_id else None
+    if graph_data is None:
+        if entry is None:
+            raise HTTPException(status_code=410, detail={"code": "cook_expired"})
+        return _Resolved(entry, "hit", entry.graph, False)
+
+    try:
+        graph = Graph.model_validate(graph_data)
+        # Compiled up front: the reference Tickers it reads are part of the
+        # cache key (plan D6, D8).
+        program = compile_graph(graph)
+    except (GraphValidationError, ValidationError, ValueError) as exc:
+        raise _GraphProblem(exc) from exc
+
+    if window is not None:
+        win = window.model_dump()
+    elif entry is not None:
+        win = dict(entry.window)
+    else:
+        raise HTTPException(status_code=422, detail={
+            "code": "window_required",
+            "message": "Send a window with the graph, or the cook_id of a live cook.",
+        })
+
+    def last_good_cook():
+        graph_hash = cook_cache.eval_hash(graph)
+        if entry is not None and entry.key[0] == graph_hash and \
+                cook_cache.window_id(entry.window) == cook_cache.window_id(win):
+            return cook_cache.COOK_CACHE.get(entry.cook_id)
+        return cook_cache.COOK_CACHE.find_live(graph_hash, win)
+
+    source = None
+    try:
+        source = require_valid_source(win["source"])
+        df = _fetch(win["ticker"], win["start"], win["end"], win["interval"], source=source)
+        if df is None or len(df) == 0:
+            raise ValueError(f"No data for {win['ticker']} in {win['start']}..{win['end']}.")
+        # Every reference frame the cook reads, padded exactly as the
+        # backtest fetches them (TTL-cached _fetch).  A reference fetch that
+        # fails is handled like the main frame's.  Only the window's own
+        # groups and the unclaimed nodes they can feed are cooked
+        # (run.window_program, KA-2/KA-4): a stray Ticker is never fetched.
+        refs = fetch_reference_frames(window_program(program, win["ticker"], win["interval"]),
+                                      win["start"], win["end"], source)
+    except HTTPException as exc:
+        if exc.status_code == 400:
+            raise _GraphProblem(ValueError(str(exc.detail))) from exc
+        fallback = last_good_cook()
+        if fallback is None:
+            raise
+        logger.warning("nodebuilder cook: fetch failed (%s), serving the last good cook", exc.detail)
+        return _Resolved(fallback, "hit", graph, True)
+    except Exception as exc:
+        if source is None:      # require_valid_source: not a fetch problem
+            raise _GraphProblem(exc) from exc
+        fallback = last_good_cook()
+        if fallback is not None:
+            logger.warning("nodebuilder cook: fetch failed (%r), serving the last good cook", exc)
+            return _Resolved(fallback, "hit", graph, True)
+        if isinstance(exc, ValueError):
+            raise _GraphProblem(exc) from exc
+        logger.exception("nodebuilder cook: fetch failed")
+        raise HTTPException(status_code=502, detail={
+            "code": "data_unavailable",
+            "message": f"Could not fetch {win['ticker']} ({win['interval']}) from {win['source']}.",
+        }) from exc
+
+    # The key covers the main frame AND every reference frame, in the order
+    # GraphCook.frames lists them: two windows that differ only in reference
+    # data never share a cook, and a backtest's cook is found again.
+    lookup_frames = ((win["ticker"], win["interval"], df),) + tuple(
+        (sym, itv, ref_df) for (sym, itv), ref_df in refs.items())
+    key = cook_cache.key_for(graph, lookup_frames, win)
+
+    def cook_and_put():
+        try:
+            cook = cook_graph_window(graph, df=df, refs=refs, **win)
+        except (GraphValidationError, ValueError) as exc:
+            raise _GraphProblem(exc) from exc
+        except HTTPException as exc:
+            if exc.status_code == 400:
+                raise _GraphProblem(ValueError(str(exc.detail))) from exc
+            raise
+        # Key the entry by every frame the cook read.  Should a cook read a
+        # frame the lookup above did not fetch, the entry just misses next
+        # time (never a wrong hit) until that frame joins the lookup.
+        return cook_cache.COOK_CACHE.put(
+            key=cook_cache.key_for(graph, cook.frames, win), graph=graph,
+            program=cook.program, result=cook.result, window=win,
+        )
+
+    entry, state = cook_cache.COOK_CACHE.get_or_cook(key, cook_and_put)
+    return _Resolved(entry, state, graph, False)
+
+
+def _cook_flags(resolved: _Resolved) -> dict:
+    """The fields /inspect and /preview add about the cook itself.
+
+    kept       : the cook_id names a live cache entry.  False when the cook
+                 was too big to keep: the client should send the graph and
+                 window with every request rather than the cook_id alone
+                 (which would only get a 410).
+    stale_data : the fetch failed and this is the last good cook of the
+                 same graph and window, not today's data.
+    """
+    return {
+        "kept": resolved.entry.cook_id in cook_cache.COOK_CACHE,
+        "stale_data": resolved.stale_data,
+    }
+
+
+def _parse_body(model, payload: dict[str, Any]):
+    """Validate *payload* with FastAPI's usual 422 on a bad field."""
+    try:
+        return model.model_validate(payload)
+    except ValidationError as exc:
+        raise RequestValidationError(
+            [{**err, "loc": ("body", *err["loc"])} for err in exc.errors()]
+        )
+
+
+def _inspect_error(exc: cook_cache.InspectError) -> HTTPException:
+    return HTTPException(status_code=exc.status, detail={"code": exc.code, "message": exc.message})
+
+
+@router.post(
+    "/inspect",
+    responses={
+        200: {"model": InspectResponse},
+        400: {"description": "Graph error: {detail, node_id, code, diagnostics}"},
+        410: {"description": 'The cook is gone and no graph was sent: {"detail": {"code": "cook_expired"}}'},
+        422: {"description": "A bad field, or {detail: {code: cook_or_graph_required | window_required | ...}}"},
+        502: {"description": 'The data could not be fetched and no earlier cook of this graph is live: {"detail": {"code": "data_unavailable"}}'},
+    },
+)
+def post_inspect(payload: dict[str, Any] = Body(...)):
+    """One page of a node's (or a wire's) stream from a cook (plan D6).
+
+    Reads the cook cache; a miss cooks the graph over the window (the same
+    cook a backtest makes, without the simulation).  A wire target shows
+    its source node's whole output stream and the names the consumer reads
+    (read_by_consumer).  A bypassed node shows its input stream.
+    """
+    req = _parse_body(InspectRequest, payload)
+    try:
+        resolved = _resolve_cook(req.cook_id, req.graph, req.window)
+        body = cook_cache.inspect_body(
+            resolved.entry, graph=resolved.graph, target=req.target, attrs=req.attrs,
+            offset=req.offset, limit=req.limit, around_time=req.around_time,
+            flt=req.filter, cache_state=resolved.state,
+        )
+        body.update(_cook_flags(resolved))
+    except _GraphProblem as exc:
+        return _graph_error(exc.exc, req.graph)
+    except cook_cache.InspectError as exc:
+        raise _inspect_error(exc)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("/api/nodebuilder/inspect failed")
+        raise HTTPException(status_code=500, detail="inspect failed")
+    # A plain JSON response: the rows can be large, and the body is already
+    # plain Python values (no NaN), so FastAPI's encoder pass is skipped.
+    return JSONResponse(content=body)
+
+
+@router.post(
+    "/preview",
+    responses={
+        200: {"model": PreviewResponse},
+        400: {"description": "Graph error: {detail, node_id, code, diagnostics}"},
+        410: {"description": 'The cook is gone and no graph was sent: {"detail": {"code": "cook_expired"}}'},
+        422: {"description": "A bad field, or {detail: {code: cook_or_graph_required | window_required | ...}}"},
+        502: {"description": 'The data could not be fetched and no earlier cook of this graph is live: {"detail": {"code": "data_unavailable"}}'},
+    },
+)
+def post_preview(payload: dict[str, Any] = Body(...)):
+    """Sparkline data for every node (or node_ids): each node's primary
+    write decimated to `points` values (plan D6, S26/S27).  Reads the cook
+    cache; a miss cooks the graph over the window."""
+    req = _parse_body(PreviewRequest, payload)
+    try:
+        resolved = _resolve_cook(req.cook_id, req.graph, req.window)
+        body = cook_cache.preview_body(
+            resolved.entry, graph=resolved.graph, node_ids=req.node_ids, points=req.points,
+        )
+        body.update(_cook_flags(resolved))
+    except _GraphProblem as exc:
+        return _graph_error(exc.exc, req.graph)
+    except cook_cache.InspectError as exc:
+        raise _inspect_error(exc)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("/api/nodebuilder/preview failed")
+        raise HTTPException(status_code=500, detail="preview failed")
+    return JSONResponse(content=body)

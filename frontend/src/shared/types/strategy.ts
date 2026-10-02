@@ -172,6 +172,8 @@ export interface Trade {
   borrow_cost?: number
   direction?: 'long' | 'short'
   rules?: string[]
+  /** Graph results only (W5, S33): the Output Group this trade came from, in the Combined trades table. */
+  group?: string
 }
 
 export interface SideStats {
@@ -288,4 +290,62 @@ export interface BacktestResult {
   rule_signals?: RuleSignal[]
   session_analytics?: SessionAnalyticsBucket[] | null
   regime_series?: Array<{ time: string | number; direction: string }>
+}
+
+// ---------------------------------------------------------------------------
+// Graph backtest results with Output Groups (plan W5, D7; spec S33).
+// One simulation runs per group; `combined` sums the group equity curves.
+// The legacy top-level fields (summary, trades, equity_curve, baseline_curve)
+// stay, filled from the group when there is exactly one.
+// ---------------------------------------------------------------------------
+
+/** How an Output Group trades: one side, or long and short by regime. */
+export type GraphGroupDirection = 'long' | 'short' | 'regime_switch'
+
+/** A position still open when a graph backtest window ended. */
+export interface GraphOpenPosition {
+  direction: 'long' | 'short'
+  entry_price: number
+  /** Unrealized gain or loss in percent (4.2 means +4.2%). */
+  unrealized_pct: number
+}
+
+/**
+ * Summary of one group, or of the combined run. It has the rule backtest's
+ * summary keys (the graph runs the same simulator), all optional here
+ * because the combined summary carries only some of them.
+ */
+export type GraphResultSummary = Partial<BacktestResult['summary']> & {
+  /** Set when a position is still open at the end; the return includes it. */
+  open_position?: GraphOpenPosition | null
+  /** False when nothing is wired into the group's Exit terminal. */
+  exit_connected?: boolean
+} & Record<string, unknown>
+
+/** The result of one Output Group. */
+export interface GroupResult {
+  name: string
+  node_id: string | null
+  path: string
+  symbol: string
+  interval: string
+  direction: GraphGroupDirection
+  /** The group's capital_weight. */
+  weight: number
+  /** Initial capital the group got: initial_capital * weight / sum(weights). */
+  capital: number
+  summary: GraphResultSummary
+  trades: Trade[]
+  equity_curve: TimeValue[]
+}
+
+/** All groups together: the summed equity curve and its metrics. */
+export interface CombinedResult {
+  summary: GraphResultSummary & {
+    /** Share of bars with any leg in a position, in percent. */
+    exposure_pct: number
+    /** Average share of total capital in positions, in percent. */
+    gross_deployed_pct: number
+  }
+  equity_curve: TimeValue[]
 }

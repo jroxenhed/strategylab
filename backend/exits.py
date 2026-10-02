@@ -8,6 +8,7 @@ required because unit tests patch module-level names in bot_runner, not in exits
 from __future__ import annotations
 
 import asyncio
+import math
 import sys
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
@@ -39,6 +40,24 @@ def _compute_borrow_cost(pos_is_short: bool, entry_price: Optional[float], entry
         import logging
         logging.getLogger(__name__).warning(f"Borrow cost calc skipped: {e}")
         return 0.0
+
+
+def _atr_at(indicators: dict, i: int) -> float:
+    """ATR on bar i, or 0.0 when it is missing or still warming up.
+
+    Read by position (iloc).  Series.get(i) on a date index looks i up as a
+    label, finds nothing and returned the default 0, so the live ATR trailing
+    stop was never set.
+    """
+    series = indicators.get("atr") if indicators else None
+    if series is None:
+        return 0.0
+    try:
+        value = series.iloc[i] if hasattr(series, "iloc") else series[i]
+        value = float(value)
+    except (IndexError, KeyError, TypeError, ValueError):
+        return 0.0
+    return value if math.isfinite(value) else 0.0
 
 
 class ExitsMixin:
@@ -205,38 +224,38 @@ class ExitsMixin:
             ts = cfg.trailing_stop
             mbh = cfg.max_bars_held
 
-        # Update trailing peak/trough
+        # Update trailing peak/trough the way the backtest does
+        # (routes/backtest.py): the peak starts at the entry price, only the
+        # peak update waits for activate_on_profit, and the trail stop is
+        # computed from the peak on every bar.  Live used to set no trail at
+        # all before activation, which left a long with no stop.
         if ts and state.entry_price is not None:
+            if state.trail_peak is None:
+                state.trail_peak = state.entry_price
+            atr_val = _atr_at(indicators, i)
             if pos_is_short:
                 source_price = float(df["Low"].iloc[-1]) if ts.source == "high" else price
                 activated = (not ts.activate_on_profit) or (
                     source_price <= state.entry_price * (1 - ts.activate_pct / 100)
                 )
-                if activated:
-                    if state.trail_peak is None or source_price < state.trail_peak:
-                        state.trail_peak = source_price
-
-                    # Compute trail stop price (above trough for shorts)
-                    atr_val = float(indicators.get("atr", {}).get(i, 0) or 0)
-                    if ts.type == "pct":
-                        state.trail_stop_price = state.trail_peak * (1 + ts.value / 100)
-                    elif ts.type == "atr" and atr_val:
-                        state.trail_stop_price = state.trail_peak + ts.value * atr_val
+                if activated and source_price < state.trail_peak:
+                    state.trail_peak = source_price
+                # Trail stop sits above the trough for shorts
+                if ts.type == "pct":
+                    state.trail_stop_price = state.trail_peak * (1 + ts.value / 100)
+                elif ts.type == "atr" and atr_val:
+                    state.trail_stop_price = state.trail_peak + ts.value * atr_val
             else:
                 source_price = float(df["High"].iloc[-1]) if ts.source == "high" else price
                 activated = (not ts.activate_on_profit) or (
                     source_price >= state.entry_price * (1 + ts.activate_pct / 100)
                 )
-                if activated:
-                    if state.trail_peak is None or source_price > state.trail_peak:
-                        state.trail_peak = source_price
-
-                    # Compute trail stop price
-                    atr_val = float(indicators.get("atr", {}).get(i, 0) or 0)
-                    if ts.type == "pct":
-                        state.trail_stop_price = state.trail_peak * (1 - ts.value / 100)
-                    elif ts.type == "atr" and atr_val:
-                        state.trail_stop_price = state.trail_peak - ts.value * atr_val
+                if activated and source_price > state.trail_peak:
+                    state.trail_peak = source_price
+                if ts.type == "pct":
+                    state.trail_stop_price = state.trail_peak * (1 - ts.value / 100)
+                elif ts.type == "atr" and atr_val:
+                    state.trail_stop_price = state.trail_peak - ts.value * atr_val
 
         # Check exits in priority order (B25: use resolved sl_pct, ts, mbh)
         if pos_is_short:
@@ -247,7 +266,11 @@ class ExitsMixin:
                 if price >= state.trail_stop_price:
                     exit_reason = "trailing_stop"
         else:
-            if sl_pct and state.entry_price and not ts:
+            # The fixed stop applies with or without a trailing stop, as in the
+            # backtest.  It used to be skipped whenever a trailing stop was set,
+            # and the broker stop leg is only sent without one, so a long with
+            # both had no fixed stop at all.
+            if sl_pct and state.entry_price:
                 if price <= state.entry_price * (1 - sl_pct / 100):
                     exit_reason = "stop_loss"
             if exit_reason is None and ts and state.trail_stop_price:

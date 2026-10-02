@@ -88,6 +88,16 @@ export interface BotSummary {
   pending_regime_flip?: boolean
   was_running?: boolean
   kind?: 'rule' | 'graph'
+  // Graph bots (plan W5, D7). The bot's own snapshot: which saved graph,
+  // which revision and which Output Group it runs.
+  graph_id?: string | null
+  graph_rev?: number | null
+  graph_group?: string | null
+  graph_direction_mode?: 'long' | 'short' | 'regime_switch' | null
+  // From the server's graph head index (5.D). Both are null when the graph
+  // was deleted or the bot has no graph_id. BotCard never fetches a graph.
+  graph_name?: string | null
+  graph_latest_rev?: number | null
 }
 
 export interface BotDetail {

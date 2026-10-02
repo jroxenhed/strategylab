@@ -35,8 +35,6 @@ from bot_manager import BotConfig, BotState
 from nodebuilder.models import Graph, Node, Wire
 from nodebuilder.compile import compile as nb_compile
 from nodebuilder.evaluator import (
-    HTFGraphNotSupportedError,
-    RegimeUnsupportedError,
     compute_indicators_from_specs,
     evaluate_graph,
 )
@@ -284,78 +282,75 @@ def test_mid_position_graph_swap_rejected():
         }
         resp = client.patch(f"/api/bots/test-bot-id", json=patch_body)
         assert resp.status_code == 409, f"Expected 409, got {resp.status_code}: {resp.text}"
-        assert "in position" in resp.json()["detail"].lower()
+        detail = resp.json()["detail"]
+        assert detail["code"] == "in_position"
+        assert "in position" in detail["message"].lower()
     finally:
         bots_route.bot_manager = original_manager
 
 
 # ---------------------------------------------------------------------------
-# 6. test_regime_graph_raises_at_compile
+# 6. A regime strategy compiles for a bot (W5, plan D8)
 # ---------------------------------------------------------------------------
 
-def test_regime_graph_raises_at_compile():
-    """A graph containing a /regime/ node must raise RegimeUnsupportedError at compile time."""
-    nodes = {
-        "/ticker": _node("/ticker", "ticker"),
-        "/regime/htf": _node("/regime/htf", "rsi"),  # path starts with /regime/
-        "/entry": _node("/entry", "entry"),
-    }
-    # Build a minimal valid graph (entry needs an incoming bool; we skip that
-    # for the regime test since compile() raises on regime nodes before reaching entry validation)
-    raw = {
-        "_version": 1,
-        "nodes": {k: v.model_dump() for k, v in nodes.items()},
-        "wires": [],
-    }
-    # Graph validation (DAG check) will pass since no wires
-    graph = Graph.model_validate(raw)
-
-    with pytest.raises(RegimeUnsupportedError):
-        nb_compile(graph)
-
-
-# ---------------------------------------------------------------------------
-# 7. test_htf_graph_raises
-# ---------------------------------------------------------------------------
-
-def test_htf_graph_raises():
-    """A bot with a graph node that has a timeframe param must raise HTFGraphNotSupportedError at compile."""
-    # We test this via _compile_graph_program which checks for HTF nodes before calling nb_compile.
-    # To avoid instantiating a full BotRunner, we replicate the same check inline here.
-    graph = _rsi_below_above_graph()
-    # Mutate a node to have a timeframe param (simulating HTF)
-    htf_node = _node("/rsi_htf", "rsi", {"period": 14, "type": "sma", "timeframe": "1h"})
-    # Rebuild graph with the HTF node
-    nodes_dict = {k: v.model_dump() for k, v in graph.nodes.items()}
-    nodes_dict["/rsi_htf"] = htf_node.model_dump()
-    # Add a wire from ticker → htf_node so it's connected
-    wires_list = [w.model_dump(by_alias=True) for w in graph.wires]
-    wires_list.append({"id": "w_htf", "from": "/ticker", "to": "/rsi_htf"})
-    htf_graph = Graph.model_validate({"_version": 1, "nodes": nodes_dict, "wires": wires_list})
-
-    # Run the HTF check as implemented in BotRunner._compile_graph_program
-    cfg_htf = BotConfig(
-        strategy_name="htf_test",
-        symbol="AAPL",
-        interval="1d",
-        buy_rules=[],
-        sell_rules=[],
-        long_buy_rules=None,
-        long_sell_rules=None,
-        short_buy_rules=None,
-        short_sell_rules=None,
-        allocated_capital=1000.0,
-        kind="graph",
-        graph=htf_graph,
+def _bot_config(graph, **extra) -> BotConfig:
+    return BotConfig(
+        strategy_name="graph_test", symbol="AAPL", interval="1d",
+        buy_rules=[], sell_rules=[], long_buy_rules=None, long_sell_rules=None,
+        short_buy_rules=None, short_sell_rules=None, allocated_capital=1000.0,
+        kind="graph", graph=graph, **extra,
     )
-    # Replicate the HTF check logic from BotRunner._compile_graph_program
-    def _run_htf_check(cfg):
-        for node in cfg.graph.nodes.values():
-            if getattr(node, 'params', {}).get('timeframe'):
-                raise HTFGraphNotSupportedError(
-                    f"Graph bot uses HTF node {node.id!r} (timeframe={node.params['timeframe']!r})."
-                )
-        return nb_compile(cfg.graph)
 
-    with pytest.raises(HTFGraphNotSupportedError):
-        _run_htf_check(cfg_htf)
+
+def test_regime_graph_compiles_for_a_bot():
+    """A regime rule strategy, auto-rendered, compiles for a bot: one
+    regime_switch group whose regime Ticker is a reference frame the tick
+    fetches next to its own bars (it used to be RegimeUnsupportedError)."""
+    from bot_runner import compile_bot_graph, graph_bot_live
+    from models import RegimeConfig, StrategyRequest
+
+    req = StrategyRequest(
+        ticker="AAPL", start="2023-01-01", end="2024-01-01", interval="1d",
+        buy_rules=[], sell_rules=[],
+        long_buy_rules=[Rule(indicator="rsi", condition="below", value=35)],
+        short_buy_rules=[Rule(indicator="rsi", condition="above", value=65)],
+        regime=RegimeConfig(enabled=True, timeframe="1wk", indicator="ma",
+                            indicator_params={"period": 10, "type": "sma"}, min_bars=2),
+    )
+    graph = auto_render(req)
+    program = compile_bot_graph(graph, "bot-1")
+    live = graph_bot_live(program, _bot_config(graph, graph_direction_mode="regime_switch"))
+    assert live.group.direction == "regime_switch"
+    assert live.references == (("AAPL", "1wk"),)
+    assert live.plan.regime is not None
+
+
+# ---------------------------------------------------------------------------
+# 7. Another timeframe is a reference Ticker, not a refusal (HTF retired)
+# ---------------------------------------------------------------------------
+
+def test_other_timeframe_ticker_is_a_reference_for_a_bot():
+    """HTFGraphNotSupportedError is retired (plan D8): a prefixed Ticker on
+    another symbol or interval compiles, and the bot lists its frame."""
+    from bot_runner import compile_bot_graph, graph_bot_live
+
+    graph = _rsi_below_above_graph()
+    nodes_dict = {k: v.model_dump() for k, v in graph.nodes.items()}
+    nodes_dict["/spy"] = _node("/spy", "ticker",
+                               {"symbol": "SPY", "interval": "1wk", "prefix": "spy"}).model_dump()
+    nodes_dict["/spy_rsi"] = _node("/spy_rsi", "rsi", {"period": 14, "out": "@spy_rsi"}).model_dump()
+    nodes_dict["/spy_up"] = _node("/spy_up", "above", {"threshold": 50.0, "out": "@spy_up"}).model_dump()
+    nodes_dict["/both"] = _node("/both", "and", {"terms": ["@spy_up", "@below"]}).model_dump()
+    wires = [w.model_dump(by_alias=True) for w in graph.wires if w.to_path != "/entry"]
+    wires += [
+        {"id": "w_s1", "from": "/spy", "to": "/spy_rsi"},
+        {"id": "w_s2", "from": "/spy_rsi", "to": "/spy_up"},
+        {"id": "w_s3", "from": "/spy_up", "to": "/both"},
+        {"id": "w_s4", "from": next(w.from_path for w in graph.wires if w.to_path == "/entry"),
+         "to": "/both"},
+        {"id": "w_s5", "from": "/both", "to": "/entry"},
+    ]
+    ref_graph = Graph.model_validate({"_version": 3, "nodes": nodes_dict, "wires": wires})
+    program = compile_bot_graph(ref_graph, "bot-1")
+    live = graph_bot_live(program, _bot_config(ref_graph))
+    assert live.references == (("SPY", "1wk"),)

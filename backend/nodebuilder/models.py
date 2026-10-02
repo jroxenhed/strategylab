@@ -6,9 +6,9 @@ Unit 1 — pure data types, no evaluator, no compiler, no indicator deps.
 from __future__ import annotations
 
 from collections import deque
-from typing import Any, Optional
+from typing import Any, Literal, Optional, Union
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, field_serializer, field_validator, model_validator
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
@@ -17,6 +17,12 @@ from pydantic import BaseModel
 
 MIN_SUPPORTED_VERSION: int = 1
 
+# Version of the stream format (plan section 3).  The source of truth is
+# nodebuilder/kernel/stream.py; it is re-exported here for older imports.
+from nodebuilder.kernel.stream import STREAM_SCHEMA_VERSION  # noqa: E402,F401
+
+_META_MAX_KEYS = 32
+
 
 # ---------------------------------------------------------------------------
 # Custom error hierarchy
@@ -24,7 +30,15 @@ MIN_SUPPORTED_VERSION: int = 1
 
 
 class GraphValidationError(Exception):
-    """Base class for all graph validation errors."""
+    """Base class for all graph validation errors.
+
+    node_id names the node the error is about, so the editor can highlight it.
+    It is None when the error is about the graph as a whole.
+    """
+
+    def __init__(self, message: str = "", node_id: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.node_id = node_id
 
 
 class CyclicGraphError(GraphValidationError):
@@ -46,8 +60,71 @@ class IncompatibleGraphVersionError(GraphValidationError):
         self.minimum = minimum
 
 
+class UnsupportedGraphVersionError(GraphValidationError):
+    """The _version is not a whole number, or is newer than this code knows.
+
+    A newer graph is refused, never loaded: loading it would drop the fields
+    this code does not know, and a save would then lose them for good.
+    """
+
+    code = "graph_invalid"
+
+
+class DuplicatePortError(GraphValidationError):
+    """Two wires go into the same input port of one node."""
+
+    code = "port_duplicate"
+
+    def __init__(self, message: str, node_id: str, port: str) -> None:
+        super().__init__(message, node_id=node_id)
+        self.port = port
+
+
 class ReadOnlyGraphError(GraphValidationError):
     """Raised when a mutation is attempted on a readOnly graph (Unit 5)."""
+
+
+class InvalidNodeNameError(GraphValidationError):
+    """A node name does not match ^[a-z_][a-z0-9_]{0,63}$."""
+
+    code = "name_invalid"
+
+
+class DuplicateNodeNameError(GraphValidationError):
+    """Two nodes with the same parent share a name."""
+
+    code = "name_duplicate"
+
+
+class InvalidParentError(GraphValidationError):
+    """A node's parent does not exist, or its parents loop back to it."""
+
+
+class WireCrossesNetworkError(GraphValidationError):
+    """A wire joins two nodes that sit in different networks (plan D7).
+
+    Wires connect siblings only.  A stream enters a network through the
+    network node's input ports and leaves through its output.  node_id is
+    the node the wire goes into, port its input port.
+    """
+
+    code = "wire_crosses_network"
+
+    def __init__(self, message: str, node_id: str, port: Optional[str]) -> None:
+        super().__init__(message, node_id=node_id)
+        self.port = port
+
+
+class ReservedNodeIdError(GraphValidationError):
+    """A stored node id contains ``::``, which only flattened ids may use."""
+
+    code = "graph_invalid"
+
+
+# Separator of composite ids: an asset instance's children get the flat id
+# ``outerId::innerId`` when the graph is flattened (plan D3, D7).  A stored
+# node id may never contain it.
+COMPOSITE_ID_SEP = "::"
 
 
 # ---------------------------------------------------------------------------
@@ -61,21 +138,36 @@ class Node(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     id: str
-    """Path string, e.g. /ticker_aapl_1d"""
+    """Stable, opaque id, e.g. /ticker_aapl_1d or n_k3x9a0bq.  Wires use it."""
 
     type: str
     """Catalog node name, e.g. 'rsi'."""
+
+    name: str = ""
+    """Leaf of the node's path, unique among its siblings.  Empty only on a
+    bare Node; Graph fills it in on load (see migrate.py)."""
+
+    parent: Optional[str] = None
+    """Id of the network node this node sits in; None means root.  Replaces
+    the unused v1 field subgraph.  Wires connect only nodes with the same
+    parent (plan D7); kernel/flatten.py turns the nested graph into one flat
+    graph before compile."""
 
     params: dict[str, Any] = Field(default_factory=dict)
     position: tuple[float, float] = (0.0, 0.0)
     display: bool = False
     bypass: bool = False
-    subgraph: Optional[str] = None
-    """Parent subgraph path; None means root."""
 
 
 class Wire(BaseModel):
-    """A directed edge between two node output and input ports."""
+    """A directed edge from one node's output to an input port of another.
+
+    A wire carries the whole stream of its source node (plan D4).  It does
+    not pick an attribute: the consumer's ``attr`` / ``attr_list`` params do.
+    An empty read param defaults to the primary write of the node on the
+    matching port, so the port matters only for those defaults; once a param
+    names its operand, moving or redrawing the wire never changes it.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -87,8 +179,47 @@ class Wire(BaseModel):
     to_path: str = Field(alias="to")
     """Destination node path."""
 
+    from_port: Literal["out"] = "out"
+    """Every node has one output."""
+
+    to_port: Optional[str] = None
+    """Input port on the destination, 'in0', 'in1'...  None only on a bare
+    Wire; Graph fills it in on load in wire order (see migrate.py)."""
+
     attr: Optional[str] = None
-    """Attribute label rendered on the wire; may be derived later."""
+    """Legacy (v1/v2) attribute label.  The v3 migration turns it into the
+    consumer's read param.  Until a graph is migrated, compile reads it only
+    for a consumer param that is empty: a label the source node knows (a
+    Ticker field, a MACD or Bollinger output) picks that output; any other
+    label reads the source's primary write."""
+
+
+class NetworkBox(BaseModel):
+    """A labelled box drawn around a group of nodes."""
+
+    id: str
+    label: str = ""
+    color: str = ""
+    rect: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    members: list[str] = Field(default_factory=list)
+    parent: Optional[str] = None
+
+
+class StickyNote(BaseModel):
+    """A free text note on the canvas."""
+
+    id: str
+    text: str = ""
+    rect: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    color: str = ""
+    parent: Optional[str] = None
+
+
+class Annotations(BaseModel):
+    """Canvas-only extras.  They never change what the graph computes."""
+
+    boxes: list[NetworkBox] = Field(default_factory=list)
+    notes: list[StickyNote] = Field(default_factory=list)
 
 
 class Graph(BaseModel):
@@ -96,23 +227,64 @@ class Graph(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    version: int = Field(alias="_version", default=1)
+    version: int = Field(alias="_version", default=2)
+    stream_schema: int = STREAM_SCHEMA_VERSION
     readOnly: bool = False
+    meta: dict[str, Union[bool, int, float, str]] = Field(default_factory=dict)
+    """Free notes about the graph (at most 32 keys)."""
     nodes: dict[str, Node] = Field(default_factory=dict)
     wires: list[Wire] = Field(default_factory=list)
+    annotations: Annotations = Field(default_factory=Annotations)
 
     # ------------------------------------------------------------------
     # Validators
     # ------------------------------------------------------------------
 
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate(cls, data: Any) -> Any:
+        """Upgrade older stored formats before any field is read (plan D2)."""
+        from nodebuilder.migrate import migrate_graph_data
+
+        return migrate_graph_data(data)
+
+    @field_validator("meta")
+    @classmethod
+    def _meta_size(cls, v: dict) -> dict:
+        if len(v) > _META_MAX_KEYS:
+            raise ValueError(f"meta has {len(v)} keys; at most {_META_MAX_KEYS} are allowed")
+        return v
+
     @model_validator(mode="after")
     def _validate_graph(self) -> "Graph":
+        from nodebuilder.migrate import name_issues
+
         # 1. node.id must match its dict key
         for key, node in self.nodes.items():
             if node.id != key:
                 raise ValueError(
                     f"Node id mismatch: nodes[{key!r}].id == {node.id!r}"
                 )
+
+        # 1a. "::" is kept for the ids flatten gives asset children (W6).
+        for key in self.nodes:
+            if COMPOSITE_ID_SEP in key:
+                raise ReservedNodeIdError(
+                    f"Node id {key!r} contains {COMPOSITE_ID_SEP!r}, which is kept "
+                    "for the ids of nodes inside library assets.",
+                    node_id=key,
+                )
+
+        # 1b. Names are valid and unique among siblings; parents exist and do
+        # not loop.  /validate lists every issue; loading stops at the first.
+        issues = name_issues(self.nodes)
+        if issues:
+            first = issues[0]
+            error_cls = {
+                "name_invalid": InvalidNodeNameError,
+                "name_duplicate": DuplicateNodeNameError,
+            }.get(first["code"], InvalidParentError)
+            raise error_cls(first["message"], node_id=first["node_id"])
 
         node_paths = set(self.nodes.keys())
 
@@ -124,14 +296,51 @@ class Graph(BaseModel):
             if wire.to_path not in node_paths:
                 missing.append(f"to_path={wire.to_path!r}")
             if missing:
-                raise DanglingWireError(
-                    f"Wire {wire.id!r} references unknown node(s): {', '.join(missing)}"
+                # Point at the end of the wire that does exist, if any.
+                known_end = next(
+                    (p for p in (wire.from_path, wire.to_path) if p in node_paths), None
                 )
+                raise DanglingWireError(
+                    f"Wire {wire.id!r} references unknown node(s): {', '.join(missing)}",
+                    node_id=known_end,
+                )
+
+        # 2b. One wire per input port.  With two wires on one port, which one
+        # is the left side of a comparison would depend on list order.
+        seen_ports: set[tuple[str, str]] = set()
+        for wire in self.wires:
+            if not wire.to_port:
+                continue
+            key = (wire.to_path, wire.to_port)
+            if key in seen_ports:
+                raise DuplicatePortError(
+                    f"Input {wire.to_port} of {wire.to_path!r} has more than one wire.",
+                    node_id=wire.to_path,
+                    port=wire.to_port,
+                )
+            seen_ports.add(key)
+
+        # 2c. Wires connect siblings only (plan D7).
+        crossing = network_wire_issues(self.nodes, self.wires)
+        if crossing:
+            first = crossing[0]
+            raise WireCrossesNetworkError(first["message"], first["node_id"], first["port"])
 
         # 3. No cycles
         _assert_acyclic(self)
 
         return self
+
+    @field_serializer("wires", mode="wrap")
+    def _wires_in_port_order(self, wires: list, handler):
+        """Write each node's input wires in port order (in0 before in1).
+
+        Compile reads inputs by port, but Wave 0 code read them by list
+        order.  Writing them in port order means a rollback computes the
+        same comparison.  Only wires into the same node swap places; every
+        other wire keeps its slot.
+        """
+        return handler(port_ordered(wires))
 
     # ------------------------------------------------------------------
     # Factory: load with version check
@@ -139,11 +348,87 @@ class Graph(BaseModel):
 
     @classmethod
     def load(cls, data: dict) -> "Graph":
-        """Deserialise from a dict, enforcing the version floor."""
-        actual_version = data.get("_version", 1)
-        if actual_version < MIN_SUPPORTED_VERSION:
-            raise IncompatibleGraphVersionError(actual_version, MIN_SUPPORTED_VERSION)
+        """Deserialise from a dict.  The migration hook checks the version
+        (floor, type and newest known)."""
         return cls.model_validate(data)
+
+
+# ---------------------------------------------------------------------------
+# Wire order
+# ---------------------------------------------------------------------------
+
+
+def port_index(port: Optional[str]) -> Optional[int]:
+    """``in3`` -> 3.  None for a missing or non-numbered port."""
+    if isinstance(port, str) and port.startswith("in") and port[2:].isdigit():
+        return int(port[2:])
+    return None
+
+
+def port_ordered(wires: list) -> list:
+    """*wires* with each node's inputs sorted by port, in the slots they held.
+
+    Numbered ports come first in port order, then any other port in list
+    order (the same order compile reads them in).  Wires into different
+    nodes never move relative to each other, so a graph already in port
+    order comes back unchanged.
+    """
+    slots: dict[Any, list[int]] = {}
+    for i, wire in enumerate(wires):
+        slots.setdefault(getattr(wire, "to_path", None), []).append(i)
+    out = list(wires)
+    for indexes in slots.values():
+        if len(indexes) < 2:
+            continue
+
+        def _key(i: int) -> tuple:
+            k = port_index(getattr(wires[i], "to_port", None))
+            return (k is None, k if k is not None else 0, i)
+
+        for slot, src in zip(indexes, sorted(indexes, key=_key)):
+            out[slot] = wires[src]
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Networks
+# ---------------------------------------------------------------------------
+
+
+CROSSING_HINT = "Wires connect nodes in the same network. Route through a network port."
+
+
+def network_wire_issues(nodes: dict, wires: list) -> list[dict]:
+    """Every wire that joins two nodes in different networks, in wire order.
+
+    Each item is ``{"code": "wire_crosses_network", "node_id", "port",
+    "wire_id", "message"}``; node_id is the node the wire goes into.  Two
+    nodes are in the same network when they have the same ``parent``.  A
+    wire with an end that does not exist is skipped (that is a dangling
+    wire, reported on its own).  *nodes* maps id to anything with a
+    ``parent`` attribute.
+    """
+    issues: list[dict] = []
+    for wire in wires:
+        src = nodes.get(wire.from_path)
+        dst = nodes.get(wire.to_path)
+        if src is None or dst is None or src.parent == dst.parent:
+            continue
+        issues.append({
+            "code": "wire_crosses_network",
+            "node_id": wire.to_path,
+            "port": wire.to_port,
+            "wire_id": wire.id,
+            "message": (
+                f"Wire {wire.id!r} goes from {wire.from_path!r} ({_where(src.parent)}) "
+                f"to {wire.to_path!r} ({_where(dst.parent)}).  {CROSSING_HINT}"
+            ),
+        })
+    return issues
+
+
+def _where(parent: Optional[str]) -> str:
+    return "at the root" if parent is None else f"inside {parent!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -177,8 +462,29 @@ def _assert_acyclic(graph: Graph) -> None:
     remaining = set(graph.nodes.keys()) - visited
     if remaining:
         raise CyclicGraphError(
-            f"Graph contains a cycle involving node(s): {sorted(remaining)}"
+            f"Graph contains a cycle involving node(s): {sorted(remaining)}",
+            node_id=_node_on_cycle(graph, remaining),
         )
+
+
+def _node_on_cycle(graph: Graph, remaining: set[str]) -> str:
+    """Return a node that sits on a cycle.
+
+    Kahn's leftover set also holds nodes that are only fed by a cycle (an
+    Entry below it, say).  Every leftover node has a leftover input, so
+    walking inputs backwards must come round to a node seen before, and that
+    node is on the cycle.
+    """
+    preds: dict[str, list[str]] = {p: [] for p in remaining}
+    for wire in graph.wires:
+        if wire.to_path in remaining and wire.from_path in remaining:
+            preds[wire.to_path].append(wire.from_path)
+    node = sorted(remaining)[0]
+    seen: set[str] = set()
+    while node not in seen:
+        seen.add(node)
+        node = sorted(preds[node])[0]
+    return node
 
 
 # ---------------------------------------------------------------------------

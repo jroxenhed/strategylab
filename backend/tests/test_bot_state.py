@@ -372,9 +372,9 @@ class TestBotManagerLoadResidual:
     def test_bot_manager_load_handles_malformed_dict_keyerror(self, tmp_path, monkeypatch, caplog):
         """A bot entry missing the required 'config' key triggers a KeyError.
 
-        The outer except-Exception in load() catches it, logs 'Failed to load bots.json',
-        and load() returns without raising — but since the exception aborts the whole for
-        loop, no bots are loaded (expected behavior per the production code structure).
+        F435 W1 (DI-02): the error is caught per row, logged at ERROR as a
+        skipped bot, and the row is kept for save() to write back unchanged.
+        load() does not raise and loads no bot from that row.
         """
         bots_file = tmp_path / "bots.json"
         # Entry with no 'config' key — will raise KeyError on entry["config"]
@@ -386,8 +386,11 @@ class TestBotManagerLoadResidual:
         with caplog.at_level(_logging.ERROR, logger="bot_manager"):
             mgr.load()  # must not raise
 
-        # Outer catch logs "Failed to load bots.json" at ERROR level
-        assert any("Failed to load" in r.message for r in caplog.records)
+        # The row is skipped at ERROR level and kept, not dropped.
+        assert any("skipped bot" in r.getMessage() and r.levelno == _logging.ERROR
+                   for r in caplog.records)
+        assert len(mgr.bots) == 0
+        assert [raw for _anchor, raw in mgr._unloaded] == [malformed]
 
     def test_normalize_symbol_handles_dot_symbols(self):
         """normalize_symbol('brk.b') returns 'BRK.B' — dot is preserved."""

@@ -1,0 +1,167 @@
+/*
+ * Editor chrome of item 3.H (F435 W3): the status bar (S20), the `?`
+ * shortcut overlay (S21), the hint and Reset view (S22) and the minimap.
+ * Tokens come from tokens.css.
+ */
+
+/* ── Status bar (S20) ─────────────────────────────────────────────────── */
+
+.nodebuilder-root .nb-status {
+  height: 22px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  background: var(--nb-bg-panel);
+  border-top: 1px solid var(--nb-border);
+  font: 11px/22px var(--nb-font-mono);
+  color: var(--nb-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.nodebuilder-root .nb-status__seg {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+/* The live region around the failed-cook button (UX-11). */
+.nodebuilder-root .nb-status__live { flex-shrink: 0; display: inline-flex; align-items: center; }
+.nodebuilder-root .nb-status__btn {
+  height: 18px;
+  padding: 0 2px;
+  margin: 0 -2px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.nodebuilder-root .nb-status__btn:hover { color: var(--nb-text); background: var(--nb-bg-hover); }
+.nodebuilder-root .nb-status__btn:focus-visible {
+  outline: 2px solid var(--nb-border-focus);
+  outline-offset: 1px;
+}
+/* Fixed width so the bar does not jitter while the pointer moves. */
+.nodebuilder-root .nb-status__cursor { width: 96px; }
+.nodebuilder-root .nb-status__zoom { min-width: 36px; justify-content: flex-start; }
+.nodebuilder-root .nb-status__selection {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nodebuilder-root .nb-status__flash { color: var(--nb-text-secondary); }
+.nodebuilder-root .nb-status__right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.nodebuilder-root .nb-status__spinner { width: 10px; height: 10px; }
+.nodebuilder-root .nb-status--dim { color: var(--nb-text-dim); }
+.nodebuilder-root .nb-status--ok { color: var(--nb-ok); }
+.nodebuilder-root .nb-status--warn { color: var(--nb-warn); }
+.nodebuilder-root .nb-status--error { color: var(--nb-error); }
+@media (max-width: 1099px) {
+  .nodebuilder-root .nb-status__wide { display: none; }
+}
+
+/* ── Shortcut overlay (S21) ───────────────────────────────────────────── */
+
+.nodebuilder-root .nb-shortcuts__filter { width: 200px; margin-left: auto; margin-right: 8px; }
+.nodebuilder-root .nb-shortcuts__body {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+  align-items: start;
+}
+.nodebuilder-root .nb-shortcuts__col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.nodebuilder-root .nb-shortcuts__group h3 {
+  margin: 0 0 4px;
+  font: 600 10px/16px var(--nb-font-mono);
+  letter-spacing: 0.08em;
+  color: var(--nb-text-dim);
+}
+.nodebuilder-root .nb-shortcuts__row {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--nb-text-secondary);
+}
+.nodebuilder-root .nb-shortcuts__row--off { opacity: 0.6; }
+.nodebuilder-root .nb-shortcuts__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nodebuilder-root .nb-shortcuts__keys { flex-shrink: 0; color: var(--nb-text-dim); font: 11px var(--nb-font-mono); }
+.nodebuilder-root .nb-shortcuts__keys kbd {
+  font: 11px/16px var(--nb-font-mono);
+  color: var(--nb-text-secondary);
+  background: var(--nb-bg-input);
+  border: 1px solid var(--nb-border);
+  border-radius: 3px;
+  padding: 0 6px;
+  display: inline-block;
+  height: 18px;
+  box-sizing: border-box;
+}
+.nodebuilder-root .nb-shortcuts__empty,
+.nodebuilder-root .nb-shortcuts__foot {
+  font-size: 11px;
+  color: var(--nb-text-dim);
+}
+.nodebuilder-root .nb-shortcuts__foot { margin-top: 16px; }
+
+/* ── Hint and Reset view (S22) ────────────────────────────────────────── */
+
+.nodebuilder-root .nb-hint {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 36px;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--nb-text-dim);
+  white-space: nowrap;
+}
+/* A full-height, zero-width first item: when the hint does not fit beside
+   it, the hint wraps onto a second line, which the 36px box clips. So the
+   hint never overlaps the right cluster, with no measuring in script. */
+.nodebuilder-root .nb-hint::before {
+  content: '';
+  width: 0;
+  height: 36px;
+}
+.nodebuilder-root .nb-hint__wrap { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; }
+.nodebuilder-root .nb-hint__dismiss {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--nb-text-dim);
+  font-size: 10px;
+  line-height: 16px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.nodebuilder-root .nb-hint__dismiss:hover { color: var(--nb-text); background: var(--nb-bg-hover); }
+
+/* ── Minimap (S22) ────────────────────────────────────────────────────── */
+
+.nodebuilder-root .react-flow__minimap-node { opacity: 0.7; }
+.nodebuilder-root .react-flow__minimap-mask { stroke: var(--nb-selection); stroke-width: 1px; }
+.nodebuilder-root .react-flow__attribution {
+  background: transparent;
+  color: var(--nb-text-dim);
+  font-size: 10px;
+}

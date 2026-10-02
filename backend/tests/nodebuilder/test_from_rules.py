@@ -170,43 +170,49 @@ def test_regime_mode_emits_subtree():
     regime_paths = [p for p in g.nodes if p.startswith("/regime/")]
     assert regime_paths, "Regime sub-tree nodes must be emitted"
 
-    # Regime ticker must exist
-    assert any("ticker" in g.nodes[p].type for p in regime_paths), "Regime ticker must exist"
+    # W5 (plan D8): the regime is a Regime network feeding the regime
+    # terminal inside the implicit group "main", which switches direction.
+    assert g.nodes["/regime"].type == "regime_net"
+    assert g.nodes["/regime_terminal"].type == "regime"
+    assert g.nodes["/main"].type == "output_group"
+    assert g.nodes["/main"].params["direction"] == "regime_switch"
+    assert any(w.from_path == "/regime" and w.to_path == "/regime_terminal" for w in g.wires)
 
-    # Regime gate AND nodes must exist
-    assert "/and_regime_buy_gate" in g.nodes
-    assert "/and_regime_sell_gate" in g.nodes
+    # Its Ticker is a prefixed reference on the regime timeframe.
+    [ticker] = [p for p in regime_paths if g.nodes[p].type == "ticker"]
+    assert g.nodes[ticker].params["prefix"] == "regime"
+    assert g.nodes[ticker].params["interval"] == "1d"
 
-    # Gates must wire to entry/exit
-    buy_gate_wires = [w for w in g.wires if w.from_path == "/and_regime_buy_gate" and w.to_path == "/entry"]
-    sell_gate_wires = [w for w in g.wires if w.from_path == "/and_regime_sell_gate" and w.to_path == "/exit"]
-    assert buy_gate_wires, "Regime buy gate must wire to /entry"
-    assert sell_gate_wires, "Regime sell gate must wire to /exit"
+    # buy_rules / sell_rules are not drawn: the rule backtest ignores them
+    # when a regime is on.  The old AND gates are gone.
+    assert not any(n.type == "rsi" for n in g.nodes.values())
+    assert "/and_regime_buy_gate" not in g.nodes and "/and_regime_sell_gate" not in g.nodes
+
+    # And the render compiles: regime graphs are supported now.
+    from nodebuilder.compile import compile as nb_compile
+    nb_compile(g)
 
 
 # ---------------------------------------------------------------------------
 # 6. Per-direction B23 mode
 # ---------------------------------------------------------------------------
 
-def test_per_direction_b23_mode():
+def test_per_direction_lists_without_a_regime_are_not_drawn():
+    """DI-09: with the regime off the rule backtest trades buy_rules /
+    sell_rules and never reads the per-direction lists (run_backtest:
+    b23_mode = regime.enabled), so the render draws the plain lists only."""
     req = _make_req(
-        buy_rules=[],
-        sell_rules=[],
+        buy_rules=[Rule(indicator="rsi", condition="below", value=40)],
+        sell_rules=[Rule(indicator="rsi", condition="above", value=60)],
         long_buy_rules=[Rule(indicator="rsi", condition="below", value=30)],
         short_buy_rules=[Rule(indicator="rsi", condition="above", value=70)],
+        long_stop_loss_pct=3.0,
     )
     g = auto_render(req)
-
-    # Per-direction logic nodes must exist
-    assert "/logic_long_buy" in g.nodes
-    assert "/logic_short_buy" in g.nodes
-
-    # OR combiner must exist (two buy-side logic paths)
-    assert "/or_b23_buy" in g.nodes, "OR combiner for b23 buy must exist"
-
-    # Entry must be reachable
-    entry_reachable = any(w.to_path == "/entry" for w in g.wires)
-    assert entry_reachable, "Entry must have at least one incoming wire in b23 mode"
+    assert g.nodes["/entry"].params.get("signal") and g.nodes["/exit"].params.get("signal")
+    assert not any(nid.startswith(("/logic_long", "/logic_short", "/or_b23", "/stop_long"))
+                   for nid in g.nodes)
+    assert not any(n.type == "output_group" for n in g.nodes.values())
 
 
 # ---------------------------------------------------------------------------
@@ -240,10 +246,15 @@ def test_macd_signal_two_wire_comparison():
     cmp_path = "/cmp_buy_0"
     assert cmp_path in g.nodes, "Comparison node must exist"
 
+    # v3 (W2): the operands are the comparison's a / b params; one wire from
+    # the MACD node carries both, and no wire holds an attr.
+    cmp = g.nodes[cmp_path]
+    assert cmp.params["a"] == "@macd_line", "a must read the MACD line"
+    assert cmp.params["b"] == "@macd_signal", "b must read the MACD signal line"
     incoming = [w for w in g.wires if w.to_path == cmp_path]
-    attrs = {w.attr for w in incoming}
-    assert "@macd_line" in attrs, "macd_line wire must exist into comparison"
-    assert "@macd_signal" in attrs, "macd_signal wire must exist into comparison"
+    macd_ids = {n.id for n in g.nodes.values() if n.type == "macd"}
+    assert {w.from_path for w in incoming} == macd_ids and len(macd_ids) == 1
+    assert all(w.attr is None for w in incoming)
 
 
 # ---------------------------------------------------------------------------
@@ -267,10 +278,12 @@ def test_ma_with_param_other_indicator():
     ema_node = ema_nodes[0]
     assert ema_node.params.get("period") == 200
 
-    # Two incoming wires to comparison
-    incoming = [w for w in g.wires if w.to_path == cmp_path]
-    attrs = {w.attr for w in incoming}
-    assert "@close" in attrs or "@ema" in attrs, f"Expected ticker/@close or ema/@ema wires, got {attrs}"
+    # v3 (W2): price (a Price node reading @close) is a, the EMA is b.
+    cmp = g.nodes[cmp_path]
+    price_nodes = [n for n in g.nodes.values() if n.type == "price"]
+    assert len(price_nodes) == 1
+    assert (cmp.params["a"], cmp.params["b"]) == (price_nodes[0].params["out"], ema_node.params["out"])
+    assert price_nodes[0].params.get("field", "@close") == "@close"
     # Specifically the EMA wire must exist
     ema_wires = [w for w in g.wires if w.to_path == cmp_path and w.from_path == ema_node.id]
     assert ema_wires, "Wire from EMA node to comparison must exist"
@@ -404,3 +417,78 @@ def test_post_auto_render_endpoint():
     parsed = AutoRenderResponse.model_validate(body)
     assert parsed.graph.readOnly is True
     assert len(parsed.graph.nodes) > 0
+
+
+# ---------------------------------------------------------------------------
+# Schema v2 (W1 item 1.A): names, ports, version
+# ---------------------------------------------------------------------------
+
+
+def _v2_req() -> StrategyRequest:
+    return StrategyRequest(
+        ticker="AAPL", start="2022-01-01", end="2024-01-01", interval="1d", source="yahoo",
+        buy_rules=[
+            Rule(indicator="rsi", condition="below", value=30),
+            Rule(indicator="rsi", condition="above", value=10, negated=True),
+        ],
+        sell_rules=[Rule(indicator="macd", condition="crosses_below", param="signal")],
+        regime=RegimeConfig(
+            enabled=True,
+            rules=[Rule(indicator="ma", condition="above", param="ma:200:sma")],
+            on_flip="close_only",
+        ),
+        long_buy_rules=[Rule(indicator="rsi", condition="below", value=35)],
+        long_sell_rules=[Rule(indicator="rsi", condition="above", value=65)],
+    )
+
+
+def test_auto_render_emits_current_version():
+    from nodebuilder.migrate import CURRENT_GRAPH_VERSION
+
+    g = auto_render(_v2_req())
+    assert g.version == CURRENT_GRAPH_VERSION == 3
+    assert g.stream_schema == 1
+    dumped = g.model_dump(by_alias=True)
+    assert dumped["_version"] == CURRENT_GRAPH_VERSION
+    assert dumped["meta"] == {} and dumped["annotations"] == {"boxes": [], "notes": []}
+
+
+def test_auto_render_names_every_node_uniquely():
+    from nodebuilder.migrate import is_valid_name, sanitize_name
+
+    g = auto_render(_v2_req())
+    names = [n.name for n in g.nodes.values()]
+    assert all(is_valid_name(n) for n in names)
+    assert len(names) == len(set(names))
+    for node_id, node in g.nodes.items():
+        # W5: the regime render nests nodes in the group "main" and the
+        # Regime network.
+        assert node.parent in (None, "/main", "/regime")
+        assert node.name == sanitize_name(node_id.lstrip("/"))
+
+
+def test_auto_render_ports_follow_wire_order():
+    # Without the regime and the long rule sets, so the buy rules are drawn:
+    # /logic_buy takes two inputs.  The regime render has no node with two.
+    g = auto_render(_v2_req().model_copy(
+        update={"regime": None, "long_buy_rules": None, "long_sell_rules": None}))
+    count: dict[str, int] = {}
+    for w in g.wires:
+        k = count.get(w.to_path, 0)
+        assert (w.from_port, w.to_port) == ("out", f"in{k}")
+        count[w.to_path] = k + 1
+    # at least one node takes more than one input, so in1 is exercised
+    assert max(count.values()) >= 2
+
+
+def test_auto_render_route_returns_current_version_fields():
+    from main import app
+
+    client = TestClient(app)
+    resp = client.post("/api/nodebuilder/auto_render", json=_v2_req().model_dump())
+    assert resp.status_code == 200, resp.text
+    graph = resp.json()["graph"]
+    assert graph["_version"] == 3
+    node = next(iter(graph["nodes"].values()))
+    assert node["name"] and "parent" in node and "subgraph" not in node
+    assert all(w["to_port"].startswith("in") and w["from_port"] == "out" for w in graph["wires"])

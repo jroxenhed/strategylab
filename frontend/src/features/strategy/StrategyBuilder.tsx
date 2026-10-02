@@ -10,6 +10,10 @@ import { apiErrorDetail } from '../../shared/utils/errors'
 
 import { migrateRule, loadSavedStrategies, saveSavedStrategies } from './savedStrategies'
 import { BOT_DEPLOYABLE_INTERVALS } from '../../shared/constants'
+import {
+  APPLIES_PILL, APPLIES_TITLE, GRAPH_NOTE_ID, GRAPH_NOTE_TEXT, GRAPH_PILL, SET_BY_GRAPH,
+  isGraphOwned, notifyGraphRunSettingsChanged, type GraphOwnedField,
+} from '../nodebuilder/ownership'
 
 interface Props {
   ticker: string
@@ -21,6 +25,18 @@ interface Props {
   dataSource: DataSource
   settingsPortalId?: string
   extendedHours?: boolean
+  /**
+   * Graph view is on (S29, D11): the fields the graph owns are greyed with
+   * "Set by graph" (never cleared), and the ones still sent with graph runs
+   * get an "applies to graph" pill. The list is GRAPH_OWNED_FIELDS.
+   */
+  graphViewActive?: boolean
+  /**
+   * The loaded graph has one or more Output Groups (D7, D11). Each group
+   * sets its own direction, so the direction is greyed too. Without groups
+   * the graph runs in the sidebar direction, which stays editable.
+   */
+  graphHasGroups?: boolean
 }
 
 export interface StrategyBuilderHandle {
@@ -47,7 +63,7 @@ function persistSavedStrategies(strategies: SavedStrategy[]) {
   saveSavedStrategies(strategies)
 }
 
-const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function StrategyBuilder({ ticker, start, end, interval, onResult, onSweep, dataSource, settingsPortalId, extendedHours }: Props, ref) {
+const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function StrategyBuilder({ ticker, start, end, interval, onResult, onSweep, dataSource, settingsPortalId, extendedHours, graphViewActive = false, graphHasGroups = false }: Props, ref) {
   const saved = useState(() => loadStrategy())[0]
 
   useEffect(() => {
@@ -469,6 +485,7 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
       longMaxBarsHeld, shortMaxBarsHeld,
       longPosSize, shortPosSize,
     }))
+    notifyGraphRunSettingsChanged()
   }, [buyRules, sellRules, buyLogic, sellLogic, capital, posSize, stopLoss, maxBarsHeld, trailingEnabled, trailingConfig, dynamicSizing, skipAfterStop, tradingHours, slippageBps, commission, direction,
       perShareRate, minPerOrder, borrowRateAnnual, regimeEnabled, regimeConfig, regimeBuyRules, regimeLogic,
       longBuyRules, longSellRules, longBuyLogic, longSellLogic,
@@ -516,12 +533,19 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
   // runBacktestRef keeps the listener bound once while always invoking the
   // latest closure (otherwise empty-deps would pin the mount-time state).
   const runBacktestRef = useRef<() => void>(() => {})
+  // F435 W4: in graph view Cmd+Enter belongs to the node builder (its
+  // cook.run command). This window listener fires after that document
+  // listener, so without this guard one key ran the graph AND a rule backtest
+  // (rewriting lastRequest / backtestResult).
+  const graphViewActiveRef = useRef(graphViewActive)
   useEffect(() => {
     runBacktestRef.current = runBacktest
+    graphViewActiveRef.current = graphViewActive
   })
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (!(e.metaKey || e.ctrlKey) || e.key !== 'Enter') return
+      if (graphViewActiveRef.current) return
       const el = document.activeElement
       if (el instanceof HTMLElement && (el.tagName === 'TEXTAREA' || el.isContentEditable)) return
       e.preventDefault()
@@ -636,10 +660,66 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
     lineHeight: '1.3',
   }
 
+  // ─── S29: graph-owned fields are greyed in graph view ───────────────────────
+  // Values are never cleared; graph runs simply do not send these fields.
+  const ownedByGraph = (f: GraphOwnedField) => graphViewActive && isGraphOwned(f, graphHasGroups)
+  const ownedGroupProps = (f: GraphOwnedField, idSuffix = '') => ({
+    'data-testid': `sb-owned-${f}${idSuffix}`,
+    title: ownedByGraph(f) ? SET_BY_GRAPH : undefined,
+    style: ownedByGraph(f) ? { ...ownedGroupStyle, opacity: 0.5 } : ownedGroupStyle,
+  })
+  const ownedControl = (f: GraphOwnedField, style: React.CSSProperties) => (ownedByGraph(f)
+    ? { disabled: true, 'aria-describedby': GRAPH_NOTE_ID, style: { ...style, pointerEvents: 'none' as const } }
+    : { style })
+  const ownedLabel = (f: GraphOwnedField, text: string) => (ownedByGraph(f)
+    ? (
+      <label style={{ ...styles.settingsLabel, width: 'auto', minWidth: 100, display: 'inline-flex', alignItems: 'center' }}>
+        {text}
+        <span aria-hidden="true" title={SET_BY_GRAPH} style={graphPillStyle}>{GRAPH_PILL}</span>
+      </label>
+    )
+    : <label style={styles.settingsLabel}>{text}</label>)
+  const appliesPill = graphViewActive
+    ? <span aria-hidden="true" title={APPLIES_TITLE} style={graphPillStyle}>{APPLIES_PILL}</span>
+    : null
+  // The GRAPH pill for a greyed field whose label is not a plain text label.
+  const ownedPill = (f: GraphOwnedField) => (ownedByGraph(f)
+    ? <span aria-hidden="true" title={SET_BY_GRAPH} style={graphPillStyle}>{GRAPH_PILL}</span>
+    : null)
+
   // ─── Settings JSX (portaled into right panel or rendered inline) ────────────
   const settingsJSX = (
     <div style={styles.settingsPanelInner}>
       <div style={styles.settingsTitle}>Settings</div>
+      {graphViewActive && (
+        <div id={GRAPH_NOTE_ID} data-testid="sb-graph-note" style={graphNoteStyle}>{GRAPH_NOTE_TEXT}</div>
+      )}
+      {graphViewActive && (
+        // D7/D11: a graph with Output Groups sets each group's direction (greyed
+        // here, never sent); a graph without groups runs in this direction.
+        <div {...ownedGroupProps('direction')}>
+        <div style={{ ...styles.settingsRow, marginBottom: 8 }} data-testid="sb-graph-direction">
+          <label style={styles.settingsLabel} id="sb-graph-direction-label">Direction</label>
+          <div role="group" aria-labelledby="sb-graph-direction-label" style={{ display: 'inline-flex', gap: 4 }}>
+            {(['long', 'short'] as const).map(d => (
+              <button
+                key={d}
+                type="button"
+                aria-pressed={direction === d}
+                onClick={() => setDirection(d)}
+                {...ownedControl('direction', {
+                  fontSize: 11, padding: '2px 10px', borderRadius: 3, cursor: 'pointer',
+                  background: direction === d ? 'rgba(88,166,255,0.14)' : 'none',
+                  color: direction === d ? 'var(--accent)' : 'var(--text-muted)',
+                  border: `1px solid ${direction === d ? 'rgba(88,166,255,0.4)' : 'var(--border-light)'}`,
+                })}
+              >{d === 'long' ? 'Long' : 'Short'}</button>
+            ))}
+          </div>
+          {ownedByGraph('direction') ? ownedPill('direction') : appliesPill}
+        </div>
+        </div>
+      )}
       <div style={styles.settingsGroupsWrapper}>
 
         {/* Column 1: Capital & Fees */}
@@ -649,18 +729,22 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
             <label style={styles.settingsLabel}>Capital ($)</label>
             <input type="number" value={capital} min={0} onChange={e => setCapital(+e.target.value)} style={styles.settingsInput} />
           </div>
+          <div {...ownedGroupProps('position_size')}>
           <div style={styles.settingsRow}>
-            <label style={styles.settingsLabel}>% of Capital</label>
-            <input type="number" value={posSize} step={1} min={1} max={100} onChange={e => setPosSize(+e.target.value)} style={styles.settingsInput} />
+            {ownedLabel('position_size', '% of Capital')}
+            <input type="number" value={posSize} step={1} min={1} max={100} onChange={e => setPosSize(+e.target.value)} {...ownedControl('position_size', styles.settingsInput)} />
           </div>
+          </div>
+          <div {...ownedGroupProps('slippage_bps')}>
           <div style={styles.settingsRow}>
-            <label style={styles.settingsLabel}>Slippage (bps)</label>
+            {ownedLabel('slippage_bps', 'Slippage (bps)')}
             <input
               type="number"
               value={slippageBps}
               step={0.5}
               min={0}
               placeholder="2"
+              {...ownedControl('slippage_bps', styles.settingsInput)}
               onChange={e => {
                 const v = e.target.value
                 if (v === '') {
@@ -671,7 +755,6 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
                   setSlippageSource('manual')
                 }
               }}
-              style={styles.settingsInput}
             />
             {slipInfo?.half_spread_bps != null && slipInfo.half_spread_bps > 0 && slippageSource !== 'spread-derived' && (
               <button
@@ -679,18 +762,18 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
                   setSlippageBps(slipInfo.half_spread_bps!)
                   setSlippageSource('spread-derived')
                 }}
-                style={{ fontSize: 10, padding: '1px 6px', marginLeft: 6, cursor: 'pointer',
+                {...ownedControl('slippage_bps', { fontSize: 10, padding: '1px 6px', marginLeft: 6, cursor: 'pointer',
                   background: 'rgba(88,166,255,0.1)', border: '1px solid rgba(88,166,255,0.3)',
-                  borderRadius: 3, color: 'var(--accent)' }}
+                  borderRadius: 3, color: 'var(--accent)' })}
                 title={`Use half of live spread: ${slipInfo.half_spread_bps.toFixed(1)} bps`}
               >Use live spread</button>
             )}
             {slippageSource === 'spread-derived' && (
               <button
                 onClick={() => setSlippageSource('default')}
-                style={{ fontSize: 10, padding: '1px 6px', marginLeft: 6, cursor: 'pointer',
+                {...ownedControl('slippage_bps', { fontSize: 10, padding: '1px 6px', marginLeft: 6, cursor: 'pointer',
                   background: 'none', border: '1px solid rgba(128,128,128,0.3)',
-                  borderRadius: 3, color: 'var(--text-muted)' }}
+                  borderRadius: 3, color: 'var(--text-muted)' })}
                 title="Reset to modeled slippage"
               >↩ modeled</button>
             )}
@@ -709,8 +792,10 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
               )}
             </span>
           </div>
+          </div>
+          <div {...ownedGroupProps('commission_pct')}>
           <div style={styles.settingsRow}>
-            <label style={styles.settingsLabel}>Commission preset</label>
+            {ownedLabel('commission_pct', 'Commission preset')}
             <select
               value={
                 perShareRate === 0 && minPerOrder === 0 ? 'alpaca'
@@ -722,7 +807,7 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
                 if (v === 'alpaca') { setPerShareRate(0); setMinPerOrder(0) }
                 else if (v === 'ibkr') { setPerShareRate(0.0035); setMinPerOrder(0.35) }
               }}
-              style={styles.settingsInput}
+              {...ownedControl('commission_pct', styles.settingsInput)}
             >
               <option value="alpaca">Alpaca (commission-free)</option>
               <option value="ibkr">IBKR Fixed ($0.0035 / $0.35)</option>
@@ -731,19 +816,22 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
           </div>
           <div style={styles.settingsRow}>
             <label style={styles.settingsLabel}>Rate per share ($)</label>
-            <input type="number" value={perShareRate} step={0.0005} min={0} onChange={e => setPerShareRate(+e.target.value)} style={styles.settingsInput} />
+            <input type="number" value={perShareRate} step={0.0005} min={0} onChange={e => setPerShareRate(+e.target.value)} {...ownedControl('commission_pct', styles.settingsInput)} />
           </div>
           <div style={styles.settingsRow}>
             <label style={styles.settingsLabel}>Min per order ($)</label>
-            <input type="number" value={minPerOrder} step={0.05} min={0} onChange={e => setMinPerOrder(+e.target.value)} style={styles.settingsInput} />
+            <input type="number" value={minPerOrder} step={0.05} min={0} onChange={e => setMinPerOrder(+e.target.value)} {...ownedControl('commission_pct', styles.settingsInput)} />
+          </div>
           </div>
 
           {direction === 'short' && (
             <>
               <div style={{ ...styles.groupTitle, marginTop: 12 }}>Short Costs</div>
+              <div {...ownedGroupProps('borrow_rate_annual')}>
               <div style={styles.settingsRow}>
-                <label style={styles.settingsLabel}>Borrow rate (%/yr)</label>
-                <input type="number" value={borrowRateAnnual} step={0.1} min={0} onChange={e => setBorrowRateAnnual(+e.target.value)} style={styles.settingsInput} />
+                {ownedLabel('borrow_rate_annual', 'Borrow rate (%/yr)')}
+                <input type="number" value={borrowRateAnnual} step={0.1} min={0} onChange={e => setBorrowRateAnnual(+e.target.value)} {...ownedControl('borrow_rate_annual', styles.settingsInput)} />
+              </div>
               </div>
             </>
           )}
@@ -752,55 +840,63 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
         {/* Column 2: Risk Management */}
         <div style={styles.settingsGroup}>
           <div style={styles.groupTitle}>Risk Management</div>
+          <div {...ownedGroupProps('stop_loss_pct')}>
           <div style={styles.settingsRow}>
-            <label style={styles.settingsLabel}>Stop Loss (%)</label>
-            <input type="number" value={stopLoss} step={0.5} min={0} max={99} placeholder="Off" onChange={e => setStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+            {ownedLabel('stop_loss_pct', 'Stop Loss (%)')}
+            <input type="number" value={stopLoss} step={0.5} min={0} max={99} placeholder="Off" onChange={e => setStopLoss(e.target.value === '' ? '' : +e.target.value)} {...ownedControl('stop_loss_pct', styles.settingsInput)} />
           </div>
+          </div>
+          <div {...ownedGroupProps('max_bars_held')}>
           <div style={styles.settingsRow}>
-            <label style={styles.settingsLabel}>Time Stop (bars)</label>
-            <input type="number" value={maxBarsHeld} step={1} min={1} max={10000} placeholder="Off" onChange={e => setMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+            {ownedLabel('max_bars_held', 'Time Stop (bars)')}
+            <input type="number" value={maxBarsHeld} step={1} min={1} max={10000} placeholder="Off" onChange={e => setMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} {...ownedControl('max_bars_held', styles.settingsInput)} />
           </div>
+          </div>
+          <div {...ownedGroupProps('trailing_stop')}>
           <div style={{ ...styles.settingsRow, marginTop: 4 }}>
             <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-              <input type="checkbox" checked={trailingEnabled} onChange={e => setTrailingEnabled(e.target.checked)} />
+              <input type="checkbox" checked={trailingEnabled} onChange={e => setTrailingEnabled(e.target.checked)} {...ownedControl('trailing_stop', {})} />
               Trailing Stop
             </label>
+            {ownedPill('trailing_stop')}
           </div>
           {trailingEnabled && (
             <div style={{ paddingLeft: 12, borderLeft: '2px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={styles.settingsRow}>
                 <label style={styles.settingsLabel}>Type</label>
-                <select value={trailingConfig.type} onChange={e => setTrailingConfig(c => ({ ...c, type: e.target.value as 'pct' | 'atr' }))} style={styles.settingsInput}>
+                <select value={trailingConfig.type} onChange={e => setTrailingConfig(c => ({ ...c, type: e.target.value as 'pct' | 'atr' }))} {...ownedControl('trailing_stop', styles.settingsInput)}>
                   <option value="pct">%</option>
                   <option value="atr">ATR</option>
                 </select>
               </div>
               <div style={styles.settingsRow}>
                 <label style={styles.settingsLabel}>Value</label>
-                <input type="number" value={trailingConfig.value} step={0.5} min={0.1} onChange={e => setTrailingConfig(c => ({ ...c, value: +e.target.value }))} style={styles.settingsInput} />
+                <input type="number" value={trailingConfig.value} step={0.5} min={0.1} onChange={e => setTrailingConfig(c => ({ ...c, value: +e.target.value }))} {...ownedControl('trailing_stop', styles.settingsInput)} />
               </div>
               <div style={styles.settingsRow}>
                 <label style={styles.settingsLabel}>Source</label>
-                <select value={trailingConfig.source} onChange={e => setTrailingConfig(c => ({ ...c, source: e.target.value as 'high' | 'close' }))} style={styles.settingsInput}>
+                <select value={trailingConfig.source} onChange={e => setTrailingConfig(c => ({ ...c, source: e.target.value as 'high' | 'close' }))} {...ownedControl('trailing_stop', styles.settingsInput)}>
                   <option value="high">High</option>
                   <option value="close">Close</option>
                 </select>
               </div>
               <div style={styles.settingsRow}>
                 <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', width: 'auto' }}>
-                  <input type="checkbox" checked={trailingConfig.activate_on_profit} onChange={e => setTrailingConfig(c => ({ ...c, activate_on_profit: e.target.checked }))} />
+                  <input type="checkbox" checked={trailingConfig.activate_on_profit} onChange={e => setTrailingConfig(c => ({ ...c, activate_on_profit: e.target.checked }))} {...ownedControl('trailing_stop', {})} />
                   Activate after
                 </label>
-                <input type="number" value={trailingConfig.activate_pct} step={0.5} min={0} max={100} disabled={!trailingConfig.activate_on_profit} onChange={e => setTrailingConfig(c => ({ ...c, activate_pct: +e.target.value }))} style={{ ...styles.settingsInput, width: 48, opacity: trailingConfig.activate_on_profit ? 1 : 0.35 }} />
+                <input type="number" value={trailingConfig.activate_pct} step={0.5} min={0} max={100} onChange={e => setTrailingConfig(c => ({ ...c, activate_pct: +e.target.value }))} {...ownedControl('trailing_stop', { ...styles.settingsInput, width: 48, opacity: trailingConfig.activate_on_profit ? 1 : 0.35 })} disabled={!trailingConfig.activate_on_profit || ownedByGraph('trailing_stop')} />
                 <span style={{ fontSize: 11, color: '#8b949e' }}>% profit</span>
               </div>
             </div>
           )}
+          </div>
           <div style={{ ...styles.settingsRow, marginTop: 4 }}>
             <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
               <input type="checkbox" checked={dynamicSizing.enabled} onChange={e => setDynamicSizing(c => ({ ...c, enabled: e.target.checked }))} />
               Dynamic Sizing
             </label>
+            {appliesPill}
           </div>
           {dynamicSizing.enabled && (
             <div style={{ paddingLeft: 12, borderLeft: '2px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -833,6 +929,7 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
               <input type="checkbox" checked={skipAfterStop.enabled} onChange={e => setSkipAfterStop(c => ({ ...c, enabled: e.target.checked }))} />
               Skip After Stop
             </label>
+            {appliesPill}
           </div>
           {skipAfterStop.enabled && (
             <div style={{ paddingLeft: 12, borderLeft: '2px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -863,9 +960,11 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
             <div style={styles.groupTitle}>Per-Direction</div>
             {/* Long settings */}
             <div style={{ fontSize: 11, color: '#3fb950', fontWeight: 600, marginBottom: 4 }}>Long</div>
+            <div {...ownedGroupProps('stop_loss_pct', '-long')}>
             <div style={styles.settingsRow}>
-              <label style={styles.settingsLabel}>Stop Loss (%)</label>
-              <input type="number" value={longStopLoss} step={0.5} min={0} max={99} placeholder="global" onChange={e => setLongStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+              {ownedLabel('stop_loss_pct', 'Stop Loss (%)')}
+              <input type="number" value={longStopLoss} step={0.5} min={0} max={99} placeholder="global" onChange={e => setLongStopLoss(e.target.value === '' ? '' : +e.target.value)} {...ownedControl('stop_loss_pct', styles.settingsInput)} />
+            </div>
             </div>
             <div style={effectiveLabelStyle}>{effectiveStopLabel(longStopLoss, stopLoss, 'long')}</div>
             <div style={styles.settingsRow}>
@@ -873,9 +972,11 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
               <input type="number" value={longMaxBarsHeld} step={1} min={1} max={10000} placeholder="global" onChange={e => setLongMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
             </div>
             <div style={effectiveLabelStyle}>{effectiveTimeStopLabel(longMaxBarsHeld, maxBarsHeld, 'long')}</div>
+            <div {...ownedGroupProps('position_size', '-long')}>
             <div style={styles.settingsRow}>
-              <label style={styles.settingsLabel}>Position Size (%)</label>
-              <input type="number" value={longPosSize} step={1} min={1} max={100} onChange={e => setLongPosSize(+e.target.value)} style={styles.settingsInput} />
+              {ownedLabel('position_size', 'Position Size (%)')}
+              <input type="number" value={longPosSize} step={1} min={1} max={100} onChange={e => setLongPosSize(+e.target.value)} {...ownedControl('position_size', styles.settingsInput)} />
+            </div>
             </div>
             <div style={{ ...styles.settingsRow, marginTop: 2 }}>
               <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
@@ -901,9 +1002,11 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
             )}
             {/* Short settings */}
             <div style={{ fontSize: 11, color: '#f85149', fontWeight: 600, marginTop: 12, marginBottom: 4 }}>Short</div>
+            <div {...ownedGroupProps('stop_loss_pct', '-short')}>
             <div style={styles.settingsRow}>
-              <label style={styles.settingsLabel}>Stop Loss (%)</label>
-              <input type="number" value={shortStopLoss} step={0.5} min={0} max={99} placeholder="global" onChange={e => setShortStopLoss(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
+              {ownedLabel('stop_loss_pct', 'Stop Loss (%)')}
+              <input type="number" value={shortStopLoss} step={0.5} min={0} max={99} placeholder="global" onChange={e => setShortStopLoss(e.target.value === '' ? '' : +e.target.value)} {...ownedControl('stop_loss_pct', styles.settingsInput)} />
+            </div>
             </div>
             <div style={effectiveLabelStyle}>{effectiveStopLabel(shortStopLoss, stopLoss, 'short')}</div>
             <div style={styles.settingsRow}>
@@ -911,9 +1014,11 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
               <input type="number" value={shortMaxBarsHeld} step={1} min={1} max={10000} placeholder="global" onChange={e => setShortMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
             </div>
             <div style={effectiveLabelStyle}>{effectiveTimeStopLabel(shortMaxBarsHeld, maxBarsHeld, 'short')}</div>
+            <div {...ownedGroupProps('position_size', '-short')}>
             <div style={styles.settingsRow}>
-              <label style={styles.settingsLabel}>Position Size (%)</label>
-              <input type="number" value={shortPosSize} step={1} min={1} max={100} onChange={e => setShortPosSize(+e.target.value)} style={styles.settingsInput} />
+              {ownedLabel('position_size', 'Position Size (%)')}
+              <input type="number" value={shortPosSize} step={1} min={1} max={100} onChange={e => setShortPosSize(+e.target.value)} {...ownedControl('position_size', styles.settingsInput)} />
+            </div>
             </div>
             <div style={{ ...styles.settingsRow, marginTop: 2 }}>
               <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
@@ -948,6 +1053,7 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
               <input type="checkbox" checked={tradingHours.enabled} onChange={e => setTradingHours(c => ({ ...c, enabled: e.target.checked }))} />
               Trading Hours
             </label>
+            {appliesPill}
           </div>
           {tradingHours.enabled && (
             <div style={{ paddingLeft: 12, borderLeft: '2px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1510,6 +1616,19 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
 })
 
 export default StrategyBuilder
+
+// S29: a greyed field group keeps the column's 12px row gap; the pills are 16px tags.
+const ownedGroupStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 12 }
+const graphPillStyle: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', height: 16, padding: '0 4px', marginLeft: 6,
+  fontSize: 10, fontWeight: 600, letterSpacing: '0.04em', whiteSpace: 'nowrap',
+  color: 'var(--gh-text-muted, var(--text-muted))', background: 'transparent',
+  border: '1px solid var(--gh-border, var(--border-light))', borderRadius: 3, flexShrink: 0,
+}
+const graphNoteStyle: React.CSSProperties = {
+  fontSize: 11, color: 'var(--gh-text-muted, var(--text-muted))', padding: 8, marginBottom: 12,
+  borderBottom: '1px solid var(--gh-border, var(--border-light))', lineHeight: 1.4,
+}
 
 const styles: Record<string, React.CSSProperties> = {
   container: { background: 'var(--bg-main)', borderTop: '1px solid var(--border-light)', paddingTop: 12, paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 },

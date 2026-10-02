@@ -14,9 +14,22 @@ import { BaseNode, type BaseNodeData } from './BaseNode'
 import { ParamRows } from './ParamRow'
 import type { CatKey } from '../categories'
 
-/** Format params as a parenthesized suffix, e.g. "(14)" or "(12,26,9)". */
-function formatParams(params: Record<string, unknown>): string {
-  const vals = Object.values(params).filter(v => v !== null && v !== undefined && v !== '')
+/** Param kinds that name stream attributes (W2), not settings: left out of the title. */
+const STREAM_PARAM_TYPES: ReadonlySet<string> = new Set(['attr', 'attr_list', 'write'])
+
+/**
+ * Format params as a parenthesized suffix, e.g. "(14)" or "(12,26,9)".
+ * Reads and writes (`@close`, `@rsi`) are left out, so the title stays
+ * "RSI(14,wilder)", not "RSI(14,wilder,@close,@rsi)".
+ */
+function formatParams(
+  params: Record<string, unknown>,
+  specs: readonly { name: string; type: string }[] = [],
+): string {
+  const stream = new Set(specs.filter(s => STREAM_PARAM_TYPES.has(s.type)).map(s => s.name))
+  const vals = Object.entries(params)
+    .filter(([k, v]) => !stream.has(k) && v !== null && v !== undefined && v !== '')
+    .map(([, v]) => (Array.isArray(v) ? v.join('/') : v))
   if (vals.length === 0) return ''
   return `(${vals.join(',')})`
 }
@@ -41,7 +54,7 @@ export default function IndicatorNode({ id, data }: NodeProps) {
 
   // Build title — when editable, omit param suffix (params shown as inputs below)
   const baseName = catalog ? backendType.toUpperCase() : friendlyName(backendType)
-  const paramSuffix = formatParams(params)
+  const paramSuffix = formatParams(params, catalog?.params ?? [])
   const title = editable
     ? baseName
     : (paramSuffix ? `${baseName}${paramSuffix}` : baseName)

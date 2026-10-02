@@ -394,6 +394,48 @@ def _compute_regime_series(req: StrategyRequest, ltf_df: pd.DataFrame) -> "pd.Se
     return aligned.fillna(0).astype(bool)
 
 
+def series_entry_size(value) -> float:
+    """The position size for an entry, from a size series value at the entry bar.
+
+    Clamped into [0.01, 1.0], as StrategyRequest clamps position_size.
+    Only for a value series_entry_block() accepts.  Shared by the simulator
+    and the graph bridge (nodebuilder.trading.sim_bridge), so a live graph
+    bot sizes exactly as its backtest does.
+    """
+    return max(0.01, min(1.0, float(value)))
+
+
+def series_entry_block(size_value=None, stop_value=None):
+    """Why an entry cannot open, from the size and stop series values at the
+    entry bar (None for a series that is not given), or None when it can.
+
+    "size": the size is not a number, or is 0 or less (size 0 means no trade).
+    "stop": the stop is not a number (a stop that cannot be worked out never
+    opens a trade).  A stop of 0 or less is allowed: it means no stop.
+    """
+    if size_value is not None:
+        size_value = float(size_value)
+        if not np.isfinite(size_value) or size_value <= 0:
+            return "size"
+    if stop_value is not None and not np.isfinite(float(stop_value)):
+        return "stop"
+    return None
+
+
+def _entry_series(values, n: int, name: str):
+    """A per-bar size or stop series as a float array of *n* values, or None.
+
+    Values are read by position (bar i of the frame is value i).  A series of
+    the wrong length is a caller bug, so it raises instead of guessing.
+    """
+    if values is None:
+        return None
+    arr = np.asarray(values, dtype=float)
+    if arr.shape != (n,):
+        raise ValueError(f"{name} has shape {arr.shape}, but the frame has {n} bars")
+    return arr
+
+
 def _run_simulation(
     df: pd.DataFrame,
     indicators: dict,
@@ -401,9 +443,12 @@ def _run_simulation(
     sell_signal_fn,
     req: "StrategyRequest",
     b23_mode: bool,
-    regime_active_series,
-    on_flip: str,
-    date_strs: list,
+    regime_active_series=None,
+    on_flip: str = "hold",
+    date_strs: list | None = None,
+    *,
+    size_series=None,
+    stop_series=None,
 ) -> dict:
     """Run the bar-by-bar simulation loop and return core results.
 
@@ -426,13 +471,41 @@ def _run_simulation(
             sizing, costs, direction, debug flag, etc.).
         b23_mode: Whether the dual-direction regime mode is active.
         regime_active_series: Boolean pd.Series aligned to df.index (or None).
+            Any other array of len(df) bools is read by position.
         on_flip: Regime flip mode string ("hold", "close_only", "close_and_reverse").
         date_strs: Pre-formatted timestamp list for df.index (from _format_time_index).
+            None builds it from df.index and req.interval.
+        size_series: Optional per-bar position size (graph `size` terminal, F435 W5).
+            When given, an entry at bar i uses the value at bar i in place of
+            req.position_size, clamped into [0.01, 1.0] as StrategyRequest clamps
+            position_size.  A value that is not a number (NaN) or is 0 or less
+            at the entry bar blocks that entry.
+        stop_series: Optional per-bar stop loss in percent (graph `stop` terminal).
+            When given, the value at the entry bar is the trade's fixed stop for
+            as long as the trade is open, in place of req.stop_loss_pct.  0 or
+            less means no stop for that trade; NaN at the entry bar blocks the
+            entry (a stop that cannot be worked out never opens a trade).
+
+    With size_series, stop_series and regime_active_series all None the loop
+    runs exactly as before these arguments existed (the rule backtest; the
+    parity tests and test_run_simulation_snapshot.py pin it).
 
     Returns:
         dict with keys: summary (partial, no spy_corr), trades, equity_curve.
         Also includes signal_trace when req.debug is True.
     """
+    if date_strs is None:
+        date_strs = _format_time_index(df.index, req.interval)
+    if regime_active_series is not None and not isinstance(regime_active_series, pd.Series):
+        regime_active_series = pd.Series(
+            np.asarray(regime_active_series, dtype=bool), index=df.index,
+        )
+    # Graph terminal series (F435 W5).  Both None on the rule path.
+    size_arr = _entry_series(size_series, len(df), "size_series")
+    stop_arr = _entry_series(stop_series, len(df), "stop_series")
+    entry_gate = size_arr is not None or stop_arr is not None
+    entry_stop_pct = None  # the open trade's stop, fixed at entry (stop_series only)
+
     close = df["Close"]
     high = df["High"]
     low = df["Low"]
@@ -507,6 +580,32 @@ def _run_simulation(
         v = req.long_position_size if direction == 'long' else req.short_position_size
         return v if v is not None else req.position_size
 
+    def _entry_size(direction: str, i: int) -> float:
+        """Position size for an entry at bar i.
+
+        The size series at the entry bar when there is one (clamped like
+        StrategyRequest.position_size), else _dir_size.  Only call it when
+        _entry_blocked(i) is None.
+        """
+        if size_arr is None:
+            return _dir_size(direction)
+        return series_entry_size(size_arr[i])
+
+    def _entry_stop(direction: str, i: int):
+        """The fixed stop (percent) for a trade opened at bar i (stop_series only)."""
+        if stop_arr is None:
+            return _dir_stop(direction)
+        return float(stop_arr[i])
+
+    def _entry_blocked(i: int):
+        """Why an entry at bar i cannot open ("size" or "stop"), or None when
+        it can (see series_entry_block).  Always None when neither series is
+        given."""
+        return series_entry_block(
+            None if size_arr is None else size_arr[i],
+            None if stop_arr is None else stop_arr[i],
+        )
+
     close_arr = close.to_numpy(dtype=float, copy=False)
 
     for i in range(len(df)):
@@ -575,9 +674,21 @@ def _run_simulation(
                 entry_ts = None
                 trail_peak = 0.0
                 trail_stop_price = None
+                entry_stop_pct = None
                 # Regime flip is not a stop-loss; don't modify consec_sl_count
 
-                if on_flip == "close_and_reverse":
+                # A graph size or stop with no value at this bar blocks the
+                # reverse entry too (never set on the rule path).
+                reverse_blocked = (
+                    _entry_blocked(i) if (entry_gate and on_flip == "close_and_reverse") else None
+                )
+                if reverse_blocked is not None and signal_trace is not None:
+                    signal_trace.append({
+                        "date": date, "price": round(price, 4), "position": "flat",
+                        "action": f"REVERSE SKIPPED (no {reverse_blocked} value)",
+                    })
+
+                if on_flip == "close_and_reverse" and reverse_blocked is None:
                     new_dir = "short" if rf_old_direction == "long" else "long"
                     if new_dir == "short":
                         fill_price_rf = price * (1 - drag)
@@ -585,7 +696,9 @@ def _run_simulation(
                         fill_price_rf = price * (1 + drag)
                     # B25: rebind ts for new direction before trail_peak usage
                     ts = _dir_ts(new_dir)
-                    shares_rf = (capital * _dir_size(new_dir)) / fill_price_rf
+                    shares_rf = (capital * _entry_size(new_dir, i)) / fill_price_rf
+                    if stop_arr is not None:
+                        entry_stop_pct = _entry_stop(new_dir, i)
                     commission_rf2 = per_leg_commission(shares_rf, req)
                     entry_slippage_rf = abs(shares_rf * (fill_price_rf - price))
                     position = shares_rf
@@ -617,6 +730,19 @@ def _run_simulation(
         buy_fired_raw, buy_rules_list, new_direction = buy_signal_fn(i, curr_regime_active)
         buy_fires = position == 0 and hour_ok and buy_fired_raw
 
+        # A graph size or stop series with no value at this bar blocks the
+        # entry.  Checked before skip-after-stop, so a bar that could never
+        # trade does not use up a skip.  Never set on the rule path.
+        if buy_fires and entry_gate:
+            blocked = _entry_blocked(i)
+            if blocked is not None:
+                buy_fires = False
+                if signal_trace is not None:
+                    signal_trace.append({
+                        "date": date, "price": round(price, 4), "position": "flat",
+                        "action": f"SKIPPED (no {blocked} value)",
+                    })
+
         if b23_mode:
             sr_key = 'long' if curr_regime_active else 'short'
             if buy_fires and skip_remaining_by_dir[sr_key] > 0:
@@ -644,13 +770,13 @@ def _run_simulation(
             ts = _dir_ts(position_direction)
 
             # Dynamic sizing: reduce position after consecutive stop losses
-            effective_size = _dir_size(position_direction)
+            effective_size = _entry_size(position_direction, i)
             if b23_mode:
                 csl = consec_sl_count_by_dir[position_direction]
             else:
                 csl = consec_sl_count
             if ds and ds.enabled and csl >= ds.consec_sls:
-                effective_size = _dir_size(position_direction) * (ds.reduced_pct / 100)
+                effective_size = _entry_size(position_direction, i) * (ds.reduced_pct / 100)
 
             # Slippage: short entry fills lower (worse for seller), long fills higher (worse for buyer)
             if position_direction == "short":
@@ -666,6 +792,8 @@ def _run_simulation(
             capital -= shares * fill_price + commission
             trail_peak = fill_price
             trail_stop_price = None
+            if stop_arr is not None:
+                entry_stop_pct = _entry_stop(position_direction, i)
             entry_slippage = abs(shares * (fill_price - price))
             entry_type = "short" if position_direction == "short" else "buy"
             trades.append({
@@ -712,8 +840,9 @@ def _run_simulation(
                         trail_stop_price = trail_peak - ts.value * atr_val
                     trail_hit = low.iloc[i] <= trail_stop_price
 
-            # Check fixed stop loss (B25: use per-direction stop when b23_mode)
-            stop_loss_pct_eff = _dir_stop(position_direction)
+            # Check fixed stop loss (B25: use per-direction stop when b23_mode).
+            # A graph stop series fixed the trade's stop at its entry bar.
+            stop_loss_pct_eff = entry_stop_pct if stop_arr is not None else _dir_stop(position_direction)
             if position_direction == "short":
                 stop_price_limit = entry_price * (1 + stop_loss_pct_eff / 100) if (stop_loss_pct_eff and stop_loss_pct_eff > 0) else None
                 stop_hit = stop_price_limit is not None and high.iloc[i] >= stop_price_limit
@@ -792,6 +921,7 @@ def _run_simulation(
                 entry_ts = None
                 trail_peak = 0.0
                 trail_stop_price = None
+                entry_stop_pct = None
                 ds_trigger = ds.trigger if ds else "sl"
                 if b23_mode:
                     if is_post_loss_trigger(exit_reason, ds_trigger):

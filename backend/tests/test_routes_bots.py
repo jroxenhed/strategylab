@@ -125,6 +125,20 @@ def test_patch_bot_accepts_exactly_100_rules_via_http(field, client_with_stub_ma
     assert response.json() == {"ok": True}
 
 
+@pytest.mark.parametrize("field,value", [
+    ("stop_loss_pct", 3.0),
+    ("position_size", 0.5),
+    ("trailing_stop", {"type": "pct", "value": 4.0}),
+])
+def test_patch_bot_refuses_a_field_it_cannot_change(field, value, client_with_stub_manager):
+    """LT-8: an unknown field was dropped and the PATCH answered ok."""
+    client, mgr = client_with_stub_manager
+    response = client.patch(f"/api/bots/{_BOT_ID}", json={field: value})
+    assert response.status_code == 422
+    assert field in str(response.json())
+    mgr.update_bot.assert_not_called()
+
+
 def test_patch_bot_503_when_bot_manager_unset(client, monkeypatch):
     """F143: bot_manager=None → 503 with 'Bot manager not initialized'.
 

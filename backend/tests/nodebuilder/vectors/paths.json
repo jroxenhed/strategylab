@@ -1,0 +1,783 @@
+{
+ "_about": "Shared test vectors for the node path helpers. backend/nodebuilder/migrate.py (pytest: test_migrate.py) and frontend/src/features/nodebuilder/paths.ts (vitest: paths.vectors.test.ts) must both pass every case. Change the two implementations and this file together.",
+ "graphs": {
+  "tree": {
+   "nodes": {
+    "n_ticker": {
+     "id": "n_ticker",
+     "type": "ticker",
+     "name": "aapl",
+     "parent": null
+    },
+    "n_rsi": {
+     "id": "n_rsi",
+     "type": "rsi",
+     "name": "rsi",
+     "parent": null
+    },
+    "n_regime": {
+     "id": "n_regime",
+     "type": "subnet",
+     "name": "regime",
+     "parent": null
+    },
+    "n_spy": {
+     "id": "n_spy",
+     "type": "ticker",
+     "name": "spy",
+     "parent": "n_regime"
+    },
+    "n_sma": {
+     "id": "n_sma",
+     "type": "sma",
+     "name": "sma",
+     "parent": "n_regime"
+    },
+    "n_inner": {
+     "id": "n_inner",
+     "type": "subnet",
+     "name": "inner",
+     "parent": "n_regime"
+    },
+    "n_deep": {
+     "id": "n_deep",
+     "type": "rsi",
+     "name": "rsi",
+     "parent": "n_inner"
+    },
+    "/rsi_ab12": {
+     "id": "/rsi_ab12",
+     "type": "rsi",
+     "name": "rsi_ab12",
+     "parent": null
+    }
+   }
+  },
+  "groups": {
+   "nodes": {
+    "n_aapl": {
+     "id": "n_aapl",
+     "type": "ticker",
+     "name": "aapl",
+     "parent": null
+    },
+    "n_aapl2": {
+     "id": "n_aapl2",
+     "type": "ticker",
+     "name": "aapl2",
+     "parent": null
+    },
+    "n_regime": {
+     "id": "n_regime",
+     "type": "subnet",
+     "name": "regime",
+     "parent": null
+    },
+    "n_spy": {
+     "id": "n_spy",
+     "type": "ticker",
+     "name": "spy",
+     "parent": "n_regime"
+    },
+    "n_net": {
+     "id": "n_net",
+     "type": "subnet",
+     "name": "net",
+     "parent": null
+    },
+    "g_long": {
+     "id": "g_long",
+     "type": "output_group",
+     "name": "long_leg",
+     "parent": null,
+     "params": {
+      "ticker": "/aapl"
+     }
+    },
+    "g_b": {
+     "id": "g_b",
+     "type": "output_group",
+     "name": "b_leg",
+     "parent": null,
+     "params": {
+      "ticker": "/aapl2"
+     }
+    },
+    "g_short": {
+     "id": "g_short",
+     "type": "output_group",
+     "name": "short_leg",
+     "parent": null,
+     "params": {
+      "ticker": "/regime/spy"
+     }
+    },
+    "g_rel": {
+     "id": "g_rel",
+     "type": "output_group",
+     "name": "rel_leg",
+     "parent": null,
+     "params": {
+      "ticker": "regime/spy"
+     }
+    },
+    "g_inner": {
+     "id": "g_inner",
+     "type": "output_group",
+     "name": "inner_leg",
+     "parent": "n_net",
+     "params": {
+      "ticker": "tk"
+     }
+    },
+    "n_tk": {
+     "id": "n_tk",
+     "type": "ticker",
+     "name": "tk",
+     "parent": "g_inner"
+    },
+    "g_up": {
+     "id": "g_up",
+     "type": "output_group",
+     "name": "up_leg",
+     "parent": "n_net",
+     "params": {
+      "ticker": "../aapl"
+     }
+    },
+    "n_other": {
+     "id": "n_other",
+     "type": "rsi",
+     "name": "rsi",
+     "parent": null,
+     "params": {
+      "ticker": "/aapl"
+     }
+    }
+   }
+  }
+ },
+ "is_valid_name": [
+  {
+   "input": "rsi",
+   "expect": true
+  },
+  {
+   "input": "_x9",
+   "expect": true
+  },
+  {
+   "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "expect": true
+  },
+  {
+   "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "expect": false
+  },
+  {
+   "input": "",
+   "expect": false
+  },
+  {
+   "input": "RSI",
+   "expect": false
+  },
+  {
+   "input": "1rsi",
+   "expect": false
+  },
+  {
+   "input": "rsi-fast",
+   "expect": false
+  },
+  {
+   "input": "rsi fast",
+   "expect": false
+  },
+  {
+   "input": "rsi/fast",
+   "expect": false
+  }
+ ],
+ "sanitize_name": [
+  {
+   "input": "rsi_ab12",
+   "expect": "rsi_ab12"
+  },
+  {
+   "input": "Ticker AAPL.1d",
+   "expect": "ticker_aapl_1d"
+  },
+  {
+   "input": "regime/cmp_regime_0",
+   "expect": "regime_cmp_regime_0"
+  },
+  {
+   "input": "bb_period_20_std_2.0",
+   "expect": "bb_period_20_std_2_0"
+  },
+  {
+   "input": "",
+   "expect": "node"
+  },
+  {
+   "input": "1abc",
+   "expect": "n_1abc"
+  },
+  {
+   "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "expect": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  },
+  {
+   "input": "a:b-c",
+   "expect": "a_b_c"
+  }
+ ],
+ "default_name": [
+  {
+   "id": "/rsi_ab12",
+   "type": "rsi",
+   "expect": "rsi_ab12"
+  },
+  {
+   "id": "/ticker_aapl_1d_yahoo",
+   "type": "ticker",
+   "expect": "ticker_aapl_1d_yahoo"
+  },
+  {
+   "id": "/regime/cmp_regime_0",
+   "type": "above",
+   "expect": "regime_cmp_regime_0"
+  },
+  {
+   "id": "3f2b8a1c-1111-2222-3333-444455556666",
+   "type": "rsi",
+   "expect": "rsi1"
+  },
+  {
+   "id": "/3F2B8A1C-1111-2222-3333-444455556666",
+   "type": "crosses_above",
+   "expect": "crosses_above1"
+  },
+  {
+   "id": "n_k3x9a0bq",
+   "type": "and",
+   "expect": "and1"
+  },
+  {
+   "id": "n_short",
+   "type": "and",
+   "expect": "n_short"
+  }
+ ],
+ "unique_name": [
+  {
+   "base": "rsi",
+   "taken": [],
+   "expect": "rsi"
+  },
+  {
+   "base": "rsi",
+   "taken": [
+    "rsi"
+   ],
+   "expect": "rsi1"
+  },
+  {
+   "base": "rsi",
+   "taken": [
+    "rsi",
+    "rsi1"
+   ],
+   "expect": "rsi2"
+  },
+  {
+   "base": "rsi1",
+   "taken": [
+    "rsi1"
+   ],
+   "expect": "rsi2"
+  },
+  {
+   "base": "x9",
+   "taken": [
+    "x9",
+    "x10"
+   ],
+   "expect": "x11"
+  },
+  {
+   "base": "cmp_buy_0",
+   "taken": [
+    "cmp_buy_0"
+   ],
+   "expect": "cmp_buy_1"
+  },
+  {
+   "base": "_1",
+   "taken": [
+    "_1"
+   ],
+   "expect": "_2"
+  },
+  {
+   "base": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "taken": [
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   ],
+   "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"
+  }
+ ],
+ "node_path": [
+  {
+   "graph": "tree",
+   "id": "n_ticker",
+   "expect": "/aapl"
+  },
+  {
+   "graph": "tree",
+   "id": "n_rsi",
+   "expect": "/rsi"
+  },
+  {
+   "graph": "tree",
+   "id": "n_regime",
+   "expect": "/regime"
+  },
+  {
+   "graph": "tree",
+   "id": "n_spy",
+   "expect": "/regime/spy"
+  },
+  {
+   "graph": "tree",
+   "id": "n_sma",
+   "expect": "/regime/sma"
+  },
+  {
+   "graph": "tree",
+   "id": "n_inner",
+   "expect": "/regime/inner"
+  },
+  {
+   "graph": "tree",
+   "id": "n_deep",
+   "expect": "/regime/inner/rsi"
+  },
+  {
+   "graph": "tree",
+   "id": "/rsi_ab12",
+   "expect": "/rsi_ab12"
+  }
+ ],
+ "find_by_path": [
+  {
+   "graph": "tree",
+   "path": "/rsi",
+   "relative_to": null,
+   "expect": "n_rsi",
+   "why": "absolute, root child"
+  },
+  {
+   "graph": "tree",
+   "path": "/regime/spy",
+   "relative_to": null,
+   "expect": "n_spy",
+   "why": "absolute, nested"
+  },
+  {
+   "graph": "tree",
+   "path": "/regime/inner/rsi",
+   "relative_to": null,
+   "expect": "n_deep",
+   "why": "same name as /rsi, other parent"
+  },
+  {
+   "graph": "tree",
+   "path": "/rsi_ab12",
+   "relative_to": null,
+   "expect": "/rsi_ab12",
+   "why": "an old path-like id is found by its name"
+  },
+  {
+   "graph": "tree",
+   "path": "/regime/nope",
+   "relative_to": null,
+   "expect": null,
+   "why": "missing child"
+  },
+  {
+   "graph": "tree",
+   "path": "/",
+   "relative_to": null,
+   "expect": null,
+   "why": "the root is not a node"
+  },
+  {
+   "graph": "tree",
+   "path": "",
+   "relative_to": null,
+   "expect": null,
+   "why": "empty path"
+  },
+  {
+   "graph": "tree",
+   "path": "//rsi",
+   "relative_to": null,
+   "expect": "n_rsi",
+   "why": "empty segments are skipped"
+  },
+  {
+   "graph": "tree",
+   "path": "/regime/./spy",
+   "relative_to": null,
+   "expect": "n_spy",
+   "why": "dot stays"
+  },
+  {
+   "graph": "tree",
+   "path": "/regime/../rsi",
+   "relative_to": null,
+   "expect": "n_rsi",
+   "why": "dot-dot goes up"
+  },
+  {
+   "graph": "tree",
+   "path": "/..",
+   "relative_to": null,
+   "expect": null,
+   "why": "above the root finds nothing"
+  },
+  {
+   "graph": "tree",
+   "path": "/RSI",
+   "relative_to": null,
+   "expect": null,
+   "why": "names are case-sensitive"
+  },
+  {
+   "graph": "tree",
+   "path": "rsi",
+   "relative_to": null,
+   "expect": "n_rsi",
+   "why": "relative with no base starts at the root"
+  },
+  {
+   "graph": "tree",
+   "path": "../sma",
+   "relative_to": "n_spy",
+   "expect": "n_sma",
+   "why": "sibling"
+  },
+  {
+   "graph": "tree",
+   "path": "../../rsi",
+   "relative_to": "n_spy",
+   "expect": "n_rsi",
+   "why": "up two levels"
+  },
+  {
+   "graph": "tree",
+   "path": "..",
+   "relative_to": "n_spy",
+   "expect": "n_regime",
+   "why": "the enclosing network"
+  },
+  {
+   "graph": "tree",
+   "path": ".",
+   "relative_to": "n_spy",
+   "expect": "n_spy",
+   "why": "the node itself"
+  },
+  {
+   "graph": "tree",
+   "path": "spy",
+   "relative_to": "n_regime",
+   "expect": "n_spy",
+   "why": "a bare name goes into a child"
+  },
+  {
+   "graph": "tree",
+   "path": "./spy",
+   "relative_to": "n_regime",
+   "expect": "n_spy",
+   "why": "dot then child"
+  },
+  {
+   "graph": "tree",
+   "path": "inner/rsi",
+   "relative_to": "n_regime",
+   "expect": "n_deep",
+   "why": "two levels down"
+  },
+  {
+   "graph": "tree",
+   "path": "../inner/rsi",
+   "relative_to": "n_sma",
+   "expect": "n_deep",
+   "why": "sibling network's child"
+  },
+  {
+   "graph": "tree",
+   "path": "/rsi",
+   "relative_to": "n_spy",
+   "expect": "n_rsi",
+   "why": "absolute ignores relative_to"
+  },
+  {
+   "graph": "tree",
+   "path": "../..",
+   "relative_to": "n_spy",
+   "expect": null,
+   "why": "ends at the root"
+  },
+  {
+   "graph": "tree",
+   "path": "../../..",
+   "relative_to": "n_spy",
+   "expect": null,
+   "why": "above the root"
+  },
+  {
+   "graph": "tree",
+   "path": "../x",
+   "relative_to": "n_missing",
+   "expect": null,
+   "why": "unknown relative_to"
+  },
+  {
+   "graph": "tree",
+   "path": "rsi",
+   "relative_to": "n_rsi",
+   "expect": null,
+   "why": "rsi has no children"
+  }
+ ],
+ "rename_node": [
+  {
+   "graph": "tree",
+   "id": "n_rsi",
+   "new_name": "rsi_fast",
+   "expect": {
+    "paths": {
+     "n_ticker": "/aapl",
+     "n_rsi": "/rsi_fast",
+     "n_regime": "/regime",
+     "n_spy": "/regime/spy",
+     "n_sma": "/regime/sma",
+     "n_inner": "/regime/inner",
+     "n_deep": "/regime/inner/rsi",
+     "/rsi_ab12": "/rsi_ab12"
+    }
+   },
+   "why": "plain rename"
+  },
+  {
+   "graph": "tree",
+   "id": "n_inner",
+   "new_name": "core",
+   "expect": {
+    "paths": {
+     "n_ticker": "/aapl",
+     "n_rsi": "/rsi",
+     "n_regime": "/regime",
+     "n_spy": "/regime/spy",
+     "n_sma": "/regime/sma",
+     "n_inner": "/regime/core",
+     "n_deep": "/regime/core/rsi",
+     "/rsi_ab12": "/rsi_ab12"
+    }
+   },
+   "why": "renaming a network moves its children's paths"
+  },
+  {
+   "graph": "tree",
+   "id": "n_deep",
+   "new_name": "sma",
+   "expect": {
+    "paths": {
+     "n_ticker": "/aapl",
+     "n_rsi": "/rsi",
+     "n_regime": "/regime",
+     "n_spy": "/regime/spy",
+     "n_sma": "/regime/sma",
+     "n_inner": "/regime/inner",
+     "n_deep": "/regime/inner/sma",
+     "/rsi_ab12": "/rsi_ab12"
+    }
+   },
+   "why": "sma is taken only under /regime, not under /regime/inner"
+  },
+  {
+   "graph": "tree",
+   "id": "n_rsi",
+   "new_name": "rsi",
+   "expect": {
+    "paths": {
+     "n_ticker": "/aapl",
+     "n_rsi": "/rsi",
+     "n_regime": "/regime",
+     "n_spy": "/regime/spy",
+     "n_sma": "/regime/sma",
+     "n_inner": "/regime/inner",
+     "n_deep": "/regime/inner/rsi",
+     "/rsi_ab12": "/rsi_ab12"
+    }
+   },
+   "why": "same name is a no-op"
+  },
+  {
+   "graph": "tree",
+   "id": "n_spy",
+   "new_name": "sma",
+   "expect": {
+    "error": "name_duplicate"
+   },
+   "why": "sibling already called sma"
+  },
+  {
+   "graph": "tree",
+   "id": "n_rsi",
+   "new_name": "regime",
+   "expect": {
+    "error": "name_duplicate"
+   },
+   "why": "root already has regime"
+  },
+  {
+   "graph": "tree",
+   "id": "n_rsi",
+   "new_name": "Bad",
+   "expect": {
+    "error": "name_invalid"
+   },
+   "why": "upper case"
+  },
+  {
+   "graph": "tree",
+   "id": "n_rsi",
+   "new_name": "",
+   "expect": {
+    "error": "name_invalid"
+   },
+   "why": "empty"
+  },
+  {
+   "graph": "tree",
+   "id": "n_rsi",
+   "new_name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "expect": {
+    "error": "name_invalid"
+   },
+   "why": "too long"
+  },
+  {
+   "graph": "tree",
+   "id": "n_missing",
+   "new_name": "x",
+   "expect": {
+    "error": "node_not_found"
+   },
+   "why": "unknown id"
+  }
+ ],
+ "rewrite_path_refs": [
+  {
+   "graph": "groups",
+   "id": "n_aapl",
+   "new_name": "msft",
+   "expect": {
+    "tickers": {
+     "g_long": "/msft",
+     "g_b": "/aapl2",
+     "g_short": "/regime/spy",
+     "g_rel": "regime/spy",
+     "g_inner": "tk",
+     "g_up": "/msft"
+    }
+   },
+   "why": "absolute exact match moves; /aapl2 is not under /aapl; a relative ../aapl that no longer lands becomes absolute; a non-group ticker param is left alone"
+  },
+  {
+   "graph": "groups",
+   "id": "n_regime",
+   "new_name": "risk",
+   "expect": {
+    "tickers": {
+     "g_long": "/aapl",
+     "g_b": "/aapl2",
+     "g_short": "/risk/spy",
+     "g_rel": "/risk/spy",
+     "g_inner": "tk",
+     "g_up": "../aapl"
+    }
+   },
+   "why": "absolute prefix under the renamed network moves; a relative ref resolved against the root becomes absolute"
+  },
+  {
+   "graph": "groups",
+   "id": "n_net",
+   "new_name": "net2",
+   "expect": {
+    "tickers": {
+     "g_long": "/aapl",
+     "g_b": "/aapl2",
+     "g_short": "/regime/spy",
+     "g_rel": "regime/spy",
+     "g_inner": "tk",
+     "g_up": "../aapl"
+    }
+   },
+   "why": "relative refs inside the renamed network still land, so they stay as written"
+  },
+  {
+   "graph": "groups",
+   "id": "g_inner",
+   "new_name": "leg2",
+   "expect": {
+    "tickers": {
+     "g_long": "/aapl",
+     "g_b": "/aapl2",
+     "g_short": "/regime/spy",
+     "g_rel": "regime/spy",
+     "g_inner": "tk",
+     "g_up": "../aapl"
+    }
+   },
+   "why": "renaming the group itself: its own relative ref still lands"
+  },
+  {
+   "graph": "groups",
+   "id": "n_tk",
+   "new_name": "tk2",
+   "expect": {
+    "tickers": {
+     "g_long": "/aapl",
+     "g_b": "/aapl2",
+     "g_short": "/regime/spy",
+     "g_rel": "regime/spy",
+     "g_inner": "/net/inner_leg/tk2",
+     "g_up": "../aapl"
+    }
+   },
+   "why": "a relative ref to a renamed child no longer lands and becomes the absolute new path"
+  },
+  {
+   "graph": "groups",
+   "id": "n_spy",
+   "new_name": "qqq",
+   "expect": {
+    "tickers": {
+     "g_long": "/aapl",
+     "g_b": "/aapl2",
+     "g_short": "/regime/qqq",
+     "g_rel": "/regime/qqq",
+     "g_inner": "tk",
+     "g_up": "../aapl"
+    }
+   },
+   "why": "a leaf rename inside a network"
+  }
+ ]
+}

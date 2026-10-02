@@ -40,6 +40,7 @@ from routes.backtest_optimizer import router as backtest_optimizer_router
 from routes.walk_forward import router as walk_forward_router
 from routes.strategies import router as strategies_router
 from routes.nodebuilder import router as nodebuilder_router
+from routes.graphs import router as graphs_router, MAX_BODY_BYTES as GRAPHS_MAX_BODY_BYTES
 from routes.turnaround import router as turnaround_router
 from routes.premises import router as premises_router
 from routes.gateway import router as gateway_router
@@ -56,7 +57,9 @@ async def lifespan(app: FastAPI):
     from fileutil import cleanup_orphan_tmps
     from journal import DATA_DIR  # data/ — used by journal, bot_manager, trading watchlist
     backend_dir = Path(__file__).resolve().parent
-    cleanup_orphan_tmps([DATA_DIR, backend_dir])
+    from nodebuilder.storage import graph_dirs
+    # graphs/ and graph_library/ are listed too: cleanup does not look in sub-folders.
+    cleanup_orphan_tmps([DATA_DIR, *graph_dirs(DATA_DIR), backend_dir])
 
     from shared import init_ibkr
     from broker import _trading_providers
@@ -151,7 +154,7 @@ app = FastAPI(
     lifespan=lifespan,
     responses={
         413: {
-            "description": "Request body exceeds STRATEGYLAB_MAX_BODY_BYTES (default 1 MB).",
+            "description": "Request body exceeds STRATEGYLAB_MAX_BODY_BYTES (default 1 MB; /api/graphs allows 2 MB).",
             "content": {"application/json": {"schema": {"type": "object", "properties": {"detail": {"type": "string"}}}}},
         },
     },
@@ -178,7 +181,10 @@ try:
 except (ValueError, TypeError):
     logger.warning("Invalid STRATEGYLAB_MAX_BODY_BYTES=%r, falling back to %d", _max_body_env, DEFAULT_MAX_BYTES)
     _max_body = DEFAULT_MAX_BYTES
-app.add_middleware(BodySizeLimitMiddleware, max_bytes=_max_body)
+# F435: the graphs API contract allows 2 MB bodies (routes/graphs.py enforces
+# its own 2 MB cap). Every other route keeps the global cap above.
+BODY_PATH_LIMITS = {"/api/graphs": GRAPHS_MAX_BODY_BYTES}
+app.add_middleware(BodySizeLimitMiddleware, max_bytes=_max_body, path_limits=BODY_PATH_LIMITS)
 
 # F199: per-route request deadline.  This is added LAST so it becomes the
 # outermost middleware layer (deadline clock starts before body-size check).
@@ -208,6 +214,7 @@ app.include_router(backtest_optimizer_router)
 app.include_router(walk_forward_router)
 app.include_router(strategies_router)
 app.include_router(nodebuilder_router)
+app.include_router(graphs_router)
 app.include_router(turnaround_router)
 app.include_router(premises_router)
 app.include_router(gateway_router)

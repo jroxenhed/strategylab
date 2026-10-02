@@ -1,0 +1,118 @@
+/* Graph/chart split (spec S28). Tokens from tokens.css, scoped to the builder. */
+
+.nodebuilder-root .nb-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.nodebuilder-root .nb-split__group {
+  flex: 1;
+  min-height: 0;
+}
+
+/* The canvas panel's content fills it. */
+.nodebuilder-root .nb-split__fill {
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* 6px hit area drawn as a 1px line (foundation 3.3). */
+.nodebuilder-root .nb-split__handle {
+  height: 6px;
+  margin: -3px 0;
+  position: relative;
+  z-index: 5;
+  cursor: row-resize;
+  background: transparent;
+  outline: none;
+}
+.nodebuilder-root .nb-split__handle::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 2.5px;
+  height: 1px;
+  background: var(--nb-border);
+}
+.nodebuilder-root .nb-split__handle:hover::after,
+.nodebuilder-root .nb-split__handle:focus-visible::after {
+  background: var(--nb-border-strong);
+}
+.nodebuilder-root .nb-split__handle[data-separator='active']::after {
+  background: var(--nb-selection);
+}
+
+.nodebuilder-root .nb-chart-panel {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--nb-bg);
+}
+
+.nodebuilder-root .nb-chart-bar {
+  flex: 0 0 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 10px;
+  background: var(--nb-bg-panel);
+  border: none;
+  border-top: 1px solid var(--nb-border);
+  border-bottom: 1px solid var(--nb-border);
+  color: var(--nb-text-muted);
+  font: 11px/20px var(--nb-font-sans);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  min-width: 0;
+}
+.nodebuilder-root .nb-chart-bar:hover {
+  background: var(--nb-bg-elevated);
+}
+.nodebuilder-root .nb-chart-bar:focus-visible {
+  outline: 1px solid var(--nb-border-focus);
+  outline-offset: -1px;
+}
+.nodebuilder-root .nb-chart-bar__toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.nodebuilder-root .nb-chart-bar__spinner {
+  width: 10px;
+  height: 10px;
+}
+.nodebuilder-root .nb-chart-bar__summary {
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: 11px/20px var(--nb-font-mono);
+  color: var(--nb-text-secondary);
+}
+.nodebuilder-root .nb-chart-bar__dim { color: var(--nb-text-dim); }
+.nodebuilder-root .nb-chart-bar__stale,
+.nodebuilder-root .nb-chart-bar__warn { color: var(--nb-warn); }
+.nodebuilder-root .nb-chart-bar__ret--pos { color: var(--nb-ok); }
+.nodebuilder-root .nb-chart-bar__ret--neg { color: var(--nb-error); }
+.nodebuilder-root .nb-chart-bar__running { color: var(--nb-text-muted); }
+
+/* The app's Chart is mounted in here by App (a portal); autoSize fills it. */
+.nodebuilder-root .nb-chart-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}

@@ -1,436 +1,248 @@
-"""Graph -> (indicator_specs, per_bar_program, simulator_settings) compile step.
+"""Graph -> CompiledProgram (plan D4, D5).
 
-Unit 7a — pure functions, no I/O, no side effects.
+The kernel (nodebuilder.kernel.schema.analyze) checks every node: ports,
+attribute reads and writes, stream merges and clashes, types, bypass.  This
+module adds the trading rules that are about the whole graph and builds the
+program:
+
+2. two wires on one input port are refused;
+3. the kernel walk over the flattened graph (networks taken out, plan D7),
+   in topological order;
+4. the terminals, per Output Group (W5): each group has one Entry, which
+   must get a signal, and one Exit, whose missing signal is a warning
+   (a regime_switch group has one of each per side).  A graph with no
+   Output Group is one implicit group, "main", with today's rules;
+5. the indicator family cap.
+
+(Step 1, the refusal of /regime/ nodes, is gone since W5: regime is a
+network and a Regime terminal in the graph, plan D8.  The numbers stay so
+the steps keep their names.)
+
+After the program is built, each group is planned (sim_bridge.plan_group),
+which gives CompiledProgram.groups (nodes_groups.build_group_programs).
+
+compile() raises the first problem; compile_with_diagnostics() lists every
+problem; check_graph() also returns each node's stream schema for
+/validate.  Pure functions, no I/O.
 """
 from __future__ import annotations
 
-from typing import Any
+import logging
+from dataclasses import dataclass, replace
+from typing import Any, Optional
 
-import pandas as pd
-
-from nodebuilder.models import Graph, topological_sort
-from nodebuilder.nodes import NODE_CATALOG, NodeCatalogEntry, get_node
+from nodebuilder import trading as _trading  # noqa: F401  (registers every node type)
+from nodebuilder.diagnostics import Diagnostic, from_error
+from nodebuilder.diagnostics import make as make_diagnostic
 from nodebuilder.evaluator import (
+    _INDICATOR_FAMILY_CAP,
+    NO_EXIT_ATTR,
     CompiledProgram,
     FamilyCapExceededError,
-    HTFGraphNotSupportedError,
-    IndicatorSpec,
-    MissingTerminalError,
-    PerBarOp,
-    RegimeUnsupportedError,
-    SimulatorSetting,
+    GraphTypeError,  # noqa: F401  (re-exported for older imports)
+    MissingTerminalError,  # noqa: F401  (re-exported for older imports)
+    UnknownNodeTypeError,
+    UnsupportedNodeError,
 )
+from nodebuilder.kernel import schema as kschema
+from nodebuilder.kernel.evaluate import analyze_graph, build_steps
+from nodebuilder.kernel.schema import RUN, coded
+from nodebuilder.kernel.stream import STREAM_SCHEMA_VERSION
+from nodebuilder.models import Graph, GraphValidationError
+from nodebuilder.trading import nodes_groups as _groups
+
+logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Helpers kept for older imports
 # ---------------------------------------------------------------------------
 
-_CATALOG_INDEX: dict[str, NodeCatalogEntry] = {e.name: e for e in NODE_CATALOG}
 
+def _wires_into(graph: Graph, node_path: str) -> list:
+    """The wires into *node_path*, ordered by input port (in0, in1, ... in10).
 
-def _indicator_spec_key(catalog_name: str, params: dict) -> tuple:
-    """Stable dedup key for an indicator (catalog_name, params) pair."""
-    return (catalog_name, frozenset(params.items()))
-
-
-def _make_comparison_fn(condition: str, left_attr: str, right_attr: str | None, threshold: float | None):
-    """Return a per-bar callable for a comparison node.
-
-    For series vs series (right_attr is not None), both attrs are read from
-    the attrs dict.  For series vs scalar (threshold is not None), the right
-    side is the scalar value embedded in the closure.
+    The port, not the wire's place in the list, decides the order.  Wires
+    without a numbered port come last, in list order.
     """
-    def _fn(attrs: dict, i: int) -> bool:
-        if i < 1:
-            return False
-        s = attrs.get(left_attr)
-        if s is None:
-            return False
-        v_now = s.iloc[i]
-        v_prev = s.iloc[i - 1]
-
-        if right_attr is not None:
-            r = attrs.get(right_attr)
-            if r is None:
-                return False
-            r_now = r.iloc[i]
-            r_prev = r.iloc[i - 1]
-
-            if condition == "above":
-                return bool(v_now > r_now)
-            elif condition == "below":
-                return bool(v_now < r_now)
-            elif condition == "crosses_above":
-                return bool(v_prev < r_prev and v_now >= r_now)
-            elif condition == "crosses_below":
-                return bool(v_prev > r_prev and v_now <= r_now)
-        elif threshold is not None:
-            if condition == "above":
-                return bool(v_now > threshold)
-            elif condition == "below":
-                return bool(v_now < threshold)
-            elif condition == "crosses_above":
-                return bool(v_prev < threshold <= v_now)
-            elif condition == "crosses_below":
-                return bool(v_prev > threshold >= v_now)
-
-        return False
-
-    return _fn
+    return kschema.wires_into_index(graph).get(node_path, [])
 
 
-def _make_and_fn(input_attrs: list[str]):
-    def _fn(attrs: dict, i: int) -> bool:
-        if i < 1:
-            return False
-        return all(bool(attrs[a].iloc[i]) for a in input_attrs if a in attrs)
-    return _fn
+def _is_rule_type(node_type: str) -> bool:
+    """True for a rule indicator or condition name (stochastic, rising...).
 
-
-def _make_or_fn(input_attrs: list[str]):
-    def _fn(attrs: dict, i: int) -> bool:
-        if i < 1:
-            return False
-        return any(bool(attrs[a].iloc[i]) for a in input_attrs if a in attrs)
-    return _fn
-
-
-def _make_not_fn(input_attr: str):
-    def _fn(attrs: dict, i: int) -> bool:
-        if i < 1:
-            return False
-        s = attrs.get(input_attr)
-        if s is None:
-            return False
-        return not bool(s.iloc[i])
-    return _fn
-
-
-# ---------------------------------------------------------------------------
-# Wire resolution helpers
-# ---------------------------------------------------------------------------
-
-# Multi-output indicator sub-attrs that callers may select via wire.attr
-# instead of getting the primary @write. Wire labels matching these names
-# are treated as explicit port selectors. Other wire.attr values (e.g.
-# "@bool", "@rsi", "@close") are generic labels and we fall back to
-# attr_written_by, since the per-bar op output keys are numbered
-# (@bool_1, @bool_2, ...) and don't match those labels.
-_MULTI_OUTPUT_SUBATTRS = frozenset({
-    "@macd_line", "@macd_signal", "@macd_histogram",
-    "@bb_upper", "@bb_middle", "@bb_lower",
-})
-
-
-def _inbound_attrs(graph: Graph, node_path: str, attr_written_by: dict[str, str]) -> list[str]:
-    """Return the @-attr names flowing INTO *node_path*.
-
-    Wires whose ``wire.attr`` selects a specific sub-output of a multi-output
-    indicator (e.g. ``@macd_signal``, ``@bb_upper``) honor that selection so
-    downstream nodes can compare against the non-primary output. Wires with
-    generic labels (``@close``, ``@rsi``, ``@bool``) fall back to the
-    upstream node's recorded write attribute — necessary because per-bar
-    op outputs are stored under numbered keys (``@bool_1``, ``@bool_2``)
-    that don't match the wire label.
-
-    This resolution mirrors the ComparisonNode dispatcher (historically the
-    only consumer of wire.attr); applying it uniformly here prevents a user
-    from wiring ``MACD.@macd_signal`` into NOT/AND/OR/Entry and silently
-    receiving ``@macd_line``.
+    auto_render turns rules into nodes of these types.  When no node module
+    registers them they are known ideas the graph backtest cannot run yet
+    (unsupported_node), not typos (unknown_node_type).
     """
-    result = []
-    for wire in graph.wires:
-        if wire.to_path == node_path:
-            src = wire.from_path
-            src_node = graph.nodes.get(src)
-            if src_node is None:
-                continue
-            if wire.attr in _MULTI_OUTPUT_SUBATTRS:
-                result.append(wire.attr)
-            else:
-                written = attr_written_by.get(src)
-                if written:
-                    result.append(written)
-    return result
+    from typing import get_args
+
+    from signal_engine import RuleCondition, RuleIndicator
+
+    return node_type in get_args(RuleIndicator) or node_type in get_args(RuleCondition)
 
 
-def _primary_inbound_attr(graph: Graph, node_path: str, attr_written_by: dict[str, str]) -> str | None:
-    """Return the single @-attr written by the first upstream node (for single-input nodes)."""
-    attrs = _inbound_attrs(graph, node_path, attr_written_by)
-    return attrs[0] if attrs else None
+def _unknown_error(node) -> GraphValidationError:
+    if _is_rule_type(node.type):
+        return UnsupportedNodeError(node.id, node.type)
+    return UnknownNodeTypeError(node.id, node.type)
+
+
+def assign_write_names(graph: Graph) -> dict[str, dict[str, str]]:
+    """The name every write param of every node writes (defaults made unique).
+
+    The v3 migration stores these on old graphs so they keep their names.
+    """
+    return kschema.assign_write_names(graph)
 
 
 # ---------------------------------------------------------------------------
-# Public compile() entry point
+# Public entry points
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class GraphCheck:
+    """Everything one compile pass learns about a graph.
+
+    program     : the CompiledProgram, or None when there is an error.
+    diagnostics : every problem, in walk order.
+    streams     : each checked node's OUTPUT StreamSchema, by node id (a node
+                  missing here could not be checked).  ``streams_json()``
+                  gives the /validate form (plan 3.3).
+    """
+    program: Optional[CompiledProgram]
+    diagnostics: list[Diagnostic]
+    streams: dict[str, Any]
+    errors: list[GraphValidationError]
+
+    def streams_json(self) -> dict[str, dict]:
+        return {nid: s.to_json() for nid, s in self.streams.items()}
+
 
 def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "compile" intentionally)
     """Compile a Graph into a CompiledProgram.
 
-    Steps:
-    1. Detect /regime/ nodes → RegimeUnsupportedError
-    2. Topological sort (already validated at Graph construction)
-    3. Walk nodes in topo order, emitting IndicatorSpecs, PerBarOps, SimulatorSettings
-    4. Require Entry terminal → MissingTerminalError if absent
-    5. Verify Entry's input attr is @bool → TypeError if not
-
-    Bypassed nodes: node.bypass=True causes the PerBarOp to be skipped.  The
-    node's writes attribute will be absent from attrs after dispatch, so any
-    downstream reads will get NaN/False from pre-allocated Series.  This is
-    a documented trade-off: bypass is a "soft disable" with no explicit
-    pass-through value.
+    Raises the first error compile finds, in this order: a second wire on
+    one input port, then nodes in topological order, then the Entry and
+    Exit checks, then the indicator family cap, then the group plans.
+    Every raised error carries ``.code`` (plan 4.2).  Use
+    compile_with_diagnostics to get every problem at once.
     """
-    # 1. Regime check
-    for node_path in graph.nodes:
-        if node_path.startswith("/regime/"):
-            raise RegimeUnsupportedError(
-                f"Graph contains a /regime/ node ({node_path!r}). "
-                "Regime is not supported in the graph evaluator at T2."
-            )
+    result = check_graph(graph)
+    if result.errors:
+        raise result.errors[0]
+    assert result.program is not None
+    return result.program
 
-    # 2. Topo sort (Graph.__init__ already ran _assert_acyclic, so no cycles)
-    ordered_nodes = topological_sort(graph)
 
-    indicator_specs: list[IndicatorSpec] = []
-    per_bar_program: list[PerBarOp] = []
-    simulator_settings: list[SimulatorSetting] = []
+def compile_with_diagnostics(graph: Graph):
+    """Compile and collect every problem instead of stopping at the first.
 
-    # Track which unique indicator (catalog_name, params) specs we've emitted.
-    # Maps spec_key → write_attr so we can reuse the same attr for dedup'ed specs.
-    indicator_key_to_attr: dict[tuple, str] = {}
+    Returns ``(program or None, diagnostics)``.  The program is None when any
+    diagnostic is an error.  Warnings (exit_unconnected, size_unit_suspect,
+    attr_shadowed) do not stop the compile.  Pure: no data is fetched.
+    """
+    result = check_graph(graph)
+    return result.program, result.diagnostics
 
-    # Maps node_path → the @-attr name that node writes (for wire resolution)
-    attr_written_by: dict[str, str] = {}
 
-    entry_attr: str | None = None
-    exit_attr: str | None = None
+def stream_schemas(graph: Graph) -> dict[str, dict]:
+    """Each node's output stream in the /validate form, by node id."""
+    return check_graph(graph).streams_json()
 
-    # Assign unique @-attr names for derived (bool) nodes
-    _op_counter: dict[str, int] = {}
 
-    def _next_attr(base: str) -> str:
-        _op_counter[base] = _op_counter.get(base, 0) + 1
-        return f"@{base}_{_op_counter[base]}"
+def check_graph(graph: Graph) -> GraphCheck:
+    """One compile pass: program (or None), diagnostics and node streams."""
+    found: list[tuple[Diagnostic, Optional[GraphValidationError]]] = []
 
-    for node in ordered_nodes:
-        node_type = node.type
-        node_path = node.id
+    def _record(exc: GraphValidationError) -> None:
+        found.append((from_error(exc), exc))
 
-        # Ticker: source node — provides raw OHLCV attrs; no spec or op needed.
-        # The OHLCV attrs (@open, @high, @low, @close, @volume) are provided
-        # externally in the attrs dict before evaluate_graph is called.
-        if node_type == "ticker":
-            # Record what attrs this node writes so downstream wires resolve
-            # correctly.  We mark the primary "close" output as the wire attr.
-            # In practice the caller seeds these, but we record @close so that
-            # a wire from ticker → rsi resolves to "@close".
-            attr_written_by[node_path] = "@close"
+    def _warn(code: str, message: str, node_id: Optional[str]) -> None:
+        # Always a warning, even for a code diagnostics.SEVERITY_BY_CODE
+        # does not list yet (setting_shadowed, W5).
+        found.append((make_diagnostic(code, message, node_id=node_id, severity="warning"), None))
+
+    # 2. One wire per input port.  The Graph model refuses a second wire on a
+    # port, so this only fires for a graph built without validation
+    # (/validate's fallback).  It keeps compile, storage, Run and bot deploy
+    # agreeing with /validate on which graphs are valid.
+    seen_ports: set[tuple[str, str]] = set()
+    for wire in graph.wires:
+        if not wire.to_port:
             continue
+        key = (wire.to_path, wire.to_port)
+        if key in seen_ports:
+            _record(coded(GraphValidationError(
+                f"Input {wire.to_port} of {wire.to_path!r} has more than one wire.",
+                node_id=wire.to_path,
+            ), "port_duplicate", port=wire.to_port))
+        seen_ports.add(key)
 
-        # --- Indicator nodes ---
-        if node_type in ("rsi", "macd", "sma", "ema", "bollinger", "atr"):
-            catalog_entry = _CATALOG_INDEX.get(node_type)
-            if catalog_entry is None:
-                continue
+    # 3. The kernel walk, over the flat graph (networks taken out).  Node
+    # ids in the flat graph are the ids the user sees (W5; W6 adds
+    # composite ids for library assets, so read node types from
+    # analysis.graph, never from the source graph).
+    analysis, flat = analyze_graph(graph, unknown_error=_unknown_error)
+    found.extend(analysis.found)
+    nodes = analysis.nodes
 
-            params = dict(node.params) if node.params else {}
-            # Fill in defaults for any missing params
-            default_params = catalog_entry.defaults.get("params", {})
-            for k, v in default_params.items():
-                params.setdefault(k, v)
+    # 4. Terminals, sorted into Output Groups (plan D7).  A graph with no
+    # group is one implicit group, "main", with the rules and messages
+    # compile has had since W1 (nodes_groups.layout_groups).
+    layout = _groups.layout_groups(graph, flat, analysis, _record, _warn)
+    entry_attr, entry_node = layout.entry_attr, layout.entry_node
+    exit_attr, exit_node = layout.exit_attr, layout.exit_node
 
-            spec_key = _indicator_spec_key(node_type, params)
-            if spec_key not in indicator_key_to_attr:
-                # Determine write_attr (the primary output attr name)
-                primary_write = catalog_entry.writes[0] if catalog_entry.writes else f"@{node_type}"
-                indicator_key_to_attr[spec_key] = primary_write
-                indicator_specs.append(
-                    IndicatorSpec(
-                        catalog_name=node_type,
-                        params=params,
-                        write_attr=primary_write,
-                        node_path=node_path,
-                    )
-                )
-
-            # This node "writes" the primary output attr (or macd-specific one)
-            attr_written_by[node_path] = indicator_key_to_attr[spec_key]
-
-            # Bypassed indicator: downstream sees no value (attr absent from attrs)
-            # Compile still records the spec so compute_indicators_from_specs will
-            # compute it — but we skip registering the node's write_attr.
-            if node.bypass:
-                attr_written_by.pop(node_path, None)
-
+    # 5. Indicator family cap: distinct (type, params, inputs) per family.
+    distinct: dict[str, list[tuple[tuple, str]]] = {}
+    for nid in analysis.order:
+        res = nodes.get(nid)
+        if res is None or res.status != RUN or res.node_type is None:
             continue
-
-        # --- Comparison nodes ---
-        if node_type in ("above", "below", "crosses_above", "crosses_below"):
-            if node.bypass:
-                continue
-
-            # Collect the two inbound attrs. Mirrors _inbound_attrs: only
-            # multi-output sub-attrs (e.g. @macd_signal, @bb_upper) are
-            # honored as explicit port selectors; generic labels like
-            # @close / @rsi / @bool fall back to attr_written_by so per-bar
-            # op outputs (numbered @bool_N keys) resolve correctly.
-            inbound: list[str] = []
-            for wire in graph.wires:
-                if wire.to_path == node_path:
-                    if wire.attr in _MULTI_OUTPUT_SUBATTRS:
-                        inbound.append(wire.attr)
-                    else:
-                        src = wire.from_path
-                        written = attr_written_by.get(src)
-                        if written:
-                            inbound.append(written)
-
-            params = dict(node.params) if node.params else {}
-            threshold = params.get("threshold")
-
-            # T2 constraint: crossover comparisons need history (iloc[i-1]).
-            # Indicator/raw attrs (@close, @rsi, @macd_line ...) are full-length
-            # Series; per-bar derived attrs (@bool_N, written by other comparison
-            # /logic ops) only get iloc[i] populated at run time, so iloc[i-1] is
-            # NaN every tick → crossover silently never fires. Reject at compile.
-            if node_type in ("crosses_above", "crosses_below"):
-                for a in inbound:
-                    if a.startswith("@bool_"):
-                        raise TypeError(
-                            f"Crossover node {node_path!r} reads from a derived "
-                            f"signal ({a!r}). Crossovers require indicator or raw "
-                            f"OHLCV inputs at T2; comparing per-bar derived booleans "
-                            f"is unsupported (no history). Use AND/OR over plain "
-                            f"comparisons, or land Signal Processing nodes in T3."
-                        )
-
-            if len(inbound) >= 2:
-                left_attr, right_attr = inbound[0], inbound[1]
-                fn = _make_comparison_fn(node_type, left_attr, right_attr, None)
-                reads = (left_attr, right_attr)
-            elif len(inbound) == 1 and threshold is not None:
-                left_attr = inbound[0]
-                fn = _make_comparison_fn(node_type, left_attr, None, float(threshold))
-                reads = (left_attr,)
-            else:
-                # Not enough wires — skip this op
-                continue
-
-            write_attr = _next_attr("bool")
-            attr_written_by[node_path] = write_attr
-            per_bar_program.append(
-                PerBarOp(
-                    node_path=node_path,
-                    reads=tuple(reads),
-                    writes=write_attr,
-                    fn=fn,
-                )
-            )
+        family = res.node_type.meta.get("family")
+        if not family:
             continue
+        spec = tuple((k, res.params.get(k)) for k in res.node_type.meta.get("spec", ()))
+        key = (res.type, spec, res.read_names)
+        seen = distinct.setdefault(family, [])
+        if all(k != key for k, _n in seen):
+            seen.append((key, nid))
+    for family, specs in distinct.items():
+        if len(specs) > _INDICATOR_FAMILY_CAP:
+            _record(FamilyCapExceededError(
+                f"Too many distinct {family!r} specs ({len(specs)}); "
+                f"max {_INDICATOR_FAMILY_CAP} per request",
+                node_id=specs[_INDICATOR_FAMILY_CAP][1],
+            ))
 
-        # --- Logic nodes ---
-        if node_type in ("and", "or", "not"):
-            if node.bypass:
-                continue
+    errors = [exc for _d, exc in found if exc is not None]
+    diagnostics = [d for d, _exc in found]
+    streams = analysis.schemas()
+    if errors:
+        return GraphCheck(None, diagnostics, streams, errors)
 
-            inbound = _inbound_attrs(graph, node_path, attr_written_by)
-
-            if not inbound:
-                continue
-
-            if node_type == "not":
-                fn = _make_not_fn(inbound[0])
-                reads = (inbound[0],)
-            elif node_type == "and":
-                fn = _make_and_fn(inbound)
-                reads = tuple(inbound)
-            else:  # or
-                fn = _make_or_fn(inbound)
-                reads = tuple(inbound)
-
-            write_attr = _next_attr("bool")
-            attr_written_by[node_path] = write_attr
-            per_bar_program.append(
-                PerBarOp(
-                    node_path=node_path,
-                    reads=reads,
-                    writes=write_attr,
-                    fn=fn,
-                )
-            )
-            continue
-
-        # --- Settings nodes ---
-        if node_type in ("position_size", "stop_loss", "slippage", "commission"):
-            catalog_entry = _CATALOG_INDEX.get(node_type)
-            if catalog_entry is None:
-                continue
-            setting_key = catalog_entry.defaults.get("setting_key", node_type)
-            params = dict(node.params) if node.params else {}
-
-            if node_type == "position_size":
-                simulator_settings.append(SimulatorSetting(key="position_size", value=params.get("size", 1.0)))
-            elif node_type == "stop_loss":
-                simulator_settings.append(SimulatorSetting(key="stop_loss", value=params.get("pct", 5.0)))
-            elif node_type == "slippage":
-                simulator_settings.append(SimulatorSetting(key="slippage_bps", value=params.get("bps", 2.0)))
-            elif node_type == "commission":
-                simulator_settings.append(
-                    SimulatorSetting(key="per_share_rate", value=params.get("per_share_rate", 0.0))
-                )
-                simulator_settings.append(
-                    SimulatorSetting(key="min_per_order", value=params.get("min_per_order", 0.0))
-                )
-            continue
-
-        # --- Output terminals ---
-        if node_type == "entry":
-            # Find the incoming wire attr
-            src_attr = _primary_inbound_attr(graph, node_path, attr_written_by)
-            if src_attr is not None:
-                entry_attr = src_attr
-            continue
-
-        if node_type == "exit":
-            src_attr = _primary_inbound_attr(graph, node_path, attr_written_by)
-            if src_attr is not None:
-                exit_attr = src_attr
-            continue
-
-        # size / stop terminal: compile_active=False at T2 — silently skip.
-        if node_type in ("size", "stop"):
-            continue
-
-        # Unknown node type: skip gracefully (forward compat)
-        continue
-
-    # 3. Require Entry terminal
-    if entry_attr is None:
-        raise MissingTerminalError("Graph has no Entry terminal (no 'entry' node found).")
-
-    # 4. Verify Entry's input attr is boolean — it should come from a node whose
-    # catalog entry writes ("@bool",).  We walk back via attr_written_by to find
-    # the source node type and check its catalog writes.
-    _wrote_entry_attr = {v: k for k, v in attr_written_by.items()}.get(entry_attr)
-    if _wrote_entry_attr is not None:
-        src_node = graph.nodes.get(_wrote_entry_attr)
-        if src_node is not None:
-            src_catalog = _CATALOG_INDEX.get(src_node.type)
-            if src_catalog is not None and src_catalog.writes and "@bool" not in src_catalog.writes:
-                raise TypeError(
-                    f"Entry terminal expects a boolean input, but the wired node "
-                    f"{_wrote_entry_attr!r} (type={src_node.type!r}) writes "
-                    f"{src_catalog.writes!r}, not '@bool'."
-                )
-
-    # 5. Default exit attr
-    if exit_attr is None:
-        exit_attr = "@always_false"
-
-    return CompiledProgram(
-        indicator_specs=indicator_specs,
-        per_bar_program=per_bar_program,
-        simulator_settings=simulator_settings,
+    assert entry_attr is not None
+    program = CompiledProgram(
+        steps=build_steps(analysis),
         entry_attr=entry_attr,
-        exit_attr=exit_attr,
+        exit_attr=exit_attr if exit_attr is not None else NO_EXIT_ATTR,
+        entry_node=entry_node,
+        exit_node=exit_node,
+        required_lookback_bars=analysis.required_lookback_bars(),
+        stream_schema=STREAM_SCHEMA_VERSION,
+        schemas=streams,
     )
+
+    # 6. Plan every group: the simulator's inputs (sim_bridge.plan_group).
+    # A problem here is about a whole group (a second trailing stop, a
+    # regime_switch group with no regime terminal), so the graph does not
+    # compile.  A size or stop terminal over a settings node only warns.
+    groups = _groups.build_group_programs(program, layout, _record, _warn)
+    errors = [exc for _d, exc in found if exc is not None]
+    diagnostics = [d for d, _exc in found]
+    if errors:
+        return GraphCheck(None, diagnostics, streams, errors)
+    program = replace(program, groups=groups)
+    return GraphCheck(program, diagnostics, streams, errors)
