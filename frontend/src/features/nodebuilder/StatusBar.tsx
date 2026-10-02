@@ -20,6 +20,8 @@ import { memo, useEffect, useState, useSyncExternalStore } from 'react'
 import { getActiveCanvas } from './commands'
 import { useScreenGraph } from './screen'
 import { useNodeBuilderStore, type NodeBuilderState } from './store'
+import { currentParentId } from './store/view'
+import { networkStatusText } from './networkNav'
 import { useDiagnostics } from './useDiagnostics'
 import { useBuilder } from './slots'
 import { focusNode } from './viewOps'
@@ -32,6 +34,7 @@ import {
   getLiveZoom,
   lastSaveOf,
   plural,
+  selectionSlotText,
   selectionText,
   setLiveZoom,
   shortGraphId,
@@ -120,14 +123,20 @@ function CursorSegment() {
 const selectNodeIds = (s: NodeBuilderState) => s.selectedNodeIds
 const selectWireIds = (s: NodeBuilderState) => s.selectedWireIds
 const selectAnnotationIds = (s: NodeBuilderState) => s.selectedAnnotationIds
+const selectNetwork = (s: NodeBuilderState) => s.network
+const selectCurrentNetworkId = (s: NodeBuilderState) => s.currentNetworkId
 
 function SelectionSegment() {
   const nodeIds = useNodeBuilderStore(selectNodeIds)
   const wireIds = useNodeBuilderStore(selectWireIds)
   const annotationIds = useNodeBuilderStore(selectAnnotationIds)
+  const network = useNodeBuilderStore(selectNetwork)
+  const currentNetworkId = useNodeBuilderStore(selectCurrentNetworkId)
   // Names can change (rename), so the graph is read too; it only changes on a commit.
   const graph = useGraphOnScreen()
-  const text = selectionText(graph, nodeIds, wireIds, annotationIds)
+  const where = networkStatusText(graph, currentParentId({ network, currentNetworkId, graph }, graph))
+  const selection = selectionText(graph, nodeIds, wireIds, annotationIds)
+  const text = selectionSlotText(selection, where)
   const empty = text === 'no selection'
   return (
     <span

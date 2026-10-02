@@ -42,9 +42,18 @@
  *   write chips, so ParamRows leaves `write` params out unless asked.
  * The specs come from the `specs` prop, else from the catalog entry of the
  * node's type in the store. Without either, rows fall back to `paramTypes`.
+ *
+ * Promoted params (W6, spec S40):
+ * - A child param that its network promoted shows the network's value,
+ *   read-only, with a `↑` glyph and the tooltip "Promoted to ../name. Edit
+ *   it on the subnet." It is edited on the network, never on the child.
+ * - `PromotedRows` draws a network's promoted params as ordinary rows (on
+ *   the subnet card, max 4 plus a "+N more in Inspector" line). An edit
+ *   commits the network's `params[name]`. A row whose target no longer
+ *   exists has its label struck through in the error colour.
  */
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNodeBuilderStore } from '../store'
 import { useParamDiagnostic, setLocalParamInvalid, LOCAL_NUMBER_MESSAGE } from '../useDiagnostics'
 import type { ParamSpec, ParamTypeSpec } from '../catalog'
@@ -56,6 +65,20 @@ import { TimeRangeInput } from './TimeRangeInput'
 import { DayOfWeekInput } from './DayOfWeekInput'
 import { WriteChip } from './WriteChip'
 import { FromSidebarRow, useSidebarParamValue } from '../sidebarWindow'
+import type { GraphPromotedParam } from '../../../api/nodebuilder'
+import {
+  paramSpecOfNode,
+  moreInInspectorText,
+  promotedOf,
+  promotedTooltip,
+  promotedTypeSpec,
+  promotedValue,
+  promotionOf,
+  resolveTarget,
+  targetMissingTooltip,
+} from '../operations/promote'
+import { goUpAndSelect } from '../assetUi'
+import '../assets.css'
 
 /** Which special widget a param gets, from its ParamSpec; null for a plain field. */
 export type StreamWidget = 'attr' | 'time_range' | 'days' | 'write'
@@ -207,6 +230,8 @@ export interface ParamRowProps {
   variant?: 'node' | 'inspector'
   /** A display view for a number row (see `ParamView`). */
   view?: ParamView
+  /** The row's label; default the param key (a promoted row shows its own label). */
+  label?: string
 }
 
 /** The test id of a param field; the Inspector variant has its own. */
@@ -217,6 +242,11 @@ function paramTestId(nodeId: string, paramKey: string, variant: ParamRowProps['v
 export function ParamRow(props: ParamRowProps) {
   // D11 before W5: a Ticker's symbol and interval come from the sidebar (UX-01).
   const fromSidebar = useSidebarParamValue(props.nodeId, props.paramKey)
+  // W6 (S40): a param promoted to the parent network is edited there.
+  const promotion = usePromotion(props.nodeId, props.paramKey)
+  if (promotion) {
+    return <PromotedChildRow {...props} networkId={promotion.networkId} name={promotion.name} valueText={promotion.valueText} />
+  }
   if (fromSidebar != null) {
     return (
       <FromSidebarRow
@@ -245,6 +275,7 @@ function StreamParamRow({
   spec,
   widget,
   variant,
+  label,
 }: ParamRowProps & { spec: ParamSpec; widget: StreamWidget }) {
   const readOnly = useNodeBuilderStore(s => s.graph?.readOnly ?? false)
   let cell: React.ReactNode
@@ -267,7 +298,7 @@ function StreamParamRow({
       data-param-kind={widget}
       onContextMenu={e => openParamMenu(e, nodeId, paramKey)}
     >
-      <span style={{ flexShrink: 0 }}>{spec.label || paramKey}</span>
+      <span style={{ flexShrink: 0 }}>{label ?? (spec.label || paramKey)}</span>
       {cell}
     </div>
   )
@@ -280,7 +311,9 @@ function ValueParamRow({
   typeSpec,
   variant,
   view: viewProp,
+  label,
 }: ParamRowProps) {
+  const rowLabel = label ?? paramKey
   const updateNodeParams = useNodeBuilderStore(s => s.updateNodeParams)
   const resolvedType = typeSpec?.type ?? (typeof value === 'number' ? 'number' : 'string')
   const isNumber = resolvedType === 'number'
@@ -362,7 +395,7 @@ function ValueParamRow({
     return (
       <>
       <label style={labelStyle} onContextMenu={e => openParamMenu(e, nodeId, paramKey)}>
-        <span style={{ flexShrink: 0 }}>{paramKey}</span>
+        <span style={{ flexShrink: 0 }}>{rowLabel}</span>
         <select
           value={initial}
           data-testid={testId}
@@ -388,7 +421,7 @@ function ValueParamRow({
   return (
     <>
     <label style={labelStyle} onContextMenu={e => openParamMenu(e, nodeId, paramKey)}>
-      <span style={{ flexShrink: 0 }}>{paramKey}</span>
+      <span style={{ flexShrink: 0 }}>{rowLabel}</span>
       <input
         type="text"
         inputMode={isNumber ? 'decimal' : 'text'}
@@ -431,5 +464,173 @@ function ValueParamRow({
     </label>
     {message}
     </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Promoted params (W6, spec S40)
+// ---------------------------------------------------------------------------
+
+/** Separator inside the promotion key (never in an id or a name). */
+const SEP = '\u0000'
+
+/**
+ * The promotion that drives this child param, with the network's value as
+ * text, or null. Selectors return strings, so an edit elsewhere does not
+ * re-render the row.
+ */
+function usePromotion(nodeId: string, paramKey: string): { networkId: string; name: string; valueText: string } | null {
+  const key = useNodeBuilderStore(s => {
+    const p = promotionOf(s.graph, nodeId, paramKey)
+    if (!p) return null
+    const net = s.graph!.nodes[p.networkId]
+    const v = promotedValue(net, p.entry)
+    return `${p.networkId}${SEP}${p.entry.name}${SEP}${v === null || v === undefined ? '' : Array.isArray(v) ? v.join(', ') : String(v)}`
+  })
+  if (!key) return null
+  const [networkId, name, ...rest] = key.split(SEP)
+  return { networkId, name, valueText: rest.join(SEP) }
+}
+
+const promotedGlyphStyle: React.CSSProperties = {
+  color: 'var(--nb-cat-network)',
+  fontSize: 10,
+  flexShrink: 0,
+}
+
+/**
+ * A child param that its network promoted: the network's value, read-only.
+ * Click does nothing; the tooltip says where to edit it, and "Go to subnet"
+ * selects the network. No `=` code toggle here (S40 must-not).
+ */
+function PromotedChildRow({
+  nodeId,
+  paramKey,
+  spec,
+  label,
+  variant,
+  networkId,
+  name,
+  valueText,
+}: ParamRowProps & { networkId: string; name: string; valueText: string }) {
+  const testId = paramTestId(nodeId, paramKey, variant)
+  const tipId = `${testId}-promoted`
+  const tip = promotedTooltip(name)
+  return (
+    <div
+      className="nb-promoted-child"
+      style={streamRowStyle}
+      data-testid={testId}
+      data-promoted-to={name}
+      title={tip}
+      onContextMenu={e => openParamMenu(e, nodeId, paramKey)}
+    >
+      <span style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+        <span style={promotedGlyphStyle} aria-hidden="true" data-testid={`${testId}-promoted-glyph`}>↑</span>
+        <span>{label ?? (spec?.label || paramKey)}</span>
+      </span>
+      <span
+        className="nb-promoted-child__value"
+        role="textbox"
+        aria-readonly="true"
+        aria-label={label ?? (spec?.label || paramKey)}
+        aria-describedby={tipId}
+        tabIndex={0}
+      >
+        {valueText}
+      </span>
+      <span id={tipId} style={srOnlyStyle}>{tip}</span>
+      <button
+        type="button"
+        className="nb-promoted-child__go"
+        onPointerDown={e => e.stopPropagation()}
+        onClick={() => goUpAndSelect(useNodeBuilderStore.getState(), networkId)}
+      >
+        Go to subnet
+      </button>
+    </div>
+  )
+}
+
+/** The spec a promoted row draws with: the target's spec (min, max, options), renamed to the promoted name. */
+function promotedSpec(entry: GraphPromotedParam, target: ParamSpec | null): ParamSpec {
+  return {
+    ...(target ?? {}),
+    name: entry.name,
+    type: entry.type as ParamSpec['type'],
+    label: entry.label,
+    default: entry.default,
+  }
+}
+
+/** Most promoted rows a subnet card shows; the rest are in the Inspector (S38, S40). */
+export const PROMOTED_ON_NODE = 4
+
+/** One promoted row of a network (card or Inspector). */
+export function PromotedParamRow({
+  networkId,
+  entry,
+  variant = 'node',
+}: {
+  networkId: string
+  entry: GraphPromotedParam
+  variant?: 'node' | 'inspector'
+}) {
+  const value = useNodeBuilderStore(s => {
+    const net = s.graph?.nodes[networkId]
+    return net ? promotedValue(net, entry) : entry.default
+  })
+  // A locked instance stores no children, so its targets are checked by
+  // the backend (promoted_invalid), not here.
+  const target = useNodeBuilderStore(s => {
+    const g = s.graph
+    const net = g?.nodes[networkId]
+    if (!g || !net || net.locked) return 'ok'
+    const r = resolveTarget(g, networkId, entry.target)
+    return r ? `${r.nodeId}${SEP}${r.param}` : 'missing'
+  })
+  const [targetId, targetParam] = target === 'ok' || target === 'missing' ? [null, null] : target.split(SEP)
+  const targetNode = useNodeBuilderStore(s => (targetId ? s.graph?.nodes[targetId] ?? null : null))
+  const targetSpec = useMemo(
+    () => (targetNode && targetParam ? paramSpecOfNode(targetNode, targetParam) : null),
+    [targetNode, targetParam],
+  )
+  const missing = target === 'missing'
+  const spec = promotedSpec(entry, targetSpec)
+  const row = (
+    <ParamRow
+      nodeId={networkId}
+      paramKey={entry.name}
+      value={value}
+      typeSpec={promotedTypeSpec(entry, targetSpec)}
+      spec={spec}
+      variant={variant}
+      label={entry.label}
+    />
+  )
+  if (!missing) return row
+  return (
+    <div className="nb-promoted-row nb-promoted-row--missing" title={targetMissingTooltip(entry.target)} data-target-missing="true">
+      {row}
+    </div>
+  )
+}
+
+/**
+ * A network's promoted params as ordinary rows (S38 card body, S40). At
+ * most `max` rows, then "+N more in Inspector".
+ */
+export function PromotedRows({ nodeId, max = PROMOTED_ON_NODE }: { nodeId: string; max?: number }) {
+  const list = useNodeBuilderStore(s => promotedOf(s.graph?.nodes[nodeId]))
+  if (list.length === 0) return null
+  const shown = list.slice(0, max)
+  const more = list.length - shown.length
+  return (
+    <div className="nodrag nopan" style={{ display: 'flex', flexDirection: 'column', gap: 3 }} data-testid={`nb-promoted-rows-${nodeId}`}>
+      {shown.map(entry => (
+        <PromotedParamRow key={entry.name} networkId={nodeId} entry={entry} />
+      ))}
+      {more > 0 && <div className="nb-promoted-more">{moreInInspectorText(more)}</div>}
+    </div>
   )
 }

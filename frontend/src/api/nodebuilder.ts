@@ -37,6 +37,29 @@ export interface GraphNode {
   position: [number, number]
   display: boolean
   bypass: boolean
+  /** Editor view state (FA1); compile ignores it. `view` picks how a network draws. */
+  meta?: GraphNodeMeta
+  /** Promoted params of a network node (W6, S40). Values live in `params[name]`. */
+  promoted?: GraphPromotedParam[]
+  /** Set on an asset instance (W6): which library asset and version it pins. */
+  asset_ref?: { name: string; version: number } | null
+  /** A locked asset instance stores no children; they come from the library. */
+  locked?: boolean
+}
+
+export interface GraphNodeMeta {
+  view?: 'frame' | 'card'
+  note?: string
+  [key: string]: unknown
+}
+
+export interface GraphPromotedParam {
+  name: string
+  label: string
+  /** Path relative to the network node, e.g. "sma/period". */
+  target: string
+  type: string
+  default: unknown
 }
 
 /** Wire between two nodes in the graph. */

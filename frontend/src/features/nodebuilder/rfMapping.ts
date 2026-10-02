@@ -22,7 +22,7 @@
 
 import { useSyncExternalStore } from 'react'
 import type { Node as RFNode, Edge as RFEdge } from '@xyflow/react'
-import type { Graph, GraphNode } from '../../api/nodebuilder'
+import type { Graph, GraphNode, GraphWire } from '../../api/nodebuilder'
 import { NODE_CATALOG, type NodeCatalogEntry } from './catalog'
 import { nodePath } from './paths'
 import { resolveGroupTicker } from './graphGroups'
@@ -85,9 +85,10 @@ export function rfTypeFor(backendType: string): string {
 // ---------------------------------------------------------------------------
 //
 // A network is a graph node whose children point at it through `parent`
-// (plan D7). In W5 every network is drawn expanded, as a frame around its
-// children ("one visual model"). W6 adds the card view (FA1) through
-// `isFrameNetwork`.
+// (plan D7). A network is drawn expanded, as a frame around its children
+// ("one visual model"), unless its `meta.view` is "card" (W6, FA1): then it
+// is one card and its insides are drawn only when the user dives in (see
+// "Card or frame" below).
 //
 // The frame is not stored. Its rectangle is the bounding box of its
 // children plus padding, worked out here when the graph changes (a commit:
@@ -120,27 +121,168 @@ export function isNetworkType(type: string | undefined): boolean {
   return !!type && NETWORK_TYPES.has(type)
 }
 
+// ---------------------------------------------------------------------------
+// Card or frame, and the network on screen (W6 6.C, FA1, S37, S38)
+// ---------------------------------------------------------------------------
+//
+// A network draws either as a frame around its children (S31) or as one
+// card (S38), by `Node.meta.view` ("frame" | "card"; missing = "frame",
+// decisions-pre). A card's children are not drawn; diving into it (or into
+// a frame) shows that network's children only, with its boundary nodes as
+// half-height cards.
+//
+// The "layout scope" is the network the canvas shows (null: the root). The
+// canvas sets it (`setLayoutScope`) so code that lays out frames without
+// knowing about the dive (the frame drag plugin calls
+// `computeFrameLayouts(nodes, sizeOf)`) sees the dived view: the network on
+// screen counts as a frame that covers the whole canvas (a child dragged
+// anywhere stays inside it), and frames outside it, or hidden inside a
+// card, are not there. Callers that know the scope pass it explicitly.
+
+/** The React Flow node type of a network drawn as a card (nodes/SubnetNode.tsx). */
+export const CARD_RF_TYPE = 'nbSubnet'
+/** The React Flow node type of a boundary node inside a dived network (nodes/BoundaryNode.tsx). */
+export const BOUNDARY_RF_TYPE = 'nbBoundary'
+
+/** A rectangle that holds every point the canvas can show (the dived network, as a frame). */
+const SCOPE_RECT = { x: -1e9, y: -1e9, w: 2e9, h: 2e9 } as const
+
+let layoutScope: string | null = null
+
+/** Canvas only: the network on screen (null: the root). See the note above. */
+export function setLayoutScope(id: string | null): void {
+  layoutScope = id
+}
+
+/** The network on screen as the canvas last set it (null: the root). */
+export function getLayoutScope(): string | null {
+  return layoutScope
+}
+
+type NetworkLike = { type: string; id?: string; meta?: GraphNode['meta'] } | undefined
+
+/** True for a network node drawn as a card (`meta.view === "card"`, FA1). */
+export function isCardNetwork(node: NetworkLike): boolean {
+  return !!node && NETWORK_TYPES.has(node.type) && node.meta?.view === 'card'
+}
+
+/** How a network node draws: "frame" (default) or "card" (FA1). */
+export function networkViewOf(node: NetworkLike): 'frame' | 'card' {
+  return isCardNetwork(node) ? 'card' : 'frame'
+}
+
 /**
- * True when this node is a network drawn as a frame. In W5 every network
- * is (FA1's card view comes with W6).
+ * True when this node is a network drawn as a frame: a network not in card
+ * view. The network on screen (`scope`, default: the layout scope) always
+ * counts as a frame: its children are inside it.
  */
-export function isFrameNetwork(node: Pick<GraphNode, 'type'> | undefined): boolean {
-  return !!node && NETWORK_TYPES.has(node.type)
+export function isFrameNetwork(node: NetworkLike, scope: string | null = layoutScope): boolean {
+  if (!node || !NETWORK_TYPES.has(node.type)) return false
+  if (scope !== null && node.id !== undefined && node.id === scope) return true
+  return node.meta?.view !== 'card'
+}
+
+/**
+ * Child ids per parent id ('' for the root), built once per `nodes` object
+ * (S37 "must not": no scan of every node per render). Commits share
+ * unchanged objects, so a new index is built once per commit at most.
+ */
+const childIndexCache = new WeakMap<Graph['nodes'], Map<string, string[]>>()
+export function childrenByParent(nodes: Graph['nodes']): Map<string, string[]> {
+  const hit = childIndexCache.get(nodes)
+  if (hit) return hit
+  const out = new Map<string, string[]>()
+  for (const n of Object.values(nodes)) {
+    const key = n.parent ?? ''
+    const list = out.get(key)
+    if (list) list.push(n.id)
+    else out.set(key, [n.id])
+  }
+  childIndexCache.set(nodes, out)
+  return out
+}
+
+/** How many nodes a network holds directly, not counting its boundary nodes. */
+export function networkChildCount(nodes: Graph['nodes'], id: string): number {
+  let count = 0
+  for (const c of childrenByParent(nodes).get(id) ?? []) {
+    if (nodes[c] && !BOUNDARY_TYPES.has(nodes[c].type)) count += 1
+  }
+  return count
+}
+
+/** How a node shows with `scope` on screen. */
+export type DrawKind = 'node' | 'frame' | 'card' | 'boundary'
+
+/**
+ * Every node drawn with `scope` on screen, and how: the scope's children
+ * ('boundary' for its boundary nodes when dived), and inside each frame
+ * among them, that frame's children (its boundary nodes are its ports, not
+ * drawn). A card's insides, the scope itself, and everything outside it are
+ * not drawn. One pass, cached per `nodes` object and scope.
+ */
+const drawnCache = new WeakMap<Graph['nodes'], Map<string, Map<string, DrawKind>>>()
+export function drawnNodes(nodes: Graph['nodes'], scope: string | null): Map<string, DrawKind> {
+  let byScope = drawnCache.get(nodes)
+  const key = scope ?? ''
+  const hit = byScope?.get(key)
+  if (hit) return hit
+  const out = new Map<string, DrawKind>()
+  const kids = childrenByParent(nodes)
+  const kindOf = (n: GraphNode): DrawKind =>
+    NETWORK_TYPES.has(n.type) ? (isCardNetwork(n) ? 'card' : 'frame') : 'node'
+  // Breadth first from the scope; a frame opens its children, a card does not.
+  const queue: string[] = []
+  const top = [...(kids.get(key) ?? [])]
+  // At the root, a node whose parent is missing or is not a network is
+  // drawn at the top level, as before W6 (the backend reports it).
+  if (scope === null) {
+    for (const n of Object.values(nodes)) {
+      if (n.parent && !NETWORK_TYPES.has(nodes[n.parent]?.type ?? '')) top.push(n.id)
+    }
+  }
+  for (const id of top) {
+    const n = nodes[id]
+    if (!n) continue
+    // Boundary nodes at the root are drawn as plain cards (they are invalid there).
+    out.set(id, scope !== null && BOUNDARY_TYPES.has(n.type) ? 'boundary' : kindOf(n))
+    if (out.get(id) === 'frame') queue.push(id)
+  }
+  for (let i = 0; i < queue.length && i < 100000; i++) {
+    const fid = queue[i]
+    for (const id of kids.get(fid) ?? []) {
+      const n = nodes[id]
+      if (!n || out.has(id) || id === scope) continue
+      if (BOUNDARY_TYPES.has(n.type)) continue // a frame port
+      const k = kindOf(n)
+      out.set(id, k)
+      if (k === 'frame') queue.push(id)
+    }
+  }
+  if (!byScope) {
+    byScope = new Map()
+    drawnCache.set(nodes, byScope)
+  }
+  byScope.set(key, out)
+  return out
 }
 
 /**
  * The frame this node sits in, or null at the root (or when its parent is
- * missing or is not a network: such a node is drawn unparented).
+ * missing or is not a network: such a node is drawn unparented). With a
+ * network on screen, its direct children sit in it.
  */
-export function frameParentOf(nodes: Graph['nodes'], node: Pick<GraphNode, 'parent'>): string | null {
+export function frameParentOf(nodes: Graph['nodes'], node: Pick<GraphNode, 'parent'>, scope: string | null = layoutScope): string | null {
   const pid = node.parent
   if (!pid) return null
-  return isFrameNetwork(nodes[pid]) ? pid : null
+  return isFrameNetwork(nodes[pid], scope) ? pid : null
 }
 
 /** True for a boundary node that is drawn as a frame port (not as a card). */
-export function isHiddenBoundary(nodes: Graph['nodes'], node: Pick<GraphNode, 'type' | 'parent'>): boolean {
-  return BOUNDARY_TYPES.has(node.type) && frameParentOf(nodes, node) !== null
+export function isHiddenBoundary(nodes: Graph['nodes'], node: Pick<GraphNode, 'type' | 'parent'>, scope: string | null = layoutScope): boolean {
+  if (!BOUNDARY_TYPES.has(node.type)) return false
+  const pid = frameParentOf(nodes, node, scope)
+  return pid !== null && pid !== scope
 }
 
 /**
@@ -161,8 +303,9 @@ export function boundaryPortOf(n: Pick<GraphNode, 'params'>): number | null {
  */
 export function boundaryInputs(nodes: Graph['nodes'], networkId: string): GraphNode[] {
   const byPort = new Map<number, GraphNode>()
-  for (const n of Object.values(nodes)) {
-    if (n.type !== 'subnet_input' || n.parent !== networkId) continue
+  for (const id of childrenByParent(nodes).get(networkId) ?? []) {
+    const n = nodes[id]
+    if (!n || n.type !== 'subnet_input') continue
     const k = boundaryPortOf(n)
     if (k === null || byPort.has(k)) continue
     byPort.set(k, n)
@@ -172,7 +315,10 @@ export function boundaryInputs(nodes: Graph['nodes'], networkId: string): GraphN
 
 /** The network's `subnet_output` child, or null. */
 export function boundaryOutput(nodes: Graph['nodes'], networkId: string): GraphNode | null {
-  return Object.values(nodes).find(n => n.type === 'subnet_output' && n.parent === networkId) ?? null
+  for (const id of childrenByParent(nodes).get(networkId) ?? []) {
+    if (nodes[id]?.type === 'subnet_output') return nodes[id]
+  }
+  return null
 }
 
 /** A ghost card (S32a): the place where a required terminal is missing. */
@@ -276,10 +422,11 @@ export function measuredSizeOf(
 export function computeFrameLayouts(
   nodes: Graph['nodes'],
   sizeOf: NodeSizeOf = () => DEFAULT_NODE_SIZE,
+  scope: string | null = layoutScope,
 ): Map<string, FrameLayout> {
   const childrenOf = new Map<string, GraphNode[]>()
   for (const n of Object.values(nodes)) {
-    const pid = frameParentOf(nodes, n)
+    const pid = frameParentOf(nodes, n, scope)
     if (!pid || BOUNDARY_TYPES.has(n.type)) continue
     const list = childrenOf.get(pid)
     if (list) list.push(n)
@@ -305,7 +452,7 @@ export function computeFrameLayouts(
       for (const k of kids) {
         // A child frame counts by its own rectangle (a parent loop is
         // refused by the backend; the guard only stops endless recursion).
-        const r = isFrameNetwork(k) && !visiting.has(k.id)
+        const r = isFrameNetwork(k, scope) && !visiting.has(k.id)
           ? layoutOf(k)
           : { x: k.position[0], y: k.position[1], ...sizeOf(k) }
         minX = Math.min(minX, r.x)
@@ -343,7 +490,15 @@ export function computeFrameLayouts(
     out.set(net.id, layout)
     return layout
   }
-  for (const n of Object.values(nodes)) if (isFrameNetwork(n)) layoutOf(n)
+  // Only frames that are drawn: not the ones inside a card, or outside the
+  // network on screen.
+  for (const [id, kind] of drawnNodes(nodes, scope)) if (kind === 'frame') layoutOf(nodes[id])
+  // The network on screen is the whole canvas (see setLayoutScope).
+  if (scope !== null && nodes[scope]) {
+    out.set(scope, {
+      id: scope, ...SCOPE_RECT, inputs: [], outputId: null, childCount: networkChildCount(nodes, scope), missing: [],
+    })
+  }
   return out
 }
 
@@ -356,13 +511,13 @@ export function drawnPositionOf(n: GraphNode, layouts: Map<string, FrameLayout>)
   return l ? { x: l.x, y: l.y } : { x: n.position[0], y: n.position[1] }
 }
 
-/** How many frames this node sits inside (0 at the root). */
-function frameDepth(nodes: Graph['nodes'], n: GraphNode): number {
+/** How many drawn frames this node sits inside (0 at the top of the network on screen). */
+function frameDepth(nodes: Graph['nodes'], n: GraphNode, drawn: Map<string, DrawKind>, scope: string | null): number {
   let d = 0
   let cur: GraphNode | undefined = n
   while (cur && d < 64) {
-    const pid = frameParentOf(nodes, cur)
-    if (!pid) break
+    const pid: string | null = cur.parent
+    if (!pid || pid === scope || drawn.get(pid) !== 'frame') break
     d += 1
     cur = nodes[pid]
   }
@@ -396,6 +551,98 @@ export interface FrameNodeData extends BaseNodeData {
   frame: FrameLayout
   /** Output Groups: the primary Ticker named by `params.ticker`, or null. */
   groupTicker: GroupTicker | null
+}
+
+/** One input port on a network card: the boundary node behind it. */
+export interface CardPort {
+  boundaryId: string
+  /** Target handle id: `in<k>`, k = the boundary's `port` param. */
+  handle: string
+  /** The boundary node's name (`in0`, or a renamed `signal`). */
+  label: string
+}
+
+/** What a network card shows besides the node (S38). */
+export interface CardInfo {
+  /** One per `subnet_input` child, in port order. */
+  inputs: CardPort[]
+  /** The `subnet_output` child, or null (no output port is drawn). */
+  outputId: string | null
+  /** Children, not counting boundary nodes. */
+  childCount: number
+  /** Set on an asset instance (W6): which asset and version, and whether it is locked. */
+  asset: { name: string; version: number; locked: boolean } | null
+}
+
+/** What a card's React Flow node carries (nodes/SubnetNode.tsx reads it). */
+export interface CardNodeData extends BaseNodeData {
+  card: CardInfo
+}
+
+/** What a boundary card's React Flow node carries (nodes/BoundaryNode.tsx reads it). */
+export interface BoundaryNodeData extends BaseNodeData {
+  boundary: { kind: 'input' | 'output'; port: number | null }
+}
+
+/**
+ * What the card mapper needs for a locked asset instance (FE-02): the
+ * graph's wires (their ports stand in until the asset file loads) and the
+ * asset network source (networkNav.assetNetworkOf). A locked instance
+ * stores no children, so its ports come from these, not from `nodes`.
+ */
+export interface CardContext {
+  wires?: readonly GraphWire[]
+  assetNetwork?: (net: GraphNode) => { nodes: Graph['nodes']; wires: readonly GraphWire[] } | null
+}
+
+/**
+ * A locked instance's ports: the asset network's top-level boundary nodes
+ * (parent null in the file), plus every port the instance's own wires use,
+ * so a wire never loses its handle while the file loads or after the asset
+ * changed. Boundary ids are composite (`<inst>::<child>`), the ids the
+ * backend gives an expanded instance's nodes.
+ */
+function lockedCardPorts(net: GraphNode, ctx: CardContext | undefined): Pick<CardInfo, 'inputs' | 'outputId' | 'childCount'> {
+  const byPort = new Map<number, CardPort>()
+  let outputId: string | null = null
+  let childCount = 0
+  const hasOutput = net.type !== 'output_group'
+  const an = ctx?.assetNetwork?.(net) ?? null
+  if (an) {
+    boundaryInputs(an.nodes, '').forEach((b, i) => {
+      const k = boundaryPortOf(b) ?? i
+      byPort.set(k, { boundaryId: `${net.id}::${b.id}`, handle: `in${k}`, label: b.name || `in${k}` })
+    })
+    const o = hasOutput ? boundaryOutput(an.nodes, '') : null
+    if (o) outputId = `${net.id}::${o.id}`
+    for (const n of Object.values(an.nodes)) if (!n.parent && !BOUNDARY_TYPES.has(n.type)) childCount += 1
+  }
+  for (const w of ctx?.wires ?? []) {
+    if (w.to === net.id) {
+      const m = /^in(\d+)$/.exec(w.to_port)
+      const k = m ? Number(m[1]) : -1
+      if (k >= 0 && !byPort.has(k)) byPort.set(k, { boundaryId: `${net.id}::in${k}`, handle: `in${k}`, label: `in${k}` })
+    }
+    if (w.from === net.id && hasOutput && outputId === null) outputId = `${net.id}::out`
+  }
+  const inputs = [...byPort.entries()].sort((a, b) => a[0] - b[0]).map(e => e[1])
+  return { inputs, outputId, childCount }
+}
+
+/** The card facts of a network node (S38): its ports, child count and asset. */
+export function cardInfoOf(nodes: Graph['nodes'], net: GraphNode, ctx?: CardContext): CardInfo {
+  const ref = net.asset_ref
+  const asset = ref && typeof ref.name === 'string' && typeof ref.version === 'number'
+    ? { name: ref.name, version: ref.version, locked: net.locked === true }
+    : null
+  if (asset?.locked) return { ...lockedCardPorts(net, ctx), asset }
+  const inputs = boundaryInputs(nodes, net.id).map((b, i) => {
+    const k = boundaryPortOf(b) ?? i
+    return { boundaryId: b.id, handle: `in${k}`, label: b.name || `in${k}` }
+  })
+  // A group has no output port, as in its frame.
+  const out = net.type === 'output_group' ? null : boundaryOutput(nodes, net.id)
+  return { inputs, outputId: out?.id ?? null, childCount: networkChildCount(nodes, net.id), asset }
 }
 
 // ---------------------------------------------------------------------------
@@ -504,6 +751,8 @@ export function createNodeMapper(): (
   nodes: Graph['nodes'],
   editable: boolean,
   sizes?: ReadonlyMap<string, { w: number; h: number }>,
+  scope?: string | null,
+  cardCtx?: CardContext,
 ) => RFNode[] {
   // Keyed on the node object itself (EA-6): commits share unchanged nodes,
   // so a node whose object did not change keeps its React Flow node and
@@ -511,35 +760,50 @@ export function createNodeMapper(): (
   // field needs no change here. Its path is in the key too: a rename of the
   // node (or of a parent) changes it. So is everything the node takes from
   // its frame (W5): the frame's corner (its children are drawn relative to
-  // it) and, for a terminal, the group's direction.
+  // it) and, for a terminal, the group's direction. A card's ports and
+  // child count (W6) come from its children, so they are in the key too.
   const cache = new Map<string, { node: GraphNode; sig: string; rfNode: RFNode }>()
   let prev: RFNode[] | null = null
-  return (nodes, editable, sizes) => {
+  return (nodes, editable, sizes, scope = null, cardCtx) => {
     const seen = new Set<string>()
+    // Only the network on screen is drawn (S37): its children, the inside
+    // of every frame among them, and its boundary nodes as cards.
+    const drawn = drawnNodes(nodes, scope)
     // Measured card sizes (FE-05): a tall card stretches its frame. The
     // frame's rectangle is in the cache signature, so a size change redraws
     // the frame (and moves its ghost row) without touching other nodes.
-    const layouts = computeFrameLayouts(nodes, measuredSizeOf(sizes))
+    const layouts = computeFrameLayouts(nodes, measuredSizeOf(sizes), scope)
     const entries: Array<{ depth: number; i: number; rfNode: RFNode }> = []
+    let nested = false
     let i = 0
     for (const n of Object.values(nodes)) {
-      // Boundary nodes of a frame are its ports, not cards (S31).
-      if (isHiddenBoundary(nodes, n)) continue
+      const kind = drawn.get(n.id)
+      if (!kind) continue
       seen.add(n.id)
       const path = safeNodePath(nodes, n.id)
-      const parentId = frameParentOf(nodes, n)
+      // The frame it is drawn in; the network on screen is the canvas itself.
+      const pid = n.parent ?? null
+      const parentId = pid && pid !== scope && drawn.get(pid) === 'frame' ? pid : null
       const parentLayout = parentId ? layouts.get(parentId) ?? null : null
       const parentAbs = parentLayout ? { x: parentLayout.x, y: parentLayout.y } : null
-      const parentNode = parentId ? nodes[parentId] : undefined
+      const parentNode = pid ? nodes[pid] : undefined
       const groupDirection = parentNode?.type === 'output_group' && typeof parentNode.params?.direction === 'string'
         ? parentNode.params.direction
         : null
-      const layout = layouts.get(n.id) ?? null
-      const groupTicker = n.type === 'output_group' ? groupTickerOf(nodes, n) : null
-      const sig = JSON.stringify([editable, path, parentId, parentAbs, groupDirection, layout, groupTicker])
+      const layout = kind === 'frame' ? layouts.get(n.id) ?? null : null
+      const groupTicker = n.type === 'output_group' && kind === 'frame' ? groupTickerOf(nodes, n) : null
+      // `card` is in the signature below, so a locked card redraws when its
+      // asset file lands or a wire changes its ports (FE-02).
+      const card = kind === 'card' ? cardInfoOf(nodes, n, cardCtx) : null
+      const boundary = kind === 'boundary'
+        ? { kind: n.type === 'subnet_output' ? 'output' as const : 'input' as const, port: n.type === 'subnet_input' ? boundaryPortOf(n) : null }
+        : null
+      const depth = parentId ? frameDepth(nodes, n, drawn, scope) : 0
+      if (depth > 0) nested = true
+      const sig = JSON.stringify([editable, kind, path, parentId, parentAbs, groupDirection, layout, groupTicker, card, boundary])
       const cached = cache.get(n.id)
       if (cached && cached.node === n && cached.sig === sig) {
-        entries.push({ depth: parentId ? frameDepth(nodes, n) : 0, i: i++, rfNode: cached.rfNode })
+        entries.push({ depth, i: i++, rfNode: cached.rfNode })
         continue
       }
       const base: BaseNodeData = {
@@ -555,11 +819,15 @@ export function createNodeMapper(): (
         groupDirection,
       }
       const abs = drawnPositionOf(n, layouts)
+      let data: BaseNodeData = base
+      if (layout) data = { ...base, frame: layout, groupTicker } as FrameNodeData
+      else if (card) data = { ...base, card } as CardNodeData
+      else if (boundary) data = { ...base, boundary } as BoundaryNodeData
       const rfNode: RFNode = {
         id: n.id,
-        type: rfTypeFor(n.type),
+        type: kind === 'card' ? CARD_RF_TYPE : kind === 'boundary' ? BOUNDARY_RF_TYPE : rfTypeFor(n.type),
         position: rfPositionOf([abs.x, abs.y], parentAbs),
-        data: layout ? ({ ...base, frame: layout, groupTicker } as FrameNodeData) : base,
+        data,
         draggable: editable,
         selectable: true,
       }
@@ -574,7 +842,7 @@ export function createNodeMapper(): (
         rfNode.style = { pointerEvents: 'none' }
       }
       cache.set(n.id, { node: n, sig, rfNode })
-      entries.push({ depth: parentId ? frameDepth(nodes, n) : 0, i: i++, rfNode })
+      entries.push({ depth, i: i++, rfNode })
     }
     // Evict removed nodes so the cache doesn't grow unbounded.
     for (const id of Array.from(cache.keys())) {
@@ -582,7 +850,7 @@ export function createNodeMapper(): (
     }
     // React Flow needs a parent before its children: shallow nodes first,
     // file order within a depth (a graph with no networks keeps its order).
-    if (layouts.size > 0) entries.sort((a, b) => a.depth - b.depth || a.i - b.i)
+    if (nested) entries.sort((a, b) => a.depth - b.depth || a.i - b.i)
     prev = stableArray(prev, entries.map(e => e.rfNode))
     return prev
   }
@@ -690,13 +958,17 @@ export function wirePlacements(
   labels: Record<string, WireLabel>,
   connectedPorts: Map<string, string[]>,
   sizes: Map<string, { w: number; h: number }>,
+  scope: string | null = null,
 ): Record<string, LabelPlacement> {
   const rects: Record<string, Rect> = {}
   const portCounts: Record<string, number> = {}
   const dynamicNodes = new Set<string>()
   // A frame's box is its computed rectangle, not its stored position (S31).
-  const layouts = computeFrameLayouts(graph.nodes, measuredSizeOf(sizes))
+  const layouts = computeFrameLayouts(graph.nodes, measuredSizeOf(sizes), scope)
+  // Only what is drawn takes room (S37: the network on screen).
+  const drawn = drawnNodes(graph.nodes, scope)
   for (const n of Object.values(graph.nodes)) {
+    if (!drawn.has(n.id)) continue
     const size = sizes.get(n.id) ?? DEFAULT_NODE_SIZE
     const frame = layouts.get(n.id)
     rects[n.id] = frame
@@ -705,7 +977,7 @@ export function wirePlacements(
     portCounts[n.id] = portsOf(n.type, connectedPorts.get(n.id) ?? []).length
     if (portsSpecOf(n.type)?.dynamic) dynamicNodes.add(n.id)
   }
-  const items = graph.wires.map(w => ({
+  const items = graph.wires.filter(w => edgeEndsOf(graph.nodes, w, scope) !== null).map(w => ({
     id: w.id, from: w.from, to: w.to, toPort: w.to_port, text: labels[w.id]?.text ?? '',
   }))
   return placeLabels(items, rects, portCounts, dynamicNodes)
@@ -721,16 +993,21 @@ export interface EdgeMapInput {
   /** Below 60% zoom labels hide at rest. */
   lowZoom: boolean
   diagByWire: Map<string, Diagnostic>
+  /** The network on screen (null: the root). Only its wires are drawn (S37). */
+  scope?: string | null
 }
 
 /** Maps graph wires to 'attr' edges, with the same per-item cache as nodes. */
 export function createEdgeMapper(): (input: EdgeMapInput) => RFEdge[] {
   const cache = new Map<string, { sig: string; rfEdge: RFEdge }>()
   let prev: RFEdge[] | null = null
-  return ({ graph, selectedWireId, labels, placements, lowZoom, diagByWire }) => {
+  return ({ graph, selectedWireId, labels, placements, lowZoom, diagByWire, scope = null }) => {
     const seen = new Set<string>()
     const result: RFEdge[] = []
     for (const w of graph.wires) {
+      // A wire is drawn only when both of its ends are (S37, S38).
+      const ends = edgeEndsOf(graph.nodes, w, scope)
+      if (!ends) continue
       seen.add(w.id)
       const selected = w.id === selectedWireId
       const label = labels[w.id]
@@ -739,7 +1016,6 @@ export function createEdgeMapper(): (input: EdgeMapInput) => RFEdge[] {
       const portLabel = portsSpecOf(consumer?.type)?.ports[Number(w.to_port.slice(2))]?.label ?? w.to_port
       // A wire from or to a frame's boundary node is drawn from or to that
       // port on the frame edge (S31): the boundary node has no card.
-      const ends = edgeEndsOf(graph.nodes, w)
       const data: AttrEdgeData = {
         from: w.from,
         to: w.to,
@@ -787,19 +1063,32 @@ export function createEdgeMapper(): (input: EdgeMapInput) => RFEdge[] {
 }
 
 /**
- * The React Flow ends of a wire. A wire out of a frame's `subnet_input`
- * starts at that port on the frame's top edge; a wire into a frame's
- * `subnet_output` ends at the port on its bottom edge. Every other wire runs
- * node to node (a wire into a network node ends at its `in<k>` port).
+ * The React Flow ends of a wire, or null when the wire is not drawn with
+ * `scope` on screen. A wire out of a frame's `subnet_input` starts at that
+ * port on the frame's top edge; a wire into a frame's `subnet_output` ends at
+ * the port on its bottom edge. Inside a dived network its own boundary
+ * nodes are cards, so their wires run node to node. Every other wire runs
+ * node to node (a wire into a network node, frame or card, ends at its
+ * `in<k>` port). A wire with an end inside a card, or outside the network on
+ * screen, is not drawn.
  */
 export function edgeEndsOf(
   nodes: Graph['nodes'],
   w: Pick<Graph['wires'][number], 'from' | 'to' | 'to_port'>,
-): { source: string; sourceHandle: string; target: string; targetHandle: string } {
+  scope: string | null = null,
+): { source: string; sourceHandle: string; target: string; targetHandle: string } | null {
+  const drawn = drawnNodes(nodes, scope)
   const from = nodes[w.from]
   const to = nodes[w.to]
-  const fromFrame = from && from.type === 'subnet_input' ? frameParentOf(nodes, from) : null
-  const toFrame = to && to.type === 'subnet_output' ? frameParentOf(nodes, to) : null
+  // A boundary node of a drawn frame (not the network on screen) is a port on it.
+  const portFrame = (n: GraphNode | undefined, type: string): string | null => {
+    if (!n || n.type !== type || !n.parent || n.parent === scope) return null
+    return drawn.get(n.parent) === 'frame' ? n.parent : null
+  }
+  const fromFrame = portFrame(from, 'subnet_input')
+  const toFrame = portFrame(to, 'subnet_output')
+  if (!fromFrame && !drawn.has(w.from)) return null
+  if (!toFrame && !drawn.has(w.to)) return null
   return {
     source: fromFrame ?? w.from,
     sourceHandle: fromFrame ? `${BOUNDARY_HANDLE_PREFIX}${w.from}` : 'out',

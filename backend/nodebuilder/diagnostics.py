@@ -96,6 +96,18 @@ SEVERITY_BY_CODE: dict[str, Severity] = {
     "setting_shadowed": "warning",
     "group_weight_zero": "warning",
     "setting_unscoped": "warning",
+    # W6 errors (library assets and promoted params, kernel/assets.py and
+    # kernel/flatten.py).  asset_missing: a locked instance whose asset
+    # version is not in the library (or cannot be read); never a crash.
+    # asset_cycle: an asset that contains itself, at any depth.
+    # interface_mismatch: an asset's declared reads and writes do not match
+    # the streams its network really reads and writes.  promoted_invalid: a
+    # promoted param whose name or target is bad, or whose value has the
+    # wrong type.
+    "asset_missing": "error",
+    "asset_cycle": "error",
+    "interface_mismatch": "error",
+    "promoted_invalid": "error",
 }
 
 CODES: frozenset[str] = frozenset(SEVERITY_BY_CODE)

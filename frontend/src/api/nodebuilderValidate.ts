@@ -36,6 +36,8 @@ export type KnownDiagnosticCode =
   | 'wire_crosses_network' | 'boundary_invalid'
   // W5 warnings
   | 'setting_shadowed' | 'group_weight_zero' | 'setting_unscoped'
+  // W6 (asset instances and promoted params)
+  | 'asset_missing' | 'asset_cycle' | 'interface_mismatch' | 'promoted_invalid'
 
 export type DiagnosticCode = KnownDiagnosticCode | (string & {})
 

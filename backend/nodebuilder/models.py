@@ -8,7 +8,15 @@ from __future__ import annotations
 from collections import deque
 from typing import Any, Literal, Optional, Union
 
-from pydantic import ConfigDict, Field, field_serializer, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    StrictInt,
+    field_serializer,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
@@ -116,20 +124,72 @@ class WireCrossesNetworkError(GraphValidationError):
 
 
 class ReservedNodeIdError(GraphValidationError):
-    """A stored node id contains ``::``, which only flattened ids may use."""
+    """A stored node id contains ``::`` outside an asset instance's copy."""
 
     code = "graph_invalid"
 
 
-# Separator of composite ids: an asset instance's children get the flat id
-# ``outerId::innerId`` when the graph is flattened (plan D3, D7).  A stored
-# node id may never contain it.
+class ReservedWireIdError(GraphValidationError):
+    """A stored wire id contains ``::`` outside an asset instance's copy.
+    Such ids belong to the wires of an expanded asset; a second wire with
+    the same id would be dropped or inspected in its place (KA-6)."""
+
+    code = "graph_invalid"
+
+
+class LockedInstanceChildError(GraphValidationError):
+    """A node sits inside a locked asset instance.  A locked instance stores
+    no children: they come from the library when the graph compiles."""
+
+    code = "graph_invalid"
+
+
+# Separator of composite ids: an asset instance's children get the id
+# ``outerId::innerId`` when the instance is expanded (plan D3, D7, W6).  A
+# stored node id may contain it only inside an unlocked asset instance
+# (a baked bot snapshot, or a local copy), where the instance is the part
+# before the last ``::`` (see _composite_id_ok).
 COMPOSITE_ID_SEP = "::"
+
+SUBNET_TYPE = "subnet"
+"""The only node type that can be a library asset instance (W6)."""
+
+ASSET_NAME_PATTERN = r"^[a-z_][a-z0-9_]{0,63}$"
+"""A library asset name (plan W6 contracts)."""
+
+_NODE_META_MAX_KEYS = 32
+_NODE_VIEWS = ("frame", "card")
 
 
 # ---------------------------------------------------------------------------
 # Data models
 # ---------------------------------------------------------------------------
+
+
+class PromotedParam(BaseModel):
+    """A param of a node inside a network, shown and edited on the network
+    node itself (W6, Houdini's promoted parameters).
+
+    The value lives on the network node in ``params[name]``; when it is
+    missing, ``default`` is used.  ``target`` is the path of the inner param,
+    relative to the network node: ``sma/period`` is param ``period`` of the
+    child ``sma``.  kernel/flatten.py puts the value into the target before
+    compile.  Bad names, targets and values are ``promoted_invalid``
+    diagnostics, not load errors, so the graph still opens.
+    """
+
+    name: str
+    label: str = ""
+    target: str
+    type: str
+    default: Any = None
+
+
+class AssetRef(BaseModel):
+    """Which library asset, and which version of it, an instance uses."""
+
+    name: str = Field(pattern=ASSET_NAME_PATTERN)
+    version: StrictInt = Field(ge=1)
 
 
 class Node(BaseModel):
@@ -157,6 +217,58 @@ class Node(BaseModel):
     position: tuple[float, float] = (0.0, 0.0)
     display: bool = False
     bypass: bool = False
+
+    meta: dict[str, Any] = Field(default_factory=dict)
+    """Editor view state (W6, FA1).  Compile, flatten and the cook never read
+    it; save, load, migrate and copy keep it as it is.  Known keys: ``view``
+    ("frame" or "card"; missing means "frame") and ``note`` (the node's note
+    in the Inspector)."""
+
+    promoted: list[PromotedParam] = Field(default_factory=list)
+    """Promoted params of a network node (W6).  Empty on other nodes."""
+
+    asset_ref: Optional[AssetRef] = None
+    """On a subnet that is a library asset instance: the asset and the
+    version it pins.  A newer library version never changes it."""
+
+    locked: bool = False
+    """A locked instance stores no children; compile takes them from the
+    library (kernel/assets.py).  An unlocked instance stores its children as
+    a local copy and keeps asset_ref to say where they came from."""
+
+    @field_validator("meta")
+    @classmethod
+    def _meta_shape(cls, v: dict) -> dict:
+        if len(v) > _NODE_META_MAX_KEYS:
+            raise ValueError(f"meta has {len(v)} keys; at most {_NODE_META_MAX_KEYS} are allowed")
+        if "view" in v and v["view"] not in _NODE_VIEWS:
+            raise ValueError(f"meta.view must be 'frame' or 'card', got {v['view']!r}")
+        if "note" in v and not isinstance(v["note"], str):
+            raise ValueError("meta.note must be text")
+        return v
+
+    @model_validator(mode="after")
+    def _asset_fields(self) -> "Node":
+        if (self.asset_ref is not None or self.locked) and self.type != SUBNET_TYPE:
+            raise ValueError(
+                f"Only a subnet can be a library asset instance; {self.type!r} has "
+                "asset_ref or locked set."
+            )
+        if self.locked and self.asset_ref is None:
+            raise ValueError("A locked asset instance needs asset_ref (the asset and version).")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _leave_out_empty_w6_fields(self, handler):
+        """Leave the W6 fields out while they hold their defaults, so a graph
+        that does not use them saves exactly as it did before W6."""
+        data = handler(self)
+        if isinstance(data, dict):
+            for key, empty in (("meta", {}), ("promoted", []), ("asset_ref", None),
+                               ("locked", False)):
+                if key in data and data[key] == empty:
+                    del data[key]
+        return data
 
 
 class Wire(BaseModel):
@@ -266,9 +378,11 @@ class Graph(BaseModel):
                     f"Node id mismatch: nodes[{key!r}].id == {node.id!r}"
                 )
 
-        # 1a. "::" is kept for the ids flatten gives asset children (W6).
+        # 1a. "::" is kept for the ids of nodes inside library asset
+        # instances (W6).  A stored one is allowed only in an unlocked
+        # instance's copy (a baked bot snapshot or a local copy).
         for key in self.nodes:
-            if COMPOSITE_ID_SEP in key:
+            if COMPOSITE_ID_SEP in key and not _composite_id_ok(self.nodes, key):
                 raise ReservedNodeIdError(
                     f"Node id {key!r} contains {COMPOSITE_ID_SEP!r}, which is kept "
                     "for the ids of nodes inside library assets.",
@@ -285,6 +399,16 @@ class Graph(BaseModel):
                 "name_duplicate": DuplicateNodeNameError,
             }.get(first["code"], InvalidParentError)
             raise error_cls(first["message"], node_id=first["node_id"])
+
+        # 1c. A locked asset instance stores no children (W6).
+        for key, node in self.nodes.items():
+            parent = self.nodes.get(node.parent) if node.parent is not None else None
+            if parent is not None and parent.locked:
+                raise LockedInstanceChildError(
+                    f"Node {key!r} sits inside the locked asset instance {parent.id!r}.  "
+                    "A locked instance stores no children; unlock it to edit a local copy.",
+                    node_id=key,
+                )
 
         node_paths = set(self.nodes.keys())
 
@@ -303,6 +427,17 @@ class Graph(BaseModel):
                 raise DanglingWireError(
                     f"Wire {wire.id!r} references unknown node(s): {', '.join(missing)}",
                     node_id=known_end,
+                )
+
+        # 2a. "::" in a wire id is kept for the wires of an expanded asset
+        # (W6, KA-6): allowed only on a wire inside the unlocked instance
+        # its prefix names.
+        for wire in self.wires:
+            if COMPOSITE_ID_SEP in wire.id and not _composite_wire_id_ok(self.nodes, wire):
+                raise ReservedWireIdError(
+                    f"Wire id {wire.id!r} contains {COMPOSITE_ID_SEP!r}, which is kept "
+                    "for the wires inside library assets.",
+                    node_id=wire.to_path,
                 )
 
         # 2b. One wire per input port.  With two wires on one port, which one
@@ -429,6 +564,47 @@ def network_wire_issues(nodes: dict, wires: list) -> list[dict]:
 
 def _where(parent: Optional[str]) -> str:
     return "at the root" if parent is None else f"inside {parent!r}"
+
+
+def _composite_id_ok(nodes: dict, node_id: str) -> bool:
+    """True when a stored id with ``::`` belongs to an unlocked asset copy.
+
+    That is the case when the part before the last ``::`` is the id of an
+    unlocked subnet with asset_ref, and that subnet holds the node (it is
+    one of the node's parents, at any depth).  kernel/assets.py gives the
+    children of an instance exactly such ids, so a baked bot snapshot
+    stores and reloads the same ids the backtest compiled.
+    """
+    owner_id = node_id.rsplit(COMPOSITE_ID_SEP, 1)[0]
+    owner = nodes.get(owner_id)
+    if owner is None or owner.type != SUBNET_TYPE or owner.asset_ref is None or owner.locked:
+        return False
+    return _inside(nodes, node_id, owner_id)
+
+
+def _composite_wire_id_ok(nodes: dict, wire: Any) -> bool:
+    """True when a stored wire id with ``::`` belongs to an unlocked asset
+    copy: the part before the last ``::`` is an unlocked subnet with
+    asset_ref, and both ends of the wire sit inside it (at any depth)."""
+    owner_id = wire.id.rsplit(COMPOSITE_ID_SEP, 1)[0]
+    owner = nodes.get(owner_id)
+    if owner is None or owner.type != SUBNET_TYPE or owner.asset_ref is None or owner.locked:
+        return False
+    return all(_inside(nodes, end, owner_id) for end in (wire.from_path, wire.to_path))
+
+
+def _inside(nodes: dict, node_id: str, owner_id: str) -> bool:
+    """True when *owner_id* is one of *node_id*'s parents, at any depth."""
+    if node_id not in nodes:
+        return False
+    seen: set[str] = {node_id}
+    current = nodes[node_id].parent
+    while current is not None and current not in seen and current in nodes:
+        if current == owner_id:
+            return True
+        seen.add(current)
+        current = nodes[current].parent
+    return False
 
 
 # ---------------------------------------------------------------------------

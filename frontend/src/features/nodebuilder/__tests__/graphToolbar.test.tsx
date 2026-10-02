@@ -71,6 +71,8 @@ import GraphToolbar, { type GraphToolbarProps } from '../GraphToolbar'
 import { diagnosticsLabel, modKeyCap, runDisabledReason } from '../graphText'
 import { useNodeBuilderStore } from '../store'
 import { clearNotices, pushNotice } from '../notices'
+import { registerSlot } from '../slots'
+import { resetAssetUi, useAssetUi } from '../assetUi'
 
 function node(id: string, type: string, name: string): GraphNode {
   return { id, type, name, parent: null, params: {}, position: [0, 0], display: false, bypass: false }
@@ -523,5 +525,48 @@ describe('W1 fix pass: global keys and banners in NodeBuilder', () => {
     expect(useNodeBuilderStore.getState().selectedNodeId).toBe('n_x')
     // W5 runs regime in the graph: the old "Regime moved out" banner is gone.
     expect(screen.queryByTestId('nb-banner-regime_removed')).toBeNull()
+  })
+})
+
+describe('W6 toolbar joins (FA6, S37)', () => {
+  const follows = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+
+  it('the dirty dot and rev come after the breadcrumb slot; slot entries from 50 come after them', () => {
+    const offCrumb = registerSlot('toolbarLeft', 'testCrumb', () => <span data-testid="test-crumb" />, 5)
+    const offLate = registerSlot('toolbarLeft', 'testLate', () => <span data-testid="test-late" />, 60)
+    try {
+      render(<GraphToolbar {...toolbarProps({ dirty: true })} />)
+      const [name, crumb, dot, rev, late] = ['nb-graph-name', 'test-crumb', 'nb-dirty-dot', 'nb-rev', 'test-late'].map(id => screen.getByTestId(id))
+      expect(follows(name, crumb)).toBe(true)
+      expect(follows(crumb, dot)).toBe(true)
+      expect(follows(dot, rev)).toBe(true)
+      expect(follows(rev, late)).toBe(true)
+    } finally {
+      offCrumb()
+      offLate()
+    }
+  })
+
+  it('Asset Manager… sits after Import JSON, set apart by lines, and runs its handler', async () => {
+    const onAssetManager = vi.fn()
+    render(<GraphToolbar {...toolbarProps({ onAssetManager })} />)
+    fireEvent.click(screen.getByTestId('nb-btn-more'))
+    const menu = await screen.findByTestId('nb-menu-more')
+    const rows = Array.from(menu.querySelectorAll('[role="menuitem"], [role="separator"]'))
+      .map(el => (el.getAttribute('role') === 'separator' ? '-' : el.getAttribute('data-testid')))
+    const at = rows.indexOf('nb-menu-asset-manager')
+    expect(rows.slice(at - 2, at + 3)).toEqual(['nb-menu-import', '-', 'nb-menu-asset-manager', '-', 'nb-menu-delete'])
+    fireEvent.click(screen.getByTestId('nb-menu-asset-manager'))
+    expect(onAssetManager).toHaveBeenCalledTimes(1)
+  })
+
+  it('NodeBuilder wires the row to the Asset Manager dialog', async () => {
+    resetAssetUi()
+    useNodeBuilderStore.getState().openGraph(smallGraph(), { id: 'g_1', rev: 2, name: 'alpha' })
+    renderNodeBuilder()
+    fireEvent.click(screen.getByTestId('nb-btn-more'))
+    fireEvent.click(await screen.findByTestId('nb-menu-asset-manager'))
+    expect(useAssetUi.getState().manager).not.toBeNull()
+    act(() => resetAssetUi())
   })
 })

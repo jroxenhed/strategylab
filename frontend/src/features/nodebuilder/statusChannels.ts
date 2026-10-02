@@ -130,6 +130,15 @@ export function selectionText(
   return parts.length > 0 ? parts.join(' · ') : 'no selection'
 }
 
+/**
+ * The selection slot's text (S37): the selection, and inside a network
+ * `in /long_leg/regime` (alone when nothing is selected).
+ */
+export function selectionSlotText(selection: string, where: string): string {
+  if (!where) return selection
+  return selection === 'no selection' ? where : `${selection} · ${where}`
+}
+
 /** The short id the graph segment shows: the last 4 hex characters. */
 export function shortGraphId(id: string): string {
   const hex = id.replace(/[^0-9a-f]/gi, '')

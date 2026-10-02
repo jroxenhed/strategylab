@@ -32,6 +32,8 @@ import {
 } from '../streamLabels'
 import { focusDiagnosticWire, useNodeDiagnostics, useStreams } from '../useDiagnostics'
 import { registerInspectorSection, type InspectorSectionProps } from './sections'
+import { boundaryOutput, NETWORK_TYPES } from '../rfMapping'
+import { LIFECYCLE_TEXT } from '../assetLifecycle'
 import { FLASH_MS, flashParam, setSectionOpen, useInspectorUi } from './state'
 import { catVars, categoryOf, diagnosticsCountText, sameValue, stepNumberField, useInspectorSelect, valueText } from './util'
 
@@ -205,6 +207,11 @@ export function StreamSection({ nodeId, node, editable }: InspectorSectionProps)
   const input = inputStreamOf(nodeId, streams, wiresIn)
   const connected = wiresIn.map(w => w.to_port)
   const ports = portsOf(node.type, connected).filter(p => !p.spare)
+  // S38: a subnet or regime network with no subnet_output child outputs
+  // nothing (a group has no output; a locked instance's insides are the
+  // library's) (UX-04).
+  const noOutput = useInspectorSelect(g =>
+    !!g && NETWORK_TYPES.has(node.type) && node.type !== 'output_group' && node.locked !== true && boundaryOutput(g.nodes, nodeId) === null)
 
   // Input attributes grouped by the node that wrote them, in stream order.
   const groups: { writer: string | null; names: string[] }[] = []
@@ -239,6 +246,9 @@ export function StreamSection({ nodeId, node, editable }: InspectorSectionProps)
 
   return (
     <div className="nb-insp-stream">
+      {noOutput && (
+        <div className="nb-insp-dim" style={{ color: 'var(--nb-warn)' }} data-testid="nb-inspector-no-output">{LIFECYCLE_TEXT.noOutput}</div>
+      )}
       <div className="nb-insp-lbl">reads</div>
       <div className="nb-insp-chips">
         {reads.length === 0 ? <span className="nb-insp-dim">none</span> : reads.map(r => (

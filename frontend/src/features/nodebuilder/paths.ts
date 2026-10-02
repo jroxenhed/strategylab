@@ -175,8 +175,8 @@ export function renameNode<G extends PathGraph>(graph: G, nodeId: string, newNam
 
 // Points stored path strings at a renamed (or moved) node's new path,
 // including paths under oldPath. Today one param stores a path: an Output
-// Group's `ticker` (W5); W6 adds promoted-param targets and W7 adds ch()
-// strings, and both get rewritten here. `onlyNodes` limits the rewrite to
+// Group's `ticker` (W5) and each network's promoted-param targets (W6, see
+// rewritePromoted); W7 adds ch() strings. `onlyNodes` limits the rewrite to
 // refs stored on those nodes: a paste renames the pasted copies, and only
 // refs inside the pasted set follow (FC-9); refs elsewhere still mean the
 // originals.
@@ -198,7 +198,13 @@ export function rewritePathRefs<G extends PathGraph>(
   let nodes: Record<string, PathNode> | null = null
   for (const [id, raw] of Object.entries(graph.nodes)) {
     if (onlyNodes && !onlyNodes.has(id)) continue
-    const node = raw as PathNode & { type?: string; params?: Record<string, unknown> }
+    let node = raw as PathNode & { type?: string; params?: Record<string, unknown>; promoted?: unknown }
+    const promoted = rewritePromoted(graph, id, node, under, toNew, toOld)
+    if (promoted !== null) {
+      nodes ??= { ...graph.nodes }
+      node = { ...node, promoted }
+      nodes[id] = node as PathNode
+    }
     if (node.type !== 'output_group') continue
     const ref = node.params?.ticker
     if (typeof ref !== 'string' || ref === '') continue
@@ -226,6 +232,57 @@ export function rewritePathRefs<G extends PathGraph>(
     nodes[id] = { ...node, params: { ...node.params, ticker: next } } as PathNode
   }
   return nodes ? ({ ...graph, nodes } as G) : graph
+}
+
+// The promoted-param targets of network `id` after a rename, or null when
+// none change (twin of migrate._rewrite_promoted). A target is
+// `<node path>/<param>`, relative to the network (W6). It is rewritten when
+// the node it named lies on the renamed path and the same string no longer
+// reaches it; the new target stays relative to the network. Renaming the
+// network itself (or anything above it) moves base and target together.
+function rewritePromoted(
+  graph: PathGraph,
+  id: string,
+  node: { promoted?: unknown },
+  under: (p: string) => boolean,
+  toNew: (p: string) => string,
+  toOld: (p: string) => string,
+): unknown[] | null {
+  const list = node.promoted
+  if (!Array.isArray(list) || list.length === 0) return null
+  let newBase: string
+  try {
+    newBase = nodePath(graph, id)
+  } catch {
+    return null
+  }
+  const oldBase = toOld(newBase)
+  let changed = false
+  const next = list.map((p: unknown) => {
+    const target = (p as { target?: unknown } | null)?.target
+    if (typeof target !== 'string' || target.startsWith('/')) return p
+    const i = target.lastIndexOf('/')
+    if (i <= 0) return p
+    const nodePart = target.slice(0, i)
+    const oldAbs = joinPath(oldBase, nodePart)
+    if (oldAbs === null || !under(oldAbs)) return p
+    const want = toNew(oldAbs)
+    if (joinPath(newBase, nodePart) === want) return p
+    changed = true
+    return { ...(p as object), target: `${relativePath(newBase, want)}/${target.slice(i + 1)}` }
+  })
+  return changed ? next : null
+}
+
+// The path from the node at absolute `base` to the node at `target`, using
+// `..` only when `target` is not inside `base` (twin of migrate._relative_path).
+export function relativePath(base: string, target: string): string {
+  const b = base.split('/').filter(p => p !== '')
+  const t = target.split('/').filter(p => p !== '')
+  let common = 0
+  while (common < Math.min(b.length, t.length) && b[common] === t[common]) common += 1
+  const parts = [...Array<string>(b.length - common).fill('..'), ...t.slice(common)]
+  return parts.length > 0 ? parts.join('/') : '.'
 }
 
 // The absolute path `rel` names from the node at absolute path `base`

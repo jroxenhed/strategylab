@@ -889,10 +889,11 @@ def _rewrite_path_refs(
 
     The twin of frontend ``paths.rewritePathRefs``; the shared vectors in
     tests/nodebuilder/vectors/paths.json hold both to the same answers.
-    Today one param stores a path: an Output Group's ``ticker`` (W5).  W6
-    adds promoted-param targets and W7 adds ``ch()`` strings; both get
-    rewritten here.  *graph* is the graph after the rename.  *only_nodes*
-    limits the rewrite to refs stored on those nodes.
+    Two kinds of ref are stored today: an Output Group's ``ticker`` param
+    (W5) and the ``target`` of each promoted param on a network (W6, see
+    ``_rewrite_promoted``).  W7 adds ``ch()`` strings.  *graph* is the
+    graph after the rename.  *only_nodes* limits the rewrite to refs stored
+    on those nodes.
 
     An absolute ref is rewritten when it is *old_path* or lies under
     ``old_path + "/"``.  A relative ref is resolved the way the server
@@ -918,6 +919,9 @@ def _rewrite_path_refs(
     for node_id, node in list(graph.nodes.items()):
         if only_nodes is not None and node_id not in only_nodes:
             continue
+        if getattr(node, "promoted", None):
+            _rewrite_promoted(graph, node_id, under, to_new, to_old)
+            node = graph.nodes[node_id]
         if node.type != "output_group":
             continue
         ref = (node.params or {}).get("ticker")
@@ -941,6 +945,55 @@ def _rewrite_path_refs(
         if nxt == ref:
             continue
         graph.nodes[node_id] = node.model_copy(update={"params": {**node.params, "ticker": nxt}})
+
+
+def _rewrite_promoted(graph: "Graph", node_id: str, under, to_new, to_old) -> None:
+    """Rewrite the promoted-param targets of network *node_id* after a rename.
+
+    A target is ``<node path>/<param>``, relative to the network (W6).  It
+    is rewritten when the node it named lies on the renamed path and the
+    same string no longer reaches it.  The new target stays relative to the
+    network.  Renaming the network itself (or anything above it) moves the
+    base and the target together, so nothing changes.
+    """
+    node = graph.nodes[node_id]
+    try:
+        new_base = node_path(graph, node_id)
+    except KeyError:
+        return
+    old_base = to_old(new_base)
+    changed = False
+    promoted = []
+    for p in node.promoted:
+        target = getattr(p, "target", None)
+        node_part, sep, param = target.rpartition("/") if isinstance(target, str) else ("", "", "")
+        if not sep or not node_part or target.startswith("/"):
+            promoted.append(p)
+            continue
+        old_abs = _join_path(old_base, node_part)
+        if old_abs is None or not under(old_abs):
+            promoted.append(p)
+            continue
+        want = to_new(old_abs)
+        if _join_path(new_base, node_part) == want:
+            promoted.append(p)
+            continue
+        promoted.append(p.model_copy(update={"target": f"{_relative_path(new_base, want)}/{param}"}))
+        changed = True
+    if changed:
+        graph.nodes[node_id] = node.model_copy(update={"promoted": promoted})
+
+
+def _relative_path(base: str, target: str) -> str:
+    """The path from the node at absolute *base* to the node at *target*,
+    using ``..`` only when *target* is not inside *base*."""
+    b = [p for p in base.split("/") if p]
+    t = [p for p in target.split("/") if p]
+    common = 0
+    while common < min(len(b), len(t)) and b[common] == t[common]:
+        common += 1
+    parts = [".."] * (len(b) - common) + t[common:]
+    return "/".join(parts) if parts else "."
 
 
 def _join_path(base: str, rel: str) -> Optional[str]:

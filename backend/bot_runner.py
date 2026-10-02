@@ -61,9 +61,38 @@ def compile_bot_graph(graph, bot_id: str = ""):
     Other timeframes are reference Tickers since W5 (plan D8): the tick
     fetches their bars next to its own (GraphLive.references), so the old
     HTF refusal is gone.
+
+    A bot never reads the library (F435 W6, plan D7): every route that gives
+    a bot a graph bakes its library assets in first (routes.graphs
+    bake_in_library), so a library edit or delete cannot change a running
+    bot.  A graph that still holds a locked asset instance got here some
+    other way (a hand-edited bots.json, a new path that skipped the bake) and
+    is refused with asset_unbaked, never resolved from the library at tick
+    time.  Compile is also given a lookup that finds nothing (BS-03): this
+    is the one place a bot compiles, so a bot never resolves the library.
+    One exception: a switched-off instance (bypassed, or inside a bypassed
+    network) whose asset could not be baked stays locked; it computes
+    nothing, so it is allowed and compiles with only a warning.
     """
     from nodebuilder.compile import compile as nb_compile
-    return nb_compile(graph)
+    from nodebuilder.kernel.flatten import is_locked_instance, switched_off
+    from nodebuilder.models import GraphValidationError
+
+    for nid, node in graph.nodes.items():
+        if is_locked_instance(node) and not switched_off(graph.nodes, nid):
+            err = GraphValidationError(
+                f"Node {node.name or node.id!r} is a locked library asset instance "
+                f"({node.asset_ref.name} version {node.asset_ref.version}). A bot's graph "
+                f"must have its assets baked in; deploy it again from the editor.",
+                node_id=node.id)
+            err.code = "asset_unbaked"
+            raise err
+    return nb_compile(graph, resolve=_no_library)
+
+
+def _no_library(name: str, version: int):
+    """The asset lookup of a bot's compile: a bot never reads the library."""
+    return None
 
 
 def graph_hash(graph) -> str:

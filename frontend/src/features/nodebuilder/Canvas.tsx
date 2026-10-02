@@ -13,6 +13,13 @@
  *          Flow handlers below (canvasPlugins.ts), commands (commands/), and
  *          the grid and minimap (CanvasChrome.tsx).
  *
+ * Wave 6 (6.C): the canvas shows one network at a time (S37). At the root it
+ *          draws the root's nodes, networks as frames or cards (FA1); dived
+ *          into a network it draws only that network's children, its
+ *          boundary nodes as half-height cards, and an inset outline. Each
+ *          network keeps its own pan and zoom (store/view.ts). A double-click
+ *          on a frame tab dives. A locked asset instance is shown read-only.
+ *
  * Read-only (auto-render): pan/zoom only; nodes are not draggable/connectable.
  * Editable (store-backed): nodesDraggable=true; drag-end calls store.moveNodes
  * once with every node that moved.
@@ -65,7 +72,7 @@ import {
   withUniqueWrites,
   type ConnectionLike,
 } from './streamLabels'
-import { dispatchKey, type CommandScope } from './commands'
+import { dispatchKey, getCommand, runCommand, type CommandScope } from './commands'
 import { activateCanvas, mountCanvas, publishScreenGraph } from './screen'
 import { anyPluginHandled, hasPluginHook, type CanvasCtx, type TabMenuRequest } from './canvasPlugins'
 import { useNodeTypes } from './nodeTypes'
@@ -78,14 +85,26 @@ import {
   createNodeMapper,
   graphPositionOf,
   measuredSizeOf,
+  setLayoutScope,
+  getLayoutScope,
   sourceNodes,
   stableArray,
   useRfNodeSourcesVersion,
   wirePlacements,
 } from './rfMapping'
 import CanvasChrome from './CanvasChrome'
+import './nodes/subnetNode.css'
 import { currentParentId, HOME_VIEWPORT, SNAP_GRID } from './store/view'
-import { frameOptions, MAX_ZOOM, MIN_ZOOM, wheelIsForSomethingElse, wheelViewport } from './viewOps'
+import { frameNodes, frameOptions, isNodeOnScreen, MAX_ZOOM, MIN_ZOOM, wheelIsForSomethingElse, wheelViewport } from './viewOps'
+import {
+  assetNetworkOf,
+  diveInto,
+  isLockedInstance,
+  isNetworkNode,
+  networkPath,
+  useAssetNetworksVersion,
+  withLockedChildren,
+} from './networkNav'
 import { closeActivePopover, isPopoverOpen } from './ui/Popover'
 import TabMenu from './TabMenu'
 import {
@@ -163,7 +182,35 @@ interface CanvasInnerProps {
   editable: boolean
 }
 
-function CanvasInner({ graph, editable }: CanvasInnerProps) {
+/** The id of the "unlock" command item 6.D may register; the locked bar runs it when present. */
+const UNLOCK_COMMAND = 'assets.unlock'
+
+/**
+ * The bar inside a locked asset instance (S38): everything here is
+ * read-only until the instance is unlocked into a local copy.
+ */
+function LockedBar({ node, canUnlock }: { node: GraphNode; canUnlock: boolean }) {
+  const ref = node.asset_ref
+  const label = ref ? `${ref.name} v${ref.version}` : node.name
+  const unlock = getCommand(UNLOCK_COMMAND)
+  const enabled = canUnlock && !!unlock
+  return (
+    <div className="nb-locked-bar" role="status" data-testid="nb-locked-bar">
+      <span>Locked asset {label}. Unlock to edit a local copy.</span>
+      <button
+        type="button"
+        className="nb-locked-bar__button"
+        disabled={!enabled}
+        title={enabled ? undefined : canUnlock ? 'Unlock is not available yet' : 'This graph is read-only'}
+        onClick={() => { runCommand(UNLOCK_COMMAND) }}
+      >
+        Unlock
+      </button>
+    </div>
+  )
+}
+
+function CanvasInner({ graph: inputGraph, editable: graphEditable }: CanvasInnerProps) {
   const rf = useReactFlow()
   const { screenToFlowPosition, fitView, setViewport: rfSetViewport } = rf
   const storeMoveNodes = useNodeBuilderStore(s => s.moveNodes)
@@ -181,9 +228,37 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   const layoutEpoch = useNodeBuilderStore(s => s.layoutEpoch)
   const layoutPending = useNodeBuilderStore(s => s.layoutPending)
   const network = useNodeBuilderStore(s => s.network)
+  const currentNetworkId = useNodeBuilderStore(s => s.currentNetworkId)
+  const revealNodeId = useNodeBuilderStore(s => s.revealNodeId)
   const snapToGrid = useNodeBuilderStore(s => s.snapToGrid)
   const nodeTypes = useNodeTypes()
   const edgeTypes = useEdgeTypes()
+
+  // ── The network on screen (S37) ───────────────────────────────────────────
+  // Kept by node id in the store, so a rename keeps the view. A network that
+  // is not in this graph (another graph on screen) shows the root.
+  const networkId = useMemo(() => {
+    const id = currentParentId({ network, currentNetworkId, graph: inputGraph }, inputGraph)
+    return id && isNetworkNode(inputGraph.nodes[id]) ? id : null
+  }, [network, currentNetworkId, inputGraph])
+  // Inside a locked asset instance: its children come from the library and
+  // everything is read-only (S38). `graphEditable` is whether the graph
+  // itself can be edited (the saved view, focus, fit); `editable` is
+  // whether what is on screen can.
+  const assetsVersion = useAssetNetworksVersion()
+  const lockedScope = networkId !== null && isLockedInstance(inputGraph.nodes[networkId])
+  const graph = useMemo(
+    () => (lockedScope && networkId ? withLockedChildren(inputGraph, networkId) : inputGraph),
+    // assetsVersion: the definition arrived.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [inputGraph, lockedScope, networkId, assetsVersion],
+  )
+  const editable = graphEditable && !lockedScope
+  // Frame layouts outside the canvas (the frame drag plugin) see this view.
+  useLayoutEffect(() => {
+    setLayoutScope(networkId)
+    return () => { if (getLayoutScope() === networkId) setLayoutScope(null) }
+  }, [networkId])
 
   // Tab menu state
   const [tabMenuOpen, setTabMenuOpen] = useState(false)
@@ -217,6 +292,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   // dependency (which changed on every edit and re-created them).
   const graphRef = useRef(graph)
   const editableRef = useRef(editable)
+  const graphEditableRef = useRef(graphEditable)
 
   // ── Nodes ─────────────────────────────────────────────────────────────────
   // Graph nodes map through a per-node cache (rfMapping.ts), so a one-node
@@ -229,14 +305,14 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   const sizesRef = useRef<Map<string, { w: number; h: number }>>(new Map())
   const [sizesVersion, setSizesVersion] = useState(0)
   const graphRfNodes = useMemo(
-    () => nodeMapper(graph.nodes, editable, sizesRef.current),
+    () => nodeMapper(graph.nodes, editable, sizesRef.current, networkId, { wires: graph.wires, assetNetwork: assetNetworkOf }),
     // sizesVersion: re-lay the frames when a card's measured size changes.
+    // assetsVersion: a locked card's ports come from its asset file (FE-02).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [nodeMapper, graph.nodes, editable, sizesVersion],
+    [nodeMapper, graph.nodes, graph.wires, editable, sizesVersion, networkId, assetsVersion],
   )
   const sourcesVersion = useRfNodeSourcesVersion()
   // The network on screen: sources draw only its boxes and notes (EA-4).
-  const networkId = useMemo(() => currentParentId({ network, graph }, graph), [network, graph])
   const extraNodes = useMemo(
     () => sourceNodes(graph, editable, networkId),
     // sourcesVersion: a source registered after mount.
@@ -271,10 +347,10 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   const labels = useMemo(() => wireLabels(graph, streams, streamsFresh), [graph, streams, streamsFresh])
   const connectedPorts = useMemo(() => connectedPortsByNode(graph.wires), [graph.wires])
   const placements = useMemo(
-    () => wirePlacements(graph, labels, connectedPorts, sizesRef.current),
+    () => wirePlacements(graph, labels, connectedPorts, sizesRef.current, networkId),
     // sizesVersion: re-place when React Flow reports a new node size.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [graph.nodes, graph.wires, labels, connectedPorts, sizesVersion],
+    [graph.nodes, graph.wires, labels, connectedPorts, sizesVersion, networkId],
   )
   const diagByWire = useMemo(() => wireDiagnostics(diagnostics, graph), [diagnostics, graph])
 
@@ -289,8 +365,9 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
       placements,
       lowZoom,
       diagByWire,
+      scope: networkId,
     }),
-    [edgeMapper, graph.wires, graph.nodes, selectedWireId, labels, placements, lowZoom, diagByWire],
+    [edgeMapper, graph.wires, graph.nodes, selectedWireId, labels, placements, lowZoom, diagByWire, networkId],
   )
 
   // Local mirror of nodes/edges so React Flow can update positions LIVE during
@@ -416,8 +493,8 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
 
   // Focus the canvas when editing starts, so keys work straight away.
   useEffect(() => {
-    if (editable) focusPane()
-  }, [editable, focusPane])
+    if (graphEditable) focusPane()
+  }, [graphEditable, focusPane])
 
   // Place the view when editing starts, when the store loads a different
   // graph (layoutEpoch: New, Open, Edit this graph) and when the network
@@ -431,8 +508,10 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   // While "Edit this graph" waits for its tidy (layoutPending, IP-4) the fit
   // is held, up to LAYOUT_WAIT_MS: when the tidy lands first there is one
   // fit, of the tidied graph, instead of a fit, a jump and a second fit.
+  // Each network has its own view (S37): diving or going up restores the
+  // saved one, a first visit frames all (H), with no animation.
   useEffect(() => {
-    if (!editable) return
+    if (!graphEditable) return
     let frame = 0
     const place = () => {
       frame = requestAnimationFrame(() => {
@@ -448,17 +527,18 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
       if (wait) clearTimeout(wait)
       cancelAnimationFrame(frame)
     }
-  }, [editable, layoutEpoch, layoutPending, network, fitView, rfSetViewport])
+  }, [graphEditable, layoutEpoch, layoutPending, networkId, fitView, rfSetViewport])
 
   // Re-fit when a new read-only graph arrives (another chart request, or back
   // from editing): the fitView prop only fits the first graph React Flow
   // sees. Read-only graphs keep their identity between renders, so this runs
   // once per new graph, never while the user pans.
   useEffect(() => {
-    if (editable) return
+    if (graphEditable) return
     const frame = requestAnimationFrame(() => { void fitView(FIT_VIEW_OPTIONS) })
     return () => cancelAnimationFrame(frame)
-  }, [editable, graph, fitView])
+  }, [graphEditable, graph, networkId, fitView])
+
 
   // Track whether the last press was inside the node builder (see
   // canvasActiveRef). Capture phase, so React Flow stopping a pointer event
@@ -466,7 +546,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   useEffect(() => {
     // Editing just started, focus is on the canvas. The read-only view takes
     // keys (readOnlyOk commands) only after a press inside the builder.
-    canvasActiveRef.current = editable
+    canvasActiveRef.current = graphEditable
     const onPointerDown = (e: PointerEvent) => {
       const container = containerRef.current
       const root = container ? outermostRoot(container) : null
@@ -478,7 +558,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
     }
     document.addEventListener('pointerdown', onPointerDown, true)
     return () => document.removeEventListener('pointerdown', onPointerDown, true)
-  }, [editable])
+  }, [graphEditable])
 
   // ── The canvas context (plugins and commands) ─────────────────────────────
   // One object for the canvas's life. Its methods read the latest values
@@ -518,6 +598,22 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   // graph on screen below.
   useLayoutEffect(() => mountCanvas(ctx), [ctx])
 
+  // Going up selects the network you left and frames it when it is off
+  // screen (S37); the crumb menu's "Frame in parent" always frames it. Runs
+  // once the node is drawn, after the saved view above is restored. No
+  // animation (foundation 8.9).
+  useEffect(() => {
+    if (!revealNodeId) return
+    if (!localNodes.some(n => n.id === revealNodeId)) return
+    const frame = requestAnimationFrame(() => {
+      const s = useNodeBuilderStore.getState()
+      if (s.revealNodeId !== revealNodeId) return
+      if (s.revealAlways || !isNodeOnScreen(ctx, revealNodeId)) frameNodes(ctx, [revealNodeId], false)
+      s.clearReveal()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [revealNodeId, localNodes, ctx])
+
   // ── Key handlers ──────────────────────────────────────────────────────────
   // Every key goes through the command registry. The canvas decides WHETHER
   // the press belongs to the node builder (shouldHandleCanvasKey); the
@@ -552,7 +648,9 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   // press, returns false (not handled) when focus is on a toolbar button,
   // so Tab keeps moving focus there.
   const openTabMenu = (req: TabMenuRequest = {}): boolean => {
-    if (!editable) return false
+    // Inside a locked asset it still opens, every row disabled under the
+    // S43 note (UX-02); only a read-only graph has no menu.
+    if (!graphEditable) return false
     const container = containerRef.current
     if (!container) return false
     if (req.keyEvent) {
@@ -637,6 +735,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   useLayoutEffect(() => {
     graphRef.current = graph
     editableRef.current = editable
+    graphEditableRef.current = graphEditable
     rfRef.current = rf
     localNodesRef.current = localNodes
     localEdgesRef.current = localEdges
@@ -781,7 +880,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   // the props set to undefined.
   const handleMoveEnd = useCallback(
     (_event: MouseEvent | TouchEvent | null, viewport: Viewport) => {
-      if (!editableRef.current) return
+      if (!graphEditableRef.current) return
       storeSetViewport({ x: viewport.x, y: viewport.y, zoom: viewport.zoom })
     },
     [storeSetViewport],
@@ -938,6 +1037,19 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
       else storeMirrorSelection({ annotationIds: [node.id] })
     },
     [storeSelect, storeMirrorSelection],
+  )
+
+  // Double-click on a frame's tab dives into that network (S37). A card's
+  // header dives by itself (nodes/SubnetNode.tsx); the group name inside a
+  // tab renames instead (it stops the event first).
+  const handleNodeDoubleClick = useCallback(
+    (event: React.MouseEvent, node: RFNode) => {
+      const t = event.target
+      if (!(t instanceof Element) || !t.closest('.nb-frame__tab')) return
+      if (!isNetworkNode(graphRef.current.nodes[node.id])) return
+      diveInto(node.id, ctx)
+    },
+    [ctx],
   )
 
   // ── Edge (wire) click → select wire ──────────────────────────────────────
@@ -1186,10 +1298,13 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
       // Double-click on empty canvas opens the Tab menu there (foundation
       // 6.1, UX-07); zoomOnDoubleClick is off for this.
       onDoubleClick={e => {
-        if (!editable || !(e.target instanceof Element) || !e.target.classList.contains('react-flow__pane')) return
+        if (!graphEditable || !(e.target instanceof Element) || !e.target.classList.contains('react-flow__pane')) return
         openTabMenuRef.current({ screen: { x: e.clientX, y: e.clientY } })
       }}
-      style={{ width: '100%', height: '100%', background: 'var(--nb-bg)', outline: 'none' }}
+      // The network on screen is announced when it changes (S37).
+      aria-label={`Network ${networkPath(graph, networkId)}`}
+      data-network={networkId ?? '/'}
+      style={{ width: '100%', height: '100%', background: 'var(--nb-bg)', outline: 'none', position: 'relative' }}
     >
       <ReactFlow
         nodes={localNodes}
@@ -1220,6 +1335,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
         onReconnectEnd={reconnectable ? handleReconnectEnd : undefined}
         reconnectRadius={18}
         onNodeClick={handleNodeClick}
+        onNodeDoubleClick={handleNodeDoubleClick}
         onNodeMouseEnter={handleNodeMouseEnter}
         onNodeMouseLeave={handleNodeMouseLeave}
         onNodeContextMenu={handleNodeContextMenu}
@@ -1257,7 +1373,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
         snapGrid={SNAP_GRID}
         // Editing places the view itself (saved view or a fit, effect above);
         // the fitView prop would re-fit over a restored view.
-        fitView={!editable}
+        fitView={!graphEditable}
         fitViewOptions={FIT_VIEW_OPTIONS}
         minZoom={MIN_ZOOM}
         maxZoom={MAX_ZOOM}
@@ -1265,7 +1381,19 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
         <CanvasChrome />
       </ReactFlow>
 
-      {editable && (
+      {/* Inside a network: an inset outline says "you are inside" (S37). */}
+      {networkId && (
+        <div
+          className={`nb-dive-outline${lockedScope ? ' nb-dive-outline--locked' : ''}`}
+          data-testid="nb-dive-outline"
+          aria-hidden="true"
+        />
+      )}
+      {lockedScope && networkId && (
+        <LockedBar node={inputGraph.nodes[networkId]} canUnlock={graphEditable} />
+      )}
+
+      {graphEditable && (
         <TabMenu
           open={tabMenuOpen}
           screenPosition={tabMenuScreen}
