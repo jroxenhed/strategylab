@@ -461,7 +461,18 @@ Graph JSON node                    adds  "code_mode": "column" | "bar"  (omitted
 
 ---
 
-## 11. Open questions for John
+## 11. Decisions (John, 2026-10-03)
+
+The design is approved as written, with these answers:
+
+1. **Start value:** a new attribute holds `0` / `False` on bars the code does not write, as in VEX.
+2. **Slow code:** bar mode accepts any Python. Code that cannot vectorize or compile runs as a Python loop with the amber badge and the time-per-bar tooltip.
+3. **Position:** bar mode reads the real position later, as part of the position-state work, not in this item.
+
+Speed comes first wherever there is a choice (John: "speed is important, so wherever we can optimize for speed is good").
+
+## 12. The questions as asked
+
 
 1. **Start value of a new attribute on bars the code does not write: `0`/`False` (VEX) or NaN?** *Recommendation: 0/False, as VEX does.* It makes `if cond: @signal = True` work with no extra line, and `@x = nan` on the first line gives NaN when you want it.
 2. **Should bar mode accept any Python, running it as a slow Python loop, or refuse what cannot vectorize or compile?** *Recommendation: accept it, with the amber badge and the ns-per-bar tooltip.* This keeps your Wave 7 decision (real Python, nothing blocked), and the badge makes the cost visible.
