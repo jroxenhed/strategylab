@@ -1103,10 +1103,6 @@ export interface AssetListItem { name: string; versions: number[]; latest: numbe
 
 ---
 
-### Wave 8: Bar mode, VEX-style one-bar code (approved 2026-10-03)
-
-John approved a bar mode on top of Wave 7: Wrangles and node code blocks get a "Run over: Columns | Each bar" switch, and in "Each bar" the snippet is written for one bar with the loop implied. Three tiers are chosen at prepare time (vectorized, compiled with numba, Python loop) and shown as a badge. Design, measured speeds, tests and the implementation plan: `docs/plans/2026-10-03-node-builder-bar-mode-design.md` (decisions in its section 11). It starts after Wave 7 and does not change Wave 7 contracts.
-
 ### Wave 7: Code at three levels (T5)
 
 **Precondition: met.** John decided the code-nodes design note on 2026-09-30: real Python everywhere, no sandbox. slx is rejected.
@@ -1228,6 +1224,12 @@ export interface ParamDep { reader_id: string; reader_param: string | null; targ
 - One execution path: `grep -rnE "\b(exec|eval)\(" backend/nodebuilder backend/bot_runner.py backend/routes` finds calls only in `backend/nodebuilder/code/runtime.py`.
 - `grep -rni "slx" backend/nodebuilder frontend/src/features/nodebuilder` finds nothing.
 - After `npm --prefix frontend run build`, Monaco is only in a separate chunk: `grep -l "monaco" frontend/dist/assets/index-*.js` finds nothing, and a file matching `frontend/dist/assets/*monaco*` or an `editor.worker` chunk exists.
+
+---
+
+### Wave 8: Bar mode, VEX-style one-bar code (approved 2026-10-03)
+
+John approved a bar mode on top of Wave 7: Wrangles and node code blocks get a "Run over: Columns | Each bar" switch, and in "Each bar" the snippet is written for one bar with the loop implied. Three tiers are chosen at prepare time (vectorized, compiled with numba, Python loop) and shown as a badge. Design, measured speeds, tests and the implementation plan: `docs/plans/2026-10-03-node-builder-bar-mode-design.md` (decisions in its section 11). It starts after Wave 7 and does not change Wave 7 contracts.
 
 ---
 
