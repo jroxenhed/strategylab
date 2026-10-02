@@ -6,6 +6,9 @@
  * - one node: header (name, type, path, flags), the catalog description,
  *   then the registered sections (Parameters, Stream, Diagnostics; W7 adds
  *   Code through `registerInspectorSection`, see inspector/sections.ts);
+ *   a subnet also gets "Save as asset…" and "Promote to palette…" under its
+ *   header (W6, S41), and a network's Parameters section holds its
+ *   Promoted list (PromotedSection.tsx);
  * - several nodes: the count, Bulk buttons and Shared parameters;
  * - one wire: its ends, ports, reads and the source stream;
  * - nothing: the legend, flags and keys (InspectorLegend.tsx).
@@ -41,7 +44,10 @@ import { catalogEntry } from './streamLabels'
 import { useNodeDiagnostics } from './useDiagnostics'
 import { isUnsupportedNode } from './nodes/unsupported'
 import InspectorLegend from './InspectorLegend'
+import { openSaveAsset } from './assetUi'
+import { Button } from './ui/Button'
 import { NodeHeader } from './inspector/NodeHeader'
+import { AssetLifecycleRows } from './inspector/AssetLifecycleRows'
 import { MultiView } from './inspector/MultiView'
 import { WireView } from './inspector/WireView'
 import { InspectorSectionShell } from './inspector/Section'
@@ -113,6 +119,15 @@ function NodeView({ nodeId, editable }: { nodeId: string; editable: boolean }) {
       <NodeHeader nodeId={nodeId} node={node} editable={canEdit} />
       {entry?.desc && (
         <div className="nb-insp-desc" title={entry.desc}>{entry.desc}</div>
+      )}
+      {node.type === 'subnet' && node.asset_ref && (
+        <AssetLifecycleRows nodeId={nodeId} node={node} editable={canEdit} diagnostics={diagnostics} />
+      )}
+      {canEdit && node.type === 'subnet' && (
+        <div className="nb-insp-desc" style={{ display: 'flex', gap: 6 }} data-testid="nb-inspector-asset-actions">
+          <Button onClick={() => openSaveAsset({ subnetId: nodeId, palette: false })}>Save as asset…</Button>
+          <Button onClick={() => openSaveAsset({ subnetId: nodeId, palette: true })}>Promote to palette…</Button>
+        </div>
       )}
       {sections.filter(s => !s.when || s.when(props)).map(s => (
         <InspectorSectionShell
@@ -204,11 +219,16 @@ export default function Inspector() {
 
   // The graph source for everything inside: the store while it has a graph,
   // else the read-only graph on screen (screen.ts, reactive: FC-4, EA-9).
+  // Inside a locked asset the canvas draws the asset's nodes under composite
+  // ids that only the screen graph has: when the primary selection is one of
+  // them, show the screen graph, read-only (FE-07).
   const storeHasGraph = useNodeBuilderStore(s => s.graph != null)
   const screenGraph = useScreenGraph().graph
+  const primaryOffStore = useNodeBuilderStore(s => s.graph != null && !!s.selectedNodeId && !(s.selectedNodeId in s.graph.nodes))
+  const fromScreen = !storeHasGraph || (primaryOffStore && !!screenGraph)
   const source = useMemo<InspectorSource | null>(
-    () => (storeHasGraph ? null : { graph: screenGraph }),
-    [storeHasGraph, screenGraph],
+    () => (fromScreen ? { graph: screenGraph } : null),
+    [fromScreen, screenGraph],
   )
 
   const width = overlay

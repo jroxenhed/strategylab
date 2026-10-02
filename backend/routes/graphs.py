@@ -29,6 +29,14 @@ revision ``rev``, all or nothing (one BotManager.add_bots call, one save).
     leg's group reads cannot be fetched on that leg's data source (LM-1).
   - The body's optional trading_hours, skip_after_stop and dynamic_sizing
     (the BotConfig shapes) go to every leg (LM-5).
+  - 400 {"detail": {"code": "asset_missing", "message", "node_id", "name",
+    "asset", "version"}} when a locked library asset instance (``name`` is
+    the instance node's name) points at an asset version the library does
+    not have (F435 W6 6.B).  409 with the same fields and code
+    ``asset_corrupt`` when that version's stored file is damaged.  Any
+    other asset problem (a cycle), and any error the editor's compile of a
+    graph with a locked instance reports (an interface_mismatch), is 400
+    graph_invalid with the problems as diagnostics.
 
 Bodies are read by hand so the 2 MB limit is checked before JSON parsing, and
 all file work and graph parsing run in the thread pool, never on the event loop.
@@ -47,7 +55,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from models import DynamicSizingConfig, IntervalField, SkipAfterStopConfig, TradingHoursConfig
-from nodebuilder.diagnostics import error_body, validate_graph_data
+from nodebuilder.diagnostics import error_body, from_error, validate_graph_data
 from nodebuilder.models import Graph, GraphValidationError
 from nodebuilder.storage import (
     GraphCorruptError,
@@ -203,15 +211,142 @@ _PARSE_ERRORS = (GraphValidationError, ValidationError, ValueError, TypeError)
 # ---------------------------------------------------------------------------
 
 
+class AssetBakeError(Exception):
+    """A graph could not become a bot's snapshot (F435 W6 6.B).
+
+    ``code`` is ``asset_missing`` (no such asset version), ``asset_corrupt``
+    (the version's stored file cannot be read, status 409, LD-03) or
+    ``graph_invalid`` (an asset cycle, an expansion that is too big, or a
+    compile error the editor reports, BS-02); ``problems`` are the
+    diagnostics.  ``status`` is the HTTP status of the refusal."""
+
+    def __init__(self, code: str, message: str, node_id: Optional[str] = None,
+                 name: Optional[str] = None, asset: Optional[str] = None,
+                 version: Optional[int] = None, problems: Optional[list] = None,
+                 status: int = 400) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.node_id = node_id
+        self.name = name
+        self.asset = asset
+        self.version = version
+        self.problems = problems or []
+        self.status = status
+
+    def detail(self) -> dict:
+        """The ``detail`` object of the refusal."""
+        if self.code in ("asset_missing", "asset_corrupt"):
+            return snapshot_detail(self.code, self.message, node_id=self.node_id,
+                                   name=self.name, asset=self.asset, version=self.version)
+        return snapshot_detail("graph_invalid", self.message, node_id=self.node_id,
+                               diagnostics=self.problems)
+
+
+def _library_lookup():
+    """(resolver, corrupt) for one bake: the resolver reads each asset
+    version from the library once (so the bake and the editor check below
+    see the same files even if the library changes meanwhile), and
+    ``corrupt`` collects the versions whose file is damaged, so the refusal
+    can say so instead of "not in the library" (LD-03)."""
+    from nodebuilder.storage import AssetCorruptError, AssetNotFoundError, get_library
+
+    library = get_library()
+    cache: dict = {}
+    corrupt: dict = {}
+
+    def lookup(name: str, version: int):
+        key = (name, version)
+        if key not in cache:
+            try:
+                cache[key] = library.get(name, version)
+            except AssetCorruptError as exc:
+                corrupt[key] = exc
+                cache[key] = None
+            except AssetNotFoundError:
+                cache[key] = None
+            except Exception:  # a resolver never raises (kernel.assets.Resolver)
+                logger.exception("asset %s version %s: lookup failed", name, version)
+                cache[key] = None
+        return cache[key]
+
+    return lookup, corrupt
+
+
+def _refuse_editor_errors(graph: Graph, lookup) -> None:
+    """Raise AssetBakeError graph_invalid when the graph, as the editor
+    compiles it (locked instances read from the library), has an error
+    (BS-02).  The bake unlocks every instance, and an unlocked copy skips
+    the asset interface check (declared reads and writes, stream schema),
+    so without this a graph the editor refuses to backtest could still
+    become a bot.  Diagnostics carry the editor's node ids (BS-04)."""
+    from nodebuilder.compile import check_graph
+
+    check = check_graph(graph, resolve=lookup)
+    errors = [d for d in check.diagnostics if d.severity == "error"]
+    if not errors and not check.errors:
+        return
+    listed = list(check.diagnostics)
+    first = errors[0] if errors else from_error(check.errors[0])
+    if not errors:
+        listed.insert(0, first)
+    raise AssetBakeError("graph_invalid", first.message, node_id=first.node_id,
+                         problems=[d.model_dump() for d in listed])
+
+
 def bake_in_library(graph: Graph) -> Graph:
-    """The library bake-in hook (plan D7; W6 item 6.B fills it in).
+    """The library bake-in hook (plan D7, F435 W6 6.B).
 
     A bot's graph is a snapshot with every library asset's definition copied
-    in, so a later library edit can never change a live bot.  Every path
-    that gives a bot a graph from the store calls this.  W5 has no library
-    assets, so the graph comes back unchanged.
+    in, so a later library edit or delete can never change a live bot.
+    Every path that gives a bot a graph calls this: spawn, add by graph_id
+    and graph_update (load_graph_snapshot), and add or PATCH with an inline
+    graph (routes.bots._bake_inline_graph).  ``kernel.assets.bake_assets``
+    gives each locked asset instance the asset's nodes as stored children
+    (locked becomes False, asset_ref stays for provenance) and writes every
+    promoted param's value into its target (BS-01), so a reader that
+    ignores ``promoted`` computes the same strategy.  A graph with nothing
+    to bake comes back unchanged (the same object).
+
+    A graph with a locked instance is also compiled as the editor compiles
+    it, and refused when that has an error (BS-02).
+
+    Raises AssetBakeError: asset_missing when an instance's asset version is
+    not in the library; asset_corrupt (409) when its file is damaged;
+    graph_invalid when the assets cannot be expanded (a cycle) or the
+    editor's compile has an error.  Reads asset files: thread pool only.
     """
-    return graph
+    from nodebuilder.kernel import assets as kernel_assets
+    from nodebuilder.kernel.flatten import is_locked_instance
+
+    lookup, corrupt = _library_lookup()
+    try:
+        baked = kernel_assets.bake_assets(graph, lookup)
+    except kernel_assets.AssetError as exc:
+        node = graph.nodes.get(exc.node_id) if exc.node_id else None
+        name = node.name if node is not None else exc.node_id
+        what = (f"{exc.asset_name} version {exc.asset_version}" if exc.asset_name
+                else "its library asset")
+        if exc.code == "asset_missing" and (exc.asset_name, exc.asset_version) in corrupt:
+            raise AssetBakeError(
+                "asset_corrupt",
+                f"Node {name!r} uses {what}, whose stored file is damaged and cannot be "
+                f"read. Pick another version, or delete that version and save the asset "
+                f"again.",
+                node_id=exc.node_id, name=name, asset=exc.asset_name,
+                version=exc.asset_version, status=409) from None
+        if exc.code == "asset_missing":
+            raise AssetBakeError(
+                "asset_missing",
+                f"Node {name!r} uses {what}, which is not in the library. "
+                f"Pick another version or unlock the node first.",
+                node_id=exc.node_id, name=name, asset=exc.asset_name,
+                version=exc.asset_version) from None
+        raise AssetBakeError(exc.code, str(exc), node_id=exc.node_id, name=name,
+                             problems=[from_error(exc).model_dump()]) from None
+    if any(is_locked_instance(n) for n in graph.nodes.values()):
+        _refuse_editor_errors(graph, lookup)
+    return baked
 
 
 class SnapshotRefused(Exception):
@@ -233,7 +368,10 @@ def load_graph_snapshot(graph_id: str, rev: int) -> tuple[dict, Graph]:
 
     Raises SnapshotRefused: 404 no such graph; 409 graph_corrupt; 409
     rev_conflict with current_rev (the store keeps only the latest rev);
-    400 graph_invalid with diagnostics when the saved graph does not parse.
+    400 graph_invalid with diagnostics when the saved graph does not parse,
+    or (with a locked asset instance) when the editor's compile of it has
+    an error; 400 asset_missing when a locked asset instance's version is
+    not in the library (W6 6.B); 409 asset_corrupt when its file is damaged.
     Reads a file: call it from the thread pool, never the event loop.
     """
     try:
@@ -248,7 +386,12 @@ def load_graph_snapshot(graph_id: str, rev: int) -> tuple[dict, Graph]:
         graph = Graph.model_validate(env["graph"])
     except _PARSE_ERRORS as exc:
         raise SnapshotRefused(400, graph_invalid_detail(exc, env["graph"])) from None
-    return env, bake_in_library(graph)
+    try:
+        return env, bake_in_library(graph)
+    except AssetBakeError as exc:
+        raise SnapshotRefused(exc.status, exc.detail()) from None
+    except _PARSE_ERRORS as exc:  # the baked graph does not load
+        raise SnapshotRefused(400, graph_invalid_detail(exc, env["graph"])) from None
 
 
 def snapshot_detail(code: str, message: str, **extra) -> dict:

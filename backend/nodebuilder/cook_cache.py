@@ -60,15 +60,22 @@ def eval_hash(graph: Any) -> str:
     """A hash of the parts of *graph* that can change what a cook computes.
 
     Kept: the format versions, each node's id, type, parent, params and
-    bypass flag, and every wire's ends, ports and attr (in list order, since
-    a wire without a port is placed by its order).  Left out: positions,
-    names, the display flag, meta, readOnly and annotations (boxes, notes),
-    and wire ids, none of which the cook reads.
+    bypass flag, its promoted params, asset_ref and locked flag (W6: a
+    promoted value or a pinned asset version changes what compiles), and
+    every wire's ends, ports and attr (in list order, since a wire without a
+    port is placed by its order).  Left out: positions, names, the display
+    flag, meta, readOnly and annotations (boxes, notes), and wire ids, none
+    of which the cook reads.
     """
     nodes = []
     for nid in sorted(graph.nodes):
         n = graph.nodes[nid]
-        nodes.append([n.id, n.type, n.parent, n.params, bool(n.bypass)])
+        nodes.append([
+            n.id, n.type, n.parent, n.params, bool(n.bypass),
+            [p.model_dump() for p in n.promoted],
+            n.asset_ref.model_dump() if n.asset_ref is not None else None,
+            bool(n.locked),
+        ])
     wires = [
         [w.from_path, w.to_path, w.from_port, w.to_port, w.attr]
         for w in graph.wires

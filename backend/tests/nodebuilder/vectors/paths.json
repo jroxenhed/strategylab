@@ -1,5 +1,5 @@
 {
- "_about": "Shared test vectors for the node path helpers. backend/nodebuilder/migrate.py (pytest: test_migrate.py) and frontend/src/features/nodebuilder/paths.ts (vitest: paths.vectors.test.ts) must both pass every case. Change the two implementations and this file together.",
+ "_about": "Shared test vectors for the node path helpers. backend/nodebuilder/migrate.py (pytest: test_migrate.py) and frontend/src/features/nodebuilder/paths.ts (vitest: paths.vectors.test.ts) must both pass every case. Change the two implementations and this file together. The rewrite_promoted section (W6: rename_node rewrites promoted-param targets) runs in test_promoted.py on the backend.",
  "graphs": {
   "tree": {
    "nodes": {
@@ -153,6 +153,107 @@
      "params": {
       "ticker": "/aapl"
      }
+    }
+   }
+  },
+  "promoted": {
+   "nodes": {
+    "n_mom": {
+     "id": "n_mom",
+     "type": "subnet",
+     "name": "mom",
+     "parent": null,
+     "promoted": [
+      {
+       "name": "rsi_period",
+       "label": "Rsi Period",
+       "target": "rsi/period",
+       "type": "int",
+       "default": 14
+      },
+      {
+       "name": "rsi2_period",
+       "label": "Rsi2 Period",
+       "target": "rsi2/period",
+       "type": "int",
+       "default": 14
+      },
+      {
+       "name": "len",
+       "label": "Len",
+       "target": "inner/len",
+       "type": "int",
+       "default": 5
+      },
+      {
+       "name": "deep",
+       "label": "Deep",
+       "target": "inner/sma/period",
+       "type": "int",
+       "default": 9
+      },
+      {
+       "name": "gone",
+       "label": "Gone",
+       "target": "gone/period",
+       "type": "int",
+       "default": 14
+      }
+     ]
+    },
+    "n_rsi": {
+     "id": "n_rsi",
+     "type": "rsi",
+     "name": "rsi",
+     "parent": "n_mom"
+    },
+    "n_rsi2": {
+     "id": "n_rsi2",
+     "type": "rsi",
+     "name": "rsi2",
+     "parent": "n_mom"
+    },
+    "n_inner": {
+     "id": "n_inner",
+     "type": "subnet",
+     "name": "inner",
+     "parent": "n_mom",
+     "promoted": [
+      {
+       "name": "len",
+       "label": "Len",
+       "target": "sma/period",
+       "type": "int",
+       "default": 5
+      }
+     ]
+    },
+    "n_sma": {
+     "id": "n_sma",
+     "type": "sma",
+     "name": "sma",
+     "parent": "n_inner"
+    },
+    "n_other": {
+     "id": "n_other",
+     "type": "subnet",
+     "name": "other",
+     "parent": null,
+     "promoted": [
+      {
+       "name": "p",
+       "label": "P",
+       "target": "rsi/period",
+       "type": "int",
+       "default": 14
+      }
+     ]
+    },
+    "n_orsi": {
+     "id": "n_orsi",
+     "type": "rsi",
+     "name": "rsi",
+     "parent": "n_other"
     }
    }
   }
@@ -778,6 +879,146 @@
     }
    },
    "why": "a leaf rename inside a network"
+  }
+ ],
+ "rewrite_promoted": [
+  {
+   "graph": "promoted",
+   "id": "n_rsi",
+   "new_name": "rsi_fast",
+   "expect": {
+    "targets": {
+     "n_mom": [
+      "rsi_fast/period",
+      "rsi2/period",
+      "inner/len",
+      "inner/sma/period",
+      "gone/period"
+     ],
+     "n_inner": [
+      "sma/period"
+     ],
+     "n_other": [
+      "rsi/period"
+     ]
+    }
+   },
+   "why": "a promoted child renamed: its target follows; rsi2 (same prefix) and the other network's rsi stay"
+  },
+  {
+   "graph": "promoted",
+   "id": "n_rsi2",
+   "new_name": "rsi3",
+   "expect": {
+    "targets": {
+     "n_mom": [
+      "rsi/period",
+      "rsi3/period",
+      "inner/len",
+      "inner/sma/period",
+      "gone/period"
+     ],
+     "n_inner": [
+      "sma/period"
+     ],
+     "n_other": [
+      "rsi/period"
+     ]
+    }
+   },
+   "why": "only the exact node moves, never a name that only starts the same"
+  },
+  {
+   "graph": "promoted",
+   "id": "n_inner",
+   "new_name": "core",
+   "expect": {
+    "targets": {
+     "n_mom": [
+      "rsi/period",
+      "rsi2/period",
+      "core/len",
+      "core/sma/period",
+      "gone/period"
+     ],
+     "n_inner": [
+      "sma/period"
+     ],
+     "n_other": [
+      "rsi/period"
+     ]
+    }
+   },
+   "why": "an inner network renamed: targets through it follow, its own targets are relative to it and stay"
+  },
+  {
+   "graph": "promoted",
+   "id": "n_sma",
+   "new_name": "sma_slow",
+   "expect": {
+    "targets": {
+     "n_mom": [
+      "rsi/period",
+      "rsi2/period",
+      "inner/len",
+      "inner/sma_slow/period",
+      "gone/period"
+     ],
+     "n_inner": [
+      "sma_slow/period"
+     ],
+     "n_other": [
+      "rsi/period"
+     ]
+    }
+   },
+   "why": "a grandchild renamed: both the inner network's target and the two-level target follow"
+  },
+  {
+   "graph": "promoted",
+   "id": "n_mom",
+   "new_name": "momentum",
+   "expect": {
+    "targets": {
+     "n_mom": [
+      "rsi/period",
+      "rsi2/period",
+      "inner/len",
+      "inner/sma/period",
+      "gone/period"
+     ],
+     "n_inner": [
+      "sma/period"
+     ],
+     "n_other": [
+      "rsi/period"
+     ]
+    }
+   },
+   "why": "the network itself renamed: relative targets stay"
+  },
+  {
+   "graph": "promoted",
+   "id": "n_orsi",
+   "new_name": "r",
+   "expect": {
+    "targets": {
+     "n_mom": [
+      "rsi/period",
+      "rsi2/period",
+      "inner/len",
+      "inner/sma/period",
+      "gone/period"
+     ],
+     "n_inner": [
+      "sma/period"
+     ],
+     "n_other": [
+      "r/period"
+     ]
+    }
+   },
+   "why": "a rename in another network touches only that network's targets"
   }
  ]
 }

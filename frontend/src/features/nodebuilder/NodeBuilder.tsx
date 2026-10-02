@@ -31,6 +31,10 @@
  * bottom, then overlays and dialogs. Slot components reach the session and
  * the Run and Stop actions through BuilderContext (useBuilder). The cook
  * state is mirrored into the store's status slice for the status bar.
+ *
+ * W6 (6.C): the network breadcrumb (`/ › long_leg › regime`, S37) is
+ * mounted here in the toolbarLeft slot, after the graph name. Dialogs from
+ * later items (Save as asset, Asset Manager) mount in the `dialogs` slot.
  */
 
 import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -84,9 +88,14 @@ import { pushNotice, resolveNotice, type Notice } from './notices'
 import { runLegacySeed, seedBannerText } from './persistence'
 import { useGraphSession } from './useGraphSession'
 import { graphHasGroups } from './ownership'
-import { BuilderContext, Slot, type BuilderApi } from './slots'
+import { BuilderContext, Slot, registerSlot, type BuilderApi } from './slots'
+import Breadcrumb from './Breadcrumb'
+import { openAssetManager } from './assetUi'
 import { isTypingTarget } from './canvasHelpers'
 import './tokens.css'
+
+// The network breadcrumb sits first in the toolbar's left slot (S37).
+registerSlot('toolbarLeft', 'breadcrumb', Breadcrumb, 5)
 
 interface NodeBuilderProps {
   request: StrategyRequest | null
@@ -540,6 +549,7 @@ function NodeBuilder({ request, graphViewActive, graphWindow = null, onRunGraph,
       onDuplicate={session.duplicate}
       onExport={session.exportJson}
       onImport={session.importJson}
+      onAssetManager={() => openAssetManager()}
       onDelete={session.deleteCurrent}
       onEditThisGraph={handleEditThisGraph}
       onCloseGraph={session.closeGraph}

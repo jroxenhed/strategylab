@@ -57,6 +57,31 @@ def _graph_error(exc: GraphValidationError) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(exc), "node_id": exc.node_id})
 
 
+def _bake_inline_graph(graph: Graph):
+    """(graph with its library assets baked in, None), or (None, a 400
+    JSONResponse) (F435 W6).
+
+    A graph sent inline (add_bot without graph_id, PATCH with graph) gets
+    the same bake as a saved revision (routes.graphs.load_graph_snapshot):
+    every locked asset instance becomes an unlocked copy, so a running bot
+    never reads the library and a later library edit or delete cannot change
+    it.  An asset version not in the library is 400 asset_missing (409
+    asset_corrupt when its file is damaged), and a graph with a locked
+    instance that the editor's compile refuses is 400 graph_invalid (BS-02).
+    Every promoted value is written into its target too (BS-01).  Reads
+    asset files: these routes are plain defs, so it runs in the thread pool.
+    """
+    from routes.graphs import (AssetBakeError, bake_in_library, graph_invalid_detail)
+    try:
+        return bake_in_library(graph), None
+    except AssetBakeError as exc:
+        return None, JSONResponse(status_code=exc.status, content={"detail": exc.detail()})
+    except (GraphValidationError, ValidationError, ValueError, TypeError) as exc:
+        # The baked graph does not load (the same answer as a saved revision).
+        return None, JSONResponse(status_code=400, content={"detail": graph_invalid_detail(
+            exc, graph.model_dump(mode="json"))})
+
+
 def _parse_body(model, payload: dict):
     """Validate a request body against model.
 
@@ -346,6 +371,13 @@ def add_bot(payload: dict[str, Any] = Body(...)):
         config = _from_saved_graph(config)
         if isinstance(config, JSONResponse):
             return config
+    elif config.graph is not None:
+        # An inline graph: bake its library assets in, as a saved one is.
+        baked, refusal = _bake_inline_graph(config.graph)
+        if refusal is not None:
+            return refusal
+        if baked is not config.graph:
+            config = config.model_copy(update={"graph": baked})
     # Every reference Ticker the bot's group reads must load on the bot's
     # data source, or the bot could never work out a signal (LM-1).  A graph
     # that does not compile is left to add_bot, which answers with node_id.
@@ -404,6 +436,13 @@ def update_bot(bot_id: str, payload: dict[str, Any] = Body(...)):
     # the broker.  This route is a plain def: the broker call runs in the
     # thread pool.
     if req.graph is not None:
+        # Bake the library assets in first (F435 W6), so the swap check
+        # compares the graph the bot would really run.
+        baked, refusal = _bake_inline_graph(req.graph)
+        if refusal is not None:
+            return refusal
+        if baked is not req.graph:
+            req = req.model_copy(update={"graph": baked})
         from routes.graphs import SnapshotRefused, snapshot_detail
         try:
             config, state = mgr.get_bot(bot_id)

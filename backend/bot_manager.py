@@ -1090,6 +1090,9 @@ class BotManager:
             self._write_pre_w2_copy(data, raw_text)
             # F435 W5 (DI-08): likewise before W5 adds its graph_* fields.
             self._write_pre_w5_copy(data, raw_text)
+            # F435 W6 (BS-01): and before W6 writes graphs with assets and
+            # promoted params.
+            self._write_pre_w6_copy(data, raw_text)
             self.bot_fund = data.get("bot_fund", 0.0)
             self._unloaded = []
             previous: Optional[str] = None  # the last bot that loaded
@@ -1183,6 +1186,47 @@ class BotManager:
         try:
             atomic_write_text(path, raw_text, backup_depth=0)
             logger.info("Wrote %s before rewriting bots.json with the Wave 5 fields", path)
+        except Exception:
+            logger.exception("Could not write %s", path)
+
+    # The node fields W6 adds to a graph (models.Node).  A graph saves each
+    # one only when it is set, so a file where no node has any of them reads
+    # the same under Wave 5 code.
+    W6_NODE_FIELDS = ("promoted", "asset_ref", "locked", "meta")
+
+    @classmethod
+    def _write_pre_w6_copy(cls, data: Any, raw_text: str) -> None:
+        """Copy bots.json to bots.json.pre-w6 on the first Wave 6 boot (F435
+        W6, BS-01): when no graph node in it has a W6 field, so the file is
+        one Wave 5 code wrote (or reads the same way).
+
+        Written once, like the pre-w5 copy: an existing copy is never
+        overwritten.  Wave 5 code drops the W6 node fields: a bot whose
+        graph uses a library asset is refused by it (the row is kept and an
+        alert is sent, but the bot is not resumed, so an open position is
+        left unmanaged), and Wave 5's first save drops ``promoted``.  Every
+        W6 bot snapshot has its promoted values written into their targets
+        (bake_in_library), so such a bot computes the same strategy under
+        Wave 5.  To roll back to Wave 5: stop the server, put this copy back
+        as bots.json, then start the Wave 5 build (bots and state written
+        since are lost; close the positions of bots spawned with library
+        assets by hand first)."""
+        path = DATA_PATH + ".pre-w6"
+        if os.path.exists(path):
+            return
+        rows = data.get("bots", []) if isinstance(data, dict) else []
+        for row in rows if isinstance(rows, list) else []:
+            cfg = row.get("config") if isinstance(row, dict) else None
+            graph = cfg.get("graph") if isinstance(cfg, dict) else None
+            nodes = graph.get("nodes") if isinstance(graph, dict) else None
+            if not isinstance(nodes, dict):
+                continue
+            for node in nodes.values():
+                if isinstance(node, dict) and any(k in node for k in cls.W6_NODE_FIELDS):
+                    return  # written by Wave 6: not a Wave 5 file
+        try:
+            atomic_write_text(path, raw_text, backup_depth=0)
+            logger.info("Wrote %s, the bots.json Wave 5 code last wrote", path)
         except Exception:
             logger.exception("Could not write %s", path)
 

@@ -85,3 +85,21 @@ describe('paths vectors: rewritePathRefs (output_group ticker)', () => {
     expect(JSON.stringify(g)).toBe(before)
   })
 })
+
+describe('paths vectors: rewritePathRefs (promoted targets)', () => {
+  const targetsOf = (g: PathGraph) => {
+    const out: Record<string, string[]> = {}
+    for (const [id, n] of Object.entries(g.nodes)) {
+      const promoted = (n as { promoted?: { target: string }[] }).promoted
+      if (Array.isArray(promoted) && promoted.length > 0) out[id] = promoted.map(p => p.target)
+    }
+    return out
+  }
+  it.each(vectors.rewrite_promoted)('$why', (c) => {
+    const g = graphs[c.graph]
+    const before = JSON.stringify(g)
+    const renamed = renameNode(g, c.id, c.new_name)
+    expect(targetsOf(renamed)).toEqual(c.expect.targets)
+    expect(JSON.stringify(g)).toBe(before) // the input is never changed
+  })
+})

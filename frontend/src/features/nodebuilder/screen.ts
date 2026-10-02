@@ -117,10 +117,12 @@ export function getScreenGraph(): ScreenGraph {
   return snapshot
 }
 
-function subscribe(l: () => void): () => void {
+/** Call `l` whenever the graph on screen changes (not reactive; for modules). */
+export function subscribeScreenGraph(l: () => void): () => void {
   listeners.add(l)
   return () => { listeners.delete(l) }
 }
+const subscribe = subscribeScreenGraph
 
 /** The graph on screen and whether it is editable. Re-renders when either changes. */
 export function useScreenGraph(): ScreenGraph {

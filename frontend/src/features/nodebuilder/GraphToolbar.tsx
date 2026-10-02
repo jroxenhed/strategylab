@@ -1,7 +1,8 @@
 /**
  * GraphToolbar — the 36px row above the canvas (surface S01).
  *
- * Left: the graph name (click to rename), the unsaved dot, the rev, and a
+ * Left: the graph name (click to rename), the network breadcrumb (the
+ * toolbarLeft slot), then the unsaved dot and the rev (S37 order), or a
  * VIEW pill for the read-only strategy view. Right: the diagnostics chip,
  * Run, Save, and the `⋯` menu with every other graph action.
  *
@@ -51,6 +52,8 @@ export interface GraphToolbarProps {
   onDuplicate: () => void
   onExport: () => void
   onImport: () => void
+  /** Opens the Asset Manager (FA6); the `⋯` row shows only when given. */
+  onAssetManager?: () => void
   onDelete: () => void
   onEditThisGraph?: () => void
   /** Leave the edit copy and go back to the strategy view. */
@@ -255,6 +258,11 @@ export default function GraphToolbar(props: GraphToolbarProps) {
     buttons[next]?.focus()
   }
 
+  // FA6: after Import JSON, before Delete, set apart by a line.
+  const assetManagerRows: MenuEntry[] = props.onAssetManager
+    ? ['sep', { label: 'Asset Manager…', onSelect: props.onAssetManager, testId: 'nb-menu-asset-manager' }]
+    : []
+
   const menuItems: MenuEntry[] = editMode
     ? [
         { label: 'New', onSelect: props.onNew, disabled: saving || loading, testId: 'nb-menu-new' },
@@ -265,6 +273,7 @@ export default function GraphToolbar(props: GraphToolbarProps) {
         'sep',
         { label: 'Export JSON', onSelect: props.onExport, disabled: loading, testId: 'nb-menu-export' },
         { label: 'Import JSON…', onSelect: props.onImport, disabled: loading, testId: 'nb-menu-import' },
+        ...assetManagerRows,
         'sep',
         { label: 'Delete…', onSelect: props.onDelete, disabled: !saved || saving || loading, danger: true, testId: 'nb-menu-delete' },
         ...(props.onCloseGraph
@@ -275,6 +284,7 @@ export default function GraphToolbar(props: GraphToolbarProps) {
         { label: 'New', onSelect: props.onNew, disabled: loading, testId: 'nb-menu-new' },
         { label: 'Open…', keyCap: modKeyCap('O'), onSelect: props.onOpen, disabled: loading, testId: 'nb-menu-open' },
         { label: 'Import JSON…', onSelect: props.onImport, disabled: loading, testId: 'nb-menu-import' },
+        ...assetManagerRows,
       ]
 
   const showChip = editMode && (errorCount > 0 || warningCount > 0 || diagnosticsUnknown)
@@ -301,23 +311,25 @@ export default function GraphToolbar(props: GraphToolbarProps) {
               onStartUntitled={props.onSaveAs}
               onRename={props.onRenameInline}
             />
-            {dirty && (
-              <span
-                className="nb-toolbar__dirty"
-                title="unsaved changes"
-                aria-label="Unsaved changes"
-                role="img"
-                data-testid="nb-dirty-dot"
-              />
-            )}
-            {saved && (
-              <span className="nb-toolbar__rev" data-testid="nb-rev">
-                rev {rev}
-              </span>
-            )}
           </>
         ) : null}
-        <Slot name="toolbarLeft" />
+        {/* The breadcrumb (order 5) follows the name; the dot and rev follow the crumbs (S37). */}
+        <Slot name="toolbarLeft" maxOrder={49} />
+        {editMode && dirty && (
+          <span
+            className="nb-toolbar__dirty"
+            title="unsaved changes"
+            aria-label="Unsaved changes"
+            role="img"
+            data-testid="nb-dirty-dot"
+          />
+        )}
+        {editMode && saved && (
+          <span className="nb-toolbar__rev" data-testid="nb-rev">
+            rev {rev}
+          </span>
+        )}
+        <Slot name="toolbarLeft" minOrder={50} />
       </div>
 
       <HintBar />

@@ -5,9 +5,13 @@ attribute reads and writes, stream merges and clashes, types, bypass.  This
 module adds the trading rules that are about the whole graph and builds the
 program:
 
+0. library asset instances get their children from the library
+   (kernel/assets.py, W6), before anything reads the nodes (a problem
+   with a switched-off instance only warns);
 2. two wires on one input port are refused;
 3. the kernel walk over the flattened graph (networks taken out, plan D7),
-   in topological order;
+   in topological order; then each locked asset instance's declared
+   interface is checked against the streams it really reads and writes;
 4. the terminals, per Output Group (W5): each group has one Entry, which
    must get a signal, and one Exit, whose missing signal is a warning
    (a regime_switch group has one of each per side).  A graph with no
@@ -44,6 +48,7 @@ from nodebuilder.evaluator import (
     UnknownNodeTypeError,
     UnsupportedNodeError,
 )
+from nodebuilder.kernel import assets as _assets
 from nodebuilder.kernel import schema as kschema
 from nodebuilder.kernel.evaluate import analyze_graph, build_steps
 from nodebuilder.kernel.schema import RUN, coded
@@ -88,6 +93,72 @@ def _unknown_error(node) -> GraphValidationError:
     return UnknownNodeTypeError(node.id, node.type)
 
 
+def _check_interfaces(flat, analysis, lookup, record) -> None:
+    """interface_mismatch for each locked asset instance whose declared
+    interface (the asset file's ``interface``) does not match its streams.
+
+    writes: each declared name must be on the instance's output stream, of
+    the declared class and dtype.  reads: each declared name must be on a
+    stream wired into the instance.  A side whose stream could not be
+    checked (an error inside, nothing wired) is skipped: its own error says
+    more.  An asset saved for another stream schema version is a mismatch.
+    A switched-off instance (bypassed, or inside a bypassed network) passes
+    its input through and computes nothing, and an instance whose asset
+    could not be expanded holds nothing: neither is checked (KA-1).
+    """
+    if not flat.networks:
+        return
+    from nodebuilder.kernel.flatten import switched_off
+
+    schemas = analysis.schemas()
+    src = flat.source if flat.source is not None else flat.graph
+    filled = {n.parent for n in src.nodes.values()}
+    for nid, node in flat.networks.items():
+        if not _assets.is_locked_instance(node):
+            continue
+        if nid not in filled or switched_off(src.nodes, nid):
+            continue
+        ref = node.asset_ref
+        try:
+            asset = lookup(ref.name, ref.version)
+        except Exception:  # noqa: BLE001 (expand already reported it)
+            continue
+        if asset is None:
+            continue
+        iface = _assets.asset_interface(asset)
+        problems: list[str] = []
+        if iface.stream_schema is not None and iface.stream_schema != STREAM_SCHEMA_VERSION:
+            problems.append(f"it was saved for stream schema {iface.stream_schema}; this "
+                            f"server uses {STREAM_SCHEMA_VERSION}.")
+        out_id = flat.outputs.get(nid)
+        out_schema = schemas.get(out_id) if out_id is not None else None
+        if out_schema is not None:
+            for decl in iface.writes:
+                name = decl["name"]
+                info = out_schema.lookup(name)
+                if info is None:
+                    problems.append(f"it says it writes {name}, but its output has no {name}.")
+                    continue
+                cls, dtype = decl.get("class"), decl.get("dtype")
+                if cls in ("point", "detail") and cls != info.kind:
+                    problems.append(f"it says {name} is a {cls} attribute, but it is a "
+                                    f"{info.kind} attribute.")
+                elif dtype not in (None, "any") and info.dtype != "any" and dtype != info.dtype:
+                    problems.append(f"it says {name} is {dtype}, but it is {info.dtype}.")
+        feeds = [schemas.get(f) for f in flat.inputs.get(nid, {}).values() if f is not None]
+        feeds = [s for s in feeds if s is not None]
+        if feeds:
+            for decl in iface.reads:
+                name = decl["name"]
+                if not any(name in s for s in feeds):
+                    problems.append(f"it says it reads {name}, but nothing wired into it "
+                                    f"has {name}.")
+        for message in problems:
+            record(coded(GraphValidationError(
+                f"Asset {ref.name} v{ref.version}: {message}", node_id=flat.to_source(nid),
+            ), "interface_mismatch"))
+
+
 def assign_write_names(graph: Graph) -> dict[str, dict[str, str]]:
     """The name every write param of every node writes (defaults made unique).
 
@@ -120,30 +191,31 @@ class GraphCheck:
         return {nid: s.to_json() for nid, s in self.streams.items()}
 
 
-def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "compile" intentionally)
+def compile(graph: Graph, *, resolve: Optional[_assets.Resolver] = None) -> CompiledProgram:  # noqa: A001 (shadows builtin "compile" intentionally)
     """Compile a Graph into a CompiledProgram.
 
-    Raises the first error compile finds, in this order: a second wire on
-    one input port, then nodes in topological order, then the Entry and
-    Exit checks, then the indicator family cap, then the group plans.
-    Every raised error carries ``.code`` (plan 4.2).  Use
-    compile_with_diagnostics to get every problem at once.
+    Raises the first error compile finds, in this order: an asset instance
+    that cannot be expanded, a second wire on one input port, then nodes in
+    topological order, then the Entry and Exit checks, then the indicator
+    family cap, then the group plans.  Every raised error carries ``.code``
+    (plan 4.2).  Use compile_with_diagnostics to get every problem at once.
+    *resolve* looks up library assets (default: the registered library).
     """
-    result = check_graph(graph)
+    result = check_graph(graph, resolve=resolve)
     if result.errors:
         raise result.errors[0]
     assert result.program is not None
     return result.program
 
 
-def compile_with_diagnostics(graph: Graph):
+def compile_with_diagnostics(graph: Graph, *, resolve: Optional[_assets.Resolver] = None):
     """Compile and collect every problem instead of stopping at the first.
 
     Returns ``(program or None, diagnostics)``.  The program is None when any
     diagnostic is an error.  Warnings (exit_unconnected, size_unit_suspect,
     attr_shadowed) do not stop the compile.  Pure: no data is fetched.
     """
-    result = check_graph(graph)
+    result = check_graph(graph, resolve=resolve)
     return result.program, result.diagnostics
 
 
@@ -152,8 +224,25 @@ def stream_schemas(graph: Graph) -> dict[str, dict]:
     return check_graph(graph).streams_json()
 
 
-def check_graph(graph: Graph) -> GraphCheck:
-    """One compile pass: program (or None), diagnostics and node streams."""
+def _remembering(resolve: _assets.Resolver) -> _assets.Resolver:
+    """*resolve*, asked at most once per asset version in one compile."""
+    cache: dict[tuple[str, int], Any] = {}
+
+    def lookup(name: str, version: int):
+        key = (name, version)
+        if key not in cache:
+            cache[key] = resolve(name, version)
+        return cache[key]
+
+    return lookup
+
+
+def check_graph(graph: Graph, *, resolve: Optional[_assets.Resolver] = None) -> GraphCheck:
+    """One compile pass: program (or None), diagnostics and node streams.
+
+    *resolve* looks up library assets for locked instances; by default the
+    one the library registered (kernel.assets.default_resolver).
+    """
     found: list[tuple[Diagnostic, Optional[GraphValidationError]]] = []
 
     def _record(exc: GraphValidationError) -> None:
@@ -163,6 +252,19 @@ def check_graph(graph: Graph) -> GraphCheck:
         # Always a warning, even for a code diagnostics.SEVERITY_BY_CODE
         # does not list yet (setting_shadowed, W5).
         found.append((make_diagnostic(code, message, node_id=node_id, severity="warning"), None))
+
+    # 0. Library asset instances (W6): each locked instance gets its
+    # children from the library, with composite ids.  From here on `graph`
+    # is that expanded graph (the same object when there is no instance).
+    # An asset that is missing or contains itself is an error on the
+    # instance; the instance is then empty.
+    lookup = _remembering(resolve or _assets.default_resolver())
+    graph, asset_problems = _assets.expand_assets(graph, lookup)
+    for problem in asset_problems:
+        if problem.severity == "warning":  # a switched-off instance (KA-7)
+            _warn(problem.code, str(problem), problem.node_id)
+        else:
+            _record(problem)
 
     # 2. One wire per input port.  The Graph model refuses a second wire on a
     # port, so this only fires for a graph built without validation
@@ -187,6 +289,7 @@ def check_graph(graph: Graph) -> GraphCheck:
     analysis, flat = analyze_graph(graph, unknown_error=_unknown_error)
     found.extend(analysis.found)
     nodes = analysis.nodes
+    _check_interfaces(flat, analysis, lookup, _record)
 
     # 4. Terminals, sorted into Output Groups (plan D7).  A graph with no
     # group is one implicit group, "main", with the rules and messages
@@ -214,7 +317,7 @@ def check_graph(graph: Graph) -> GraphCheck:
             _record(FamilyCapExceededError(
                 f"Too many distinct {family!r} specs ({len(specs)}); "
                 f"max {_INDICATOR_FAMILY_CAP} per request",
-                node_id=specs[_INDICATOR_FAMILY_CAP][1],
+                node_id=flat.to_source(specs[_INDICATOR_FAMILY_CAP][1]),
             ))
 
     errors = [exc for _d, exc in found if exc is not None]

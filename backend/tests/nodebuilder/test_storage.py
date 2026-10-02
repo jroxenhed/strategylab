@@ -59,7 +59,7 @@ def store(tmp_path, monkeypatch):
 def test_store_uses_the_temp_data_dir(store, tmp_path):
     env = store.create("one", _graph())
     assert (tmp_path / "graphs" / f"{env['id']}.json").exists()
-    assert graph_dirs() == [tmp_path / "graphs", tmp_path / "graph_library"]
+    assert graph_dirs() == [tmp_path / "graphs", tmp_path / "library"]
 
 
 def test_create_envelope_shape(store):

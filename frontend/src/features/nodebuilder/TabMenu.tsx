@@ -15,14 +15,39 @@
  * Rendered into document.body through a portal, so no panel of the app can
  * sit on top of it or shift its fixed position. Only nodes that compile acts
  * on are offered (catalog entries with compileActive: false are hidden).
+ *
+ * W6 (spec S43, item 6.D):
+ * - Library assets join at runtime (never in catalog.generated.ts): `Rules`
+ *   holds the built-in rule nodes plus every asset with a Rules palette
+ *   entry, `Library` holds every asset and a "Manage assets…" link. The
+ *   built-in rows draw at once; asset rows append when the list arrives.
+ * - Choosing an asset places a locked instance of its latest version, wired
+ *   like any node (it goes through `onCreate` as a subnet, then becomes the
+ *   instance in the same undo step).
+ * - Search by attribute: `@volume` lists only what reads or writes it;
+ *   the matched attribute shows as a chip after the description.
+ * - Inside a network, `Networks` adds `Subnet input` and `Subnet output`
+ *   (the output row is disabled when one exists). Inside a locked asset
+ *   every row is disabled under a note.
  */
 
 import { useEffect, useId, useMemo, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import type { NodeCatalogEntry } from './catalog'
-import { CATS, type CatKey } from './categories'
-import { rankCatalog, friendlyName, type MatchResult } from './search'
+import { assetErrorText, cachedAsset, getAsset, type AssetFile } from '../../api/graphLibrary'
+import type { GraphNode } from '../../api/nodebuilder'
+import { NODE_CATALOG, type NodeCatalogEntry } from './catalog'
+import { rankCatalog, entryLabel, type MatchResult } from './search'
 import { clampMenuPosition, groupByCategory, menuCatalog } from './canvasHelpers'
+import { currentNetworkOf, ensureLibrary, insertAssetInstance, openAssetManager, refreshLibrary, useAssetLibrary } from './assetUi'
+import { noMatchText, TAB_MENU_TEXT } from './assetText'
+import { assetRowOf, catPill, isAssetRow, LIBRARY_CAT, pillOf, rowLabel, type AssetRowEntry } from './assetRows'
+import { insideLockedAsset } from './operations/collapse'
+import { assetInstanceNode } from './operations/assets'
+import { uniqueName } from './operations'
+import { boundaryPortOf } from './rfMapping'
+import { primaryWriteOf } from './streamLabels'
+import { useNodeBuilderStore } from './store'
+import './assets.css'
 
 // ---------------------------------------------------------------------------
 // Props
@@ -59,7 +84,8 @@ interface HighlightedNameProps {
 }
 
 function HighlightedName({ name, indices }: HighlightedNameProps) {
-  const friendly = friendlyName(name)
+  // `name` is the text shown (a row label), already friendly.
+  const friendly = name
   const indexSet = new Set(indices)
   return (
     <span>
@@ -81,12 +107,11 @@ function HighlightedName({ name, indices }: HighlightedNameProps) {
 // ---------------------------------------------------------------------------
 
 interface CatPillProps {
-  cat: CatKey
+  color: string
   glyph: string
 }
 
-function CatPill({ cat, glyph }: CatPillProps) {
-  const color = CATS[cat]?.color ?? 'var(--nb-text-muted)'
+function CatPill({ color, glyph }: CatPillProps) {
   return (
     <div style={{
       width: 22,
@@ -116,14 +141,29 @@ function CatPill({ cat, glyph }: CatPillProps) {
 // The catalog is static, so what the menu offers is worked out once at load.
 const MENU_CATALOG: NodeCatalogEntry[] = menuCatalog()
 const MENU_BY_CATEGORY: Record<string, NodeCatalogEntry[]> = groupByCategory(MENU_CATALOG)
-const MENU_BY_NAME: Map<string, NodeCatalogEntry> = new Map(MENU_CATALOG.map(e => [e.name, e]))
 
-// Categories with nothing to offer are left out.
-const CAT_ORDER: CatKey[] = (['ticker', 'indicator', 'comparison', 'logic', 'settings', 'output', 'network'] as CatKey[])
-  .filter(c => (MENU_BY_CATEGORY[c]?.length ?? 0) > 0)
+// Category order. Rules and Library may be filled by assets at runtime, so
+// they are kept even when the catalog has nothing for them.
+const BASE_ORDER: string[] = ['ticker', 'indicator', 'comparison', 'logic', 'rules', 'settings', 'output', 'network', LIBRARY_CAT]
 
 const MENU_HEIGHT = 420
 const NO_ENTRIES: NodeCatalogEntry[] = []
+
+/** Boundary rows offered inside a network (S38): built from the catalog. */
+const BOUNDARY_ENTRIES: NodeCatalogEntry[] = NODE_CATALOG.filter(e => e.name === 'subnet_input' || e.name === 'subnet_output')
+
+/** The lowest `port` no `subnet_input` of `networkId` uses yet. */
+function freeInputPort(nodes: Record<string, GraphNode>, networkId: string): number {
+  const used = new Set<number>()
+  for (const n of Object.values(nodes)) {
+    if (n.type !== 'subnet_input' || n.parent !== networkId) continue
+    const k = boundaryPortOf(n)
+    if (k !== null) used.add(k)
+  }
+  let k = 0
+  while (used.has(k)) k += 1
+  return k
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -139,6 +179,7 @@ export default function TabMenu(props: TabMenuProps) {
 function TabMenuPanel({
   open,
   screenPosition,
+  graphPosition,
   selectedNodeId,
   wireFromLabel,
   autoWire,
@@ -151,8 +192,52 @@ function TabMenuPanel({
   const inputName = `nb-search-${useId()}`
   const [query, setQuery] = useState('')
 
+  // W6: where the menu is (network on screen), the library, and locks.
+  const graph = useNodeBuilderStore(s => s.graph)
+  const network = useNodeBuilderStore(s => currentNetworkOf(s))
+  const libraryItems = useAssetLibrary(s => s.items)
+  const libraryStatus = useAssetLibrary(s => s.status)
+  const locked = !!graph && insideLockedAsset(graph.nodes, network)
+  const hasOutput = !!graph && !!network && Object.values(graph.nodes).some(n => n.type === 'subnet_output' && n.parent === network)
+  // The muted "loading assets…" row shows for at most 2 s.
+  const [loadingShown, setLoadingShown] = useState(true)
+  useEffect(() => {
+    void ensureLibrary()
+    const t = setTimeout(() => setLoadingShown(false), 2000)
+    return () => clearTimeout(t)
+  }, [])
+
+  const assetRows = useMemo(() => libraryItems.map(assetRowOf), [libraryItems])
+  const searchCatalog = useMemo(() => [...MENU_CATALOG, ...assetRows], [assetRows])
+  const byName = useMemo(() => new Map(searchCatalog.map(e => [e.name, e])), [searchCatalog])
+  const byCategory = useMemo(() => {
+    const out: Record<string, NodeCatalogEntry[]> = { ...MENU_BY_CATEGORY }
+    out.rules = [...(MENU_BY_CATEGORY.rules ?? []), ...assetRows.filter(r => r.asset.palette)]
+    out[LIBRARY_CAT] = assetRows
+    // Inside a network: its boundary nodes (S38). The input gets a free port.
+    if (network && graph) {
+      const port = freeInputPort(graph.nodes, network)
+      const extra = BOUNDARY_ENTRIES.map(e => e.name === 'subnet_input'
+        ? { ...e, defaults: { ...e.defaults, params: { ...e.defaults.params, port } } }
+        : e)
+      out.network = [...(MENU_BY_CATEGORY.network ?? []), ...extra]
+    }
+    return out
+  }, [assetRows, network, graph])
+  const catOrder = useMemo(
+    () => BASE_ORDER.filter(c => c === LIBRARY_CAT || (byCategory[c]?.length ?? 0) > 0),
+    [byCategory],
+  )
+
+  /** Why a row cannot be placed, or null. */
+  const rowDisabled = useCallback((e: NodeCatalogEntry): string | null => {
+    if (locked) return TAB_MENU_TEXT.lockedNote
+    if (e.name === 'subnet_output' && hasOutput) return 'already present'
+    return null
+  }, [locked, hasOutput])
+
   // Two-column state
-  const [focusedCat, setFocusedCat] = useState<CatKey>(CAT_ORDER[0])
+  const [focusedCat, setFocusedCat] = useState<string>(BASE_ORDER[0])
   const [focusedCatIndex, setFocusedCatIndex] = useState(0)
   const [focusedNodeIndex, setFocusedNodeIndex] = useState(0)
   // which column is active: 'cat' | 'node'
@@ -186,13 +271,13 @@ function TabMenuPanel({
   }, [onClose])
 
   // Derived data
-  const byCategory = MENU_BY_CATEGORY
   const trimmed = query.trim()
   const isSearching = trimmed.length > 0
 
   const flatResults: MatchResult[] = useMemo(
-    () => (trimmed ? rankCatalog(trimmed, MENU_CATALOG) : []),
-    [trimmed],
+    // Asset rows carry their own `label`, which search shows and matches.
+    () => (trimmed ? rankCatalog(trimmed, searchCatalog) : []),
+    [trimmed, searchCatalog],
   )
 
   // Nodes in focused category (two-col mode)
@@ -200,16 +285,37 @@ function TabMenuPanel({
 
   // Clamp indices when data changes
   const clampedFlatIndex = Math.min(focusedFlatIndex, Math.max(0, flatResults.length - 1))
-  const clampedCatIndex = Math.min(focusedCatIndex, Math.max(0, CAT_ORDER.length - 1))
+  const clampedCatIndex = Math.min(focusedCatIndex, Math.max(0, catOrder.length - 1))
   const clampedNodeIndex = Math.min(focusedNodeIndex, Math.max(0, catNodes.length - 1))
 
   const confirm = useCallback(
     (entry: NodeCatalogEntry, withWire: boolean) => {
-      onCreate(entry, withWire)
+      if (rowDisabled(entry)) return
+      if (isAssetRow(entry)) {
+        placeAsset(entry, withWire, onCreate, graphPosition)
+      } else if (entry.name === 'subnet_input') {
+        placeBoundaryInput(entry, withWire, onCreate)
+      } else if (entry.name === 'subnet') {
+        // S43: an empty Subnet from the menu is a card (FA1), one undo step (UX-03).
+        createThenPatch(entry, withWire, onCreate, (_g, node) => ({ ...node, meta: { ...(node.meta ?? {}), view: 'card' } }))
+      } else {
+        onCreate(entry, withWire)
+      }
       onClose()
     },
-    [onCreate, onClose]
+    [onCreate, onClose, rowDisabled, graphPosition]
   )
+
+  // Fetch the file of the highlighted asset row early, so choosing it can
+  // place the instance (with its promoted params) without waiting.
+  const highlighted = isSearching
+    ? byName.get(flatResults[clampedFlatIndex]?.name ?? '')
+    : activeCol === 'node' ? catNodes[clampedNodeIndex] : undefined
+  useEffect(() => {
+    if (highlighted && isAssetRow(highlighted)) {
+      getAsset(highlighted.asset.name, highlighted.asset.latest).catch(() => {})
+    }
+  }, [highlighted])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -226,7 +332,7 @@ function TabMenuPanel({
         if (isSearching) {
           const hit = flatResults[clampedFlatIndex]
           if (hit) {
-            const entry = MENU_BY_NAME.get(hit.name)
+            const entry = byName.get(hit.name)
             if (entry) confirm(entry, autoWire && !e.shiftKey && !!selectedNodeId)
           }
         } else {
@@ -259,9 +365,9 @@ function TabMenuPanel({
         if (e.key === 'ArrowDown') {
           e.preventDefault()
           if (activeCol === 'cat') {
-            const next = Math.min(clampedCatIndex + 1, CAT_ORDER.length - 1)
+            const next = Math.min(clampedCatIndex + 1, catOrder.length - 1)
             setFocusedCatIndex(next)
-            setFocusedCat(CAT_ORDER[next])
+            setFocusedCat(catOrder[next])
             setFocusedNodeIndex(0)
           } else {
             setFocusedNodeIndex(i => Math.min(i + 1, catNodes.length - 1))
@@ -271,7 +377,7 @@ function TabMenuPanel({
           if (activeCol === 'cat') {
             const prev = Math.max(clampedCatIndex - 1, 0)
             setFocusedCatIndex(prev)
-            setFocusedCat(CAT_ORDER[prev])
+            setFocusedCat(catOrder[prev])
             setFocusedNodeIndex(0)
           } else {
             setFocusedNodeIndex(i => Math.max(i - 1, 0))
@@ -288,6 +394,7 @@ function TabMenuPanel({
     [
       open, isSearching, flatResults, clampedFlatIndex, activeCol, catNodes,
       clampedCatIndex, clampedNodeIndex, autoWire, selectedNodeId, confirm, onClose,
+      byName, catOrder,
     ]
   )
 
@@ -415,18 +522,37 @@ function TabMenuPanel({
         </div>
       </div>
 
+      {locked && (
+        <div className="nb-tab-note" role="note" style={{ height: 22, boxSizing: 'border-box' }}>{TAB_MENU_TEXT.lockedNote}</div>
+      )}
+
       {/* Body */}
       {isSearching ? (
         <FlatList
+          query={trimmed}
           results={flatResults}
+          byName={byName}
           focusedIndex={clampedFlatIndex}
+          isDisabled={rowDisabled}
           onHover={setFocusedFlatIndex}
           onConfirm={(entry) => confirm(entry, autoWire && !!selectedNodeId)}
         />
       ) : (
         <TwoColumnBrowser
           byCategory={byCategory}
-          catOrder={CAT_ORDER}
+          catOrder={catOrder}
+          isDisabled={rowDisabled}
+          libraryNote={
+            libraryStatus === 'error'
+              ? { text: TAB_MENU_TEXT.unavailable, retry: () => { void refreshLibrary() } }
+              : libraryStatus === 'loading' && loadingShown
+                ? { text: TAB_MENU_TEXT.loading }
+                : null
+          }
+          onManage={() => {
+            onClose()
+            openAssetManager({ insertAt: graphPosition })
+          }}
           focusedCatIndex={clampedCatIndex}
           focusedCat={focusedCat}
           focusedNodeIndex={clampedNodeIndex}
@@ -455,13 +581,16 @@ function TabMenuPanel({
 // ---------------------------------------------------------------------------
 
 interface FlatListProps {
+  query: string
   results: MatchResult[]
+  byName: Map<string, NodeCatalogEntry>
   focusedIndex: number
+  isDisabled(entry: NodeCatalogEntry): string | null
   onHover(idx: number): void
   onConfirm(entry: NodeCatalogEntry): void
 }
 
-function FlatList({ results, focusedIndex, onHover, onConfirm }: FlatListProps) {
+function FlatList({ query, results, byName, focusedIndex, isDisabled, onHover, onConfirm }: FlatListProps) {
   if (results.length === 0) {
     return (
       <div style={{
@@ -470,7 +599,7 @@ function FlatList({ results, focusedIndex, onHover, onConfirm }: FlatListProps) 
         color: 'var(--nb-text-muted)',
         fontSize: 12,
       }}>
-        No nodes match
+        {noMatchText(query)}
       </div>
     )
   }
@@ -478,32 +607,37 @@ function FlatList({ results, focusedIndex, onHover, onConfirm }: FlatListProps) 
   return (
     <div style={{ overflowY: 'auto', flex: 1 }}>
       {results.map((r, i) => {
-        const cat = r.cat as CatKey
-        const catEntry = CATS[cat] ?? CATS.indicator
-        const entry = MENU_BY_NAME.get(r.name)
+        const entry = byName.get(r.name)
+        if (!entry) return null
+        const pill = pillOf(entry)
         const isFocused = i === focusedIndex
+        const disabled = isDisabled(entry)
 
         return (
           <div
             key={r.name}
+            data-testid={`nb-tab-row-${r.name}`}
+            aria-disabled={disabled ? true : undefined}
+            title={disabled ?? undefined}
             onMouseEnter={() => onHover(i)}
-            onClick={() => entry && onConfirm(entry)}
+            onClick={() => !disabled && onConfirm(entry)}
             style={{
               display: 'flex',
               alignItems: 'center',
               gap: 8,
               padding: '6px 12px',
-              cursor: 'pointer',
+              cursor: disabled ? 'not-allowed' : 'pointer',
+              opacity: disabled ? 0.45 : 1,
               background: isFocused ? 'oklch(0.24 0.016 250)' : 'transparent',
-              borderLeft: isFocused ? `3px solid ${catEntry.color}` : '3px solid transparent',
+              borderLeft: isFocused ? `3px solid ${pill.color}` : '3px solid transparent',
             }}
           >
-            <CatPill cat={cat} glyph={catEntry.glyph} />
+            <CatPill color={pill.color} glyph={pill.glyph} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--nb-text)' }}>
-                <HighlightedName name={r.name} indices={r.matchedIndices} />
+                <HighlightedName name={entryLabel({ name: entry.name, label: rowLabel(entry) })} indices={r.matchedIndices} />
               </div>
-              {entry?.desc && (
+              {entry.desc && (
                 <div style={{
                   fontSize: 10,
                   color: 'var(--nb-text-muted)',
@@ -512,9 +646,21 @@ function FlatList({ results, focusedIndex, onHover, onConfirm }: FlatListProps) 
                   whiteSpace: 'nowrap',
                 }}>
                   {entry.desc}
+                  {r.attr && (
+                    <span
+                      className={`nb-tab-attr-chip${r.attr.kind === 'write' ? ' nb-tab-attr-chip--write' : ''}`}
+                      aria-label={`matches ${r.attr.name}`}
+                      data-testid="nb-tab-attr-chip"
+                    >
+                      {r.attr.name}
+                    </span>
+                  )}
                 </div>
               )}
             </div>
+            {isAssetRow(entry) && (
+              <span className="nb-tab-asset-kind">{entry.asset.palette ? 'RULES' : 'LIBRARY'}</span>
+            )}
           </div>
         )
       })}
@@ -528,12 +674,16 @@ function FlatList({ results, focusedIndex, onHover, onConfirm }: FlatListProps) 
 
 interface TwoColumnBrowserProps {
   byCategory: Record<string, NodeCatalogEntry[]>
-  catOrder: CatKey[]
+  catOrder: string[]
   focusedCatIndex: number
-  focusedCat: CatKey
+  focusedCat: string
   focusedNodeIndex: number
   activeCol: 'cat' | 'node'
-  onHoverCat(cat: CatKey, idx: number): void
+  isDisabled(entry: NodeCatalogEntry): string | null
+  /** A muted last row in Library (loading, or unavailable with a retry). */
+  libraryNote: { text: string; retry?: () => void } | null
+  onManage(): void
+  onHoverCat(cat: string, idx: number): void
   onHoverNode(idx: number): void
   onConfirm(entry: NodeCatalogEntry): void
 }
@@ -541,6 +691,9 @@ interface TwoColumnBrowserProps {
 function TwoColumnBrowser({
   byCategory,
   catOrder,
+  isDisabled,
+  libraryNote,
+  onManage,
   focusedCatIndex,
   focusedCat,
   focusedNodeIndex,
@@ -561,7 +714,7 @@ function TwoColumnBrowser({
         flexShrink: 0,
       }}>
         {catOrder.map((cat, i) => {
-          const catEntry = CATS[cat]
+          const catEntry = catPill(cat)
           const count = byCategory[cat]?.length ?? 0
           const isFocused = i === focusedCatIndex
           return (
@@ -582,7 +735,7 @@ function TwoColumnBrowser({
                 borderLeft: isFocused ? `3px solid ${catEntry.color}` : '3px solid transparent',
               }}
             >
-              <CatPill cat={cat} glyph={catEntry.glyph} />
+              <CatPill color={catEntry.color} glyph={catEntry.glyph} />
               <span style={{
                 fontSize: 11,
                 color: 'var(--nb-text-secondary)',
@@ -605,8 +758,9 @@ function TwoColumnBrowser({
       </div>
 
       {/* Right: nodes in focused category */}
-      <div style={{ flex: 1, overflowY: 'auto' }}>
-        {catNodes.length === 0 ? (
+      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: 1 }}>
+        {catNodes.length === 0 && focusedCat === LIBRARY_CAT ? null : catNodes.length === 0 ? (
           <div style={{
             padding: '24px 12px',
             color: 'var(--nb-text-muted)',
@@ -617,27 +771,35 @@ function TwoColumnBrowser({
           </div>
         ) : (
           catNodes.map((entry, i) => {
-            const cat = entry.cat as CatKey
-            const catEntry = CATS[cat] ?? CATS.indicator
+            const pill = pillOf(entry)
             const isFocused = i === focusedNodeIndex && activeCol === 'node'
+            const disabled = isDisabled(entry)
             return (
               <div
                 key={entry.name}
+                data-testid={`nb-tab-row-${entry.name}`}
+                aria-disabled={disabled ? true : undefined}
+                title={disabled ?? undefined}
                 onMouseEnter={() => onHoverNode(i)}
-                onClick={() => onConfirm(entry)}
+                onClick={() => !disabled && onConfirm(entry)}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: 8,
                   padding: '6px 12px',
-                  cursor: 'pointer',
+                  cursor: disabled ? 'not-allowed' : 'pointer',
+                  opacity: disabled ? 0.45 : 1,
                   background: isFocused ? 'oklch(0.24 0.016 250)' : 'transparent',
-                  borderLeft: isFocused ? `3px solid ${catEntry.color}` : '3px solid transparent',
+                  borderLeft: isFocused ? `3px solid ${pill.color}` : '3px solid transparent',
                 }}
               >
+                {isAssetRow(entry) && <CatPill color={pill.color} glyph={pill.glyph} />}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--nb-text)' }}>
-                    {friendlyName(entry.name)}
+                    {rowLabel(entry)}
+                    {disabled && disabled !== TAB_MENU_TEXT.lockedNote && (
+                      <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--nb-text-dim)' }}>{disabled}</span>
+                    )}
                   </div>
                   {entry.defaults.subtitle && (
                     <div style={{
@@ -653,7 +815,134 @@ function TwoColumnBrowser({
             )
           })
         )}
+        {focusedCat === LIBRARY_CAT && libraryNote && (
+          <div
+            className="nb-tab-note"
+            role={libraryNote.retry ? 'button' : undefined}
+            style={{ cursor: libraryNote.retry ? 'pointer' : 'default' }}
+            onClick={libraryNote.retry}
+          >
+            {libraryNote.text}
+          </div>
+        )}
+        </div>
+        {focusedCat === LIBRARY_CAT && (
+          <button type="button" className="nb-tab-footer-link" onClick={onManage}>
+            {TAB_MENU_TEXT.manage}
+          </button>
+        )}
       </div>
     </div>
   )
+}
+
+// ---------------------------------------------------------------------------
+// Placing asset instances and boundary inputs (W6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Place a locked instance of the asset's latest version. When its file is
+ * cached, the instance is made through `onCreate` (as a subnet, so the
+ * canvas wires it as any node: a port drag, or the auto-wire), then turned
+ * into the instance, all in one undo step. Otherwise the file is fetched
+ * first and the instance placed at the menu point without a wire.
+ */
+function placeAsset(
+  row: AssetRowEntry,
+  withWire: boolean,
+  onCreate: TabMenuProps['onCreate'],
+  at: { x: number; y: number },
+): void {
+  const a = row.asset
+  const file = cachedAsset(a.name, a.latest)
+  if (!file) {
+    // Not prefetched yet (FE-06): wait for the file, so the instance gets
+    // its promoted params. When nothing changed meanwhile, place it as if
+    // it had been cached (same spot, same auto-wire); otherwise place it at
+    // the menu's spot without a wire. A failed fetch places nothing.
+    const graphAtClick = useNodeBuilderStore.getState().graph
+    getAsset(a.name, a.latest).then(
+      f => {
+        if (useNodeBuilderStore.getState().graph === graphAtClick) placeAssetFile(a, f, withWire, onCreate, at)
+        else insertAssetInstance({ name: a.name, version: a.latest, promoted: f.promoted }, at)
+      },
+      err => useNodeBuilderStore.getState().showFlash(assetErrorText(err)),
+    )
+    return
+  }
+  placeAssetFile(a, file, withWire, onCreate, at)
+}
+
+function placeAssetFile(
+  a: AssetRowEntry['asset'],
+  file: AssetFile,
+  withWire: boolean,
+  onCreate: TabMenuProps['onCreate'],
+  at: { x: number; y: number },
+): void {
+  const subnet = NODE_CATALOG.find(e => e.name === 'subnet')
+  if (!subnet) {
+    insertAssetInstance({ name: a.name, version: a.latest, promoted: file.promoted }, at)
+    return
+  }
+  createThenPatch(subnet, withWire, onCreate, (g, node) => {
+    const inst = assetInstanceNode(g, { name: a.name, version: a.latest, promoted: file.promoted }, node.parent, node.position)
+    const params = { ...inst.params }
+    prefillFirstAttr(g, node.id, file, params)
+    return { ...inst, id: node.id, name: uniqueName(g, a.name, node.parent, node.id), params }
+  })
+}
+
+/** S43: the first promoted `attr` param reads the wired source's primary write. */
+function prefillFirstAttr(
+  g: { nodes: Record<string, GraphNode>; wires: { from: string; to: string }[] },
+  nodeId: string,
+  file: AssetFile,
+  params: Record<string, unknown>,
+): void {
+  const first = file.promoted.find(p => p.type === 'attr')
+  if (!first) return
+  const wire = g.wires.find(w => w.to === nodeId)
+  const source = wire ? g.nodes[wire.from] : undefined
+  const write = primaryWriteOf(source)
+  if (write) params[first.name] = write
+}
+
+/** A `subnet_input` named `in<k>` after its free port (S38), in one undo step with its wire. */
+function placeBoundaryInput(entry: NodeCatalogEntry, withWire: boolean, onCreate: TabMenuProps['onCreate']): void {
+  const port = Number(entry.defaults.params.port ?? 0)
+  createThenPatch(entry, withWire, onCreate, (g, node) => ({
+    ...node,
+    name: uniqueName(g, `in${port}`, node.parent, node.id),
+    params: { ...node.params, port },
+  }))
+}
+
+/**
+ * Run the canvas's `onCreate`, then rewrite the node it made, as one undo
+ * step (the canvas selects the new node, which is how it is found).
+ */
+function createThenPatch(
+  entry: NodeCatalogEntry,
+  withWire: boolean,
+  onCreate: TabMenuProps['onCreate'],
+  patch: (g: NonNullable<ReturnType<typeof useNodeBuilderStore.getState>['graph']>, node: GraphNode) => GraphNode,
+): void {
+  const s = useNodeBuilderStore.getState()
+  const before = new Set(Object.keys(s.graph?.nodes ?? {}))
+  s.beginBatch(`add ${entry.name}`)
+  try {
+    onCreate(entry, withWire)
+    const after = useNodeBuilderStore.getState()
+    const id = after.selectedNodeId
+    const node = id && !before.has(id) ? after.graph?.nodes[id] : undefined
+    if (node && after.graph) {
+      after.commit(`add ${entry.name}`, g => {
+        const n = g.nodes[node.id]
+        return n ? { ...g, nodes: { ...g.nodes, [n.id]: patch(g, n) } } : g
+      })
+    }
+  } finally {
+    useNodeBuilderStore.getState().endBatch()
+  }
 }

@@ -8,8 +8,8 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import type { NodeCatalogEntry } from '../catalog'
-import { fuzzyMatch, rankCatalog, friendlyName } from '../search'
+import { NODE_CATALOG, type NodeCatalogEntry } from '../catalog'
+import { ATTR_MATCH_SCORE, attrOfQuery, fuzzyMatch, rankCatalog, friendlyName } from '../search'
 
 // ---------------------------------------------------------------------------
 // Test catalog
@@ -254,5 +254,123 @@ describe('friendlyName', () => {
   })
   it('upper-cases sma → SMA', () => {
     expect(friendlyName('sma')).toBe('SMA')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// W6 (spec S43): search by attribute
+// ---------------------------------------------------------------------------
+
+describe('attribute search (S43)', () => {
+  const VOLUME_READER: NodeCatalogEntry = {
+    name: 'obv',
+    cat: 'indicator',
+    desc: 'On-balance volume.',
+    reads: ['@close', '@volume'],
+    writes: ['@obv'],
+    defaults: { params: {}, ins: 1, outs: 1, subtitle: null },
+    compileActive: true,
+  }
+  const TICKER: NodeCatalogEntry = {
+    name: 'ticker',
+    cat: 'ticker',
+    desc: 'Price bars.',
+    reads: [],
+    writes: ['@open', '@close', '@volume'],
+    defaults: { params: {}, ins: 0, outs: 1, subtitle: null },
+    compileActive: true,
+  }
+  // Matches "volume" by name only (reads and writes do not have it).
+  const VOLUME_SPIKE: NodeCatalogEntry = {
+    name: 'volume_spike',
+    cat: 'signal',
+    desc: 'True when the bar is unusual.',
+    reads: ['@x'],
+    writes: ['@spike'],
+    defaults: { params: {}, ins: 1, outs: 1, subtitle: null },
+    compileActive: true,
+  }
+  // Matches "volume" by description only.
+  const QUIET: NodeCatalogEntry = {
+    name: 'quiet_bar',
+    cat: 'signal',
+    desc: 'A bar with low volume.',
+    reads: ['@x'],
+    writes: ['@quiet'],
+    defaults: { params: {}, ins: 1, outs: 1, subtitle: null },
+    compileActive: true,
+  }
+  const CAT = [RSI, VOLUME_READER, TICKER, VOLUME_SPIKE, QUIET, SMA]
+
+  it('"@volume" returns every entry that reads or writes @volume and nothing else', () => {
+    const r = rankCatalog('@volume', CAT)
+    expect(r.map(m => m.name).sort()).toEqual(['obv', 'ticker'])
+    expect(r.find(m => m.name === 'obv')?.attr).toEqual({ name: '@volume', kind: 'read' })
+    expect(r.find(m => m.name === 'ticker')?.attr).toEqual({ name: '@volume', kind: 'write' })
+    for (const m of r) expect(m.score).toBe(ATTR_MATCH_SCORE)
+  })
+
+  it('"volume" returns the same attribute matches first, then name and description matches', () => {
+    const r = rankCatalog('volume', CAT).map(m => m.name)
+    expect(r.slice(0, 2).sort()).toEqual(['obv', 'ticker'])
+    expect(r.slice(2)).toEqual(['volume_spike', 'quiet_bar'])
+  })
+
+  it('works on the real catalog: @volume finds exactly the nodes that read or write it', () => {
+    const want = NODE_CATALOG.filter(e => e.reads.includes('@volume') || e.writes.includes('@volume')).map(e => e.name).sort()
+    expect(want.length).toBeGreaterThan(0)
+    expect(rankCatalog('@volume', NODE_CATALOG).map(m => m.name).sort()).toEqual(want)
+  })
+
+  it('matches asset-like entries by their interface and searches their label', () => {
+    const asset = {
+      name: 'asset:regime_filter',
+      label: 'Regime Filter',
+      cat: 'rules',
+      desc: 'asset v3 · SPY above its 50-day SMA',
+      reads: ['@close'],
+      writes: ['@regime_on'],
+    }
+    expect(rankCatalog('@regime_on', [asset, RSI]).map(m => m.name)).toEqual(['asset:regime_filter'])
+    const byLabel = rankCatalog('regime f', [asset])
+    expect(byLabel[0]?.name).toBe('asset:regime_filter')
+    expect(byLabel[0]?.matchedIndices).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+  })
+
+  it('attrOfQuery accepts with or without @ and refuses non-names', () => {
+    expect(attrOfQuery('@volume')).toBe('@volume')
+    expect(attrOfQuery('volume')).toBe('@volume')
+    expect(attrOfQuery('Volume ')).toBe('@volume')
+    expect(attrOfQuery('crosses below')).toBeNull()
+    expect(attrOfQuery('@')).toBeNull()
+  })
+
+  it('an unknown @attr matches nothing', () => {
+    expect(rankCatalog('@nothing_writes_this', CAT)).toEqual([])
+  })
+})
+
+describe('bare one-letter queries do not rank port placeholders first (FE-04)', () => {
+  it("'b' puts a name match first, not the nodes that read @b", () => {
+    const top = rankCatalog('b', NODE_CATALOG)[0]
+    expect(top.attr).toBeUndefined()
+    expect(top.name.startsWith('b')).toBe(true)
+  })
+
+  it("'a' puts a name match first, not the 17 nodes that read @a", () => {
+    const r = rankCatalog('a', NODE_CATALOG)
+    expect(r[0].attr).toBeUndefined()
+    expect(r.every(m => m.score < ATTR_MATCH_SCORE)).toBe(true)
+  })
+
+  it("'bool' is a placeholder too; '@b' and '@bool' still ask for attributes", () => {
+    expect(rankCatalog('bool', NODE_CATALOG).some(m => m.score === ATTR_MATCH_SCORE)).toBe(false)
+    expect(rankCatalog('@b', NODE_CATALOG).length).toBeGreaterThan(0)
+    expect(rankCatalog('@b', NODE_CATALOG).every(m => m.score === ATTR_MATCH_SCORE)).toBe(true)
+    expect(rankCatalog('@bool', NODE_CATALOG).length).toBeGreaterThan(0)
+  })
+
+  it("a bare word of 3+ characters still finds attributes ('volume')", () => {
+    expect(rankCatalog('volume', NODE_CATALOG).some(m => m.score === ATTR_MATCH_SCORE)).toBe(true)
   })
 })

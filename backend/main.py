@@ -41,6 +41,7 @@ from routes.walk_forward import router as walk_forward_router
 from routes.strategies import router as strategies_router
 from routes.nodebuilder import router as nodebuilder_router
 from routes.graphs import router as graphs_router, MAX_BODY_BYTES as GRAPHS_MAX_BODY_BYTES
+from routes.graph_library import router as graph_library_router
 from routes.turnaround import router as turnaround_router
 from routes.premises import router as premises_router
 from routes.gateway import router as gateway_router
@@ -58,7 +59,7 @@ async def lifespan(app: FastAPI):
     from journal import DATA_DIR  # data/ — used by journal, bot_manager, trading watchlist
     backend_dir = Path(__file__).resolve().parent
     from nodebuilder.storage import graph_dirs
-    # graphs/ and graph_library/ are listed too: cleanup does not look in sub-folders.
+    # graphs/, library/ and each library/<name>/ are listed too: cleanup does not look in sub-folders.
     cleanup_orphan_tmps([DATA_DIR, *graph_dirs(DATA_DIR), backend_dir])
 
     from shared import init_ibkr
@@ -215,6 +216,7 @@ app.include_router(walk_forward_router)
 app.include_router(strategies_router)
 app.include_router(nodebuilder_router)
 app.include_router(graphs_router)
+app.include_router(graph_library_router)
 app.include_router(turnaround_router)
 app.include_router(premises_router)
 app.include_router(gateway_router)

@@ -74,6 +74,32 @@ def test_eval_hash_changes_with_what_the_cook_reads(mutate):
     assert eval_hash(_g(mutate)) != eval_hash(_g())
 
 
+def test_eval_hash_keeps_out_meta_but_reads_the_w6_fields():
+    """F435 W6: promoted params, asset_ref and locked change what compiles,
+    so they are in the hash; meta (view state, notes) never is."""
+    from tests.nodebuilder.test_promoted import _pp, _with_meta, mom
+    from tests.test_graph_library import instance_graph
+
+    # meta only: the same hash.
+    assert eval_hash(_with_meta()) == eval_hash(mom({"rsi_period": 7}))
+    # A promoted default (no value on the instance), a target or a type.
+    base = eval_hash(mom())
+    assert eval_hash(mom(promoted=[_pp("rsi_period", "rsi/period", default=20)])) != base
+    assert eval_hash(mom(promoted=[])) != base
+    assert eval_hash(mom({"rsi_period": 7})) != base
+
+    # The asset version an instance pins, the asset name, and the lock.
+    inst = eval_hash(Graph.model_validate(instance_graph(30, version=1)))
+    assert eval_hash(Graph.model_validate(instance_graph(30, version=2))) != inst
+    assert eval_hash(Graph.model_validate(instance_graph(30, asset="other"))) != inst
+    unlocked = instance_graph(30, version=1)
+    unlocked["nodes"]["rf"]["locked"] = False
+    assert eval_hash(Graph.model_validate(unlocked)) != inst
+    meta_only = instance_graph(30, version=1)
+    meta_only["nodes"]["rf"]["meta"] = {"note": "hello"}
+    assert eval_hash(Graph.model_validate(meta_only)) == inst
+
+
 # ---------------------------------------------------------------------------
 # Frame fingerprint
 # ---------------------------------------------------------------------------

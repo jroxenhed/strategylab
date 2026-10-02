@@ -1034,6 +1034,14 @@ Legacy bots without these fields load unchanged.
 
 ### Wave 6: Sub-network assets, promotion and dive (T3)
 
+**Status: done (2026-10-03).** Items 6.A to 6.D are in. A five-reviewer wave found 51 findings; all 4 P1 were confirmed and fixed (a rollback to Wave 5 changed a promoted-param bot's strategy; a bypassed asset failed compile; Shift+C wired the subnet output on the wrong port; a locked asset card lost its wires), and the rest are fixed or deferred to section 10. A live Playwright run then found one more defect: Shift+C over nodes that feed two outside nodes left entry and exit without a signal; fixed with tests and a backend signal probe. Contract notes for Wave 7:
+
+- **Node fields.** `meta` (view state; `view` is "frame" or "card", `note`), `promoted` (name, label, target relative to the network, type, default; values in `params[name]`), `asset_ref` {name, version} and `locked`. Compile ignores `meta`; the cook-cache key hashes the other three.
+- **Assets.** `kernel/assets.py`: `expand_assets`, `bake_assets`, `set_default_resolver`. A locked instance expands at compile time with ids `<instance>::<child>`; `::` ids are allowed only under an unlocked subnet with `asset_ref`. Library files are `<data>/library/<name>/<version>.json`, immutable; a deleted version number is never reused (`.deleted` marker).
+- **Bots.** Every path that gives a bot a graph bakes the assets in and writes promoted values into their targets, so a bot never reads the library and a Wave 5 rollback computes the same strategy. `compile_bot_graph` refuses a locked instance (`asset_unbaked`). The first Wave 6 boot writes `bots.json.pre-w6`.
+- **Rollback from Wave 6.** Stop the server, put `bots.json.pre-w6` back as `bots.json`, start the Wave 5 build. Bots and state written since are lost. Close the positions of bots spawned with library assets by hand first: Wave 5 refuses those rows (kept, alerted, not resumed).
+- **Editor.** `currentNetworkId` is a node id (a rename keeps the view); per-network viewports in `localStorage['nb.viewports.<graphId>']`. Collapse fills each outside consumer's empty read with the attribute it read before when the subnet output goes through a merge.
+
 **Goal.** Folders of nodes you can collapse and dive into, reusable assets with promoted params, and a Rules palette. (The network core already landed in 5.0.)
 
 **Order.** {6.A, 6.B} backend in parallel. {6.C, 6.D} frontend in parallel.
@@ -1410,3 +1418,8 @@ Also ask after W2 and after W5: does the graph now beat the rule builder for the
 - **`meta` on graph nodes (FA1 view state)** still needs a backend schema field.
 - **A broker position-check failure in a normal tick** marks the bar done and skips that bar's exits. This predates Wave 5; it waits on a TODO slot (john-questions Q2).
 - **Session restore of a deleted graph** logs one 404 in the console before the editor falls back.
+
+**Deferred from the Wave 6 review (2026-10-03).** Full notes: `.run/F435/w6/decisions.md` and the `fix-*.md` reports (local only).
+
+- **Design calls for the Fable UI/UX pass.** Asset Manager version pills, Used-by rows and list layout (S42); breadcrumb roving tabindex and the first crumb; the network-deleted notice as a toast; the collapse rename field and its accessible name; "Edit in Inspector" in Save as asset; RULES/LIBRARY tags and attribute chips in Tab menu rows; boundary type-slot hover; the network colour as a token; and a key for the Asset Manager (Cmd+Shift+A was removed, because Chrome on macOS uses it).
+- **Network registry params** (Output Group direction, ticker and weight; regime_net params) cannot be promoted, by design.

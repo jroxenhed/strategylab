@@ -25,7 +25,7 @@
  * handles keys and holds focus.
  */
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, Ref, RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { Button } from './Button'
 import { isTopDialog as isTop, isDialogOpen, popDialog, pushDialog, topDialogPanel } from './dialogStack'
@@ -61,6 +61,8 @@ export interface DialogProps {
   /** Default footer: the primary uses the danger kind (Delete, Discard). */
   danger?: boolean
   cancelLabel?: ReactNode
+  /** Default footer: a ref to the Cancel button (to give it the initial focus on a destructive confirm). */
+  cancelRef?: Ref<HTMLButtonElement>
   initialFocusRef?: RefObject<HTMLElement | null>
   returnFocusTo?: HTMLElement | null
   'data-testid'?: string
@@ -131,6 +133,7 @@ export function Dialog({
   primaryDisabledReason,
   danger,
   cancelLabel = 'Cancel',
+  cancelRef,
   initialFocusRef,
   returnFocusTo,
   ariaDescribedBy,
@@ -279,7 +282,7 @@ export function Dialog({
 
   const defaultFooter = (
     <>
-      <Button onClick={onCancel} data-testid="nb-dialog-cancel">{cancelLabel}</Button>
+      <Button ref={cancelRef} onClick={onCancel} data-testid="nb-dialog-cancel">{cancelLabel}</Button>
       {primaryLabel != null && (
         <Button
           kind={danger ? 'danger' : 'primary'}

@@ -1,0 +1,313 @@
+/* Network card (S38), boundary cards (S38) and the dived canvas (S37).
+   Tokens only; no blur, no shadow. */
+
+/* ── Network card ─────────────────────────────────────────────────────── */
+
+.nodebuilder-root .nb-subnet {
+  position: relative;
+  min-width: 200px;
+  max-width: 320px;
+  box-sizing: border-box;
+  font-family: var(--nb-font-sans);
+  background: var(--nb-bg-node);
+  border: 1px solid var(--nb-border);
+  border-radius: var(--nb-radius-node);
+}
+.nodebuilder-root .nb-subnet--error { border: 1px solid rgba(248, 113, 113, 0.6); }
+
+/* The networks stripe (3px) and the second 2px stripe at left 4px. */
+.nodebuilder-root .nb-subnet__stripe,
+.nodebuilder-root .nb-subnet__stripe2 {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+.nodebuilder-root .nb-subnet__stripe {
+  left: 0;
+  width: 3px;
+  background: var(--nb-cat-network);
+  border-radius: 5px 0 0 5px;
+}
+.nodebuilder-root .nb-subnet__stripe2 {
+  left: 4px;
+  width: 2px;
+  background: var(--nb-cat-network);
+}
+/* A locked asset instance: the second stripe is dashed. */
+.nodebuilder-root .nb-subnet--locked .nb-subnet__stripe2 {
+  background: repeating-linear-gradient(180deg, var(--nb-cat-network) 0 4px, transparent 4px 7px);
+}
+
+.nodebuilder-root .nb-subnet__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  box-sizing: border-box;
+  padding: 0 10px 0 14px;
+  cursor: grab;
+}
+.nodebuilder-root .nb-subnet__glyph {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font: 700 9px/1 var(--nb-font-mono, monospace);
+  color: var(--nb-bg);
+  background: var(--nb-cat-network);
+  user-select: none;
+}
+.nodebuilder-root .nb-subnet__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--nb-text);
+}
+.nodebuilder-root .nb-subnet__type {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font: 400 10px/16px var(--nb-font-mono, monospace);
+  color: var(--nb-text-muted);
+}
+.nodebuilder-root .nb-subnet__type--rules { color: var(--nb-cat-rules); }
+.nodebuilder-root .nb-subnet__type--missing { color: var(--nb-error); }
+.nodebuilder-root .nb-subnet__warn { color: var(--nb-warn); }
+.nodebuilder-root .nb-subnet__lock { font-size: 10px; line-height: 1; }
+/* S38: a newer asset version exists. */
+.nodebuilder-root .nb-subnet__newer {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 3px;
+  border-radius: 50%;
+  background: var(--nb-cat-network);
+  vertical-align: middle;
+}
+.nodebuilder-root .nb-subnet__bypass-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--nb-flag-bypass, var(--nb-warn));
+  flex-shrink: 0;
+}
+
+.nodebuilder-root .nb-subnet__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 10px 7px 14px;
+  border-top: 1px solid var(--nb-border-subtle);
+}
+.nodebuilder-root .nb-subnet--bypass .nb-subnet__body { opacity: 0.45; }
+.nodebuilder-root .nb-subnet__hint {
+  font: 400 10px/14px var(--nb-font-mono, monospace);
+  color: var(--nb-text-dim, var(--nb-text-muted));
+}
+.nodebuilder-root .nb-subnet__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.nodebuilder-root .nb-subnet__chip--write {
+  background: var(--nb-tint-network);
+  color: var(--nb-cat-network);
+}
+
+/* Port labels over the card's top edge. */
+.nodebuilder-root .nb-subnet__port-label {
+  position: absolute;
+  top: -15px;
+  transform: translateX(-50%);
+  font: 400 9px/12px var(--nb-font-mono, monospace);
+  color: var(--nb-text-muted);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* ── Boundary cards (inside a dived network) ─────────────────────────── */
+
+.nodebuilder-root .nb-boundary {
+  position: relative;
+  width: 160px;
+  height: 26px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 0 11px;
+  border: 1px dashed rgba(129, 140, 248, 0.6);
+  border-radius: 6px;
+  background: var(--nb-bg-node-bottom);
+  font-family: var(--nb-font-sans);
+  cursor: grab;
+}
+.nodebuilder-root .nb-boundary__stripe {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--nb-cat-network);
+  border-radius: 5px 0 0 5px;
+  pointer-events: none;
+}
+.nodebuilder-root .nb-boundary__glyph {
+  font: 400 10px/1 var(--nb-font-mono, monospace);
+  color: var(--nb-cat-network);
+  flex-shrink: 0;
+}
+.nodebuilder-root .nb-boundary__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--nb-text);
+}
+.nodebuilder-root .nb-boundary__type {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font: 400 10px/16px var(--nb-font-mono, monospace);
+  color: var(--nb-text-muted);
+}
+
+/* ── Dived canvas (S37) ──────────────────────────────────────────────── */
+
+/* "You are inside": a 1px inset outline in the network color at 30%. */
+.nodebuilder-root .nb-dive-outline {
+  position: absolute;
+  inset: 4px;
+  border: 1px solid rgba(129, 140, 248, 0.3);
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 5;
+}
+.nodebuilder-root .nb-dive-outline--locked { border-style: dashed; }
+
+/* The locked-asset bar (S38), 22px, at the top of the canvas. */
+.nodebuilder-root .nb-locked-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 22px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  background: var(--nb-bg-elevated);
+  border-bottom: 1px solid var(--nb-border);
+  font: 400 12px/16px var(--nb-font-sans, inherit);
+  color: var(--nb-text-secondary);
+}
+.nodebuilder-root .nb-locked-bar__button {
+  height: 18px;
+  padding: 0 8px;
+  border-radius: 3px;
+  border: 1px solid var(--nb-border);
+  background: transparent;
+  color: var(--nb-text-secondary);
+  font: 500 11px/16px var(--nb-font-sans, inherit);
+  cursor: pointer;
+}
+.nodebuilder-root .nb-locked-bar__button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── Breadcrumb (S37) ────────────────────────────────────────────────── */
+
+.nodebuilder-root .nb-crumbs {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 40%;
+}
+.nodebuilder-root .nb-crumbs__list {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+.nodebuilder-root .nb-crumbs__item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.nodebuilder-root .nb-crumbs__sep {
+  color: var(--nb-text-muted);
+  font: 400 12px/16px var(--nb-font-mono, monospace);
+  padding: 0 2px;
+}
+.nodebuilder-root .nb-crumbs__crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--nb-text-muted);
+  font: 400 12px/16px var(--nb-font-mono, monospace);
+  cursor: pointer;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nodebuilder-root .nb-crumbs__crumb:hover { background: var(--nb-bg-hover); text-decoration: underline; }
+.nodebuilder-root .nb-crumbs__crumb:focus-visible { outline: 1px solid var(--nb-border-focus); }
+.nodebuilder-root .nb-crumbs__crumb[aria-current='location'] {
+  color: var(--nb-text);
+  min-width: 80px;
+  flex-shrink: 0;
+}
+.nodebuilder-root .nb-crumbs__glyph {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font: 700 9px/1 var(--nb-font-mono, monospace);
+  color: var(--nb-bg);
+}
+.nodebuilder-root .nb-crumbs__lock { font-size: 10px; }
+.nodebuilder-root .nb-crumbs__menu {
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+}
+.nodebuilder-root .nb-crumbs__menu-item {
+  height: 26px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--nb-text);
+  text-align: left;
+  font: 400 12px/16px var(--nb-font-sans, inherit);
+  cursor: pointer;
+}
+.nodebuilder-root .nb-crumbs__menu-item:hover,
+.nodebuilder-root .nb-crumbs__menu-item:focus-visible { background: var(--nb-bg-hover); outline: none; }
