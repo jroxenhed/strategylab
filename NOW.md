@@ -11,4 +11,4 @@ This is the four-item this-week view of TODO.md, two lines each, pointing back i
 
 ## Waiting on John
 
-Two questions from 2026-09-30 are open in john-questions.md: deploy node builder Waves 0 to 5 and run the live paper gate G1, and a TODO slot for the IBKR stop-order defect.
+The node builder deploy (Waves 0 to 5) waits on John's go after he sees the production position list; two positions sit within 0.5 % of the fixed stops the deploy turns on. The live paper gate G1 runs on the next session after the deploy.
