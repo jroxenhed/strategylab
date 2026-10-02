@@ -4,7 +4,7 @@ This file holds open work only. Finished work lives in TODO-archive.md, half for
 
 ## Features
 
-- [ ] <a id="f435"></a> **F435** Build the node builder in waves W0 to W7 from docs/plans/2026-09-29-node-builder-finish-plan.md, with code nodes that run real Python. Waves 0 to 5 are in: a fast column engine, a Houdini-style editor, the data sheet and chart split, and pair graphs that spawn stopped bots. Wave 6, sub-network assets, is next. The live paper gate G1 waits on John. [medium] [features]
+- [ ] <a id="f435"></a> **F435** Build the node builder in waves W0 to W7 from docs/plans/2026-09-29-node-builder-finish-plan.md, with code nodes that run real Python. Waves 0 to 5 are in and run on strategylab01 since 2026-10-02, up to pair graphs that spawn stopped bots. Wave 6, sub-network assets, is next, and the live paper gate G1 runs on the next market session. [medium] [features]
 ## Architecture
 
 - [ ] <a id="f438"></a> **F438** The Form 4 event filter keys transaction_codes, min_dollar_total and exclude_10b51 are validated in backend/research/streams/form4.py but never applied. The code comments blame F389, which is closed, and the module docstring still says the r1 wiring is missing when it shipped. Apply the keys at dose time and fix both stale comments. [easy] [arch]
@@ -28,7 +28,7 @@ This file holds open work only. Finished work lives in TODO-archive.md, half for
 - [ ] <a id="f431"></a> **F431** The Gateway alert loop keeps its cooldown and self-heal counters in memory only, so a backend restart resets them. After a restart the next poll can send one extra alert, or run one extra Gateway restart, for a problem that is already known. Save AlertState to a small JSON file in the data directory, the way bots.json works. The state lives in AlertState in backend/gateway.py. [next] [easy] [hardening]
 - [ ] <a id="f440"></a> **F440** Prove the Gateway restart fix on the VM. The Gateway writes AutoRestart=1 back into jts.ini about 10 s after the unit sets it to 0, so its own 05:00 restart is probably still on. After the next weekday, check the IBC log for Restart in progress lines, one clean login per day and no Existing session lines, then note the result in deploy/README.md. [next] [easy] [hardening] (added 2026-09-20)
 - [ ] <a id="f448"></a> **F448** The bot watch keeps its once a day memory in the process, so a backend restart during the session sends the same stalled bot alert again. Save it next to the Gateway alert state when F431 moves that state to a JSON file in the data directory. The memory is the reported map in backend/bot_watch.py. [easy] [hardening] (added 2026-09-29)
-- [ ] <a id="f449"></a> **F449** Two live exit-safety gaps in the bot tick. The IBKR provider sends an entry with a stop as a bare BUY STOP below market, so the broker holds no protective stop; send a parent order plus a child stop with SMART routing. When the broker position check fails, the tick returns after marking the bar done, so that bar's stop checks never run and nothing counts toward the alert. [medium] [hardening] (added 2026-10-02)
+- [ ] <a id="f449"></a> **F449** Two live exit-safety gaps in the bot tick. IBKR sends an entry with a stop as a bare BUY STOP below market, so the broker holds no protective stop; send a parent order plus a child stop with SMART routing. When the broker position check fails, the tick returns after marking the bar done, so that bar's stop checks never run and nothing counts toward the alert. [medium] [hardening] (added 2026-10-02)
 
 ## Polish
 
