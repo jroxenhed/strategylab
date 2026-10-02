@@ -41,13 +41,13 @@ from nodebuilder.cook_cache import COOK_CACHE  # noqa: E402
 from nodebuilder.models import Graph  # noqa: E402
 from nodebuilder.prepare import build_graph_attrs  # noqa: E402
 from nodebuilder.run import (  # noqa: E402
-    _apply_settings_overrides,
     _build_baseline_curve,
     _make_cached_eval,
     _settings_to_strategy_request,
     cook_attrs,
     run_graph_backtest_cooked,
 )
+from nodebuilder.trading import sim_bridge  # noqa: E402
 
 TOLERANCE = 1.05
 RUNS = 7
@@ -61,7 +61,9 @@ def _w2_backtest(req: GraphBacktestRequest, df) -> dict:
     from shared import _format_time_index
 
     program = compile_graph(req.graph)
-    settings = _apply_settings_overrides(req, program.simulator_settings)
+    # W5: the simulator fields come from the group plan (5.B Needs 2).
+    settings = sim_bridge.strategy_fields(sim_bridge.request_fields(req),
+                                          program.groups[0].plan_for(req.direction))
     attrs = build_graph_attrs(program, df, settings.get("trailing_stop"))
     cached_eval = _make_cached_eval(program, attrs)
     direction = settings["direction"]

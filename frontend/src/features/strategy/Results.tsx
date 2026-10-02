@@ -18,6 +18,21 @@ import SensitivityPanel from './SensitivityPanel'
 import OptimizerPanel from './OptimizerPanel'
 import WalkForwardPanel from './WalkForwardPanel'
 import { GraphResultHeader, NotAvailableForGraph, type GraphResultInfo } from '../nodebuilder/graphResultUi'
+import GroupResultsStrip from '../nodebuilder/GroupResultsStrip'
+import {
+  EXPOSURE_LABEL,
+  EXPOSURE_TITLE,
+  GROSS_DEPLOYED_LABEL,
+  GROSS_DEPLOYED_TITLE,
+  GROUP_COLUMN,
+  asBacktestSummary,
+  displayedGroupResult,
+  effectiveGroupKey,
+  stripGroups,
+  tilePercent,
+} from '../nodebuilder/groupResults'
+import type { GraphBacktestResult } from '../../api/nodebuilder'
+import type { GraphResultSummary, GroupResult } from '../../shared/types/strategy'
 
 export type ResultsTab = 'summary' | 'equity' | 'trades' | 'trace' | 'session' | 'monte_carlo' | 'rolling' | 'hold_duration' | 'sensitivity' | 'optimizer' | 'walk_forward'
 type SortCol =
@@ -99,7 +114,29 @@ interface Props {
    * `lastRequest={null}` with it: a graph run never has a rule request.
    */
   graphInfo?: GraphResultInfo | null
+  /**
+   * W5 (S33): the graph response with its Output Groups, and which tab is
+   * shown (`graphResult.displayedGroup`). With two or more groups Results
+   * shows the group strip (Combined first) and feeds the chosen group's
+   * result, or the combined one, to its sub-tabs instead of `result`.
+   * With one group (or none) it is ignored and `result` is shown as in W4.
+   */
+  graphGroups?: GraphGroupsView | null
 }
+
+/** What Results needs to show per-group graph results (S33). */
+export interface GraphGroupsView {
+  response: GraphBacktestResult
+  /** `combined` or a group name; an unknown name shows the first tab. */
+  displayedGroup: string
+  /** A pill was chosen. The owner stores it in `graphResult.displayedGroup`. */
+  onSelect: (key: string) => void
+  /** Double-click on a group pill: frame that group on the canvas. */
+  onFrameGroup?: (group: GroupResult) => void
+}
+
+/** Summary tiles the combined graph result has no value for (S33). */
+const COMBINED_HIDDEN_TILES: readonly string[] = ['B&H', 'Alpha', 'Win Rate']
 
 /** Tabs that re-run a rule request; they do not apply to a graph result (S30). */
 const RULE_ONLY_TABS: readonly ResultsTab[] = ['sensitivity', 'optimizer', 'walk_forward']
@@ -111,9 +148,23 @@ function autoDefaultBucket(equityLength: number): string {
   return 'M'
 }
 
-export default function Results({ result, mainChart, activeTab, onTabChange, onBucketChange, lastRequest, showBaseline, onShowBaselineChange, logScale, onLogScaleChange, viewInterval, backtestInterval, sweepInit, onSweepConsumed, mainTimestamps, onApplyParams, onRunBacktest, graphInfo = null, bucket: bucketProp }: Props) {
+export default function Results({ result: resultProp, mainChart, activeTab, onTabChange, onBucketChange, lastRequest, showBaseline, onShowBaselineChange, logScale, onLogScaleChange, viewInterval, backtestInterval, sweepInit, onSweepConsumed, mainTimestamps, onApplyParams, onRunBacktest, graphInfo = null, graphGroups = null, bucket: bucketProp }: Props) {
   // S30/CI-06: macro buckets need a rule request; a graph result is Detail only.
   const bucket = graphInfo ? null : bucketProp
+  // S33: with 2+ Output Groups the strip picks which result the sub-tabs
+  // show. Memoized on the response and the tab, so switching back to a tab
+  // gives the same object and nothing downstream re-runs needlessly.
+  const groupResponse = graphInfo ? graphGroups?.response ?? null : null
+  const groupKey = effectiveGroupKey(groupResponse, graphGroups?.displayedGroup)
+  const groupView = useMemo(() => displayedGroupResult(groupResponse, groupKey), [groupResponse, groupKey])
+  // A multi-group response may leave the legacy top-level summary sparse;
+  // missing numbers read 0 rather than crashing the tiles.
+  const safeProp = useMemo(
+    () => (graphInfo ? { ...resultProp, summary: asBacktestSummary(resultProp.summary as GraphResultSummary) } : resultProp),
+    [graphInfo, resultProp],
+  )
+  const result = groupView?.result ?? safeProp
+  const isCombined = groupView?.combined != null
   const { summary, trades, equity_curve, signal_trace } = result
   const [tzMode] = useTimezone()
   const chartRef = useRef<HTMLDivElement>(null)
@@ -184,16 +235,20 @@ export default function Results({ result, mainChart, activeTab, onTabChange, onB
     return [...sells].sort((a, b) => sign * base(a, b))
   }, [sells, tradesSort, buysForSort])
 
+  // Bumped whenever `result` changes (a group tab swaps it in place): a
+  // Monte Carlo answer for an older result is dropped (FE-07).
+  const mcSeqRef = useRef(0)
   async function fetchMonteCarlo() {
     if (mcLoading || sells.length < 2) return
     const pnls = sells.map(t => t.pnl ?? 0)
+    const seq = mcSeqRef.current
     setMcLoading(true)
     try {
       const res = await api.post('/api/backtest/montecarlo', { pnls, initial_capital: summary.initial_capital, n_simulations: 1000 })
-      setMcResult(res.data)
+      if (seq === mcSeqRef.current) setMcResult(res.data)
     } catch {
     } finally {
-      setMcLoading(false)
+      if (seq === mcSeqRef.current) setMcLoading(false)
     }
   }
 
@@ -471,6 +526,7 @@ export default function Results({ result, mainChart, activeTab, onTabChange, onB
   }, [activeTab, bucket, equity_curve, summary.total_return_pct, mainChart, showBaseline, result.baseline_curve, logScale, viewInterval, backtestInterval, tzMode, mainTimestamps])
 
   useEffect(() => {
+    mcSeqRef.current += 1
     setMcResult(null)
     setMcLoading(false)
   }, [result])
@@ -484,6 +540,16 @@ export default function Results({ result, mainChart, activeTab, onTabChange, onB
   return (
     <div ref={containerRef} className="results-scroller" style={styles.container}>
       {graphInfo && <GraphResultHeader info={graphInfo} />}
+      {graphInfo && graphGroups && groupKey && (
+        <GroupResultsStrip
+          groups={stripGroups(groupResponse)}
+          combined={groupResponse?.combined}
+          active={groupKey}
+          onSelect={graphGroups.onSelect}
+          onFrameGroup={graphGroups.onFrameGroup}
+          stale={graphInfo.stale}
+        />
+      )}
       <div style={{ ...styles.tabBar, flexWrap: 'nowrap', overflowX: 'auto' }}>
         <div style={{ display: 'flex', flexWrap: 'nowrap' }}>
           {(['summary', 'equity', 'trades',
@@ -593,8 +659,17 @@ export default function Results({ result, mainChart, activeTab, onTabChange, onB
             { label: 'Win Rate', value: `${summary.win_rate_pct}%`, color: summary.win_rate_pct >= 50 ? 'var(--gh-green)' : 'var(--gh-red)', primary: false },
             { label: 'Sharpe', value: summary.sharpe_ratio, color: summary.sharpe_ratio >= 1 ? 'var(--gh-green)' : summary.sharpe_ratio >= 0.5 ? 'var(--gh-yellow)' : summary.sharpe_ratio < 0 ? 'var(--gh-red)' : 'var(--gh-text-muted)', primary: false },
             { label: 'Max DD', value: `${summary.max_drawdown_pct}%`, color: Math.abs(summary.max_drawdown_pct) >= 10 ? 'var(--gh-red)' : 'var(--gh-text-muted)', primary: false },
-          ].map(({ label, value, color, primary }) => (
-            <div key={label} style={{ ...styles.metric, minWidth: primary ? 140 : 90 }}>
+          ]
+            // S33: the combined summary has no buy-and-hold or win rate, so
+            // those tiles go; Exposure and Gross deployed join at the end.
+            .filter(t => !isCombined || !COMBINED_HIDDEN_TILES.includes(t.label))
+            .map(t => ({ ...t, title: undefined as string | undefined }))
+            .concat(isCombined && groupView?.combined ? [
+              { label: EXPOSURE_LABEL, value: tilePercent(groupView.combined.summary.exposure_pct), color: 'var(--gh-text-primary)', primary: false, title: EXPOSURE_TITLE },
+              { label: GROSS_DEPLOYED_LABEL, value: tilePercent(groupView.combined.summary.gross_deployed_pct), color: 'var(--gh-text-primary)', primary: false, title: GROSS_DEPLOYED_TITLE },
+            ] : [])
+            .map(({ label, value, color, primary, title }) => (
+            <div key={label} title={title} data-testid={title ? `graph-tile-${label}` : undefined} style={{ ...styles.metric, minWidth: primary ? 140 : 90 }}>
               <div style={{ fontSize: 10, color: 'var(--gh-text-muted)', marginBottom: 2 }}>{label}</div>
               <div style={{ fontSize: primary ? 22 : 13, fontWeight: 700, color }}>{value}</div>
             </div>
@@ -797,6 +872,11 @@ export default function Results({ result, mainChart, activeTab, onTabChange, onB
                   style={{ ...styles.tradeRow, borderBottom: '1px solid var(--gh-border)', marginBottom: 2 }}
                   title="Click a column to sort — click again to reverse, third click clears"
                 >
+                  {isCombined && (
+                    <span style={{ ...styles.tradeCell, width: 70, color: 'var(--gh-text-muted)', fontSize: 10 }} data-testid="graph-trades-group-col">
+                      {GROUP_COLUMN}
+                    </span>
+                  )}
                   {cols.map(([col, width, label]) => (
                     <span
                       key={col}
@@ -817,7 +897,12 @@ export default function Results({ result, mainChart, activeTab, onTabChange, onB
               const totalSlip = (buy?.slippage ?? 0) + (sell.slippage ?? 0)
               const totalComm = (buy?.commission ?? 0) + (sell.commission ?? 0)
               return (
-                <div key={i} style={{ ...styles.tradeRow, borderLeft: `3px solid ${color}` }}>
+                <div key={i} style={{ ...styles.tradeRow, borderLeft: `3px solid ${color}` }} data-testid={isCombined ? 'graph-trade-row' : undefined}>
+                  {isCombined && (
+                    <span style={{ ...styles.tradeCell, width: 70 }}>
+                      <span style={{ fontSize: 10, padding: '0 5px', borderRadius: 3, background: 'rgba(255, 255, 255, 0.08)', color: 'var(--gh-text-primary)' }}>{sell.group ?? ''}</span>
+                    </span>
+                  )}
                   <span style={{ ...styles.tradeCell, width: 24, color: 'var(--gh-text-muted)' }}>{i + 1}</span>
                   <span style={{ ...styles.tradeCell, width: 115, color: 'var(--gh-yellow-pale)' }}>{fmtDate(buy?.date)}</span>
                   <span style={{ ...styles.tradeCell, width: 65, color: 'var(--gh-yellow-pale)' }}>${buy?.price.toFixed(2)}</span>

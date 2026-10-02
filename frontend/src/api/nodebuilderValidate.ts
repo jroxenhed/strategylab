@@ -22,7 +22,7 @@ export type KnownDiagnosticCode =
   // W1 errors
   | 'missing_terminal' | 'unsupported_node' | 'unknown_node_type' | 'dangling_wire'
   | 'cycle' | 'missing_input' | 'param_invalid' | 'param_out_of_range' | 'family_cap'
-  | 'name_invalid' | 'name_duplicate' | 'regime_unsupported'
+  | 'name_invalid' | 'name_duplicate'
   // W1 errors outside the plan table (backend/nodebuilder/diagnostics.py)
   | 'graph_invalid' | 'parent_missing' | 'parent_cycle' | 'port_duplicate'
   | 'duplicate_terminal' | 'request_invalid'
@@ -31,6 +31,11 @@ export type KnownDiagnosticCode =
   // W2
   | 'attr_missing' | 'attr_type' | 'attr_clash' | 'prims_no_producer' | 'port_unknown'
   | 'attr_shadowed'
+  // W5 (Output Groups, networks, terminals)
+  | 'group_invalid' | 'group_terminal_outside' | 'group_duplicate_terminal' | 'ticker_missing'
+  | 'wire_crosses_network' | 'boundary_invalid'
+  // W5 warnings
+  | 'setting_shadowed' | 'group_weight_zero' | 'setting_unscoped'
 
 export type DiagnosticCode = KnownDiagnosticCode | (string & {})
 

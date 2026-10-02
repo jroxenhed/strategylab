@@ -286,11 +286,33 @@ export function updateNodeParams(
 }
 
 /**
- * Remove nodes and every wire that touches them. No rewiring.
+ * The given node ids that exist, plus every node inside them at any depth
+ * (W5): a network's children and boundary nodes go with it, so no node is
+ * left with a dangling `parent` (the backend refuses such a graph).
+ */
+export function withDescendants(graph: Pick<Graph, 'nodes'>, nodeIds: readonly string[]): Set<string> {
+  const doomed = new Set(nodeIds.filter(id => id in graph.nodes))
+  if (doomed.size === 0) return doomed
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const n of Object.values(graph.nodes)) {
+      if (n.parent && doomed.has(n.parent) && !doomed.has(n.id)) {
+        doomed.add(n.id)
+        grew = true
+      }
+    }
+  }
+  return doomed
+}
+
+/**
+ * Remove nodes and every wire that touches them. No rewiring. A network
+ * takes everything inside it along (`withDescendants`).
  */
 export function removeNodes(graph: Graph, nodeIds: readonly string[]): Graph {
   assertEditable(graph, 'removeNodes')
-  const doomed = new Set(nodeIds.filter(id => id in graph.nodes))
+  const doomed = withDescendants(graph, nodeIds)
   if (doomed.size === 0) return graph
   const nodes = { ...graph.nodes }
   for (const id of doomed) delete nodes[id]
@@ -340,7 +362,7 @@ export function mapBoxMembers(graph: Graph, fn: (id: string) => string | null): 
  */
 export function removeNodesWithRewire(graph: Graph, nodeIds: readonly string[]): Graph {
   assertEditable(graph, 'removeNodesWithRewire')
-  const doomed = new Set(nodeIds.filter(id => id in graph.nodes))
+  const doomed = withDescendants(graph, nodeIds)
   if (doomed.size === 0) return graph
 
   const incoming = graph.wires.filter(w => doomed.has(w.to) && !doomed.has(w.from))

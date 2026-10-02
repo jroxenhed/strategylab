@@ -95,7 +95,8 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "default": "1d",
         "options": ["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"],
         "code_able": false
-      }
+      },
+      { "name": "prefix", "type": "string", "label": "prefix", "default": "", "code_able": false }
     ],
     "reads": [],
     "writes": ["@open", "@high", "@low", "@close", "@volume", "@time", "@index"],
@@ -1610,15 +1611,212 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
     "outs": 1
   },
   {
-    "name": "trailing_stop",
+    "name": "borrow_rate",
     "cat": "settings",
-    "desc": "Trailing stop. type=pct trails value % from the peak; type=atr trails value x ATR(14). Optionally waits until the trade is activate_pct % in profit.",
+    "desc": "Annual cost of borrowing shares for a short, in percent per year. Charged on short trades only, for the days held. Default: 0.5%.",
     "compile_active": true,
     "inputs": {
       "ports": [],
       "dynamic": false,
       "min": 0,
       "max": 0
+    },
+    "params": [
+      {
+        "name": "rate",
+        "type": "number",
+        "label": "annual rate",
+        "default": 0.5,
+        "min": 0.0,
+        "unit": "%"
+      },
+      {
+        "name": "out",
+        "type": "write",
+        "label": "out",
+        "default": "@borrow_rate_annual",
+        "dtype": "float"
+      }
+    ],
+    "reads": [],
+    "writes": ["@borrow_rate_annual"],
+    "subtitle": "Borrow: 0.5%/yr",
+    "setting_key": "borrow_rate_annual",
+    "ins": 0,
+    "outs": 1
+  },
+  {
+    "name": "entry",
+    "cat": "output",
+    "desc": "Entry terminal. Opens a position on the bar where the signal is true.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "signal" }
+      ],
+      "dynamic": false,
+      "min": 1,
+      "max": 1
+    },
+    "params": [
+      { "name": "signal", "type": "attr", "label": "signal", "default": null, "dtype": "bool" },
+      {
+        "name": "side",
+        "type": "select",
+        "label": "side",
+        "default": "long",
+        "options": ["long", "short"]
+      }
+    ],
+    "reads": ["@bool"],
+    "writes": [],
+    "subtitle": "Entry",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 0
+  },
+  {
+    "name": "exit",
+    "cat": "output",
+    "desc": "Exit terminal. Closes the position on the bar where the signal is true.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "signal", "optional": true }
+      ],
+      "dynamic": false,
+      "min": 0,
+      "max": 1
+    },
+    "params": [
+      {
+        "name": "signal",
+        "type": "attr",
+        "label": "signal",
+        "default": null,
+        "dtype": "bool",
+        "optional": true
+      },
+      {
+        "name": "side",
+        "type": "select",
+        "label": "side",
+        "default": "long",
+        "options": ["long", "short"]
+      }
+    ],
+    "reads": ["@bool"],
+    "writes": [],
+    "subtitle": "Exit",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 0
+  },
+  {
+    "name": "size",
+    "cat": "output",
+    "desc": "Size terminal. Share of the group's capital to use per trade, 1% to 100%, as a fraction (0.5 = 50%). Wire a number in, or set the constant. A wired value is read at the entry bar; no value there means no entry.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "value", "optional": true }
+      ],
+      "dynamic": false,
+      "min": 0,
+      "max": 1
+    },
+    "params": [
+      {
+        "name": "value",
+        "type": "attr",
+        "label": "value",
+        "default": null,
+        "dtype": "float",
+        "optional": true
+      },
+      {
+        "name": "constant",
+        "type": "number",
+        "label": "size",
+        "default": null,
+        "min": 0.0,
+        "max": 1.0,
+        "unit": "frac",
+        "optional": true
+      },
+      {
+        "name": "side",
+        "type": "select",
+        "label": "side",
+        "default": "both",
+        "options": ["both", "long", "short"]
+      }
+    ],
+    "reads": ["@float"],
+    "writes": [],
+    "subtitle": "Size",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 0
+  },
+  {
+    "name": "stop",
+    "cat": "output",
+    "desc": "Stop terminal. Fixed stop as a percent from the entry price (above entry for a short). Wire a number in, or set the constant; 0 means no stop. A wired value is read at the entry bar and holds for the whole trade; no value there means no entry.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "value", "optional": true }
+      ],
+      "dynamic": false,
+      "min": 0,
+      "max": 1
+    },
+    "params": [
+      {
+        "name": "value",
+        "type": "attr",
+        "label": "value",
+        "default": null,
+        "dtype": "float",
+        "optional": true
+      },
+      {
+        "name": "constant",
+        "type": "number",
+        "label": "pct",
+        "default": null,
+        "min": 0.0,
+        "unit": "%",
+        "optional": true
+      },
+      {
+        "name": "side",
+        "type": "select",
+        "label": "side",
+        "default": "both",
+        "options": ["both", "long", "short"]
+      }
+    ],
+    "reads": ["@float"],
+    "writes": [],
+    "subtitle": "Stop",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 0
+  },
+  {
+    "name": "trailing_stop",
+    "cat": "output",
+    "desc": "Trailing stop terminal. type=pct trails value % from the peak; type=atr trails value x ATR(14). Starts at once, or (activate on profit) once the trade is activate_pct % in profit.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "in", "optional": true }
+      ],
+      "dynamic": false,
+      "min": 0,
+      "max": 1
     },
     "params": [
       {
@@ -1658,6 +1856,13 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "unit": "%"
       },
       {
+        "name": "side",
+        "type": "select",
+        "label": "side",
+        "default": "both",
+        "options": ["both", "long", "short"]
+      },
+      {
         "name": "out",
         "type": "write",
         "label": "out",
@@ -1669,13 +1874,52 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
     "writes": ["@trail_value"],
     "subtitle": "Trail: 5%",
     "setting_key": "trailing_stop",
-    "ins": 0,
+    "ins": 1,
     "outs": 1
   },
   {
-    "name": "entry",
+    "name": "time_stop",
     "cat": "output",
-    "desc": "Entry terminal. Wire the buy-signal boolean here to trigger long entries.",
+    "desc": "Time stop terminal. Closes the position after this many bars.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "in", "optional": true }
+      ],
+      "dynamic": false,
+      "min": 0,
+      "max": 1
+    },
+    "params": [
+      {
+        "name": "max_bars",
+        "type": "int",
+        "label": "max bars",
+        "default": null,
+        "min": 1,
+        "unit": "bars",
+        "optional": true
+      },
+      {
+        "name": "side",
+        "type": "select",
+        "label": "side",
+        "default": "both",
+        "options": ["both", "long", "short"]
+      },
+      { "name": "out", "type": "write", "label": "out", "default": "@max_bars", "dtype": "float" }
+    ],
+    "reads": [],
+    "writes": ["@max_bars"],
+    "subtitle": "Time stop",
+    "setting_key": null,
+    "ins": 1,
+    "outs": 1
+  },
+  {
+    "name": "regime",
+    "cat": "output",
+    "desc": "Regime terminal. Trading is allowed only while the signal is true. On flip says what happens to an open position: hold it, close it, or close and reverse.",
     "compile_active": true,
     "inputs": {
       "ports": [
@@ -1686,85 +1930,144 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
       "max": 1
     },
     "params": [
-      { "name": "signal", "type": "attr", "label": "signal", "default": null, "dtype": "bool" }
-    ],
-    "reads": ["@bool"],
-    "writes": [],
-    "subtitle": "Entry",
-    "setting_key": null,
-    "ins": 1,
-    "outs": 0
-  },
-  {
-    "name": "exit",
-    "cat": "output",
-    "desc": "Exit terminal. Wire the sell-signal boolean here to trigger exits.",
-    "compile_active": true,
-    "inputs": {
-      "ports": [
-        { "label": "signal", "optional": true }
-      ],
-      "dynamic": false,
-      "min": 0,
-      "max": 1
-    },
-    "params": [
+      { "name": "signal", "type": "attr", "label": "signal", "default": null, "dtype": "bool" },
       {
-        "name": "signal",
-        "type": "attr",
-        "label": "signal",
-        "default": null,
-        "dtype": "bool",
-        "optional": true
+        "name": "on_flip",
+        "type": "select",
+        "label": "on flip",
+        "default": "hold",
+        "options": ["hold", "close_only", "close_and_reverse"]
       }
     ],
     "reads": ["@bool"],
     "writes": [],
-    "subtitle": "Exit",
+    "subtitle": "Regime",
     "setting_key": null,
     "ins": 1,
     "outs": 0
   },
   {
-    "name": "size",
-    "cat": "output",
-    "desc": "(T4) Size terminal. Not run yet: an unwired one is ignored, a wired one is refused by the backtest.",
-    "compile_active": false,
+    "name": "subnet",
+    "cat": "network",
+    "desc": "Subnet. A folder of nodes with input ports and one output. Dive in to edit it.",
+    "compile_active": true,
     "inputs": {
       "ports": [
-        { "label": "signal", "optional": true }
+        { "label": "in0", "optional": true }
+      ],
+      "dynamic": true,
+      "min": 0,
+      "max": 32
+    },
+    "params": [],
+    "reads": [],
+    "writes": [],
+    "subtitle": "Subnet",
+    "setting_key": null,
+    "ins": 0,
+    "outs": 0
+  },
+  {
+    "name": "regime_net",
+    "cat": "network",
+    "desc": "Regime. A network that works out when the group may trade (its output feeds the group's Regime terminal). Dive in to edit it.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "in0", "optional": true }
+      ],
+      "dynamic": true,
+      "min": 0,
+      "max": 32
+    },
+    "params": [],
+    "reads": [],
+    "writes": [],
+    "subtitle": "Regime",
+    "setting_key": null,
+    "ins": 0,
+    "outs": 0
+  },
+  {
+    "name": "subnet_input",
+    "cat": "network",
+    "desc": "Subnet input. Adds an input port to this network.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [],
+      "dynamic": false,
+      "min": 0,
+      "max": 0
+    },
+    "params": [
+      { "name": "port", "type": "int", "label": "port", "default": 0, "min": 0, "max": 31 }
+    ],
+    "reads": [],
+    "writes": [],
+    "subtitle": "Input",
+    "setting_key": null,
+    "ins": 0,
+    "outs": 0
+  },
+  {
+    "name": "subnet_output",
+    "cat": "network",
+    "desc": "Subnet output. The stream wired here is what the network puts out (one per network).",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "in", "optional": true }
       ],
       "dynamic": false,
       "min": 0,
       "max": 1
     },
     "params": [],
-    "reads": ["@bool"],
+    "reads": [],
     "writes": [],
-    "subtitle": "Size (T4)",
+    "subtitle": "Output",
     "setting_key": null,
     "ins": 1,
     "outs": 0
   },
   {
-    "name": "stop",
-    "cat": "output",
-    "desc": "(T4) Stop terminal. Not run yet: an unwired one is ignored, a wired one is refused by the backtest.",
-    "compile_active": false,
+    "name": "output_group",
+    "cat": "network",
+    "desc": "Output group. One strategy leg: its terminals, primary Ticker, direction and capital share.",
+    "compile_active": true,
     "inputs": {
       "ports": [
-        { "label": "signal", "optional": true }
+        { "label": "in0", "optional": true }
       ],
-      "dynamic": false,
+      "dynamic": true,
       "min": 0,
-      "max": 1
+      "max": 32
     },
-    "params": [],
-    "reads": ["@bool"],
+    "params": [
+      {
+        "name": "direction",
+        "type": "select",
+        "label": "direction",
+        "default": "long",
+        "options": ["long", "short", "regime_switch"],
+        "code_able": false
+      },
+      { "name": "ticker", "type": "path", "label": "ticker", "default": "", "code_able": false },
+      {
+        "name": "capital_weight",
+        "type": "number",
+        "label": "capital weight",
+        "default": 1.0,
+        "min": 0.0,
+        "step": 0.1,
+        "code_able": false
+      }
+    ],
+    "reads": [],
     "writes": [],
-    "subtitle": "Stop (T4)",
+    "subtitle": "Output group",
     "setting_key": null,
-    "ins": 1,
+    "ins": 0,
     "outs": 0
   }
 ];

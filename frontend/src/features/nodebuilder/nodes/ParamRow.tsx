@@ -50,7 +50,7 @@ import { useParamDiagnostic, setLocalParamInvalid, LOCAL_NUMBER_MESSAGE } from '
 import type { ParamSpec, ParamTypeSpec } from '../catalog'
 import { paramSpecsOf } from '../streamLabels'
 import { openParamMenu } from '../contextMenuModel'
-import { unitLabel } from './paramFormat'
+import { unitLabel, viewText, viewValue, type ParamView } from './paramFormat'
 import { AttrPicker } from './AttrPicker'
 import { TimeRangeInput } from './TimeRangeInput'
 import { DayOfWeekInput } from './DayOfWeekInput'
@@ -102,6 +102,7 @@ export function ParamRows({
   paramTypes,
   specs,
   showWrites = false,
+  views,
 }: {
   nodeId: string
   params: Record<string, unknown>
@@ -111,6 +112,8 @@ export function ParamRows({
   specs?: readonly ParamSpec[]
   /** Also draw `write` params (the Inspector); the node shows them as chips. */
   showWrites?: boolean
+  /** Per-key display views (terminal cards, S32b): see `ParamRowProps.view`. */
+  views?: Readonly<Record<string, ParamView>>
 }) {
   const nodeType = useNodeBuilderStore(s => s.graph?.nodes[nodeId]?.type)
   const allSpecs = specs ?? paramSpecsOf(nodeType)
@@ -124,6 +127,7 @@ export function ParamRows({
           value={value}
           typeSpec={paramTypes?.[key]}
           spec={spec}
+          view={views?.[key]}
         />
       ))}
     </div>
@@ -201,6 +205,8 @@ export interface ParamRowProps {
    * node row and the Inspector row never share one while both are on screen.
    */
   variant?: 'node' | 'inspector'
+  /** A display view for a number row (see `ParamView`). */
+  view?: ParamView
 }
 
 /** The test id of a param field; the Inspector variant has its own. */
@@ -273,12 +279,14 @@ function ValueParamRow({
   value,
   typeSpec,
   variant,
+  view: viewProp,
 }: ParamRowProps) {
   const updateNodeParams = useNodeBuilderStore(s => s.updateNodeParams)
   const resolvedType = typeSpec?.type ?? (typeof value === 'number' ? 'number' : 'string')
   const isNumber = resolvedType === 'number'
   const isSelect = resolvedType === 'select'
-  const initial = value === null || value === undefined ? '' : String(value)
+  const view = isNumber && !isSelect ? viewProp : undefined
+  const initial = viewText(value, view)
   const [draft, setDraft] = useState(initial)
   // Refs, not state: these are read inside event handlers and the sync effect
   // and must never trigger a render on their own.
@@ -333,9 +341,10 @@ function ValueParamRow({
       if (Number.isFinite(n)) {
         // Show the value the store will hold ("20.0" becomes "20") so the
         // field and the store agree even if the number did not change.
-        setDraft(String(n))
+        const stored = viewValue(n, view)
+        setDraft(viewText(stored, view))
         dirtyRef.current = false
-        updateNodeParams(nodeId, { [paramKey]: n })
+        updateNodeParams(nodeId, { [paramKey]: stored })
       }
       // Otherwise the text stays on screen, red, until the user fixes it.
     } else {
@@ -374,7 +383,7 @@ function ValueParamRow({
     )
   }
 
-  const unitText = unitLabel(typeSpec?.unit, initial)
+  const unitText = view === 'percent' ? '%' : unitLabel(typeSpec?.unit, initial)
 
   return (
     <>
@@ -384,6 +393,8 @@ function ValueParamRow({
         type="text"
         inputMode={isNumber ? 'decimal' : 'text'}
         value={draft}
+        placeholder={view === 'stop' ? 'none' : undefined}
+        className={view === 'stop' ? 'nb-param-none' : undefined}
         data-testid={testId}
         aria-invalid={invalidMessage ? true : undefined}
         aria-describedby={invalidMessage ? messageId : undefined}

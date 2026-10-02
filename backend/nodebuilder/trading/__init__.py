@@ -32,6 +32,8 @@ MODULE_ORDER: tuple[str, ...] = (
     "nodes_slope",
     "nodes_terminals",
     "nodes_time",
+    "nodes_network",
+    "nodes_groups",
 )
 
 

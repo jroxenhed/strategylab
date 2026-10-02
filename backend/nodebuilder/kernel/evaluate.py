@@ -1,5 +1,8 @@
 """The column evaluator (plan D5).
 
+``analyze_graph`` is where a graph enters the kernel: it flattens the
+nested graph (kernel.flatten, plan D7) and checks the flat graph.
+
 A compiled graph is a list of Steps, one per node.  ``cook`` runs each
 step once over the full index: a running node gets the merge of the streams
 on its input ports and returns its output stream; a bypassed (or off) node
@@ -65,6 +68,41 @@ class Step:
         if self.mode == PASS and self.pass_from is not None:
             return (self.pass_from,)
         return ()
+
+
+def analyze_graph(
+    graph,
+    *,
+    unknown_error: Optional[Callable[..., Any]] = None,
+    preset_broken: Iterable[str] = (),
+):
+    """Flatten *graph* (plan D7), then check the flat graph.
+
+    Returns ``(analysis, flat)``.  ``analysis`` is the kernel check of the
+    flat graph (``analysis.graph`` is the flat graph and ``analysis.order``
+    holds flat ids).  ``analysis.found`` starts with flatten's own problems
+    (networks, boundaries, wires that cross networks), and every node id in
+    it is the id of the node the user sees (``flat.flat_to_source``).
+    ``flat`` is the kernel.flatten.FlatGraph, for callers that need to know
+    which network a node sits in.
+
+    preset_broken holds source ids, as analyze's argument does.
+    """
+    from nodebuilder.kernel.flatten import flatten
+    from nodebuilder.kernel.schema import analyze
+
+    flat = flatten(graph)
+    if flat.graph is graph:
+        preset = list(preset_broken)
+    else:
+        by_source: dict[str, list[str]] = {}
+        for fid, sid in flat.flat_to_source.items():
+            by_source.setdefault(sid, []).append(fid)
+        preset = [fid for sid in preset_broken for fid in by_source.get(sid, ())]
+    analysis = analyze(flat.graph, unknown_error=unknown_error, preset_broken=preset)
+    if flat.found or flat.nested:
+        analysis.found = list(flat.found) + flat.remap(analysis.found)
+    return analysis, flat
 
 
 def build_steps(analysis: Analysis) -> tuple[Step, ...]:

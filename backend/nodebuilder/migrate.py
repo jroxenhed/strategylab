@@ -879,11 +879,84 @@ def rename_node(graph: "Graph", node_id: str, new_name: str) -> "Graph":
     return new_graph
 
 
-def _rewrite_path_refs(graph: "Graph", old_path: str, new_path: str) -> None:
-    """Point stored path strings at a renamed node's new path (in place).
+def _rewrite_path_refs(
+    graph: "Graph",
+    old_path: str,
+    new_path: str,
+    only_nodes: Optional[set[str]] = None,
+) -> None:
+    """Point stored path strings at a renamed (or moved) node's new path, in place.
 
-    Nothing stores paths yet.  W6 adds promoted-param targets and W7 adds
-    ``ch()`` strings; both get rewritten here.  A path under *old_path*
-    (a child of a renamed network) must move too.
+    The twin of frontend ``paths.rewritePathRefs``; the shared vectors in
+    tests/nodebuilder/vectors/paths.json hold both to the same answers.
+    Today one param stores a path: an Output Group's ``ticker`` (W5).  W6
+    adds promoted-param targets and W7 adds ``ch()`` strings; both get
+    rewritten here.  *graph* is the graph after the rename.  *only_nodes*
+    limits the rewrite to refs stored on those nodes.
+
+    An absolute ref is rewritten when it is *old_path* or lies under
+    ``old_path + "/"``.  A relative ref is resolved the way the server
+    resolves a group's ticker (against the group, then its parent, then the
+    root): at the first base where the old resolution lands under
+    *old_path*, it is rewritten to the absolute new path only when the same
+    relative string no longer lands there; otherwise it is kept.
     """
-    return None
+    if old_path == new_path or old_path in ("/", ""):
+        return
+
+    def under(p: str) -> bool:
+        return p == old_path or p.startswith(old_path + "/")
+
+    def to_new(p: str) -> str:
+        return new_path + p[len(old_path):] if under(p) else p
+
+    def to_old(p: str) -> str:
+        if p == new_path or p.startswith(new_path + "/"):
+            return old_path + p[len(new_path):]
+        return p
+
+    for node_id, node in list(graph.nodes.items()):
+        if only_nodes is not None and node_id not in only_nodes:
+            continue
+        if node.type != "output_group":
+            continue
+        ref = (node.params or {}).get("ticker")
+        if not isinstance(ref, str) or ref == "":
+            continue
+        nxt = ref
+        if ref.startswith("/"):
+            nxt = to_new(ref)
+        else:
+            for base in (node_id, node.parent, None):
+                try:
+                    new_base = "/" if base is None else node_path(graph, base)
+                except KeyError:
+                    continue
+                old_abs = _join_path(to_old(new_base), ref)
+                if old_abs is None or not under(old_abs):
+                    continue
+                want = to_new(old_abs)
+                nxt = ref if _join_path(new_base, ref) == want else want
+                break
+        if nxt == ref:
+            continue
+        graph.nodes[node_id] = node.model_copy(update={"params": {**node.params, "ticker": nxt}})
+
+
+def _join_path(base: str, rel: str) -> Optional[str]:
+    """The absolute path *rel* names from the node at absolute path *base*.
+
+    Same rules as find_by_path (and frontend ``paths.joinPath``).  None when
+    it climbs above the root or ends at the root itself.
+    """
+    parts = [] if rel.startswith("/") else [p for p in base.split("/") if p != ""]
+    for part in rel.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not parts:
+                return None
+            parts.pop()
+            continue
+        parts.append(part)
+    return "/" + "/".join(parts) if parts else None

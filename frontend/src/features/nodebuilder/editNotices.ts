@@ -1,9 +1,9 @@
 /**
  * editNotices.ts — pure helpers behind the "Edit this graph" copy.
  *
- * prepareEditableCopy turns a read-only auto-render graph into an editable one
- * and reports which regime nodes it removed. findUnsupportedNodes lists the
- * nodes the graph compiler cannot run yet, so the editor can warn before Run.
+ * prepareEditableCopy turns a read-only auto-render graph into an editable
+ * one. findUnsupportedNodes lists the nodes the graph compiler cannot run
+ * yet, so the editor can warn before Run.
  */
 
 import type { Graph, GraphNode } from '../../api/nodebuilder'
@@ -19,39 +19,22 @@ export const EDIT_VERTICAL_SPACING = 1.8
 
 export interface EditableCopy {
   graph: Graph
-  /** Ids of the regime nodes that were taken out of the copy. */
-  regimeRemoved: string[]
-}
-
-function isRegimePath(id: string): boolean {
-  return id.startsWith('/regime/')
 }
 
 /**
- * Copy an auto-render graph into an editable graph.
- *
- * Regime nodes (and their wires) are removed, because the graph backtest
- * refuses them. The read-only view keeps showing them; only the copy drops
- * them, and the caller shows a banner so the user knows.
+ * Copy an auto-render graph into an editable graph. Since W5 the graph runs
+ * regime (the `regime_net` network and the `regime` terminal), so nothing is
+ * taken out: the copy keeps every node and wire, rows spread apart.
  */
 export function prepareEditableCopy(graph: Graph): EditableCopy {
   const nodes: Record<string, GraphNode> = {}
-  const regimeRemoved: string[] = []
   for (const [id, n] of Object.entries(graph.nodes)) {
-    if (isRegimePath(id)) {
-      regimeRemoved.push(id)
-      continue
-    }
     nodes[id] = {
       ...n,
       position: [n.position[0], n.position[1] * EDIT_VERTICAL_SPACING],
     }
   }
-  const wires = graph.wires.filter(w => !isRegimePath(w.from) && !isRegimePath(w.to))
-  return {
-    graph: { ...graph, readOnly: false, nodes, wires },
-    regimeRemoved,
-  }
+  return { graph: { ...graph, readOnly: false, nodes, wires: [...graph.wires] } }
 }
 
 export interface UnsupportedNode {
@@ -60,8 +43,8 @@ export interface UnsupportedNode {
   /**
    * Why compile refuses it:
    *   "unknown"   — not in the catalog;
-   *   "inactive"  — in the catalog but compile cannot run it (a wired Size or
-   *                 Stop terminal, a slope condition...);
+   *   "inactive"  — in the catalog but compile cannot run it (a slope
+   *                 condition...);
    *   "direction" — a per-direction (long/short) setting;
    *   "rule"      — a comparison carrying a rule detail it cannot draw.
    */
@@ -70,14 +53,10 @@ export interface UnsupportedNode {
   detail?: string
 }
 
-// Terminals compile ignores while nothing is wired into them.
-const IGNORED_WHEN_UNWIRED: ReadonlySet<string> = new Set(['size', 'stop'])
-
 /**
  * List the nodes in `graph` that the compiler will refuse, mirroring
  * backend/nodebuilder/compile.py: node types missing from the frontend
- * catalog, catalog entries marked compileActive=false (Size/Stop only when
- * wired, since compile ignores them otherwise), per-direction Settings nodes,
+ * catalog, catalog entries marked compileActive=false, per-direction Settings nodes,
  * and comparisons carrying a condition_extra. A bypassed Settings node or
  * comparison is skipped by compile before those checks, so it is not listed.
  * Order follows the graph's node order.
@@ -88,7 +67,6 @@ export function findUnsupportedNodes(
 ): UnsupportedNode[] {
   if (graph == null) return []
   const byName = new Map(catalog.map(e => [e.name, e]))
-  const wiredInto = new Set(graph.wires.map(w => w.to))
   const out: UnsupportedNode[] = []
   for (const [id, n] of Object.entries(graph.nodes)) {
     const entry = byName.get(n.type)
@@ -96,7 +74,6 @@ export function findUnsupportedNodes(
     if (entry == null) {
       out.push({ id, type: n.type, reason: 'unknown' })
     } else if (!entry.compileActive) {
-      if (IGNORED_WHEN_UNWIRED.has(n.type) && !wiredInto.has(id)) continue
       out.push({ id, type: n.type, reason: 'inactive' })
     } else if (n.bypass) {
       continue
@@ -127,8 +104,3 @@ export function describeUnsupportedNodes(list: UnsupportedNode[]): string | null
   if (list.length === 0) return null
   return `${UNSUPPORTED_PREFIX}${list.map(unsupportedLabel).join(', ')}${UNSUPPORTED_SUFFIX}`
 }
-
-/** S07 `regime_removed` copy, and the text its `Learn more` action shows. */
-export const REGIME_REMOVED_TEXT =
-  "Regime moved out of this graph: the rule strategy's regime filter is not part of the graph yet. Results may differ."
-export const REGIME_LEARN_MORE_TEXT = 'Wave 5 brings regime into the graph.'

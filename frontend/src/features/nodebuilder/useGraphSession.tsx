@@ -54,6 +54,8 @@ import { dismissNotice, pushNotice, resolveNotice } from './notices'
 import { DeleteGraphDialog, NameDialog, RelativeTimeText, SaveChangesDialog } from './GraphDialogs'
 import ConflictDialog from './ConflictDialog'
 import GraphBrowser from './GraphBrowser'
+import { OPEN_GRAPH_EVENT, requestShowGraphView, type OpenGraphDetail } from './graphLinks'
+import { clearPendingSpawn } from './spawnUi'
 
 /** Tries before giving up on finding a free "copy N" / "(imported N)" name. */
 const NAME_TRIES = 50
@@ -130,6 +132,18 @@ export interface GraphSession {
   closeGraph: () => void
   /** Open `nb.lastGraph` when nothing is loaded yet (app start). */
   openLastGraph: () => void
+  /**
+   * Load the current graph again from the server (its latest rev), after
+   * the unsaved-changes prompt. The Spawn dialog's `Reload graph` (S34).
+   */
+  reload: () => Promise<void>
+  /**
+   * Open a saved graph by id (the unsaved-changes prompt first), then select
+   * the Output Group named `group` when given. The bot card's graph link
+   * (S35, `strategylab-open-graph`). A graph that is already open is not
+   * loaded again.
+   */
+  openGraphLink: (graphId: string, group?: string | null, spawn?: boolean) => Promise<void>
   /** Dialogs, the browser and the hidden file input. Render once. */
   element: ReactNode
 }
@@ -704,6 +718,59 @@ export function useGraphSession(): GraphSession {
     if (st().graphMeta?.id === item.id) st().discardEdits()
   }
 
+  const reload = async (): Promise<void> => {
+    const id = st().graphMeta?.id
+    if (!id) return
+    if (!(await confirmLeave())) return
+    try {
+      await openGraphById(id)
+    } catch (e) {
+      reportError('Could not reload the graph: ')(e)
+    }
+  }
+
+  const selectGroup = (group: string | null | undefined) => {
+    if (!group) return
+    const g = st().graph
+    const node = g ? Object.values(g.nodes).find(n => n.type === 'output_group' && n.name === group) : undefined
+    if (node) st().select(node.id)
+  }
+
+  const openGraphLink = async (graphId: string, group?: string | null, spawn = false): Promise<void> => {
+    if (st().graphMeta?.id !== graphId) {
+      // A "Spawn…" link that does not end with this graph open must not
+      // leave its request behind: the dialog would pop up much later (FE-08).
+      const giveUp = () => { if (spawn) clearPendingSpawn(graphId) }
+      if (!(await confirmLeave())) return giveUp()
+      // Past the prompt: now App may show the graph view (FE-08). A cancel
+      // above leaves the tab, the view and the graph as they were.
+      requestShowGraphView()
+      try {
+        if (!(await openGraphById(graphId))) return giveUp()
+      } catch (e) {
+        giveUp()
+        reportError('Could not open the graph: ')(e)
+        return
+      }
+    } else {
+      requestShowGraphView()
+    }
+    selectGroup(group)
+  }
+
+  // The bot card's graph link and the spawn toast (graphLinks.ts). This
+  // asks first, then has App show the graph view, then loads the graph.
+  const openLinkRef = useRef(openGraphLink)
+  openLinkRef.current = openGraphLink
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent<OpenGraphDetail>).detail
+      if (d && typeof d.graphId === 'string' && d.graphId) void openLinkRef.current(d.graphId, d.group, d.spawn === true)
+    }
+    window.addEventListener(OPEN_GRAPH_EVENT, onOpen)
+    return () => window.removeEventListener(OPEN_GRAPH_EVENT, onOpen)
+  }, [])
+
   const closeGraph = () => {
     void confirmLeave().then(ok => {
       if (!ok) return
@@ -850,6 +917,8 @@ export function useGraphSession(): GraphSession {
     deleteCurrent,
     closeGraph,
     openLastGraph,
+    reload,
+    openGraphLink,
     element,
   }
 }

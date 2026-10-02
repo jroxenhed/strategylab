@@ -12,11 +12,17 @@
  * NodeBuilder provides the window when App drives it (`graphWindow`). On its
  * own (tests, standalone runs) there is no window and the params stay
  * editable, as before W4.
+ *
+ * W5: only the implicit group's primary Ticker (no prefix, in a graph with
+ * no Output Group) still runs on the sidebar's symbol and interval
+ * (`sidebarOwnsTicker`, ownership.ts). A reference Ticker and the Tickers
+ * of a graph with groups keep their own, editable values.
  */
 
 import { createContext, useContext, type CSSProperties } from 'react'
 import { useNodeBuilderStore } from './store'
 import type { GraphWindow } from './graphRun'
+import { sidebarOwnsTicker } from './ownership'
 
 export const SidebarWindowContext = createContext<GraphWindow | null>(null)
 
@@ -41,7 +47,11 @@ export function sidebarTickerValue(win: GraphWindow | null, nodeType: string | u
 /** Hook form for a param row: the sidebar value, or null. */
 export function useSidebarParamValue(nodeId: string, paramKey: string): string | null {
   const win = useSidebarWindow()
-  const nodeType = useNodeBuilderStore(s => (win ? s.graph?.nodes[nodeId]?.type : undefined))
+  const nodeType = useNodeBuilderStore(s => {
+    if (!win) return undefined
+    const node = s.graph?.nodes[nodeId]
+    return node && sidebarOwnsTicker(node.params, s.graph) ? node.type : undefined
+  })
   return sidebarTickerValue(win, nodeType, paramKey)
 }
 

@@ -4,8 +4,9 @@ import { fmtUsd } from '../../shared/utils/format'
 import { apiErrorDetail } from '../../shared/utils/errors'
 import { btnStyle } from './ui'
 import { BOT_DEPLOYABLE_INTERVALS } from '../../shared/constants'
-import { getGraph, graphErrorDetail, listGraphs, type GraphListItem } from '../../api/graphs'
+import { errorDiagnostics, getGraph, graphErrorDetail, listGraphs, type GraphEnvelope, type GraphListItem } from '../../api/graphs'
 import { formatFullTimestamp, useRelativeTime } from '../nodebuilder/ui/relativeTime'
+import { directionLabel, listGraphGroups, type GraphGroupInfo } from '../nodebuilder/graphGroups'
 
 const SAVED_KEY = 'strategylab-saved-strategies'
 // INTERVALS is the set of deployable intraday intervals — shared source of truth in shared/constants.ts
@@ -17,6 +18,32 @@ type GraphList =
   | { state: 'loading' }
   | { state: 'error'; detail: string }
   | { state: 'ready'; graphs: GraphListItem[] }
+
+/** One fetched graph for the group selector (S36), cached by id in component state. */
+type GraphLoad =
+  | { state: 'loading' }
+  | { state: 'error'; detail: string }
+  | { state: 'ready'; env: GraphEnvelope; groups: GraphGroupInfo[] }
+
+const NO_GROUPS: GraphGroupInfo[] = []
+
+/** `long_leg · LONG · AAPL 1d` (S36 option format). */
+function groupOptionLabel(g: GraphGroupInfo): string {
+  const parts = [g.name]
+  const dir = directionLabel(g.direction)
+  if (dir) parts.push(dir)
+  const ticker = [g.symbol, g.interval].filter(Boolean).join(' ')
+  if (ticker) parts.push(ticker)
+  return parts.join(' · ')
+}
+
+/** The first diagnostic's message from a 400 graph error, else null. */
+function firstDiagnosticMessage(e: unknown): string | null {
+  const list = errorDiagnostics(e)
+  if (!list || list.length === 0) return null
+  const msg = (list[0] as { message?: unknown } | null)?.message
+  return typeof msg === 'string' && msg ? msg : null
+}
 
 /** Newest first, as the picker shows them. */
 function sortByUpdated(graphs: GraphListItem[]): GraphListItem[] {
@@ -73,6 +100,11 @@ export default function AddBotBar({
   const [selectedGraphId, setSelectedGraphId] = useState('')
   // Only the newest list request may land (a slow old one must not win).
   const listReq = useRef(0)
+  // S36: each chosen graph is fetched once to read its Output Groups.
+  const [graphLoads, setGraphLoads] = useState<Record<string, GraphLoad>>({})
+  const [selectedGroup, setSelectedGroup] = useState('')
+  // A graph rev the bot POST refused as having errors: Create stays off for it.
+  const [badGraphRev, setBadGraphRev] = useState<string | null>(null)
 
   const loadStrategies = () => {
     try {
@@ -108,6 +140,49 @@ export default function AddBotBar({
   const graphs = graphList.state === 'ready' ? graphList.graphs : []
   const selectedGraph = graphs.find(g => g.id === selectedGraphId) ?? null
 
+  const loadGraph = useCallback(async (id: string) => {
+    setGraphLoads(m => ({ ...m, [id]: { state: 'loading' } }))
+    try {
+      const env = await getGraph(id)
+      setGraphLoads(m => ({ ...m, [id]: { state: 'ready', env, groups: listGraphGroups(env.graph) } }))
+    } catch (e) {
+      setGraphLoads(m => ({ ...m, [id]: { state: 'error', detail: graphErrorDetail(e) } }))
+    }
+  }, [])
+
+  // Fetch a chosen graph once (cached by id). A newer rev in the list refetches it.
+  const selectedLoad = selectedGraph ? graphLoads[selectedGraph.id] : undefined
+  useEffect(() => {
+    if (source !== 'graph' || !selectedGraph) return
+    const load = graphLoads[selectedGraph.id]
+    if (load == null || (load.state === 'ready' && load.env.rev < selectedGraph.rev)) void loadGraph(selectedGraph.id)
+  }, [source, selectedGraph, graphLoads, loadGraph])
+
+  const graphGroups = selectedLoad?.state === 'ready' ? selectedLoad.groups : NO_GROUPS
+  const group: GraphGroupInfo | null = graphGroups.find(g => g.name === selectedGroup) ?? graphGroups[0] ?? null
+  // Hidden for one group or only the implicit `main` (S36).
+  const showGroupSelect = graphGroups.length > 1
+
+  // A new graph (or new groups) preselects the first group.
+  useEffect(() => {
+    if (graphGroups.length === 0) return
+    if (!graphGroups.some(g => g.name === selectedGroup)) setSelectedGroup(graphGroups[0].name)
+  }, [graphGroups, selectedGroup])
+
+  // The group fills the interval when it is one a bot can run on.
+  useEffect(() => {
+    if (source !== 'graph' || !group?.interval) return
+    if ((INTERVALS as readonly string[]).includes(group.interval)) setInterval(group.interval)
+  }, [source, group?.name, group?.interval])
+
+  // In graph mode the group owns the symbol and (unless it is the implicit
+  // group or a regime switch) the direction; the fields show them read-only.
+  const graphSymbol = source === 'graph' ? (group?.symbol ?? '') : ''
+  const graphDirection = source === 'graph' ? (group?.direction ?? null) : null
+  const effectiveSymbol = graphSymbol || symbol
+  const graphRevKey = selectedLoad?.state === 'ready' ? `${selectedLoad.env.id}@${selectedLoad.env.rev}` : null
+  const graphHasErrors = graphRevKey != null && graphRevKey === badGraphRev
+
   useEffect(() => {
     loadStrategies()
     // Check for pending spawn from Discovery tab
@@ -142,8 +217,8 @@ export default function AddBotBar({
   }
 
   const available = fund?.available ?? 0
-  const canAdd = fund && fund.bot_fund > 0 && available > 0 && symbol && allocation &&
-    (source === 'rule' ? selectedIdx >= 0 : selectedGraph != null)
+  const canAdd = fund && fund.bot_fund > 0 && available > 0 && effectiveSymbol && allocation &&
+    (source === 'rule' ? selectedIdx >= 0 : selectedGraph != null && selectedLoad?.state === 'ready' && group != null && !graphHasErrors)
 
   const handleAdd = async () => {
     if (adding) return
@@ -154,41 +229,55 @@ export default function AddBotBar({
     setAdding(true)
     try {
       if (source === 'graph') {
-        // Graph mode: fetch the saved graph, then post kind=graph + the graph
-        // payload; no buy/sell rules needed. The bot keeps its own copy.
+        // Graph mode (S36): post the saved graph's id, rev and group. The
+        // server loads that revision itself (the same path as spawn), so no
+        // graph JSON is sent. No buy/sell rules are needed.
         const item = selectedGraph
         if (!item) { setError('Select a graph'); return }
-        let env
+        if (selectedLoad?.state !== 'ready' || !group) { setError('Select a group'); return }
+        const env = selectedLoad.env
         try {
-          env = await getGraph(item.id)
+          await onAdd({
+            strategy_name: group.implicit ? env.name : `${env.name} ▸ ${group.name}`,
+            symbol: effectiveSymbol.toUpperCase(),
+            interval,
+            kind: 'graph',
+            graph_id: env.id,
+            graph_rev: env.rev,
+            graph_group: group.name,
+            // Stub rule arrays required by BotConfig schema (empty)
+            buy_rules: [],
+            sell_rules: [],
+            buy_logic: 'AND',
+            sell_logic: 'AND',
+            long_buy_rules: null,
+            long_sell_rules: null,
+            short_buy_rules: null,
+            short_sell_rules: null,
+            allocated_capital: alloc,
+            position_size: 1.0,
+            slippage_bps: 2.0,
+            max_spread_bps: maxSpreadBps ? parseFloat(maxSpreadBps) || null : null,
+            drawdown_threshold_pct: maxDrawdownPct ? parseFloat(maxDrawdownPct) || null : null,
+            data_source: dataSource,
+            // The group owns the direction. A regime_switch group trades both
+            // sides and the server takes the mode from the group, so it gets
+            // the BotConfig default 'long', never the hidden select (UX-18).
+            direction: graphDirection === 'long' || graphDirection === 'short'
+              ? graphDirection
+              : graphDirection === 'regime_switch' ? 'long' : direction,
+            broker,
+          })
         } catch (e) {
-          setError(`Could not load "${item.name}": ${graphErrorDetail(e)}`)
-          return
+          // A saved graph with errors: show the first one and keep Create off for this rev.
+          const first = firstDiagnosticMessage(e)
+          if (first) {
+            setBadGraphRev(`${env.id}@${env.rev}`)
+            setError(first)
+            return
+          }
+          throw e
         }
-        await onAdd({
-          strategy_name: env.name,
-          symbol: symbol.toUpperCase(),
-          interval,
-          kind: 'graph',
-          graph: env.graph,
-          // Stub rule arrays required by BotConfig schema (empty)
-          buy_rules: [],
-          sell_rules: [],
-          buy_logic: 'AND',
-          sell_logic: 'AND',
-          long_buy_rules: null,
-          long_sell_rules: null,
-          short_buy_rules: null,
-          short_sell_rules: null,
-          allocated_capital: alloc,
-          position_size: 1.0,
-          slippage_bps: 2.0,
-          max_spread_bps: maxSpreadBps ? parseFloat(maxSpreadBps) || null : null,
-          drawdown_threshold_pct: maxDrawdownPct ? parseFloat(maxDrawdownPct) || null : null,
-          data_source: dataSource,
-          direction,
-          broker,
-        })
       } else {
         const s = strategies[selectedIdx]
         const hasRegime = !!(s.regime && s.regime.enabled)
@@ -298,15 +387,40 @@ export default function AddBotBar({
             >
               ↻
             </button>
+            {selectedGraph && selectedLoad?.state === 'loading' && (
+              <select aria-label="Output group" disabled data-testid="addbot-group-select" style={{ ...inputStyle, width: 160 }}>
+                <option>loading…</option>
+              </select>
+            )}
+            {selectedGraph && showGroupSelect && (
+              <>
+                <select
+                  aria-label="Output group"
+                  value={group?.name ?? ''}
+                  onChange={e => setSelectedGroup(e.target.value)}
+                  data-testid="addbot-group-select"
+                  style={{ ...inputStyle, width: 160 }}
+                >
+                  {graphGroups.map(g => (
+                    <option key={g.name} value={g.name}>{groupOptionLabel(g)}</option>
+                  ))}
+                </select>
+                <span style={{ fontSize: 11, color: 'var(--gh-text-faint, #666)' }}>one bot per group</span>
+              </>
+            )}
           </span>
         )}
 
         {/* Ticker */}
         <input
-          placeholder="Ticker"
-          value={symbol}
+          placeholder={source === 'graph' ? 'from graph' : 'Ticker'}
+          aria-label="Ticker"
+          value={source === 'graph' ? effectiveSymbol : symbol}
+          readOnly={!!graphSymbol}
+          title={graphSymbol ? 'Set by the graph group' : undefined}
           onChange={e => setSymbol(e.target.value.toUpperCase())}
-          style={{ ...inputStyle, width: 70 }}
+          data-testid="addbot-symbol"
+          style={{ ...inputStyle, width: 70, ...(graphSymbol ? { color: 'var(--gh-text-faint, #888)' } : {}) }}
         />
 
         {/* Interval */}
@@ -339,10 +453,25 @@ export default function AddBotBar({
         </select>
 
         {/* Direction */}
-        <select value={direction} onChange={e => setDirection(e.target.value as 'long' | 'short')} style={inputStyle}>
-          <option value="long">Long</option>
-          <option value="short">Short</option>
-        </select>
+        {graphDirection ? (
+          <select
+            aria-label="Direction"
+            value={graphDirection}
+            disabled
+            title="Set by the graph group"
+            data-testid="addbot-direction"
+            style={inputStyle}
+          >
+            <option value="long">Long</option>
+            <option value="short">Short</option>
+            <option value="regime_switch">Switch</option>
+          </select>
+        ) : (
+          <select aria-label="Direction" value={direction} onChange={e => setDirection(e.target.value as 'long' | 'short')} data-testid="addbot-direction" style={inputStyle}>
+            <option value="long">Long</option>
+            <option value="short">Short</option>
+          </select>
+        )}
 
         {/* Allocation */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -387,7 +516,11 @@ export default function AddBotBar({
         <button
           onClick={handleAdd}
           disabled={!canAdd || adding}
-          title={source === 'graph' && graphList.state === 'ready' && graphs.length > 0 && !selectedGraph ? 'Select a graph' : undefined}
+          title={
+            source === 'graph' && graphHasErrors ? "Fix the graph's errors first"
+              : source === 'graph' && graphList.state === 'ready' && graphs.length > 0 && !selectedGraph ? 'Select a graph'
+                : undefined
+          }
           data-testid="addbot-add"
           style={btnStyle('#1e3a5f', !canAdd || adding)}
         >
@@ -423,6 +556,18 @@ export default function AddBotBar({
             ) : null}
           </span>
           {graphList.state !== 'error' && graphs.length > 0 && selectedGraph && <SelectedGraphLine graph={selectedGraph} />}
+          {selectedGraph && selectedLoad?.state === 'error' && (
+            <div role="alert" data-testid="addbot-graph-load-error" style={{ color: 'var(--gh-red, #ef5350)' }}>
+              {selectedLoad.detail} ·{' '}
+              <button
+                type="button"
+                onClick={() => void loadGraph(selectedGraph.id)}
+                style={{ background: 'none', border: 'none', padding: 0, color: 'inherit', font: 'inherit', textDecoration: 'underline', cursor: 'pointer' }}
+              >
+                Retry
+              </button>
+            </div>
+          )}
         </div>
       )}
 

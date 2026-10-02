@@ -92,10 +92,6 @@ export interface GraphSlice {
   // Current editable graph (null = no graph loaded; view auto-render via TanStack Query)
   graph: Graph | null
 
-  // Regime node ids that "Edit this graph" took out of the copy (empty when
-  // none). NodeBuilder shows a banner while this is non-empty.
-  regimeRemoved: string[]
-
   // ── History ──────────────────────────────────────────────────────────────
 
   /** Undo steps, oldest first. */
@@ -241,7 +237,7 @@ export function reconcileFields(s: NodeBuilderState, next: Graph, cause: 'commit
 export function loadedGraphState(
   s: Pick<GraphSlice, 'commitSeq' | 'layoutEpoch'>,
   graph: Graph,
-  extra: { graphMeta: GraphMeta | null; regimeRemoved: string[] },
+  extra: { graphMeta: GraphMeta | null },
 ) {
   // Module stores (the Inspector's flash) clear themselves; store fields
   // are reset below.
@@ -252,7 +248,6 @@ export function loadedGraphState(
     graph,
     savedGraph: graph,
     graphMeta: extra.graphMeta,
-    regimeRemoved: extra.regimeRemoved,
     commitSeq: s.commitSeq + 1,
     layoutEpoch: s.layoutEpoch + 1,
     layoutPending: false,
@@ -265,7 +260,6 @@ export function loadedGraphState(
 
 export const createGraphSlice: StateCreator<NodeBuilderState, [], [], GraphSlice> = (set, get) => ({
   graph: null,
-  regimeRemoved: [],
   past: [],
   future: [],
   canUndo: false,
@@ -431,13 +425,13 @@ export const createGraphSlice: StateCreator<NodeBuilderState, [], [], GraphSlice
 
   openGraph(graph, meta) {
     const editable = graph.readOnly ? { ...graph, readOnly: false } : graph
-    set(loadedGraphState(get(), editable, { graphMeta: meta, regimeRemoved: [] }))
+    set(loadedGraphState(get(), editable, { graphMeta: meta }))
   },
 
   newGraph() {
     // A new graph also starts from the home view, so it does not keep the
     // old graph's pan and zoom.
-    set({ ...loadedGraphState(get(), emptyGraph(), { graphMeta: null, regimeRemoved: [] }), ...homeView() })
+    set({ ...loadedGraphState(get(), emptyGraph(), { graphMeta: null }), ...homeView() })
   },
 
   markSaved(meta) {
@@ -454,7 +448,6 @@ export const createGraphSlice: StateCreator<NodeBuilderState, [], [], GraphSlice
       graph: null,
       savedGraph: null,
       graphMeta: null,
-      regimeRemoved: [],
       commitSeq: s.commitSeq + 1,
     })
   },

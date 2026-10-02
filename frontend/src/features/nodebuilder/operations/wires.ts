@@ -11,18 +11,21 @@
  */
 
 import type { Graph, GraphWire } from '../../../api/nodebuilder'
-import { canWire, hasOutputPort } from '../catalog'
+import { canWire, hasInputPort, hasOutputPort } from '../catalog'
 import { addWire as opAddWire, newWireId, removeNodesWithRewire, removeWires, wouldCreateCycle } from '../operations'
 import {
   connectedPortsByNode,
   connectionProblem,
   connectWire,
+  defaultReadPatch,
   portIndex,
   portsOf,
   portsSpecOf,
   removeWiresWithTerms,
   type ConnectionLike,
 } from '../streamLabels'
+import { BOUNDARY_HANDLE_PREFIX, boundaryInputs, boundaryOutput, boundaryPortOf, isNetworkType } from '../rfMapping'
+import { routeInto } from '../networkOps'
 
 /** Why a wire move or a splice was refused. */
 export type WireProblem = NonNullable<ReturnType<typeof connectionProblem>>
@@ -261,4 +264,164 @@ export function fullPortNotice(
   const node = graph.nodes[drag.fromNodeId]
   const label = portsSpecOf(node?.type)?.ports[portIndex(drag.handleId)]?.label ?? drag.handleId
   return `Input ${label} of ${node?.name || drag.fromNodeId} already has a wire. Drag its wire end to move it.`
+}
+
+// ---------------------------------------------------------------------------
+// Wires and networks (W5, FA2)
+// ---------------------------------------------------------------------------
+
+/** The S31 copy for a wire that would cross a network edge (`wire_crosses_network`). */
+export const WIRE_CROSSES_NETWORK_TEXT = 'Wires connect nodes in the same network. Route through a network port.'
+
+/**
+ * What a dropped wire does once networks are taken into account (FA2):
+ * - `plain`: both ends are siblings (or a frame port and a sibling of the
+ *   frame); the normal wire rules apply to `conn`;
+ * - `route`: an outside node feeds a node directly inside a network one
+ *   level down, so the wire goes through a frame port (`routeInto`);
+ * - `crosses`: anything else (two levels, out of a network, between two
+ *   groups or sibling subnets) is refused.
+ */
+export type NetworkConnection =
+  | { kind: 'plain'; conn: ConnectionLike }
+  | { kind: 'route'; from: string; networkId: string; to: string; toPort: string }
+  | { kind: 'crosses' }
+
+/** A frame's inner boundary handle (`bnd:<id>`) stands for the boundary node itself. */
+function resolveFrameHandles(c: ConnectionLike): ConnectionLike {
+  let { source, target, sourceHandle, targetHandle } = c
+  if (sourceHandle != null && sourceHandle.startsWith(BOUNDARY_HANDLE_PREFIX)) {
+    source = sourceHandle.slice(BOUNDARY_HANDLE_PREFIX.length)
+    sourceHandle = 'out'
+  }
+  if (targetHandle != null && targetHandle.startsWith(BOUNDARY_HANDLE_PREFIX)) {
+    target = targetHandle.slice(BOUNDARY_HANDLE_PREFIX.length)
+    targetHandle = 'in0'
+  }
+  return { source, target, sourceHandle, targetHandle }
+}
+
+/** The first input port of `nodeId` with no wire, or `in0`. */
+function freeInputPort(graph: Pick<Graph, 'nodes' | 'wires'>, nodeId: string): string {
+  const connected = connectedPortsByNode(graph.wires).get(nodeId) ?? []
+  return portsOf(graph.nodes[nodeId]?.type, connected).find(p => !p.connected)?.id ?? 'in0'
+}
+
+/** How a connection is made in a graph with networks (FA2). */
+export function planConnection(graph: Pick<Graph, 'nodes' | 'wires'>, c: ConnectionLike): NetworkConnection {
+  const conn = resolveFrameHandles(c)
+  if (!conn.source || !conn.target) return { kind: 'plain', conn }
+  const from = graph.nodes[conn.source]
+  const to = graph.nodes[conn.target]
+  if (!from || !to) return { kind: 'plain', conn }
+  const pf = from.parent ?? null
+  const pt = to.parent ?? null
+  if (pf === pt) return { kind: 'plain', conn }
+  const net = pt ? graph.nodes[pt] : undefined
+  if (net && isNetworkType(net.type) && (net.parent ?? null) === pf && to.type !== 'subnet_input') {
+    const toPort = conn.targetHandle ?? freeInputPort(graph, conn.target)
+    return { kind: 'route', from: conn.source, networkId: net.id, to: conn.target, toPort }
+  }
+  return { kind: 'crosses' }
+}
+
+/** Why a wire may not be dropped here in a graph with networks, or null. */
+export type NetworkWireProblem = WireProblem | 'crosses'
+
+/**
+ * `connectionProblemIgnoring` with networks (FA2): a wire between siblings
+ * follows the S08 rules; a frame port takes a wire from a sibling of the
+ * frame (the frame's output feeds one); an outside node may feed a node one
+ * level inside through a port; anything else is `crosses`.
+ */
+export function networkConnectionProblem(
+  graph: Pick<Graph, 'nodes' | 'wires'>,
+  c: ConnectionLike,
+  ignoreWireId?: string | null,
+): NetworkWireProblem | null {
+  const g = withoutWire(graph, ignoreWireId)
+  const plan = planConnection(g, c)
+  if (plan.kind === 'crosses') return 'crosses'
+  if (plan.kind === 'route') {
+    if (g.wires.some(w => w.to === plan.to && w.to_port === plan.toPort)) return 'full'
+    const src = g.nodes[plan.from]
+    // A network source feeds out only through its output port.
+    if (src && isNetworkType(src.type) && !boundaryOutput(g.nodes, src.id)) return 'no_port'
+    if (!canWire(src?.type, g.nodes[plan.to]?.type)) return 'no_port'
+    // The wire actually added at the outer level is source -> network
+    // (FE-02): refuse it when the network already feeds the source.
+    if (wouldCreateCycle(g as Graph, plan.from, plan.networkId)) return 'cycle'
+    return null
+  }
+  const { source, target, targetHandle } = plan.conn
+  const to = target ? g.nodes[target] : undefined
+  const from = source ? g.nodes[source] : undefined
+  // A frame's top port (`in<k>`) or bottom output: the network types may not
+  // be in an older catalog, so the frame decides which ports exist.
+  if (from && to && source !== target && (isNetworkType(to.type) || isNetworkType(from.type))) {
+    if (isNetworkType(to.type)) {
+      const k = targetHandle != null ? portIndex(targetHandle) : -1
+      if (k < 0 || !boundaryInputs(g.nodes, to.id).some(b => boundaryPortOf(b) === k)) return 'no_port'
+      if (g.wires.some(w => w.to === to.id && w.to_port === targetHandle)) return 'full'
+    } else {
+      if (!hasInputPort(to.type)) return 'no_port'
+      if (targetHandle != null && g.wires.some(w => w.to === to.id && w.to_port === targetHandle)) return 'full'
+    }
+    if (isNetworkType(from.type) && !boundaryOutput(g.nodes, from.id)) return 'no_port'
+    if (wouldCreateCycle(g as Graph, from.id, to.id)) return 'cycle'
+    return null
+  }
+  return connectionProblem(g, plan.conn)
+}
+
+/** The two handle ends a finished wire drag reports (React Flow's FinalConnectionState). */
+export interface DropEnds {
+  fromHandle?: { nodeId: string; id?: string | null; type: 'source' | 'target' } | null
+  toHandle?: { nodeId: string; id?: string | null; type: 'source' | 'target' } | null
+}
+
+/**
+ * True when a wire drag ended ON a port that refuses it because it is
+ * across a network edge (FE-09). A drop on a node body or anywhere that is
+ * not a port is never a crossing, whatever the pointer passed over.
+ */
+export function dropCrossesNetwork(
+  graph: Pick<Graph, 'nodes' | 'wires'>,
+  state: DropEnds | null | undefined,
+  ignoreWireId?: string | null,
+): boolean {
+  const a = state?.fromHandle
+  const b = state?.toHandle
+  if (!a || !b) return false
+  const [src, dst] = a.type === 'source' ? [a, b] : [b, a]
+  const c: ConnectionLike = { source: src.nodeId, sourceHandle: src.id ?? null, target: dst.nodeId, targetHandle: dst.id ?? null }
+  return networkConnectionProblem(graph, c, ignoreWireId) === 'crosses'
+}
+
+/**
+ * Make the connection `c` in one graph change (one undo step). A routed
+ * wire goes through a frame port, and the inside consumer's empty read
+ * takes what the outside source writes (as a direct wire would). Throws
+ * when the connection is refused.
+ */
+export function connectInNetworks(graph: Graph, c: ConnectionLike, wireId: string = newWireId()): Graph {
+  const problem = networkConnectionProblem(graph, c)
+  if (problem === 'crosses') throw new Error(WIRE_CROSSES_NETWORK_TEXT)
+  if (problem) throw new WireOpError(problem, wireProblemText(problem))
+  const plan = planConnection(graph, c)
+  if (plan.kind === 'route') {
+    const routed = routeInto(graph, plan.from, plan.networkId, plan.to, plan.toPort)
+    if (!routed) throw new Error(WIRE_CROSSES_NETWORK_TEXT)
+    const patch = defaultReadPatch(graph, { from: plan.from, to: plan.to, to_port: plan.toPort })
+    if (!patch) return routed
+    const node = routed.nodes[plan.to]
+    return { ...routed, nodes: { ...routed.nodes, [plan.to]: { ...node, params: { ...node.params, ...patch } } } }
+  }
+  if (plan.kind !== 'plain' || !plan.conn.source || !plan.conn.target) throw new Error('connectInNetworks: missing end')
+  return connectWire(graph, {
+    id: wireId,
+    from: plan.conn.source,
+    to: plan.conn.target,
+    to_port: plan.conn.targetHandle ?? undefined,
+  })
 }

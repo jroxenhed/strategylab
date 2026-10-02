@@ -27,6 +27,7 @@ from nodebuilder.compile import compile as compile_graph
 from nodebuilder.evaluator import cook_signals
 from nodebuilder.migrate import CURRENT_GRAPH_VERSION, migrate_graph_data
 from nodebuilder.models import Graph, GraphValidationError
+from tests.nodebuilder._v1_regime_oracle import v1_regime_signals
 from tests.nodebuilder.test_rule_coverage import _DF
 
 _HERE = Path(os.path.dirname(__file__))
@@ -54,6 +55,11 @@ def _graph_data(case: dict) -> dict:
 
 _COMPUTED = [c for c in _GOLDEN["cases"] if c["w1"]["ok"]]
 _REFUSED = [c for c in _GOLDEN["cases"] if not c["w1"]["ok"]]
+# Wave 1 refused every /regime/ node (regime_unsupported).  Since W5 (plan
+# D8) those graphs compile, so their cases check signals instead (plan
+# section 10); the other refusals (atr_pct rules) stay refusals.
+_REGIME = [c for c in _REFUSED if c["w1"].get("code") == "regime_unsupported"]
+_STILL_REFUSED = [c for c in _REFUSED if c["w1"].get("code") != "regime_unsupported"]
 
 
 def _bars(col: np.ndarray) -> list[int]:
@@ -92,12 +98,35 @@ def test_wave2_matches_wave1_through_the_botsjson_dump(case):
     assert _bars(exit_) == case["w1"]["exit"]
 
 
-@pytest.mark.parametrize("case", _REFUSED, ids=[c["id"] for c in _REFUSED])
+@pytest.mark.parametrize("case", _STILL_REFUSED, ids=[c["id"] for c in _STILL_REFUSED])
 def test_wave1_refusals_are_still_refused(case):
-    """The Wave 1 refusals in the corpus (regime, atr_pct rules) stay refused
-    (regime until W5); nothing here may start trading silently."""
+    """The Wave 1 refusals in the corpus (atr_pct rules) stay refused;
+    nothing here may start trading silently."""
     with pytest.raises(GraphValidationError):
         compile_graph(Graph.model_validate(copy.deepcopy(_graph_data(case))))
+
+
+def test_the_regime_cases_are_the_three_stored_v1_graphs():
+    assert sorted(c["id"] for c in _REGIME) == [
+        "v1:api:per_direction_b23", "v1:api:regime_mode", "v1:botsjson:regime_mode"]
+
+
+@pytest.mark.parametrize("case", _REGIME, ids=[c["id"] for c in _REGIME])
+def test_wave1_regime_graphs_fire_as_drawn(case):
+    """A stored v1 regime graph compiles since W5 and fires exactly where its
+    drawing says: entry = regime AND (long buy OR short buy), exit the same
+    with the sell rules (the rule engine evaluates that expression, see
+    _v1_regime_oracle).  It is never silently the new regime_switch
+    semantics: that is what a fresh auto-render draws (test_backtest_parity)."""
+    from tests.nodebuilder.test_backtest_parity import _STRATEGIES
+
+    name = case["source"].rsplit(":", 1)[1]
+    graph = Graph.model_validate(copy.deepcopy(_graph_data(case)))
+    entry, exit_ = cook_signals(compile_graph(graph), _DF)
+    want_entry, want_exit = v1_regime_signals(dict(_STRATEGIES)[name], _DF)
+    assert want_entry and want_exit, "the oracle should fire on this frame"
+    assert _bars(entry) == want_entry
+    assert _bars(exit_) == want_exit
 
 
 @pytest.mark.parametrize("case", _GOLDEN["cases"], ids=[c["id"] for c in _GOLDEN["cases"]])

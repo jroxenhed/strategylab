@@ -30,7 +30,7 @@ async function pickGraphSource() {
 }
 
 function fillBar() {
-  fireEvent.change(screen.getByPlaceholderText('Ticker'), { target: { value: 'AAPL' } })
+  fireEvent.change(screen.getByLabelText('Ticker'), { target: { value: 'AAPL' } })
   fireEvent.change(screen.getByPlaceholderText('Allocation $'), { target: { value: '100' } })
 }
 
@@ -85,21 +85,32 @@ describe('AddBotBar graph picker', () => {
     expect(add).toBeDisabled()
     expect(add).toHaveAttribute('title', 'Select a graph')
 
+    // S36: choosing a graph fetches it once to read its Output Groups.
+    // This one has the implicit `main` group and no ticker, so the typed
+    // symbol stays.
+    const graph = {
+      _version: 3, stream_schema: 1, readOnly: false, meta: {}, wires: [], annotations: { boxes: [], notes: [] },
+      nodes: { e1: { id: 'e1', type: 'entry', name: 'entry', parent: null, params: {}, position: [0, 0], display: false, bypass: false } },
+    }
+    vi.mocked(getGraph).mockResolvedValue({
+      id: 'g_old', rev: 3, name: 'old one', description: '', created_at: 'c', updated_at: 'u', graph: graph as never,
+    })
     fireEvent.change(select, { target: { value: 'g_old' } })
-    expect(add).not.toBeDisabled()
+    await waitFor(() => expect(add).not.toBeDisabled())
     const help = screen.getByTestId('addbot-graph-help')
     expect(help).toHaveTextContent('rev 3 · updated')
     // Only the error and empty texts are live; the ticking "updated N min ago" is not (UX-17).
     expect(help).not.toHaveAttribute('aria-live')
     expect(help.querySelector('[aria-live]')).not.toHaveTextContent('rev 3')
 
-    const graph = { _version: 2, nodes: {}, wires: [] }
-    vi.mocked(getGraph).mockResolvedValue({
-      id: 'g_old', rev: 3, name: 'old one', description: '', created_at: 'c', updated_at: 'u', graph: graph as never,
-    })
     await act(async () => fireEvent.click(add))
+    expect(getGraph).toHaveBeenCalledTimes(1)
     expect(getGraph).toHaveBeenCalledWith('g_old')
-    expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ kind: 'graph', graph, strategy_name: 'old one', symbol: 'AAPL' }))
+    // The server loads the saved revision: id, rev and group, no graph JSON.
+    expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'graph', graph_id: 'g_old', graph_rev: 3, graph_group: 'main', strategy_name: 'old one', symbol: 'AAPL',
+    }))
+    expect('graph' in onAdd.mock.calls[0][0]).toBe(false)
   })
 
   it('says so when there are no saved graphs', async () => {
@@ -120,10 +131,13 @@ describe('AddBotBar graph picker', () => {
     fillBar()
     const select = screen.getByTestId('addbot-graph-select')
     await waitFor(() => expect(select).not.toBeDisabled())
-    fireEvent.change(select, { target: { value: 'g_new' } })
     vi.mocked(getGraph).mockRejectedValue({ response: { status: 404, data: { detail: 'Graph not found' } } })
+    fireEvent.change(select, { target: { value: 'g_new' } })
+    // S36: the fetch happens on choosing; its failure shows with Retry, and Add stays off.
+    const err = await screen.findByTestId('addbot-graph-load-error')
+    expect(err).toHaveTextContent('Graph not found · Retry')
+    expect(screen.getByTestId('addbot-add')).toBeDisabled()
     await act(async () => fireEvent.click(screen.getByTestId('addbot-add')))
-    expect(screen.getByText('Could not load "new one": Graph not found')).toBeInTheDocument()
     expect(onAdd).not.toHaveBeenCalled()
   })
 

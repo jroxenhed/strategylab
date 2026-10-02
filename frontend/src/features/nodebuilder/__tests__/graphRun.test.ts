@@ -2,7 +2,9 @@
  * Graph runs (F435 W4 item 4.D; plan D10, D11; specs S28, S30).
  *
  * - buildGraphRequest never includes a field from GRAPH_OWNED_FIELDS, and
- *   carries only its allowlist.
+ *   carries only its allowlist. The direction goes only with a graph that
+ *   has no Output Group (W5, D7).
+ * - graphTrades follows the displayed group (S33).
  * - readGraphRunSettings reads the capital and the "applies to graph"
  *   settings, never the graph-owned ones.
  * - The chart bar and Results header texts.
@@ -25,10 +27,14 @@ const CLEAN_DIAG = {
   pending: false, offline: false, offlineDetail: null as string | null, hasResult: true,
 }
 
-interface ResultsCall { origin: 'graph' | 'rule'; lastRequest: unknown; header: string | null; result: unknown }
+interface ResultsCall {
+  origin: 'graph' | 'rule'; lastRequest: unknown; header: string | null; result: unknown
+  graphGroups?: { displayedGroup: string; onSelect: (k: string) => void; onFrameGroup?: (g: unknown) => void } | null
+}
 const seen = vi.hoisted(() => ({
   results: [] as ResultsCall[],
   sbGraphView: [] as boolean[],
+  sbHasGroups: [] as boolean[],
   charts: 0,
 }))
 
@@ -101,8 +107,9 @@ vi.mock('../../strategy/StrategyBuilder', async () => {
   const { createElement: h } = await import('react')
   return {
     // React 19 passes `ref` as a plain prop; the stub has no handle to give.
-    default: function StrategyBuilderStub(p: { graphViewActive?: boolean; onResult: (r: unknown, req?: unknown) => void }) {
+    default: function StrategyBuilderStub(p: { graphViewActive?: boolean; graphHasGroups?: boolean; onResult: (r: unknown, req?: unknown) => void }) {
       seen.sbGraphView.push(!!p.graphViewActive)
+      seen.sbHasGroups.push(!!p.graphHasGroups)
       return h('button', {
         type: 'button',
         'data-testid': 'sb-stub-run',
@@ -114,9 +121,12 @@ vi.mock('../../strategy/StrategyBuilder', async () => {
 vi.mock('../../strategy/Results', async () => {
   const { createElement: h } = await import('react')
   return {
-    default: (p: { result: unknown; lastRequest: unknown; graphInfo?: { headerText: string } | null }) => {
+    default: (p: { result: unknown; lastRequest: unknown; graphInfo?: { headerText: string } | null; graphGroups?: ResultsCall['graphGroups'] }) => {
       const origin = p.graphInfo ? 'graph' : 'rule'
-      seen.results.push({ origin, lastRequest: p.lastRequest, header: p.graphInfo?.headerText ?? null, result: p.result })
+      seen.results.push({
+        origin, lastRequest: p.lastRequest, header: p.graphInfo?.headerText ?? null, result: p.result,
+        graphGroups: p.graphGroups ?? null,
+      })
       return h('div', { 'data-testid': `results-stub-${origin}` }, p.graphInfo?.headerText ?? 'rule')
     },
   }
@@ -144,23 +154,27 @@ function RULE_RESULT_FOR_MOCK(): BacktestResult {
 }
 
 import { fetchGraphBacktest } from '../../../api/nodebuilder'
+import { getGraph } from '../../../api/graphs'
+import { requestOpenGraph, requestOpenTrading } from '../graphLinks'
 import {
   buildGraphRequest,
   chartBarSummary,
   chartBarText,
+  currentRunSettingsKey,
   GRAPH_REQUEST_FIELDS,
   graphHeaderText,
   graphResultAsBacktest,
   graphTrades,
   NO_RESULT_TEXT,
   readGraphRunSettings,
+  requestSettingsKey,
   STRATEGY_STORAGE_KEY,
   windowKey,
   windowOfRequest,
   type GraphResultState,
   type GraphSidebar,
 } from '../graphRun'
-import { GRAPH_OWNED_FIELDS, notifyGraphRunSettingsChanged } from '../ownership'
+import { GRAPH_OWNED_FIELDS, GROUP_OWNED_FIELDS, notifyGraphRunSettingsChanged } from '../ownership'
 import { useNodeBuilderStore } from '../store'
 import { IDLE_COOK } from '../store/status'
 import { clearNotices } from '../notices'
@@ -179,6 +193,12 @@ function smallGraph(): Graph {
       n_e: node('n_e', 'entry', 'entry'),
     },
   }
+}
+
+/** smallGraph with one Output Group: the group sets its own direction (D11). */
+function groupGraph(): Graph {
+  const g = smallGraph()
+  return { ...g, nodes: { ...g.nodes, n_g: node('n_g', 'output_group', 'long_leg', { direction: 'long', ticker: 'aapl' }) } }
 }
 
 const SIDEBAR: GraphSidebar = {
@@ -248,6 +268,37 @@ describe('buildGraphRequest (D11)', () => {
       initial_capital: 10000, direction: 'short', dynamic_sizing: { enabled: true },
     })
     expect(req.graph).toBe(graph)
+  })
+
+  it('a graph with Output Groups never sends the direction (D7, D11)', () => {
+    const extras = { direction: 'short', dynamic_sizing: { enabled: true } } as const
+    const req = buildGraphRequest(groupGraph(), SIDEBAR, extras) as unknown as Record<string, unknown>
+    for (const f of [...GRAPH_OWNED_FIELDS, ...GROUP_OWNED_FIELDS]) expect(f in req, f).toBe(false)
+    expect(req.dynamic_sizing).toEqual({ enabled: true })
+    // Without groups the same extras send the sidebar direction.
+    expect(buildGraphRequest(smallGraph(), SIDEBAR, extras).direction).toBe('short')
+  })
+
+  it('never sends trailing stop, time stop or borrow rate (graph-owned from W5)', () => {
+    const extras = {
+      direction: 'long', trailing_stop: { type: 'pct', value: 5 }, max_bars_held: 30, borrow_rate_annual: 1.25,
+    } as unknown as Parameters<typeof buildGraphRequest>[2]
+    for (const g of [smallGraph(), groupGraph()]) {
+      const req = buildGraphRequest(g, SIDEBAR, extras) as unknown as Record<string, unknown>
+      for (const f of ['trailing_stop', 'max_bars_held', 'borrow_rate_annual']) expect(f in req, f).toBe(false)
+    }
+  })
+
+  it('the settings key follows the same rule, so a groups result is not stale on a direction change', () => {
+    localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ capital: 20000, direction: 'short' }))
+    const s = readGraphRunSettings()
+    const sent = (g: Graph) => requestSettingsKey(buildGraphRequest(g, { ...SIDEBAR, initial_capital: s.initial_capital }, s.extras))
+    expect(currentRunSettingsKey(false)).toBe(sent(smallGraph()))
+    expect(currentRunSettingsKey(true)).toBe(sent(groupGraph()))
+    expect(currentRunSettingsKey(true)).not.toBe(currentRunSettingsKey(false))
+    localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ capital: 20000, direction: 'long' }))
+    expect(currentRunSettingsKey(true)).toBe(sent(groupGraph()))
+    localStorage.clear()
   })
 
   it('leaves out the optional settings that are off', () => {
@@ -323,6 +374,25 @@ describe('result texts (S28, S30)', () => {
     expect(text).toMatch(/^GRAPH .+ @ rev \d+ · [A-Z.]+ \w+ · \d{4}-\d{2}-\d{2} → \d{4}-\d{2}-\d{2} · cooked \d{2}:\d{2}:\d{2}$/)
     expect(text).toBe('GRAPH regime_filtered_rsi @ rev 12 · AAPL 1d · 2025-09-11 → 2026-09-11 · cooked 12:04:31')
     expect(graphHeaderText(resultState({ graphName: null, rev: null }))).toMatch(/^untitled graph · AAPL 1d/)
+  })
+
+  it('graphTrades follows the displayed group, and Combined merges the groups (S33)', () => {
+    const st = resultState()
+    const trades = st.response.trades as unknown as Record<string, unknown>[]
+    const group = (name: string, n: number) => ({
+      name, node_id: `n_${name}`, path: `/${name}`, symbol: 'AAPL', interval: '1d', direction: 'long',
+      weight: 1, capital: 5000, summary: { num_trades: n / 2 }, trades: trades.slice(0, n), equity_curve: [],
+    })
+    st.response = {
+      ...st.response,
+      trades: [],
+      groups: [group('long_leg', 4), group('short_leg', 2)],
+      combined: { summary: { exposure_pct: 10, gross_deployed_pct: 5 }, equity_curve: [] },
+    } as unknown as GraphResultState['response']
+    // 'main' is no tab: the first tab, Combined, shows every group's trades.
+    expect(graphTrades(st)).toHaveLength(6)
+    expect(graphTrades({ ...st, displayedGroup: 'short_leg' })).toHaveLength(2)
+    expect(graphTrades({ ...st, displayedGroup: 'long_leg' })).toHaveLength(4)
   })
 
   it('adapts the result for Results and the chart', () => {
@@ -480,5 +550,151 @@ describe('App: a graph run through the run handler (D10)', () => {
     })
     expect(screen.getByTestId('nb-chart-bar-summary').textContent).toBe('MSFT 1d · 6 trades · +25.8% · Sharpe 1.40')
     expect(useNodeBuilderStore.getState().cooks.backtest.stale).toBe(false)
+  })
+})
+
+// ---- W5: Output Groups in App (S33), links from Trading (S34, S35) --------------------
+
+function twoGroupGraph(): Graph {
+  const g = smallGraph()
+  return {
+    ...g,
+    nodes: {
+      ...g.nodes,
+      n_long: node('n_long', 'output_group', 'long_leg', { direction: 'long', ticker: 'aapl' }),
+      n_short: node('n_short', 'output_group', 'short_leg', { direction: 'short', ticker: 'aapl' }),
+    },
+  }
+}
+
+function twoGroupResponse() {
+  const base = graphResponse()
+  const trades = base.trades
+  const group = (name: string, symbol: string, n: number) => ({
+    name, node_id: `n_${name.split('_')[0]}`, path: `/${name}`, symbol, interval: '1h', direction: 'long',
+    weight: 1, capital: 12500, summary: { num_trades: n / 2, total_return_pct: 1 }, trades: trades.slice(0, n), equity_curve: [],
+  })
+  return {
+    ...base,
+    trades: [],
+    groups: [group('long_leg', 'AAPL', 4), group('short_leg', 'MSFT', 2)],
+    combined: { summary: { exposure_pct: 61.2, gross_deployed_pct: 48 }, equity_curve: [] },
+  }
+}
+
+describe('App with Output Groups and Trading links (W5)', () => {
+  beforeEach(() => {
+    clearNotices()
+    seen.results.length = 0
+    seen.sbGraphView.length = 0
+    seen.sbHasGroups.length = 0
+    localStorage.removeItem('strategylab-last-backtest')
+    localStorage.setItem('nodebuilder-graph-view-active', 'false')
+    localStorage.setItem('activeTab', 'chart')
+    localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ capital: 25000, direction: 'short' }))
+    vi.mocked(fetchGraphBacktest).mockReset()
+    vi.mocked(getGraph).mockReset()
+    useNodeBuilderStore.getState().discardEdits()
+    useNodeBuilderStore.getState().resetCooks()
+    useNodeBuilderStore.setState({ cook: IDLE_COOK })
+  })
+  afterEach(() => cleanup())
+
+  it('a group tab moves the chart to that group; Combined shows the S33 hint; no direction is sent', async () => {
+    vi.mocked(fetchGraphBacktest).mockResolvedValue(
+      twoGroupResponse() as unknown as Awaited<ReturnType<typeof fetchGraphBacktest>>,
+    )
+    render(createElement(App), { wrapper })
+    fireEvent.click(screen.getByRole('button', { name: 'View as Graph' }))
+    await act(async () => {
+      useNodeBuilderStore.getState().openGraph(twoGroupGraph(), { id: 'g_2', rev: 1, name: 'pair' })
+    })
+    // The settings panel greys the direction for a graph with groups.
+    expect(seen.sbHasGroups.at(-1)).toBe(true)
+    await act(async () => { fireEvent.click(screen.getByTestId('nb-btn-run')) })
+    await waitFor(() => expect(screen.getByTestId('results-stub-graph')).toBeInTheDocument())
+    const sent = vi.mocked(fetchGraphBacktest).mock.calls[0][0] as unknown as Record<string, unknown>
+    expect('direction' in sent).toBe(false)
+
+    // Combined first: the first group's candles and markers, and the hint.
+    const groups = lastResults('graph')!.graphGroups!
+    expect(groups.displayedGroup).toBe('main')
+    expect(screen.getByTestId('chart-stub').dataset).toMatchObject({ ticker: 'AAPL', trades: '4' })
+    expect(screen.getByTestId('graph-chart-hint').textContent).toBe('Candles: long_leg (AAPL). Markers: long_leg. Equity: combined.')
+
+    // A group pill: that group's ticker and markers, its frame selected, no hint.
+    act(() => groups.onSelect('short_leg'))
+    expect(lastResults('graph')!.graphGroups!.displayedGroup).toBe('short_leg')
+    expect(screen.getByTestId('chart-stub').dataset).toMatchObject({ ticker: 'MSFT', trades: '2' })
+    expect(screen.queryByTestId('graph-chart-hint')).toBeNull()
+    expect(useNodeBuilderStore.getState().selectedNodeId).toBe('n_short')
+    // Back on Combined the candles stay on the last group chosen.
+    act(() => lastResults('graph')!.graphGroups!.onSelect('combined'))
+    expect(screen.getByTestId('chart-stub').dataset).toMatchObject({ ticker: 'MSFT', trades: '2' })
+    expect(screen.getByTestId('graph-chart-hint').textContent).toBe('Candles: short_leg (MSFT). Markers: short_leg. Equity: combined.')
+    // One chart all along, and no rule state touched.
+    expect(seen.charts).toBe(1)
+    expect(lastResults('rule')).toBeUndefined()
+  })
+
+  it('the Trading links switch the tab, and the graph link opens that graph at its group', async () => {
+    render(createElement(App), { wrapper })
+    act(() => requestOpenTrading('bot_1'))
+    expect(localStorage.getItem('activeTab')).toBe('trading')
+
+    vi.mocked(getGraph).mockResolvedValue({
+      id: 'g_9', rev: 4, name: 'pair', graph: twoGroupGraph(),
+    } as unknown as Awaited<ReturnType<typeof getGraph>>)
+    await act(async () => { requestOpenGraph({ graphId: 'g_9', group: 'short_leg', spawn: false }) })
+    expect(localStorage.getItem('activeTab')).toBe('chart')
+    expect(seen.sbGraphView.at(-1)).toBe(true)
+    await waitFor(() => expect(useNodeBuilderStore.getState().graphMeta?.id).toBe('g_9'))
+    expect(getGraph).toHaveBeenCalledWith('g_9')
+    expect(useNodeBuilderStore.getState().selectedNodeId).toBe('n_short')
+
+    // The same graph again: no second load, the group is selected.
+    await act(async () => { requestOpenGraph({ graphId: 'g_9', group: 'long_leg', spawn: false }) })
+    expect(getGraph).toHaveBeenCalledTimes(1)
+    expect(useNodeBuilderStore.getState().selectedNodeId).toBe('n_long')
+  })
+
+  it('the graph link asks about unsaved edits before it switches the view; Cancel changes nothing (FE-08)', async () => {
+    render(createElement(App), { wrapper })
+    await act(async () => {
+      useNodeBuilderStore.getState().openGraph(twoGroupGraph(), { id: 'g_1', rev: 1, name: 'mine' })
+    })
+    act(() => {
+      useNodeBuilderStore.getState().commit('nudge', g => ({
+        ...g, nodes: { ...g.nodes, n_long: { ...g.nodes.n_long, position: [5, 5] } },
+      }))
+    })
+    expect(useNodeBuilderStore.getState().dirty).toBe(true)
+    act(() => requestOpenTrading(null))
+    expect(localStorage.getItem('activeTab')).toBe('trading')
+    const viewBefore = seen.sbGraphView.at(-1)
+
+    vi.mocked(getGraph).mockResolvedValue({
+      id: 'g_9', rev: 4, name: 'pair', graph: twoGroupGraph(),
+    } as unknown as Awaited<ReturnType<typeof getGraph>>)
+    await act(async () => { requestOpenGraph({ graphId: 'g_9', group: 'short_leg', spawn: false }) })
+    // The prompt first: the tab and the view have not moved yet.
+    expect(await screen.findByTestId('nb-save-changes-dialog')).toBeInTheDocument()
+    expect(localStorage.getItem('activeTab')).toBe('trading')
+    expect(seen.sbGraphView.at(-1)).toBe(viewBefore)
+
+    // Cancel: same tab, same view, same graph, nothing loaded.
+    await act(async () => { fireEvent.click(screen.getByTestId('nb-dialog-cancel')) })
+    expect(screen.queryByTestId('nb-save-changes-dialog')).toBeNull()
+    expect(localStorage.getItem('activeTab')).toBe('trading')
+    expect(seen.sbGraphView.at(-1)).toBe(viewBefore)
+    expect(useNodeBuilderStore.getState().graphMeta?.id).toBe('g_1')
+    expect(getGraph).not.toHaveBeenCalled()
+
+    // Discard: now the view switches and the graph loads.
+    await act(async () => { requestOpenGraph({ graphId: 'g_9', group: 'short_leg', spawn: false }) })
+    await act(async () => { fireEvent.click(await screen.findByTestId('nb-save-changes-discard')) })
+    expect(localStorage.getItem('activeTab')).toBe('chart')
+    expect(seen.sbGraphView.at(-1)).toBe(true)
+    await waitFor(() => expect(useNodeBuilderStore.getState().graphMeta?.id).toBe('g_9'))
   })
 })

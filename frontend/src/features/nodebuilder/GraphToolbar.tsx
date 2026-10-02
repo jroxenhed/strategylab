@@ -377,6 +377,9 @@ export default function GraphToolbar(props: GraphToolbarProps) {
             </Button>
           ))}
 
+        {/* S01: entries ordered 50 to 59 (Spawn bots 50) sit between Run and Save. */}
+        <Slot name="toolbarRight" minOrder={50} maxOrder={59} />
+
         {editMode && (
           <Button
             onClick={props.onSave}
@@ -411,8 +414,8 @@ export default function GraphToolbar(props: GraphToolbarProps) {
         >
           ⋯
         </Button>
-        {/* Panel toggles (order 50 and up, Inspector 90) after the ⋯ menu. */}
-        <Slot name="toolbarRight" minOrder={50} />
+        {/* Panel toggles (order 80 and up: Inspector 90, Data Sheet 91) after the ⋯ menu. */}
+        <Slot name="toolbarRight" minOrder={80} />
       </div>
 
       {menuAnchor && <OverflowMenu anchor={menuAnchor} items={menuItems} onClose={() => setMenuAnchor(null)} />}

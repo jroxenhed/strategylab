@@ -225,6 +225,19 @@ describe('GraphToolbar', () => {
   })
 })
 
+describe('toolbar order (S01, 5.F)', () => {
+  it('Spawn bots sits between Run and Save; the panel toggles stay after the menu', async () => {
+    // Canvas (which auto-loads plugins/) is a stub here: load the spawn plugin itself.
+    await import('../plugins/spawnBots')
+    useNodeBuilderStore.getState().openGraph(smallGraph(), { id: 'g_1', rev: 2, name: 'alpha' })
+    renderNodeBuilder()
+    const order = ['nb-btn-run', 'nb-btn-spawn', 'nb-btn-save', 'nb-btn-more'].map(id => screen.getByTestId(id))
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING, order[i].dataset.testid).toBeTruthy()
+    }
+  })
+})
+
 describe('NodeBuilder diagnostics wiring', () => {
   it('disables Run with "Fix 1 error to run" when validate reports one error', () => {
     diagState.value = { ...diagState.value, errorCount: 1, warningCount: 0 }
@@ -499,19 +512,16 @@ describe('W1 fix pass: global keys and banners in NodeBuilder', () => {
     expect(await screen.findByTestId('nb-graph-browser')).toBeInTheDocument()
   })
 
-  it('unsupported nodes and the regime notice use the S07 copy (UX-09)', () => {
+  it('unsupported nodes use the S07 copy, and no regime notice is left (UX-09, W5)', () => {
     const g = smallGraph()
     g.nodes.n_x = node('n_x', 'bogus_type', 'weird')
     useNodeBuilderStore.getState().openGraph(g, { id: 'g_1', rev: 2, name: 'alpha' })
-    act(() => useNodeBuilderStore.setState({ regimeRemoved: ['/regime'] }))
     renderNodeBuilder()
     const banner = screen.getByTestId('nb-banner-unsupported_nodes')
     expect(banner).toHaveTextContent('Unsupported in graphs: bogus_type. The graph cannot run until these are replaced.')
     fireEvent.click(within(banner).getByRole('button', { name: 'bogus_type' }))
     expect(useNodeBuilderStore.getState().selectedNodeId).toBe('n_x')
-    const regime = screen.getByTestId('nb-banner-regime_removed')
-    expect(regime).toHaveTextContent("Regime moved out of this graph: the rule strategy's regime filter is not part of the graph yet. Results may differ.")
-    fireEvent.click(screen.getByTestId('nb-regime-learn-more'))
-    expect(screen.getByTestId('nb-banner-regime_removed')).toHaveTextContent('Wave 5 brings regime into the graph.')
+    // W5 runs regime in the graph: the old "Regime moved out" banner is gone.
+    expect(screen.queryByTestId('nb-banner-regime_removed')).toBeNull()
   })
 })

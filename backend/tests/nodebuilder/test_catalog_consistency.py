@@ -33,8 +33,9 @@ KNOWN_CATEGORIES = set(NODE_CATEGORIES.keys())
 # Minimum set that must be present in NODE_CATALOG per the plan.
 REQUIRED_CATEGORIES = {"ticker", "indicator", "comparison", "logic", "settings", "output"}
 
-# The only names allowed to have compile_active=False at T2.
-CATALOG_ONLY_NAMES = {"size", "stop"}
+# The only names allowed to have compile_active=False.  Empty since W5:
+# the Size and Stop terminals run (plan W5, 5.A).
+CATALOG_ONLY_NAMES: set[str] = set()
 
 
 # ---------------------------------------------------------------------------
@@ -87,22 +88,34 @@ class TestCatalogIntegrity:
         - Settings nodes: writes ("@setting",), reads empty. OK.
         - Pass-through nodes (merge, W2): no params, so nothing of their
           own to read or write; they pass the union of their inputs on.
+        - Network and boundary nodes (W5: subnet, subnet_input,
+          subnet_output, output_group): flatten removes them and splices
+          the streams through, so they read and write nothing of their own
+          (5.0 Needs 4, 5.B Needs 9).  Told apart by registry meta.
         - All others: both non-empty is expected but any one suffices.
         """
+        from nodebuilder.kernel import registry
+
         pass_through = {"merge"}
         for name in pass_through:
             entry = next(e for e in NODE_CATALOG if e.name == name)
             assert not entry.params, f"{name} is exempt only while it has no params"
+
+        def _structural(name: str) -> bool:
+            nt = registry.get(name)
+            return bool(nt is not None and (nt.meta.get("network") or nt.meta.get("boundary")))
+
         both_empty = [
             e.name for e in NODE_CATALOG
             if not e.reads and not e.writes and e.name not in pass_through
+            and not _structural(e.name)
         ]
         assert not both_empty, (
             f"These entries have empty reads AND writes: {both_empty}"
         )
 
     def test_compile_active_false_only_for_catalog_only_nodes(self):
-        """compile_active=False is reserved for the T2 catalog-only Size/Stop terminals."""
+        """compile_active=False is reserved for catalog-only nodes (none since W5)."""
         inactive = {e.name for e in NODE_CATALOG if not e.compile_active}
         assert inactive == CATALOG_ONLY_NAMES, (
             f"Expected compile_active=False only for {CATALOG_ONLY_NAMES}, "
@@ -352,7 +365,8 @@ class TestTrailingStopCatalog:
 
         assert TRAILING_STOP_DEFAULTS == TrailingStopConfig().model_dump()
         entry = get_node("trailing_stop")
-        assert entry.cat == "settings" and entry.compile_active
+        # W5 (5.A): trailing_stop is a group terminal in the output category.
+        assert entry.cat == "output" and entry.compile_active
         assert {k: v for k, v in entry.defaults["params"].items() if k in TRAILING_STOP_DEFAULTS} == (
             TRAILING_STOP_DEFAULTS
         )
@@ -482,12 +496,19 @@ class TestParamAndPortSpecs:
         assert not get_node("not").inputs.dynamic and get_node("not").inputs.max == 1
 
     def test_ticker_symbol_and_interval_are_not_code_able(self):
-        """Plan D1: a Ticker's symbol and interval may never hold code."""
+        """Plan D1: a Ticker's symbol and interval may never hold code.
+
+        An output group's direction, ticker and capital weight are
+        structural like the Ticker's (they decide which bots spawn and what
+        is fetched), so they are not code-able either (5.B Needs 9).
+        """
         specs = {p.name: p for p in get_node("ticker").params}
         assert not specs["symbol"].code_able
         assert not specs["interval"].code_able
+        group = {p.name: p.code_able for p in get_node("output_group").params}
+        assert group == {"direction": False, "ticker": False, "capital_weight": False}
         for entry in NODE_CATALOG:
-            if entry.name != "ticker":
+            if entry.name not in ("ticker", "output_group"):
                 assert all(p.code_able for p in entry.params), entry.name
 
     def test_int_limits_match_what_compile_accepts(self):

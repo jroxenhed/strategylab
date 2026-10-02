@@ -52,6 +52,7 @@ NODE_CATEGORIES: dict[str, str] = {
     "settings":   "Settings",
     "code":       "Code",
     "output":     "Output Terminals",
+    "network":    "Networks",
 }
 
 

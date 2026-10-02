@@ -43,7 +43,6 @@ SEVERITY_BY_CODE: dict[str, Severity] = {
     "family_cap": "error",
     "name_invalid": "error",
     "name_duplicate": "error",
-    "regime_unsupported": "error",  # removed in W5
     # W1 errors the table does not name.  graph_invalid: the body does not
     # parse (bad field types, unsupported version).  parent_missing and
     # parent_cycle come from migrate.name_issues.  port_duplicate: two wires
@@ -74,6 +73,29 @@ SEVERITY_BY_CODE: dict[str, Severity] = {
     # W2 warning: a clash nothing reads (the name is hidden below the node),
     # or a node writing a name that replaces one from upstream.
     "attr_shadowed": "warning",
+    # W5 errors (plan table).  group_invalid: a bad output group (nested,
+    # duplicate name, no primary Ticker).  group_terminal_outside: a terminal
+    # outside every group in a graph that has groups.  wire_crosses_network:
+    # a wire that leaves its network other than through a boundary node.
+    # boundary_invalid: a bad subnet_input / subnet_output.
+    # group_duplicate_terminal: a second terminal of one kind (per side) in
+    # an Output Group, on each of the two.  ticker_missing: an Output Group
+    # whose ticker path is empty or does not point at a Ticker.  (A graph
+    # with no group keeps duplicate_terminal for a second Entry or Exit.)
+    "group_invalid": "error",
+    "group_terminal_outside": "error",
+    "group_duplicate_terminal": "error",
+    "ticker_missing": "error",
+    "wire_crosses_network": "error",
+    "boundary_invalid": "error",
+    # W5 warnings.  setting_shadowed: a root settings node that a group
+    # terminal overrides.  group_weight_zero: an Output Group with capital
+    # weight 0 (it compiles but gets no capital and does not trade, S32a).
+    # setting_unscoped: a settings node no group's scope reaches (one inside
+    # a Subnet within a group, plan D7).
+    "setting_shadowed": "warning",
+    "group_weight_zero": "warning",
+    "setting_unscoped": "warning",
 }
 
 CODES: frozenset[str] = frozenset(SEVERITY_BY_CODE)
@@ -260,11 +282,18 @@ def validate_graph_full(data: Any) -> ValidateResult:
         result = check_graph(target)
         streams = result.streams_json()
         # Compile checks ports too (so every path agrees); the structure
-        # check above already listed those, so list each one once.
-        listed = {(d.code, d.node_id, d.port) for d in diagnostics if d.code == "port_duplicate"}
-        diagnostics.extend(
-            d for d in result.diagnostics if (d.code, d.node_id, d.port) not in listed
-        )
+        # check above already listed those, so list each one once.  A wire
+        # that crosses a network is reported by both the Graph model (the
+        # parse error above) and flatten inside compile: list it once too.
+        once = ("port_duplicate", "wire_crosses_network")
+        listed = {(d.code, d.node_id, d.port) for d in diagnostics if d.code in once}
+        for d in result.diagnostics:
+            key = (d.code, d.node_id, d.port)
+            if d.code in once and key in listed:
+                continue
+            if d.code in once:
+                listed.add(key)
+            diagnostics.append(d)
 
     _fill_paths(diagnostics, nodes or {})
     return ValidateResult(diagnostics=diagnostics, streams=streams)

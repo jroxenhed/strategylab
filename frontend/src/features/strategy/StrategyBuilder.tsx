@@ -11,7 +11,7 @@ import { apiErrorDetail } from '../../shared/utils/errors'
 import { migrateRule, loadSavedStrategies, saveSavedStrategies } from './savedStrategies'
 import { BOT_DEPLOYABLE_INTERVALS } from '../../shared/constants'
 import {
-  APPLIES_PILL, APPLIES_TITLE, APPLIES_UNTIL_W5_TITLE, GRAPH_NOTE_ID, GRAPH_NOTE_TEXT, GRAPH_PILL, SET_BY_GRAPH,
+  APPLIES_PILL, APPLIES_TITLE, GRAPH_NOTE_ID, GRAPH_NOTE_TEXT, GRAPH_PILL, SET_BY_GRAPH,
   isGraphOwned, notifyGraphRunSettingsChanged, type GraphOwnedField,
 } from '../nodebuilder/ownership'
 
@@ -31,6 +31,12 @@ interface Props {
    * get an "applies to graph" pill. The list is GRAPH_OWNED_FIELDS.
    */
   graphViewActive?: boolean
+  /**
+   * The loaded graph has one or more Output Groups (D7, D11). Each group
+   * sets its own direction, so the direction is greyed too. Without groups
+   * the graph runs in the sidebar direction, which stays editable.
+   */
+  graphHasGroups?: boolean
 }
 
 export interface StrategyBuilderHandle {
@@ -57,7 +63,7 @@ function persistSavedStrategies(strategies: SavedStrategy[]) {
   saveSavedStrategies(strategies)
 }
 
-const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function StrategyBuilder({ ticker, start, end, interval, onResult, onSweep, dataSource, settingsPortalId, extendedHours, graphViewActive = false }: Props, ref) {
+const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function StrategyBuilder({ ticker, start, end, interval, onResult, onSweep, dataSource, settingsPortalId, extendedHours, graphViewActive = false, graphHasGroups = false }: Props, ref) {
   const saved = useState(() => loadStrategy())[0]
 
   useEffect(() => {
@@ -656,7 +662,7 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
 
   // ─── S29: graph-owned fields are greyed in graph view ───────────────────────
   // Values are never cleared; graph runs simply do not send these fields.
-  const ownedByGraph = (f: GraphOwnedField) => graphViewActive && isGraphOwned(f)
+  const ownedByGraph = (f: GraphOwnedField) => graphViewActive && isGraphOwned(f, graphHasGroups)
   const ownedGroupProps = (f: GraphOwnedField, idSuffix = '') => ({
     'data-testid': `sb-owned-${f}${idSuffix}`,
     title: ownedByGraph(f) ? SET_BY_GRAPH : undefined,
@@ -676,11 +682,10 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
   const appliesPill = graphViewActive
     ? <span aria-hidden="true" title={APPLIES_TITLE} style={graphPillStyle}>{APPLIES_PILL}</span>
     : null
-  // Direction, trailing stop, time stop and borrow rate: the graph owns them
-  // from W5 (D11); until then graph runs send these values (UX-04, UX-05).
-  const appliesUntilW5Pill = graphViewActive
-    ? <span aria-hidden="true" title={APPLIES_UNTIL_W5_TITLE} style={graphPillStyle} data-testid="sb-applies-w5">{APPLIES_PILL}</span>
-    : null
+  // The GRAPH pill for a greyed field whose label is not a plain text label.
+  const ownedPill = (f: GraphOwnedField) => (ownedByGraph(f)
+    ? <span aria-hidden="true" title={SET_BY_GRAPH} style={graphPillStyle}>{GRAPH_PILL}</span>
+    : null)
 
   // ─── Settings JSX (portaled into right panel or rendered inline) ────────────
   const settingsJSX = (
@@ -690,6 +695,9 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
         <div id={GRAPH_NOTE_ID} data-testid="sb-graph-note" style={graphNoteStyle}>{GRAPH_NOTE_TEXT}</div>
       )}
       {graphViewActive && (
+        // D7/D11: a graph with Output Groups sets each group's direction (greyed
+        // here, never sent); a graph without groups runs in this direction.
+        <div {...ownedGroupProps('direction')}>
         <div style={{ ...styles.settingsRow, marginBottom: 8 }} data-testid="sb-graph-direction">
           <label style={styles.settingsLabel} id="sb-graph-direction-label">Direction</label>
           <div role="group" aria-labelledby="sb-graph-direction-label" style={{ display: 'inline-flex', gap: 4 }}>
@@ -699,16 +707,17 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
                 type="button"
                 aria-pressed={direction === d}
                 onClick={() => setDirection(d)}
-                style={{
+                {...ownedControl('direction', {
                   fontSize: 11, padding: '2px 10px', borderRadius: 3, cursor: 'pointer',
                   background: direction === d ? 'rgba(88,166,255,0.14)' : 'none',
                   color: direction === d ? 'var(--accent)' : 'var(--text-muted)',
                   border: `1px solid ${direction === d ? 'rgba(88,166,255,0.4)' : 'var(--border-light)'}`,
-                }}
+                })}
               >{d === 'long' ? 'Long' : 'Short'}</button>
             ))}
           </div>
-          {appliesUntilW5Pill}
+          {ownedByGraph('direction') ? ownedPill('direction') : appliesPill}
+        </div>
         </div>
       )}
       <div style={styles.settingsGroupsWrapper}>
@@ -818,10 +827,11 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
           {direction === 'short' && (
             <>
               <div style={{ ...styles.groupTitle, marginTop: 12 }}>Short Costs</div>
+              <div {...ownedGroupProps('borrow_rate_annual')}>
               <div style={styles.settingsRow}>
-                <label style={styles.settingsLabel}>Borrow rate (%/yr)</label>
-                <input type="number" value={borrowRateAnnual} step={0.1} min={0} onChange={e => setBorrowRateAnnual(+e.target.value)} style={styles.settingsInput} />
-                {appliesUntilW5Pill}
+                {ownedLabel('borrow_rate_annual', 'Borrow rate (%/yr)')}
+                <input type="number" value={borrowRateAnnual} step={0.1} min={0} onChange={e => setBorrowRateAnnual(+e.target.value)} {...ownedControl('borrow_rate_annual', styles.settingsInput)} />
+              </div>
               </div>
             </>
           )}
@@ -836,48 +846,51 @@ const StrategyBuilder = forwardRef<StrategyBuilderHandle, Props>(function Strate
             <input type="number" value={stopLoss} step={0.5} min={0} max={99} placeholder="Off" onChange={e => setStopLoss(e.target.value === '' ? '' : +e.target.value)} {...ownedControl('stop_loss_pct', styles.settingsInput)} />
           </div>
           </div>
+          <div {...ownedGroupProps('max_bars_held')}>
           <div style={styles.settingsRow}>
-            <label style={styles.settingsLabel}>Time Stop (bars)</label>
-            <input type="number" value={maxBarsHeld} step={1} min={1} max={10000} placeholder="Off" onChange={e => setMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} style={styles.settingsInput} />
-            {appliesUntilW5Pill}
+            {ownedLabel('max_bars_held', 'Time Stop (bars)')}
+            <input type="number" value={maxBarsHeld} step={1} min={1} max={10000} placeholder="Off" onChange={e => setMaxBarsHeld(e.target.value === '' ? '' : +e.target.value)} {...ownedControl('max_bars_held', styles.settingsInput)} />
           </div>
+          </div>
+          <div {...ownedGroupProps('trailing_stop')}>
           <div style={{ ...styles.settingsRow, marginTop: 4 }}>
             <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-              <input type="checkbox" checked={trailingEnabled} onChange={e => setTrailingEnabled(e.target.checked)} />
+              <input type="checkbox" checked={trailingEnabled} onChange={e => setTrailingEnabled(e.target.checked)} {...ownedControl('trailing_stop', {})} />
               Trailing Stop
             </label>
-            {appliesUntilW5Pill}
+            {ownedPill('trailing_stop')}
           </div>
           {trailingEnabled && (
             <div style={{ paddingLeft: 12, borderLeft: '2px solid var(--border-light)', display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={styles.settingsRow}>
                 <label style={styles.settingsLabel}>Type</label>
-                <select value={trailingConfig.type} onChange={e => setTrailingConfig(c => ({ ...c, type: e.target.value as 'pct' | 'atr' }))} style={styles.settingsInput}>
+                <select value={trailingConfig.type} onChange={e => setTrailingConfig(c => ({ ...c, type: e.target.value as 'pct' | 'atr' }))} {...ownedControl('trailing_stop', styles.settingsInput)}>
                   <option value="pct">%</option>
                   <option value="atr">ATR</option>
                 </select>
               </div>
               <div style={styles.settingsRow}>
                 <label style={styles.settingsLabel}>Value</label>
-                <input type="number" value={trailingConfig.value} step={0.5} min={0.1} onChange={e => setTrailingConfig(c => ({ ...c, value: +e.target.value }))} style={styles.settingsInput} />
+                <input type="number" value={trailingConfig.value} step={0.5} min={0.1} onChange={e => setTrailingConfig(c => ({ ...c, value: +e.target.value }))} {...ownedControl('trailing_stop', styles.settingsInput)} />
               </div>
               <div style={styles.settingsRow}>
                 <label style={styles.settingsLabel}>Source</label>
-                <select value={trailingConfig.source} onChange={e => setTrailingConfig(c => ({ ...c, source: e.target.value as 'high' | 'close' }))} style={styles.settingsInput}>
+                <select value={trailingConfig.source} onChange={e => setTrailingConfig(c => ({ ...c, source: e.target.value as 'high' | 'close' }))} {...ownedControl('trailing_stop', styles.settingsInput)}>
                   <option value="high">High</option>
                   <option value="close">Close</option>
                 </select>
               </div>
               <div style={styles.settingsRow}>
                 <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', width: 'auto' }}>
-                  <input type="checkbox" checked={trailingConfig.activate_on_profit} onChange={e => setTrailingConfig(c => ({ ...c, activate_on_profit: e.target.checked }))} />
+                  <input type="checkbox" checked={trailingConfig.activate_on_profit} onChange={e => setTrailingConfig(c => ({ ...c, activate_on_profit: e.target.checked }))} {...ownedControl('trailing_stop', {})} />
                   Activate after
                 </label>
-                <input type="number" value={trailingConfig.activate_pct} step={0.5} min={0} max={100} disabled={!trailingConfig.activate_on_profit} onChange={e => setTrailingConfig(c => ({ ...c, activate_pct: +e.target.value }))} style={{ ...styles.settingsInput, width: 48, opacity: trailingConfig.activate_on_profit ? 1 : 0.35 }} />
+                <input type="number" value={trailingConfig.activate_pct} step={0.5} min={0} max={100} onChange={e => setTrailingConfig(c => ({ ...c, activate_pct: +e.target.value }))} {...ownedControl('trailing_stop', { ...styles.settingsInput, width: 48, opacity: trailingConfig.activate_on_profit ? 1 : 0.35 })} disabled={!trailingConfig.activate_on_profit || ownedByGraph('trailing_stop')} />
                 <span style={{ fontSize: 11, color: '#8b949e' }}>% profit</span>
               </div>
             </div>
           )}
+          </div>
           <div style={{ ...styles.settingsRow, marginTop: 4 }}>
             <label style={{ ...styles.settingsLabel, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
               <input type="checkbox" checked={dynamicSizing.enabled} onChange={e => setDynamicSizing(c => ({ ...c, enabled: e.target.checked }))} />

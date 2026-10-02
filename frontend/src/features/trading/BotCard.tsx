@@ -8,6 +8,8 @@ import { fmtTimeET } from '../../shared/utils/time'
 import MiniSparkline from './MiniSparkline'
 import DailyPnlChart from './DailyPnlChart'
 import { INFO_COLUMN_FLEX, StatCell, btnStyle } from './ui'
+import { graphActionError, plainErrorText, updateBotGraph } from '../../api/graphSpawn'
+import { requestOpenGraph } from '../nodebuilder/graphLinks'
 
 const SAVED_KEY = 'strategylab-saved-strategies'
 
@@ -103,6 +105,222 @@ function StatusBadge({ status, tooltip, style }: { status: string; tooltip: stri
         </div>
       )}
     </span>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// GraphLine: "graph ▸ group @ rev 7" and "Update to rev 9" (S35)
+// ---------------------------------------------------------------------------
+
+// Node builder colors for the group glyph and the SWITCH pill. Those tokens
+// live under .nodebuilder-root, so the card gives their values as fallbacks.
+const NB_CAT_OUTPUT = 'var(--nb-cat-output, #f1f5f9)'
+const NB_TINT_OUTPUT = 'var(--nb-tint-output, #373c43)'
+const NB_CAT_NETWORK = 'var(--nb-cat-network, #818cf8)'
+const NB_TINT_NETWORK = 'var(--nb-tint-network, #252b43)'
+
+type GraphLineMsg = {
+  kind: 'error' | 'ok'
+  text: string
+  /** A link after the text: open the graph and its Spawn dialog, or just the graph. */
+  link?: { label: string; spawn: boolean }
+}
+
+const linkBtn: React.CSSProperties = {
+  background: 'none', border: 'none', padding: 0, marginLeft: 6, font: 'inherit',
+  color: 'var(--gh-blue)', textDecoration: 'underline', cursor: 'pointer',
+}
+
+/**
+ * The graph line of a graph bot (S35). Everything comes from the bot
+ * summary: `graph_name` and `graph_latest_rev` are filled by the server from
+ * its graph index. This card never loads a graph. It never decides whether
+ * a symbol or direction changed either: it sends the update and shows the
+ * server's answer. Updating never starts a bot.
+ */
+function GraphLine({ summary }: { summary: BotSummary }) {
+  const graphId = summary.graph_id ?? null
+  const group = summary.graph_group ?? null
+  const [phase, setPhase] = useState<'idle' | 'confirm' | 'updating'>('idle')
+  const [msg, setMsg] = useState<GraphLineMsg | null>(null)
+  // The rev a 200 moved the bot to, until the next summary poll shows it.
+  const [updatedRev, setUpdatedRev] = useState<number | null>(null)
+  // A newer rev learned from a 409 rev_conflict, until the summary catches up.
+  const [conflictRev, setConflictRev] = useState<number | null>(null)
+  // A rev the server refused for good (symbol, direction or group changed): no button for it.
+  const [refusedRev, setRefusedRev] = useState<number | null>(null)
+  const mounted = useRef(true)
+  useEffect(() => () => { mounted.current = false }, [])
+
+  // The ok message goes away after 4 s, as a toast would.
+  useEffect(() => {
+    if (msg?.kind !== 'ok') return
+    const t = setTimeout(() => { if (mounted.current) setMsg(null) }, 4000)
+    return () => clearTimeout(t)
+  }, [msg])
+
+  const lineStyle: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: 6, minHeight: 20,
+    fontFamily: 'monospace', fontSize: 11, color: 'var(--gh-text-faint)',
+  }
+
+  // A graph bot made before graphs had ids: no source graph to follow.
+  if (!graphId) {
+    return (
+      <div style={lineStyle} data-testid="botcard-graph-line">
+        <span>graph snapshot · no source graph</span>
+      </div>
+    )
+  }
+
+  const deleted = summary.graph_latest_rev == null
+  const summaryRev = summary.graph_rev ?? null
+  const botRev = updatedRev != null && (summaryRev == null || updatedRev > summaryRev) ? updatedRev : summaryRev
+  const latest = deleted ? null : Math.max(summary.graph_latest_rev ?? 0, conflictRev ?? 0)
+  const newer = latest != null && botRev != null && latest > botRev
+  const inPosition = !!summary.has_position
+  const running = summary.status === 'running'
+  const groupName = group ?? 'main'
+  const shownName = summary.graph_name ?? graphId
+
+  const openGraph = (spawn: boolean) => requestOpenGraph({ graphId, group, spawn })
+
+  const doUpdate = async (target: number) => {
+    setPhase('updating')
+    setMsg(null)
+    try {
+      const res = await updateBotGraph(summary.bot_id, graphId, target)
+      if (!mounted.current) return
+      const rev = typeof res?.graph_rev === 'number' ? res.graph_rev : target
+      setUpdatedRev(rev)
+      setMsg({ kind: 'ok', text: `${groupName} updated to rev ${rev}` })
+    } catch (e) {
+      if (!mounted.current) return
+      const err = graphActionError(e)
+      if (err.kind === 'network') {
+        setMsg({ kind: 'error', text: 'Could not reach the server.' })
+      } else if (err.code === 'in_position') {
+        setMsg({ kind: 'error', text: 'Close the position first.' })
+      } else if (err.code === 'rev_conflict') {
+        const cur = err.currentRev
+        if (cur != null) setConflictRev(cur)
+        setMsg({ kind: 'error', text: `The graph changed again (rev ${cur ?? '?'}). Try once more.` })
+      } else if (err.code === 'symbol_changed') {
+        setRefusedRev(target)
+        setMsg({ kind: 'error', text: `In rev ${target} this group trades a different symbol. Spawn a new bot instead.`, link: { label: 'Spawn…', spawn: true } })
+      } else if (err.code === 'interval_changed') {
+        setRefusedRev(target)
+        setMsg({ kind: 'error', text: `In rev ${target} this group runs on another interval. Spawn a new bot instead.`, link: { label: 'Spawn…', spawn: true } })
+      } else if (err.code === 'broker_unavailable') {
+        setMsg({ kind: 'error', text: 'Could not check the broker for an open position. Try again.' })
+      } else if (err.code === 'direction_changed') {
+        setRefusedRev(target)
+        setMsg({ kind: 'error', text: `In rev ${target} this group changed direction. Spawn a new bot instead.`, link: { label: 'Spawn…', spawn: true } })
+      } else if (err.code === 'group_missing') {
+        setRefusedRev(target)
+        setMsg({ kind: 'error', text: `Group ${groupName} no longer exists in rev ${target}.` })
+      } else if (err.code === 'graph_invalid') {
+        setMsg({ kind: 'error', text: `Rev ${target} has errors.`, link: { label: 'Fix them in the node builder.', spawn: false } })
+      } else {
+        setMsg({ kind: 'error', text: plainErrorText(err) })
+      }
+    } finally {
+      if (mounted.current) setPhase('idle')
+    }
+  }
+
+  let right: React.ReactNode = null
+  if (newer && latest != null && refusedRev !== latest) {
+    const btn = (label: React.ReactNode, onClick?: () => void, extra: React.CSSProperties = {}, aria: Record<string, unknown> = {}) => (
+      <button
+        type="button"
+        onClick={onClick}
+        style={{ ...btnStyle('var(--gh-blue-bg)'), height: 22, padding: '0 8px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 4, ...extra }}
+        {...aria}
+      >
+        {label}
+      </button>
+    )
+    if (inPosition) {
+      right = (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ color: 'var(--gh-text-faint)' }}>rev {latest} available</span>
+          {btn(`Update to rev ${latest}`, undefined, { ...btnStyle('var(--gh-blue-bg)', true), height: 22, padding: '0 8px', fontSize: 11 }, {
+            'aria-disabled': 'true',
+            title: 'Close the position first',
+            'data-testid': 'botcard-graph-update',
+          })}
+        </span>
+      )
+    } else if (phase === 'updating') {
+      right = btn('Updating…', undefined, {}, { disabled: true, 'aria-busy': 'true', 'data-testid': 'botcard-graph-update' })
+    } else if (phase === 'confirm') {
+      right = (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'inherit' }}>
+          <span style={{ color: 'var(--gh-text-light)' }}>Update while running? The bot uses the new rules on its next tick.</span>
+          {btn('Update', () => void doUpdate(latest), {}, { 'data-testid': 'botcard-graph-confirm' })}
+          {btn('Cancel', () => setPhase('idle'), { background: 'var(--gh-bg-alt)' })}
+        </span>
+      )
+    } else {
+      right = btn(
+        `Update to rev ${latest}`,
+        () => { if (running) setPhase('confirm'); else void doUpdate(latest) },
+        {},
+        { 'data-testid': 'botcard-graph-update' },
+      )
+    }
+  }
+
+  return (
+    <div data-testid="botcard-graph-line">
+      <div style={lineStyle} title={!deleted && !newer ? 'latest' : undefined}>
+        <span
+          aria-hidden="true"
+          style={{
+            width: 12, height: 12, borderRadius: 3, flexShrink: 0, display: 'inline-flex',
+            alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 600,
+            color: NB_CAT_OUTPUT, background: NB_TINT_OUTPUT,
+          }}
+        >O</span>
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {deleted ? (
+            <span style={{ color: 'var(--gh-text-primary)' }}>{shownName}</span>
+          ) : (
+            <a
+              href="#"
+              aria-label={`Open graph ${shownName} at group ${groupName}`}
+              onClick={e => { e.preventDefault(); openGraph(false) }}
+              style={{ color: 'var(--gh-text-primary)', textDecoration: 'none' }}
+              onMouseEnter={e => { e.currentTarget.style.textDecoration = 'underline' }}
+              onMouseLeave={e => { e.currentTarget.style.textDecoration = 'none' }}
+            >{shownName}</a>
+          )}
+          {group != null && <span style={{ color: 'var(--gh-text-primary)' }}> ▸ {group}</span>}
+          {botRev != null && <span style={{ color: 'var(--gh-text-faint)' }}> @ rev {botRev}</span>}
+          {deleted && <span style={{ color: 'var(--gh-text-faint)' }}> (graph deleted)</span>}
+        </span>
+        {summary.graph_direction_mode === 'regime_switch' && (
+          <span style={{
+            height: 16, lineHeight: '16px', padding: '0 5px', borderRadius: 3, fontFamily: 'sans-serif',
+            fontWeight: 600, fontSize: 10, letterSpacing: '0.06em', color: NB_CAT_NETWORK, background: NB_TINT_NETWORK,
+          }}>SWITCH</span>
+        )}
+        {right != null && <span style={{ marginLeft: 'auto', flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}>{right}</span>}
+      </div>
+      {msg && (
+        <div
+          role={msg.kind === 'error' ? 'alert' : 'status'}
+          data-testid={msg.kind === 'error' ? 'botcard-graph-error' : 'botcard-graph-ok'}
+          style={{ fontSize: 11, color: msg.kind === 'error' ? 'var(--gh-red-alt)' : 'var(--gh-teal)', paddingLeft: 18 }}
+        >
+          {msg.text}
+          {msg.link && (
+            <button type="button" style={linkBtn} onClick={() => openGraph(msg.link!.spawn)}>{msg.link.label}</button>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -207,7 +425,7 @@ export default function BotCard({
   // ---- Compact layout ----
   if (compact) {
     return (
-      <div style={{
+      <div data-bot-id={summary.bot_id} style={{
         background: `linear-gradient(135deg, ${bgTint}, var(--gh-bg-panel))`,
         border: '1px solid var(--gh-bg-alt)', borderRadius: 4,
         display: 'flex', flexDirection: 'column',
@@ -258,6 +476,17 @@ export default function BotCard({
                 }}>S</span>
               )}
               <span style={{ color: 'var(--gh-text-faint2)', marginLeft: 6 }}>{summary.strategy_name}</span>
+              {/* A graph bot on an older rev says so in the compact row too (S35, UX-05). */}
+              {summary.kind === 'graph' && summary.graph_id && summary.graph_rev != null
+                && summary.graph_latest_rev != null && summary.graph_latest_rev > summary.graph_rev && (
+                <span
+                  data-testid="botcard-compact-rev"
+                  title="A newer graph rev is saved. Expand the card to update."
+                  style={{ marginLeft: 6, fontFamily: 'monospace', fontSize: 10, color: 'var(--gh-blue)' }}
+                >
+                  rev {summary.graph_rev} → {summary.graph_latest_rev}
+                </span>
+              )}
             </span>
 
             {/* P&L: dollar + percentage */}
@@ -368,9 +597,10 @@ export default function BotCard({
           </div>
         </div>
 
-        {/* Expandable activity log */}
+        {/* Expandable detail: the graph line (S35, UX-05), then the activity log */}
         {expanded && (
           <div style={{ padding: '0 8px 8px' }}>
+            {summary.kind === 'graph' && <GraphLine summary={summary} />}
             <ActivityLog entries={detail?.state?.activity_log ?? []} status={summary.status} />
           </div>
         )}
@@ -388,7 +618,7 @@ export default function BotCard({
 
   // ---- Expanded (default) layout ----
   return (
-    <div style={{
+    <div data-bot-id={summary.bot_id} style={{
       background: `linear-gradient(135deg, ${bgTint}, var(--gh-bg-panel))`, border: '1px solid var(--gh-bg-alt)', borderRadius: 6,
       padding: 12, display: 'flex', flexDirection: 'column', gap: 8,
     }}>
@@ -490,6 +720,9 @@ export default function BotCard({
               )}
             </span>
           </div>
+
+          {/* Graph bots: which graph, group and rev; update to the latest rev (S35) */}
+          {summary.kind === 'graph' && <GraphLine summary={summary} />}
 
           {/* Stats row — columnar layout */}
           <div style={{

@@ -5,12 +5,21 @@ attribute reads and writes, stream merges and clashes, types, bypass.  This
 module adds the trading rules that are about the whole graph and builds the
 program:
 
-1. a /regime/ node is refused (until W5);
 2. two wires on one input port are refused;
-3. the kernel walk, in topological order;
-4. one Entry, which must get a signal; one Exit, whose missing signal is a
-   warning;
+3. the kernel walk over the flattened graph (networks taken out, plan D7),
+   in topological order;
+4. the terminals, per Output Group (W5): each group has one Entry, which
+   must get a signal, and one Exit, whose missing signal is a warning
+   (a regime_switch group has one of each per side).  A graph with no
+   Output Group is one implicit group, "main", with today's rules;
 5. the indicator family cap.
+
+(Step 1, the refusal of /regime/ nodes, is gone since W5: regime is a
+network and a Regime terminal in the graph, plan D8.  The numbers stay so
+the steps keep their names.)
+
+After the program is built, each group is planned (sim_bridge.plan_group),
+which gives CompiledProgram.groups (nodes_groups.build_group_programs).
 
 compile() raises the first problem; compile_with_diagnostics() lists every
 problem; check_graph() also returns each node's stream schema for
@@ -19,7 +28,7 @@ problem; check_graph() also returns each node's stream schema for
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Optional
 
 from nodebuilder import trading as _trading  # noqa: F401  (registers every node type)
@@ -31,17 +40,16 @@ from nodebuilder.evaluator import (
     CompiledProgram,
     FamilyCapExceededError,
     GraphTypeError,  # noqa: F401  (re-exported for older imports)
-    MissingTerminalError,
-    RegimeUnsupportedError,
-    SimulatorSetting,
+    MissingTerminalError,  # noqa: F401  (re-exported for older imports)
     UnknownNodeTypeError,
     UnsupportedNodeError,
 )
 from nodebuilder.kernel import schema as kschema
-from nodebuilder.kernel.evaluate import build_steps
-from nodebuilder.kernel.schema import BROKEN, DISABLED, LIVE, RUN, SKIPPED, coded
+from nodebuilder.kernel.evaluate import analyze_graph, build_steps
+from nodebuilder.kernel.schema import RUN, coded
 from nodebuilder.kernel.stream import STREAM_SCHEMA_VERSION
 from nodebuilder.models import Graph, GraphValidationError
+from nodebuilder.trading import nodes_groups as _groups
 
 logger = logging.getLogger(__name__)
 
@@ -115,9 +123,9 @@ class GraphCheck:
 def compile(graph: Graph) -> CompiledProgram:  # noqa: A001 (shadows builtin "compile" intentionally)
     """Compile a Graph into a CompiledProgram.
 
-    Raises the first error compile finds, in this order: a /regime/ node
-    first, then a second wire on one input port, then nodes in topological
-    order, then the Entry and Exit checks, then the indicator family cap.
+    Raises the first error compile finds, in this order: a second wire on
+    one input port, then nodes in topological order, then the Entry and
+    Exit checks, then the indicator family cap, then the group plans.
     Every raised error carries ``.code`` (plan 4.2).  Use
     compile_with_diagnostics to get every problem at once.
     """
@@ -152,16 +160,9 @@ def check_graph(graph: Graph) -> GraphCheck:
         found.append((from_error(exc), exc))
 
     def _warn(code: str, message: str, node_id: Optional[str]) -> None:
-        found.append((make_diagnostic(code, message, node_id=node_id), None))
-
-    # 1. Regime nodes (W5 brings regime into the graph).
-    regime_nodes = [nid for nid in graph.nodes if nid.startswith("/regime/")]
-    for nid in regime_nodes:
-        _record(RegimeUnsupportedError(
-            f"Graph contains a /regime/ node ({nid!r}). "
-            "Regime is not supported in the graph evaluator yet.",
-            node_id=nid,
-        ))
+        # Always a warning, even for a code diagnostics.SEVERITY_BY_CODE
+        # does not list yet (setting_shadowed, W5).
+        found.append((make_diagnostic(code, message, node_id=node_id, severity="warning"), None))
 
     # 2. One wire per input port.  The Graph model refuses a second wire on a
     # port, so this only fires for a graph built without validation
@@ -179,62 +180,20 @@ def check_graph(graph: Graph) -> GraphCheck:
             ), "port_duplicate", port=wire.to_port))
         seen_ports.add(key)
 
-    # 3. The kernel walk.
-    analysis = kschema.analyze(graph, unknown_error=_unknown_error,
-                               preset_broken=regime_nodes)
+    # 3. The kernel walk, over the flat graph (networks taken out).  Node
+    # ids in the flat graph are the ids the user sees (W5; W6 adds
+    # composite ids for library assets, so read node types from
+    # analysis.graph, never from the source graph).
+    analysis, flat = analyze_graph(graph, unknown_error=_unknown_error)
     found.extend(analysis.found)
     nodes = analysis.nodes
 
-    # 4. Terminals.
-    entries = [nid for nid in analysis.order if graph.nodes[nid].type == "entry"]
-    exits = [nid for nid in analysis.order if graph.nodes[nid].type == "exit"]
-    for label, terminals in (("Entry", entries), ("Exit", exits)):
-        for nid in terminals[1:]:
-            _record(coded(GraphValidationError(
-                f"The graph has more than one {label} ({terminals[0]!r} and {nid!r}).  "
-                f"Join the signals with OR into one {label}.",
-                node_id=nid,
-            ), "duplicate_terminal"))
-
-    entry_attr: Optional[str] = None
-    entry_node: Optional[str] = None
-    if not entries:
-        _record(MissingTerminalError("Graph has no Entry terminal (no 'entry' node found)."))
-    else:
-        nid = entries[0]
-        res = nodes.get(nid)
-        if res is not None and res.status not in (BROKEN, SKIPPED):
-            info = res.reads.get("signal")
-            if info is not None and info.status == LIVE:
-                entry_attr, entry_node = info.name, nid
-            elif info is not None and info.status == DISABLED:
-                _record(coded(MissingTerminalError(
-                    f"Entry terminal {nid!r} gets no signal: its input is bypassed.",
-                    node_id=nid,
-                ), "missing_input", port="in0"))
-            else:
-                _record(coded(MissingTerminalError(
-                    f"Entry terminal {nid!r} is not wired to a signal.",
-                    node_id=nid,
-                ), "missing_input", port="in0"))
-
-    exit_attr: Optional[str] = None
-    exit_node: Optional[str] = None
-    if not exits:
-        # Not an error: stops, trailing stops or the end of the data close
-        # the trade.  But a strategy with no exit signal is often a mistake.
-        _warn("exit_unconnected", "The graph has no Exit, so only a stop or "
-              "the end of the data closes a trade.", None)
-    else:
-        nid = exits[0]
-        res = nodes.get(nid)
-        if res is not None and res.status not in (BROKEN, SKIPPED):
-            info = res.reads.get("signal")
-            if info is not None and info.status == LIVE:
-                exit_attr, exit_node = info.name, nid
-            else:
-                _warn("exit_unconnected", f"Exit {nid!r} gets no signal, so only "
-                      "a stop or the end of the data closes a trade.", nid)
+    # 4. Terminals, sorted into Output Groups (plan D7).  A graph with no
+    # group is one implicit group, "main", with the rules and messages
+    # compile has had since W1 (nodes_groups.layout_groups).
+    layout = _groups.layout_groups(graph, flat, analysis, _record, _warn)
+    entry_attr, entry_node = layout.entry_attr, layout.entry_node
+    exit_attr, exit_node = layout.exit_attr, layout.exit_node
 
     # 5. Indicator family cap: distinct (type, params, inputs) per family.
     distinct: dict[str, list[tuple[tuple, str]]] = {}
@@ -264,23 +223,26 @@ def check_graph(graph: Graph) -> GraphCheck:
     if errors:
         return GraphCheck(None, diagnostics, streams, errors)
 
-    # The settings nodes' values, as the Wave 0 overlay code reads them.
-    simulator_settings = [
-        SimulatorSetting(key=key, value=value)
-        for nid in analysis.order
-        if (res := nodes.get(nid)) is not None and res.status == RUN
-        for key, value in res.annotations.get("settings", ())
-    ]
     assert entry_attr is not None
     program = CompiledProgram(
         steps=build_steps(analysis),
         entry_attr=entry_attr,
         exit_attr=exit_attr if exit_attr is not None else NO_EXIT_ATTR,
-        simulator_settings=simulator_settings,
         entry_node=entry_node,
         exit_node=exit_node,
         required_lookback_bars=analysis.required_lookback_bars(),
         stream_schema=STREAM_SCHEMA_VERSION,
         schemas=streams,
     )
+
+    # 6. Plan every group: the simulator's inputs (sim_bridge.plan_group).
+    # A problem here is about a whole group (a second trailing stop, a
+    # regime_switch group with no regime terminal), so the graph does not
+    # compile.  A size or stop terminal over a settings node only warns.
+    groups = _groups.build_group_programs(program, layout, _record, _warn)
+    errors = [exc for _d, exc in found if exc is not None]
+    diagnostics = [d for d, _exc in found]
+    if errors:
+        return GraphCheck(None, diagnostics, streams, errors)
+    program = replace(program, groups=groups)
     return GraphCheck(program, diagnostics, streams, errors)

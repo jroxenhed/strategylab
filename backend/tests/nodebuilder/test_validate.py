@@ -231,6 +231,19 @@ def test_every_code_has_a_severity():
     assert set(SEVERITY_BY_CODE.values()) <= {"error", "warning", "info"}
 
 
+def test_frontend_code_union_lists_every_backend_code():
+    """frontend/src/api/nodebuilderValidate.ts KnownDiagnosticCode names every
+    code the backend registers, and nothing else."""
+    import re
+    ts_path = os.path.join(os.path.dirname(_BACKEND_DIR), "frontend", "src", "api",
+                           "nodebuilderValidate.ts")
+    if not os.path.exists(ts_path):
+        pytest.skip("frontend tree not present")
+    text = open(ts_path, encoding="utf-8").read()
+    block = text[text.index("export type KnownDiagnosticCode"):text.index("export type DiagnosticCode")]
+    assert set(re.findall(r"'([a-z_]+)'", block)) == set(CODES)
+
+
 # ---------------------------------------------------------------------------
 # One test per emitted code
 # ---------------------------------------------------------------------------
@@ -280,12 +293,15 @@ def test_code_unsupported_node_for_condition_extra():
     assert d.node_id == "/below" and d.param == "condition_extra"
 
 
-def test_code_unsupported_node_for_wired_size_terminal():
+def test_code_attr_type_for_a_signal_wired_into_size():
+    """A wired Size terminal runs since W5 (5.A); it reads a number, so a
+    true/false signal wired into it is attr_type on the terminal."""
     graph = _rsi_graph()
     graph["nodes"]["/size_t"] = _n("/size_t", "size")
     graph["wires"].append(_w("ws", "/below", "/size_t"))
-    d = _find(validate_graph_data(graph), "unsupported_node")
+    d = _find(validate_graph_data(graph), "attr_type")
     assert d.node_id == "/size_t"
+    assert "unsupported_node" not in _codes(validate_graph_data(graph))
 
 
 def test_code_unknown_node_type():
@@ -374,12 +390,56 @@ def test_code_parent_cycle():
     assert {d.node_id for d in diags if d.code == "parent_cycle"} == {"/net_a", "/net_b"}
 
 
-def test_code_regime_unsupported():
+def test_regime_node_is_not_refused():
+    """regime_unsupported is gone (W5, plan D8): a /regime/ node checks like
+    any other."""
     graph = _rsi_graph()
     graph["nodes"]["/regime/sma"] = _n("/regime/sma", "sma", period=200)
     graph["wires"].append(_w("wr", "/ticker", "/regime/sma"))
-    d = _find(validate_graph_data(graph), "regime_unsupported")
-    assert d.node_id == "/regime/sma"
+    diags = validate_graph_data(graph)
+    assert "regime_unsupported" not in _codes(diags)
+    assert [d for d in diags if d.severity == "error"] == []
+
+
+def _group_graph(b_prefix: str | None) -> dict:
+    """An Output Group on AAPL whose Exit reads a second Ticker (MSFT)."""
+    def node(nid, typ, parent="g", **params):
+        return {"id": nid, "type": typ, "name": nid, "parent": parent, "params": params}
+
+    b_params = {"symbol": "MSFT", "interval": "1d"}
+    if b_prefix is not None:
+        b_params["prefix"] = b_prefix
+    nodes = [
+        node("g", "output_group", parent=None, direction="long", ticker="ta",
+             capital_weight=1.0),
+        node("ta", "ticker", symbol="AAPL", interval="1d"),
+        node("tb", "ticker", **b_params),
+        node("ra", "rsi", period=14),
+        node("rb", "rsi", period=14, out="@rsi_b"),
+        node("lo", "below", threshold=30.0),
+        node("hi", "above", threshold=70.0),
+        node("entry", "entry"),
+        node("exit", "exit"),
+    ]
+    wires = [("w1", "ta", "ra"), ("w2", "tb", "rb"), ("w3", "ra", "lo"), ("w4", "rb", "hi"),
+             ("w5", "lo", "entry"), ("w6", "hi", "exit")]
+    return {"_version": 3, "nodes": {n["id"]: n for n in nodes},
+            "wires": [{"id": w, "from": a, "to": b, "to_port": "in0"} for w, a, b in wires]}
+
+
+def test_code_attr_clash_for_two_tickers_without_a_prefix_in_a_group():
+    """Two Tickers in one group that both write @close: the second one gets
+    attr_clash on its prefix (plan D8, S32c)."""
+    d = _find(validate_graph_data(_group_graph(None)), "attr_clash")
+    assert d.node_id == "tb" and d.param == "prefix"
+    assert [x.code for x in validate_graph_data(_group_graph("msft"))
+            if x.severity == "error"] == []
+
+
+@pytest.mark.parametrize("prefix", ["MSFT", "9x", "a-b", "x" * 17, " msft"])
+def test_code_param_invalid_for_a_bad_prefix(prefix):
+    d = _find(validate_graph_data(_group_graph(prefix)), "param_invalid")
+    assert d.node_id == "tb" and d.param == "prefix"
 
 
 def test_code_port_duplicate():

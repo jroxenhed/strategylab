@@ -22,6 +22,8 @@ import { seedFromLocalStorageIfAny } from './shared/utils/seedFromLocalStorage'
 import NodeBuilder from './features/nodebuilder/NodeBuilder'
 import AutoRenderToggle from './features/nodebuilder/AutoRenderToggle'
 import {
+  chartGroupOf,
+  combinedChartHint,
   graphHeaderText,
   graphResultAsBacktest,
   graphTrades,
@@ -35,6 +37,11 @@ import {
 import { useGraphChartHost } from './features/nodebuilder/graphSplitState'
 import { GraphResultHint, type GraphResultInfo } from './features/nodebuilder/graphResultUi'
 import { useNodeBuilderStore } from './features/nodebuilder/store'
+import { graphHasGroups } from './features/nodebuilder/ownership'
+import { COMBINED } from './features/nodebuilder/groupResults'
+import { OPEN_TRADING_EVENT, SHOW_GRAPH_VIEW_EVENT, type OpenTradingDetail } from './features/nodebuilder/graphLinks'
+import { runCommand } from './features/nodebuilder/commands'
+import type { GraphGroupsView } from './features/strategy/Results'
 
 type AppTab = 'chart' | 'trading' | 'discovery' | 'desk'
 
@@ -240,14 +247,63 @@ export default function App() {
   }, [])
   // "stale" on the graph result: NodeBuilder keeps it in the backtest cook state.
   const graphResultStale = useNodeBuilderStore(s => s.cooks.backtest.stale)
+  // D7/D11: a loaded graph with Output Groups sets each group's direction,
+  // so the settings panel greys the direction too.
+  const loadedGraphHasGroups = useNodeBuilderStore(s => graphHasGroups(s.graph))
+
+  // ---- Links from the Trading view (S34, S35) ---------------------------------
+  // The bot card and the spawn toast ask by a window event (graphLinks.ts).
+  // Opening the graph itself (with the unsaved-changes prompt) is the graph
+  // session's job; App only shows the right tab and view, and only once the
+  // session says the prompt was passed (SHOW_GRAPH_VIEW_EVENT, FE-08).
+  useEffect(() => {
+    const showTab = (tab: AppTab) => {
+      setActiveTab(tab)
+      try { localStorage.setItem('activeTab', tab) } catch { /* storage off */ }
+    }
+    const onOpenGraph = () => {
+      showTab('chart')
+      setGraphViewActive(true)
+    }
+    const onOpenTrading = (e: Event) => {
+      showTab('trading')
+      const botId = (e as CustomEvent<OpenTradingDetail>).detail?.botId
+      if (!botId) return
+      // After the Trading tab is shown: scroll to that bot's card.
+      setTimeout(() => {
+        const card = Array.from(document.querySelectorAll<HTMLElement>('[data-bot-id]'))
+          .find(el => el.dataset.botId === botId)
+        card?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+      }, 0)
+    }
+    window.addEventListener(SHOW_GRAPH_VIEW_EVENT, onOpenGraph)
+    window.addEventListener(OPEN_TRADING_EVENT, onOpenTrading)
+    return () => {
+      window.removeEventListener(SHOW_GRAPH_VIEW_EVENT, onOpenGraph)
+      window.removeEventListener(OPEN_TRADING_EVENT, onOpenTrading)
+    }
+  }, [])
 
   // ---- The chart (one instance, D10) ------------------------------------------
   // In graph view the chart shows the graph result's ticker, interval, dates
   // and source (or the sidebar's with no result). They are set here as the
   // chart's own view, never through onTickerChange, which would clear the
-  // rule result.
+  // rule result. With 2+ Output Groups (S33) the chart follows the group
+  // tab: its primary ticker and interval; on Combined the last group chosen
+  // (the first by default).
   const gv = graphViewActive
-  const graphChartWindow = graphResult ? windowOfRequest(graphResult.request) : graphWindow
+  const [graphCandleGroup, setGraphCandleGroup] = useState<string | null>(null)
+  const chartGroup = gv ? chartGroupOf(graphResult, graphCandleGroup) : null
+  const graphChartWindow = graphResult
+    ? (chartGroup
+      ? {
+        ...windowOfRequest(graphResult.request),
+        ticker: chartGroup.symbol || windowOfRequest(graphResult.request).ticker,
+        interval: chartGroup.interval || windowOfRequest(graphResult.request).interval,
+      }
+      : windowOfRequest(graphResult.request))
+    : graphWindow
+  const graphChartHint = gv ? combinedChartHint(graphResult, graphCandleGroup) : null
   const cTicker = gv ? graphChartWindow.ticker : ticker
   const cStart = gv ? graphChartWindow.start : start
   const cEnd = gv ? graphChartWindow.end : end
@@ -271,10 +327,11 @@ export default function App() {
     refetchOhlcv(); refetchIndicators(); refetchSpy(); refetchQqq()
   }, [refetchOhlcv, refetchIndicators, refetchSpy, refetchQqq])
 
-  // Graph trades render as the chart's trade markers, like rule trades.
+  // Graph trades render as the chart's trade markers, like rule trades. With
+  // groups the markers are the charted group's own (never another ticker's).
   const trades = useMemo(
-    () => (gv ? graphTrades(graphResult) : (backtestResult?.trades ?? [])),
-    [gv, graphResult, backtestResult],
+    () => (gv ? (chartGroup ? chartGroup.trades : graphTrades(graphResult)) : (backtestResult?.trades ?? [])),
+    [gv, chartGroup, graphResult, backtestResult],
   )
   const mainTimestamps = useMemo(() => ohlcv.map(d => d.time), [ohlcv])
   // Rule-only overlays (graph results carry none).
@@ -339,6 +396,30 @@ export default function App() {
       : null),
     [graphResult, graphResultStale],
   )
+  // S33: the group strip in the graph Results. A pill sets displayedGroup
+  // (graphResult only, D10), moves the chart to that group and selects its
+  // frame on the canvas (one way); a double-click frames it.
+  const graphGroups = useMemo<GraphGroupsView | null>(() => {
+    if (!graphResult) return null
+    return {
+      response: graphResult.response,
+      displayedGroup: graphResult.displayedGroup,
+      onSelect: key => {
+        setGraphResult(st => (st ? { ...st, displayedGroup: key } : st))
+        if (key === COMBINED) return
+        setGraphCandleGroup(key)
+        const g = graphResult.response.groups?.find(x => x.name === key)
+        if (g?.node_id && useNodeBuilderStore.getState().graph?.nodes[g.node_id]) {
+          useNodeBuilderStore.getState().select(g.node_id)
+        }
+      },
+      onFrameGroup: g => {
+        if (!g.node_id || !useNodeBuilderStore.getState().graph?.nodes[g.node_id]) return
+        useNodeBuilderStore.getState().select(g.node_id)
+        runCommand('view.frameSelection')
+      },
+    }
+  }, [graphResult])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
@@ -558,6 +639,7 @@ export default function App() {
                           <StrategyBuilder
                             ref={strategyBuilderRef}
                             graphViewActive={graphViewActive}
+                            graphHasGroups={loadedGraphHasGroups}
                             ticker={ticker}
                             start={start}
                             end={end}
@@ -655,6 +737,7 @@ export default function App() {
                             backtestInterval={cBaseInterval}
                             mainTimestamps={graphViewActive ? mainTimestamps : undefined}
                             graphInfo={graphInfo}
+                            graphGroups={graphGroups}
                           />
                         ) : (
                           <div style={styles.graphResultsEmpty}>
@@ -692,7 +775,14 @@ export default function App() {
            split's open chart panel. Never two charts: chartBody renders
            above only outside graph view. */}
       {graphViewActive && graphChartHost && createPortal(
-        <div className="panel-fill">{chartBody}</div>,
+        <div className="panel-fill">
+          {/* S33 Combined hint. The chart keeps its place in the tree either
+               way, so switching tabs never remounts it (chart teardown race). */}
+          {graphChartHint && (
+            <div style={styles.chartHint} data-testid="graph-chart-hint">{graphChartHint}</div>
+          )}
+          {chartBody}
+        </div>,
         graphChartHost,
       )}
     </div>
@@ -733,6 +823,10 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'hidden',
   },
   graphResults: { height: '100%', overflowY: 'auto', background: 'var(--bg-main)' },
+  chartHint: {
+    height: 22, lineHeight: '22px', padding: '0 8px', flexShrink: 0, overflow: 'hidden', whiteSpace: 'nowrap',
+    textOverflow: 'ellipsis', fontFamily: 'var(--nb-font-mono, monospace)', fontSize: 11, color: 'var(--text-muted)',
+  },
   graphResultsEmpty: { padding: 16, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 },
   metricsStrip: {
     fontSize: 11, color: 'var(--text-secondary)',

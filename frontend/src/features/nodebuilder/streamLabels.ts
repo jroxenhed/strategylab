@@ -108,8 +108,35 @@ export interface WriteSlot {
 }
 
 /**
+ * A Ticker's write prefix (S32c): its `prefix` param when that is a
+ * non-empty string, else null (a plain Ticker writes `@open` ... `@volume`,
+ * `@time` and `@index`). Only Ticker-category nodes have one. Same rule as
+ * the backend's `nodes_data.ticker_prefix` (trimmed; an invalid prefix is
+ * still a prefix there, and validate reports it).
+ */
+export function tickerPrefixOf(node: Pick<GraphNode, 'type' | 'params'> | undefined): string | null {
+  if (!node) return null
+  const entry = catalogEntry(node.type)
+  const isTicker = entry ? entry.cat === 'ticker' : node.type === 'ticker'
+  if (!isTicker) return null
+  const p = node.params?.prefix
+  return typeof p === 'string' && p.trim() !== '' ? p.trim() : null
+}
+
+/** The five price names a Ticker writes, in order (backend `BAR_FIELDS`). */
+export const BAR_WRITES: readonly string[] = ['@open', '@high', '@low', '@close', '@volume']
+
+/** `@close` under the prefix `msft` is `@msft_close` (S32c, backend nodes_data). */
+export function prefixedName(name: string, prefix: string | null): string {
+  if (!prefix) return name
+  return `@${prefix}_${name.replace(/^@/, '')}`
+}
+
+/**
  * What a node writes: one slot per `write` param (its current value, or
- * the catalog default when unset), else the catalog's fixed writes.
+ * the catalog default when unset), else the catalog's fixed writes. A
+ * Ticker with a prefix writes only the five price names, prefixed
+ * (`@msft_open` ... `@msft_volume`, no time or index; backend nodes_data).
  */
 export function writesOf(node: Pick<GraphNode, 'type' | 'params'>): WriteSlot[] {
   const specs = writeParamsOf(node.type)
@@ -119,18 +146,23 @@ export function writesOf(node: Pick<GraphNode, 'type' | 'params'>): WriteSlot[] 
       return typeof v === 'string' && v !== '' ? [{ param: spec.name, name: v }] : []
     })
   }
-  return (catalogEntry(node.type)?.writes ?? []).map(name => ({ param: null, name }))
+  const prefix = tickerPrefixOf(node)
+  const fixed = catalogEntry(node.type)?.writes ?? []
+  if (prefix) return BAR_WRITES.filter(n => fixed.includes(n)).map(name => ({ param: null, name: prefixedName(name, prefix) }))
+  return fixed.map(name => ({ param: null, name }))
 }
 
 /**
  * The attribute a fresh wire out of this node is read as by default (plan
  * D4 "default reads"): the node's first `write` param. A node without
- * `write` params falls back to the catalog rule (`@close` for a Ticker).
+ * `write` params falls back to the catalog rule (`@close` for a Ticker,
+ * `@msft_close` for one with the prefix `msft`).
  */
 export function primaryWriteOf(node: Pick<GraphNode, 'type' | 'params'> | undefined): string | null {
   if (!node) return null
   if (writeParamsOf(node.type).length > 0) return writesOf(node)[0]?.name ?? null
-  return primaryAttrFor(node.type)
+  const name = primaryAttrFor(node.type)
+  return name ? prefixedName(name, tickerPrefixOf(node)) : null
 }
 
 // ---------------------------------------------------------------------------

@@ -189,8 +189,22 @@ def list_item(env: dict) -> dict:
         # The list is sorted by this, so it must always be a string.
         "updated_at": updated_at if isinstance(updated_at, str) else "",
         "node_count": len(nodes) if isinstance(nodes, dict) else 0,
-        "groups": ["main"],  # one group until W5
+        "groups": group_names(nodes),
     }
+
+
+def group_names(nodes: Any) -> list[str]:
+    """The Output Group names of a stored graph's nodes, in node order
+    (F435 W5 DI-04): each output_group node's name (its id when the name is
+    empty, as nodes_groups names it), or ["main"] for a graph with none
+    (the implicit group).  Read from the JSON, no compile."""
+    names: list[str] = []
+    for n in (nodes.values() if isinstance(nodes, dict) else ()):
+        if isinstance(n, dict) and n.get("type") == "output_group":
+            name = n.get("name") or n.get("id")
+            if isinstance(name, str) and name and name not in names:
+                names.append(name)
+    return names or ["main"]
 
 
 def envelope_problem(env: Any, graph_id: str) -> Optional[str]:
@@ -226,6 +240,15 @@ class GraphStore:
         # Held while a name is checked and then written, so two creates or
         # renames cannot both take the same name.
         self._names_lock = threading.Lock()
+        # The head index: graph_id -> (rev, name) of every readable graph
+        # file (plan W5 5.D).  The bot list reads it, so building the bot
+        # summary never opens a graph file.  Filled here, at start, from the
+        # files on disk; every write and delete below keeps it current.
+        # _heads_lock is always the innermost lock: nothing else is taken
+        # while it is held.
+        self._heads_lock = threading.Lock()
+        self._heads: dict[str, tuple[int, str]] = {}
+        self._load_heads()
 
     # -- locks and files -----------------------------------------------------
 
@@ -269,6 +292,33 @@ class GraphStore:
     def _write(self, env: dict) -> None:
         self.graphs_dir.mkdir(parents=True, exist_ok=True)
         atomic_write_text(self._path(env["id"]), json.dumps(env, indent=2))
+        self._set_head(env)
+
+    # -- head index (rev and name per graph id) -------------------------------
+
+    def _load_heads(self) -> None:
+        """Fill the head index from the files on disk (once, at start)."""
+        heads = {env["id"]: (env["rev"], env["name"]) for env in self._all()}
+        with self._heads_lock:
+            self._heads = heads
+
+    def _set_head(self, env: dict) -> None:
+        """Record a graph's new rev and name.  Called after its file is
+        written, under that graph's file lock, so the index never runs ahead
+        of the disk and two saves of one graph update it in order."""
+        with self._heads_lock:
+            self._heads[env["id"]] = (env["rev"], env["name"])
+
+    def _drop_head(self, graph_id: str) -> None:
+        with self._heads_lock:
+            self._heads.pop(graph_id, None)
+
+    def head(self, graph_id: str) -> Optional[tuple[int, str]]:
+        """(rev, name) of a stored graph, or None when there is no readable
+        graph with this id (deleted, never saved, or a damaged file).
+        Reads the in-memory index only, never a file."""
+        with self._heads_lock:
+            return self._heads.get(graph_id)
 
     def _all(self) -> list[dict]:
         """Every readable envelope. A broken file is logged and skipped."""
@@ -424,11 +474,13 @@ class GraphStore:
                 path.replace(path.with_name(path.name + ".corrupt"))
                 logger.warning("graph %s: moved damaged file aside on delete (%s)",
                                graph_id, exc.reason)
+                self._drop_head(graph_id)
                 self._drop_lock(graph_id)
                 return
             if env["rev"] != rev:
                 raise RevConflictError(env["rev"])
             path.unlink()
+            self._drop_head(graph_id)
             # atomic_write_text keeps one .bak copy; the user asked for a delete.
             try:
                 Path(str(path) + ".bak").unlink()
@@ -537,6 +589,15 @@ def _free_name(base: str, taken: set[str]) -> str:
 
 _stores: dict[Path, GraphStore] = {}
 _stores_guard = threading.Lock()
+
+
+def graph_head(graph_id: Optional[str]) -> Optional[tuple[int, str]]:
+    """(rev, name) of a saved graph from the store's in-memory head index, or
+    None when the id is empty or no readable graph has it (plan W5 5.D: the
+    bot summary's graph_latest_rev and graph_name).  Never reads a file."""
+    if not graph_id:
+        return None
+    return get_store().head(graph_id)
 
 
 def get_store() -> GraphStore:

@@ -331,6 +331,61 @@ def test_both_cook_paths_record_the_frames_they_read(frame):
     assert [(s, i) for s, i, _ in cook.frames] == [("SYN", "1d")] and cook.frames[0][2] is df
 
 
+def _ref_graph_data() -> dict:
+    """SYN (the request's ticker) minus a prefixed SPY reference Ticker's
+    close, above 0, into Entry (plan D8)."""
+    nodes = [
+        {"id": "/ticker", "type": "ticker", "params": {}},
+        {"id": "/spy", "type": "ticker",
+         "params": {"symbol": "SPY", "interval": "1d", "prefix": "spy"}},
+        {"id": "/diff", "type": "math",
+         "params": {"op": "sub", "a": "@close", "b": "@spy_close", "out": "@diff"}},
+        {"id": "/up", "type": "above", "params": {"a": "@diff", "threshold": 0.0, "out": "@up"}},
+        {"id": "/entry", "type": "entry", "params": {"signal": "@up"}},
+    ]
+    wires = [
+        {"id": "w1", "from": "/ticker", "to": "/diff", "to_port": "in0"},
+        {"id": "w2", "from": "/spy", "to": "/diff", "to_port": "in1"},
+        {"id": "w3", "from": "/diff", "to": "/up", "to_port": "in0"},
+        {"id": "w4", "from": "/up", "to": "/entry", "to_port": "in0"},
+    ]
+    return {"_version": 3, "nodes": {n["id"]: n for n in nodes}, "wires": wires}
+
+
+def _spy(offset: float) -> pd.DataFrame:
+    df = _daily(120)
+    for col in ("Open", "High", "Low", "Close"):
+        df[col] = df[col] + offset
+    return df
+
+
+def test_runs_that_differ_only_in_reference_data_never_share_a_cook(client, monkeypatch):
+    """The cook key covers every reference frame (plan D6, D8): the main
+    frame stays the same, only SPY changes, and the cache never serves the
+    other SPY's cook.  The backtest's cook is found again by /inspect."""
+    import shared
+
+    frames = {"SYN": _daily(120), "SPY": _spy(-3.0)}
+    monkeypatch.setattr(shared, "_fetch", lambda ticker, *a, **k: frames[ticker.upper()])
+    graph = _ref_graph_data()
+    body = {"graph": graph, "window": WINDOW, "target": {"node_id": "/diff"}}
+
+    first = _backtest(client, graph)["cook_id"]
+    assert first
+    again = client.post(INSPECT, json=body).json()
+    assert again["cache"] == "hit" and again["cook_id"] == first
+
+    frames["SPY"] = _spy(+3.0)                      # only the reference data changes
+    fresh = client.post(INSPECT, json=body).json()
+    assert fresh["cache"] == "miss" and fresh["cook_id"] != first
+    second = _backtest(client, graph)["cook_id"]
+    assert second == fresh["cook_id"] != first      # the backtest keys the same way
+
+    frames["SPY"] = _spy(-3.0)                      # back to the first SPY: its cook again
+    back = client.post(INSPECT, json=body).json()
+    assert back["cache"] == "hit" and back["cook_id"] == first
+
+
 def test_a_cook_too_big_to_keep_says_so(client, monkeypatch):
     """CC-1: the cook_id of a cook that was not kept is marked kept=false,
     so the client sends the graph and window instead of taking a 410."""

@@ -7,16 +7,19 @@
  * auto-render, and a graph run would corrupt all of them (D10).
  *
  * `buildGraphRequest` builds the request from the sidebar window (date range,
- * capital, data source, plus the sidebar ticker and interval until W5) and
- * never includes a field the graph owns (`GRAPH_OWNED_FIELDS`, D11). It copies
- * an allowlist of fields, so a field nobody listed can never leak in either.
+ * capital, data source, plus the sidebar ticker and interval for the
+ * implicit group) and never includes a field the graph owns (`ownedFields`,
+ * D11): the direction goes only with a graph that has no Output Group (D7).
+ * It copies an allowlist of fields, so a field nobody listed can never leak
+ * in either.
  */
 
 import { fetchGraphBacktest, type Graph, type GraphBacktestRequest, type GraphBacktestResult } from '../../api/nodebuilder'
-import type { BacktestResult, Trade } from '../../shared/types'
+import type { BacktestResult, GroupResult, Trade } from '../../shared/types'
 import { useSyncExternalStore } from 'react'
-import { GRAPH_OWNED_FIELDS, GRAPH_RUN_SETTINGS_EVENT } from './ownership'
+import { GRAPH_RUN_SETTINGS_EVENT, graphHasGroups, ownedFields } from './ownership'
 import { EXIT_NOT_CONNECTED, graphEvalKey } from './resultsStrip'
+import { COMBINED, displayedGroupResult, effectiveGroupKey, stripGroups } from './groupResults'
 
 /** The sidebar values a graph run uses (D11). */
 export interface GraphSidebar {
@@ -38,20 +41,16 @@ export interface GraphWindow {
 }
 
 /**
- * Settings-panel values that still go with a graph run: the direction until
- * W5 moves it into the graph, and the three "applies to graph" settings that
- * have no node yet (S29).
+ * Settings-panel values that still go with a graph run: the direction (only
+ * for a graph with no Output Group, D7) and the three "applies to graph"
+ * settings that have no node yet (S29). Trailing stop, time stop and borrow
+ * rate are graph-owned from W5 and never go out.
  */
 export interface GraphRunExtras {
   direction?: 'long' | 'short'
   dynamic_sizing?: unknown
   skip_after_stop?: unknown
   trading_hours?: unknown
-  // Graph-owned only from W5 (D11). Until then the settings panel's values go
-  // with graph runs, and a graph node for one still wins on the backend.
-  trailing_stop?: unknown
-  max_bars_held?: number
-  borrow_rate_annual?: number
 }
 
 /** The backtest response; W4 adds the server's cook cache id (D6). */
@@ -64,7 +63,10 @@ export interface GraphResultState {
   rev: number | null
   request: GraphBacktestRequest
   response: GraphRunResponse
-  /** 'main' until W5 adds output groups. */
+  /**
+   * The group tab shown (S33): `combined` or a group name. Any other value
+   * (the initial 'main') shows the first tab, Combined.
+   */
   displayedGroup: string
   /** The graph's name for the Results header (S30); null when it has none. */
   graphName: string | null
@@ -90,13 +92,25 @@ export type GraphRunHandler = (args: GraphRunArgs) => Promise<GraphResultState>
 export const GRAPH_REQUEST_FIELDS = [
   'graph', 'ticker', 'start', 'end', 'interval', 'source', 'initial_capital',
   'direction', 'dynamic_sizing', 'skip_after_stop', 'trading_hours',
-  'trailing_stop', 'max_bars_held', 'borrow_rate_annual',
 ] as const
+
+/** Copy the settings-panel extras a graph run may carry onto `req`. */
+function applyExtras(req: Partial<GraphBacktestRequest>, extras: GraphRunExtras, hasGroups: boolean): void {
+  // D7: only the implicit group takes the request's direction.
+  if (!hasGroups && (extras.direction === 'long' || extras.direction === 'short')) req.direction = extras.direction
+  if (extras.dynamic_sizing != null) req.dynamic_sizing = extras.dynamic_sizing
+  if (extras.skip_after_stop != null) req.skip_after_stop = extras.skip_after_stop
+  if (extras.trading_hours != null) req.trading_hours = extras.trading_hours
+  // Belt and braces: the allowlist above already leaves these out.
+  const loose = req as unknown as Record<string, unknown>
+  for (const f of ownedFields(hasGroups)) delete loose[f]
+}
 
 /**
  * The request for a graph run. Graph-owned fields (position size, stop loss,
- * slippage, commission) are never in it, so the backend takes the graph's
- * own node value or its engine default (D11 precedence).
+ * slippage, commission, trailing stop, time stop, borrow rate, and the
+ * direction of a graph with Output Groups) are never in it, so the backend
+ * takes the graph's own node value or its engine default (D11 precedence).
  */
 export function buildGraphRequest(
   graph: Graph,
@@ -112,16 +126,7 @@ export function buildGraphRequest(
     source: sidebar.source,
     initial_capital: sidebar.initial_capital,
   }
-  if (extras.direction === 'long' || extras.direction === 'short') req.direction = extras.direction
-  if (extras.dynamic_sizing != null) req.dynamic_sizing = extras.dynamic_sizing
-  if (extras.skip_after_stop != null) req.skip_after_stop = extras.skip_after_stop
-  if (extras.trading_hours != null) req.trading_hours = extras.trading_hours
-  if (extras.trailing_stop != null) req.trailing_stop = extras.trailing_stop
-  if (typeof extras.max_bars_held === 'number' && extras.max_bars_held > 0) req.max_bars_held = extras.max_bars_held
-  if (typeof extras.borrow_rate_annual === 'number' && extras.borrow_rate_annual >= 0) req.borrow_rate_annual = extras.borrow_rate_annual
-  // Belt and braces: the allowlist above already leaves these out.
-  const loose = req as unknown as Record<string, unknown>
-  for (const f of GRAPH_OWNED_FIELDS) delete loose[f]
+  applyExtras(req, extras, graphHasGroups(graph))
   return req
 }
 
@@ -152,10 +157,6 @@ interface StoredStrategy {
   dynamicSizing?: { enabled?: unknown } | null
   skipAfterStop?: { enabled?: unknown } | null
   tradingHours?: { enabled?: unknown; start_time?: unknown; end_time?: unknown } | null
-  maxBarsHeld?: unknown
-  trailingEnabled?: unknown
-  trailingConfig?: unknown
-  borrowRateAnnual?: unknown
 }
 
 /**
@@ -186,44 +187,39 @@ export function readGraphRunSettings(
   if (th && th.enabled === true && typeof th.start_time === 'string' && typeof th.end_time === 'string') {
     extras.trading_hours = th
   }
-  // Until W5 (D11): trailing stop, time stop and borrow rate (UX-04, CI-02).
-  if (saved?.trailingEnabled === true && saved.trailingConfig != null && typeof saved.trailingConfig === 'object') {
-    extras.trailing_stop = saved.trailingConfig
-  }
-  if (typeof saved?.maxBarsHeld === 'number' && Number.isFinite(saved.maxBarsHeld) && saved.maxBarsHeld > 0) {
-    extras.max_bars_held = saved.maxBarsHeld
-  }
-  if (typeof saved?.borrowRateAnnual === 'number' && Number.isFinite(saved.borrowRateAnnual) && saved.borrowRateAnnual >= 0) {
-    extras.borrow_rate_annual = saved.borrowRateAnnual
-  }
   return { initial_capital: cap, extras }
 }
 
 /**
  * One string for the settings a graph request carries besides the graph and
- * the window: capital, direction and the APPLIES TO GRAPH settings. A shown
- * result whose request key differs from the current settings is stale (CI-09).
+ * the window: capital, direction (graphs with no Output Group only) and the
+ * APPLIES TO GRAPH settings. A shown result whose request key differs from
+ * the current settings is stale (CI-09).
  */
 export function requestSettingsKey(req: Partial<GraphBacktestRequest>): string {
   return JSON.stringify([
     req.initial_capital ?? null, req.direction ?? null, req.dynamic_sizing ?? null,
-    req.skip_after_stop ?? null, req.trading_hours ?? null, req.trailing_stop ?? null,
-    req.max_bars_held ?? null, req.borrow_rate_annual ?? null,
+    req.skip_after_stop ?? null, req.trading_hours ?? null,
   ])
 }
 
-/** The settings key a graph run would send right now. */
-export function currentRunSettingsKey(): string {
+/**
+ * The settings key a graph run would send right now. `hasGroups`: the graph
+ * has Output Groups, so its run sends no direction (D7).
+ */
+export function currentRunSettingsKey(hasGroups = false): string {
   const { initial_capital, extras } = readGraphRunSettings()
-  const blank = { ticker: '', start: '', end: '', interval: '', source: '', initial_capital }
-  // Same normalisation as a real run: build the request, then key it.
-  return requestSettingsKey(buildGraphRequest(null as unknown as Graph, blank, extras))
+  const req: Partial<GraphBacktestRequest> = { initial_capital }
+  // Same normalisation as a real run, then key it.
+  applyExtras(req, extras, hasGroups)
+  return requestSettingsKey(req)
 }
 
-let settingsKeyCache: string | null = null
+// One cached key per kind of graph (with and without Output Groups).
+let settingsKeyCache: [string | null, string | null] = [null, null]
 function subscribeRunSettings(onChange: () => void): () => void {
-  settingsKeyCache = null
-  const on = () => { settingsKeyCache = null; onChange() }
+  settingsKeyCache = [null, null]
+  const on = () => { settingsKeyCache = [null, null]; onChange() }
   window.addEventListener(GRAPH_RUN_SETTINGS_EVENT, on)
   window.addEventListener('storage', on)
   return () => {
@@ -232,13 +228,19 @@ function subscribeRunSettings(onChange: () => void): () => void {
   }
 }
 function runSettingsSnapshot(): string {
-  if (settingsKeyCache == null) settingsKeyCache = currentRunSettingsKey()
-  return settingsKeyCache
+  return (settingsKeyCache[0] ??= currentRunSettingsKey(false))
+}
+function runSettingsSnapshotGroups(): string {
+  return (settingsKeyCache[1] ??= currentRunSettingsKey(true))
 }
 
-/** The current run settings key; re-renders when the settings panel saves. */
-export function useGraphRunSettingsKey(): string {
-  return useSyncExternalStore(subscribeRunSettings, runSettingsSnapshot, runSettingsSnapshot)
+/**
+ * The current run settings key; re-renders when the settings panel saves.
+ * `hasGroups`: the loaded graph has Output Groups (its runs send no direction).
+ */
+export function useGraphRunSettingsKey(hasGroups = false): string {
+  const snap = hasGroups ? runSettingsSnapshotGroups : runSettingsSnapshot
+  return useSyncExternalStore(subscribeRunSettings, snap, snap)
 }
 
 // ---- running ------------------------------------------------------------------
@@ -266,9 +268,45 @@ export async function runGraphBacktest(
 
 // ---- showing a result ------------------------------------------------------------
 
-/** The graph's trades in the chart's trade shape (same records as rule runs). */
+/**
+ * The trades of the group shown (S33) in the chart's trade shape (same
+ * records as rule runs). With two or more groups the legacy top-level
+ * `trades` may be empty, so the displayed group's (or Combined's merged)
+ * trades are used; otherwise the response's own.
+ */
 export function graphTrades(state: GraphResultState | null): Trade[] {
-  return state ? (state.response.trades as unknown as Trade[]) : []
+  if (!state) return []
+  const shown = displayedGroupResult(state.response, effectiveGroupKey(state.response, state.displayedGroup))
+  return shown?.result.trades ?? (state.response.trades as unknown as Trade[])
+}
+
+/**
+ * The group whose candles and trade markers the chart shows (S33): the
+ * group tab shown; on Combined, `candleGroup` when it names a group, else
+ * the first group. Null when the result has no group strip (one group or
+ * none): the chart then shows the request's window, as in W4.
+ */
+export function chartGroupOf(state: GraphResultState | null, candleGroup: string | null): GroupResult | null {
+  if (!state) return null
+  const groups = stripGroups(state.response)
+  if (groups.length === 0) return null
+  const key = effectiveGroupKey(state.response, state.displayedGroup)
+  if (key && key !== COMBINED) return groups.find(g => g.name === key) ?? groups[0]
+  return groups.find(g => g.name === candleGroup) ?? groups[0]
+}
+
+/**
+ * The S33 hint over the chart on the Combined tab:
+ * `Candles: long_leg (AAPL). Markers: long_leg. Equity: combined.` Null on
+ * a group tab or without a group strip.
+ */
+export function combinedChartHint(state: GraphResultState | null, candleGroup: string | null): string | null {
+  if (!state) return null
+  const key = effectiveGroupKey(state.response, state.displayedGroup)
+  if (key !== COMBINED) return null
+  const g = chartGroupOf(state, candleGroup)
+  if (!g) return null
+  return `Candles: ${g.name} (${g.symbol}). Markers: ${g.name}. Equity: combined.`
 }
 
 /**

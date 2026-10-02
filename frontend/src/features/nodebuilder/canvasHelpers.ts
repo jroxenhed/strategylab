@@ -58,9 +58,13 @@ export function primaryAttrFor(nodeType: string | undefined): string | null {
   return (entry.writes[0] as string | undefined) ?? null
 }
 
+// Boundary nodes are a network's ports: wiring into a frame makes them (FA2),
+// so the Tab menu never offers them on their own.
+const MENU_HIDDEN: ReadonlySet<string> = new Set(['subnet_input', 'subnet_output'])
+
 /** Catalog entries the Tab menu offers: only nodes that compile does something with. */
 export function menuCatalog(catalog: readonly NodeCatalogEntry[] = NODE_CATALOG): NodeCatalogEntry[] {
-  return catalog.filter(e => e.compileActive)
+  return catalog.filter(e => e.compileActive && !MENU_HIDDEN.has(e.name))
 }
 
 /** Group catalog entries by category, keeping catalog order inside each group. */

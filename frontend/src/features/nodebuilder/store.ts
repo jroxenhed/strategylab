@@ -56,14 +56,10 @@ export const useNodeBuilderStore = create<NodeBuilderState>()((set, get, api) =>
   ...createClipboardSlice(set, get, api),
 
   loadFromAutoRender(graph) {
-    // Strip /regime/* nodes + incident wires. The T2 graph evaluator returns
-    // 400 on regime nodes ("Regime is not supported"), and WFA already strips
-    // them at its boundary (see CLAUDE.md WFA §"Regime is unconditionally
-    // stripped"). T1 read-only view still shows them; the editable copy must
-    // not, otherwise Run Backtest 400s every time. The removed ids are kept
-    // so NodeBuilder can tell the user.
-    const { graph: editable, regimeRemoved } = prepareEditableCopy(graph)
-    set({ ...loadedGraphState(get(), editable, { graphMeta: null, regimeRemoved }), layoutPending: true })
+    // The copy keeps every node, regime included: since W5 the graph runs
+    // regime (the regime_net network and the regime terminal).
+    const { graph: editable } = prepareEditableCopy(graph)
+    set({ ...loadedGraphState(get(), editable, { graphMeta: null }), layoutPending: true })
 
     // Edit mode draws param rows, so nodes grow and the read-only layout
     // overlaps (bug 8). Tidy the copy with elk (3.F). The copy above already

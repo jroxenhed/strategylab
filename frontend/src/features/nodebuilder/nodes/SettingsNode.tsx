@@ -36,15 +36,6 @@ function formatSubtitle(backendType: string, params: Record<string, unknown>): s
       if (rate === 0 && min === 0) return 'free'
       return `$${rate.toFixed(4)}/sh`
     }
-    case 'trailing_stop': {
-      // Missing params take the simulator's defaults (pct, 5).
-      const value = params.value != null ? Number(params.value) : 5.0
-      const base = params.type === 'atr' ? `${value}x ATR trail` : `${value}% trail`
-      const activate = params.activate_on_profit === true || params.activate_on_profit === 'true'
-      if (!activate) return base
-      const after = params.activate_pct != null ? Number(params.activate_pct) : 0
-      return `${base} after +${after}%`
-    }
     default:
       return ''
   }
@@ -57,7 +48,6 @@ function titleFor(backendType: string): string {
     case 'stop_loss':     return 'Stop Loss'
     case 'slippage':      return 'Slippage'
     case 'commission':    return 'Commission'
-    case 'trailing_stop': return 'Trailing Stop'
     default:              return backendType
   }
 }

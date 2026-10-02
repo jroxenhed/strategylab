@@ -8,7 +8,9 @@
  */
 
 import { api } from './client'
-import type { StrategyRequest } from '../shared/types/strategy'
+import type { StrategyRequest, GroupResult, CombinedResult } from '../shared/types/strategy'
+
+export type { GroupResult, CombinedResult, GraphGroupDirection } from '../shared/types/strategy'
 
 // ---------------------------------------------------------------------------
 // Graph JSON v2 (plan section 4.1). The server migrates older graphs to this
@@ -222,6 +224,13 @@ export interface GraphBacktestResult {
   baseline_curve: CurvePoint[]
   /** W4: the server's cook cache id for this run (null when not kept). */
   cook_id?: string | null
+  /**
+   * W5: one result per Output Group, in file order (a graph with no group
+   * gives one implicit group named `main`). Older servers leave it out.
+   */
+  groups?: GroupResult[]
+  /** W5: all groups together (summed equity, exposure, gross deployed). */
+  combined?: CombinedResult
 }
 
 /**

@@ -6,14 +6,23 @@ backtest saw.  The live bot also needs to know how much history to fetch:
 ``live_fetch_start`` turns the compiled program's ``required_lookback_bars``
 into a calendar start date (plan D5, critic 9).
 
+Reference Tickers (plan D8): ``build_graph_attrs`` also takes the frames
+of the Tickers a group reads besides its primary one, keyed by
+(SYMBOL, interval), and keeps them in the attrs dict for the cook
+(nodebuilder.trading.align).  ``reference_fetches`` says which frames a
+backtest must fetch and from which day, with the lookback padding
+``shared.htf_lookback_days`` gives (never less than the bars the frame's
+nodes need at its interval).
+
 Pure functions, no I/O.  Building attrs is CPU work: the bot runner calls it
 through ``_run_in_executor`` so it never blocks the polling loop.
 """
 from __future__ import annotations
 
 import math
-from datetime import date, timedelta
-from typing import Any, Optional
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from typing import Any, Mapping, Optional
 
 import pandas as pd
 
@@ -50,7 +59,14 @@ _BARS_PER_SESSION: dict[str, float] = {
 }
 
 
-def build_graph_attrs(program: Any, df: pd.DataFrame, trailing_stop: Any = None) -> dict:
+def build_graph_attrs(
+    program: Any,
+    df: pd.DataFrame,
+    trailing_stop: Any = None,
+    frames: Optional[Mapping[tuple, pd.DataFrame]] = None,
+    *,
+    interval: Optional[str] = None,
+) -> dict:
     """The attrs dict a compiled graph cooks from, built from fetched bars.
 
     Holds the five bar series (@open @high @low @close @volume; zeros when
@@ -58,8 +74,12 @@ def build_graph_attrs(program: Any, df: pd.DataFrame, trailing_stop: Any = None)
     ``atr`` (ATR 14) when the trailing stop is ATR based, because the exit
     checks read attrs["atr"] and would otherwise see 0.
 
-    *program* is not read yet; it stays in the signature so reference
-    tickers and HTF frames (W5) can be added here for both paths at once.
+    When *program* reads reference Tickers (plan D8), attrs also carries
+    their frames under ``align.REFS_KEY``.  *frames* maps (SYMBOL, interval)
+    to a fetched frame for each of them; a missing one raises ValueError
+    (fetch it first: run.fetch_reference_frames for a backtest, the bot
+    runner's gather for a live tick).  *interval* is *df*'s interval when
+    the caller knows it; else it is read from the bar spacing.
     """
     vol_series = df["Volume"] if "Volume" in df.columns else pd.Series(0, index=df.index)
     attrs: dict = {
@@ -75,7 +95,86 @@ def build_graph_attrs(program: Any, df: pd.DataFrame, trailing_stop: Any = None)
 
         ohlcv = OHLCVSeries(close=df["Close"], high=df["High"], low=df["Low"], volume=vol_series)
         attrs["atr"] = compute_instance("atr", {"period": ATR_TRAIL_PERIOD}, ohlcv)["atr"]
+    refs = reference_frames(program, frames, interval=interval)
+    if refs is not None:
+        from nodebuilder.trading.align import REFS_KEY
+
+        attrs[REFS_KEY] = refs
     return attrs
+
+
+def reference_frames(program: Any, frames: Optional[Mapping[tuple, pd.DataFrame]],
+                     *, interval: Optional[str] = None):
+    """The align.ReferenceFrames a cook of *program* needs, from *frames*
+    ((SYMBOL, interval) -> DataFrame), or None when the program reads no
+    reference Ticker and no Ticker has a prefix.  Raises ValueError for a
+    reference frame that is missing or empty."""
+    if program is None or not hasattr(program, "steps"):
+        return None
+    from nodebuilder.trading import align
+
+    roles = align.ticker_roles(program)
+    if not roles.needs_domains:
+        return None
+    given = {align.frame_key(sym, itv): df for (sym, itv), df in (frames or {}).items()}
+    out = align.ReferenceFrames(primary_interval=interval)
+    for key in roles.keys():
+        df = given.get(key)
+        if df is None or len(df) == 0:
+            who = next(r for r in roles.references if r.key == key)
+            raise ValueError(
+                f"Reference Ticker {who.node_id!r} reads {key[0]} {key[1]}, but no bars were "
+                f"fetched for it." if df is None else
+                f"No data for reference Ticker {who.node_id!r} ({key[0]} {key[1]}).")
+        out.frames[key] = align.ref_frame(key, df)
+    return out
+
+
+@dataclass(frozen=True)
+class ReferenceFetch:
+    """One reference frame a backtest fetches: its key, and the first and
+    last day of the fetch (the first day padded for the lookback)."""
+    symbol: str
+    interval: str
+    start: str
+    end: str
+
+    @property
+    def key(self) -> tuple[str, str]:
+        return (self.symbol, self.interval)
+
+
+def reference_padding_days(lookback_bars: int, interval: str) -> int:
+    """Calendar days of history to fetch before the backtest's first bar
+    for a reference frame whose nodes need *lookback_bars* bars.
+
+    Reuses ``shared.htf_lookback_days`` (the rule regime's padding), so a
+    daily reference is padded at least as far as the rule backtest pads its
+    regime frame, and never less than the live window rule for that many
+    bars at *interval* (a weekly frame needs weeks, not days)."""
+    from shared import htf_lookback_days
+
+    bars = max(int(lookback_bars), 1)
+    return max(htf_lookback_days("ma", {"period": bars}), factor_window_days(bars, interval))
+
+
+def reference_fetches(program: Any, start: str, end: str) -> list[ReferenceFetch]:
+    """The reference frames a backtest of *program* over start..end needs,
+    each once, with its padded first day."""
+    from nodebuilder.trading import align
+
+    roles = align.ticker_roles(program)
+    if not roles.references:
+        return []
+    needs = align.reference_needs(program, roles)
+    first = datetime.fromisoformat(str(start)[:10])
+    out = []
+    for key in roles.keys():
+        pad = reference_padding_days(needs.get(key, 1), key[1])
+        out.append(ReferenceFetch(symbol=key[0], interval=key[1],
+                                  start=(first - timedelta(days=pad)).strftime("%Y-%m-%d"),
+                                  end=end))
+    return out
 
 
 def graph_lookback_bars(program: Any, trailing_stop: Any = None) -> int:

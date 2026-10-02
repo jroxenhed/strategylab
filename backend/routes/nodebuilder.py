@@ -35,6 +35,7 @@ from nodebuilder.api_models import (
 )
 from nodebuilder.diagnostics import error_body, has_errors, validate_graph_data, validate_graph_full
 from nodebuilder.from_rules import auto_render
+from nodebuilder.compile import compile as compile_graph
 from nodebuilder.models import STREAM_SCHEMA_VERSION, Graph, GraphValidationError
 
 # The backtest core moved to nodebuilder/run.py so bot code can call it
@@ -46,6 +47,8 @@ from nodebuilder.run import (  # noqa: F401
     _make_cached_eval,
     _settings_to_strategy_request,
     cook_graph_window,
+    fetch_reference_frames,
+    window_program,
     run_graph_backtest,
     run_graph_backtest_cooked,
 )
@@ -113,10 +116,15 @@ def post_validate(payload: dict[str, Any] = Body(...)):
 def post_graph_backtest(payload: dict[str, Any] = Body(...)):
     """Run a backtest using a compiled node graph.
 
-    Returns {summary, trades, equity_curve, baseline_curve, cook_id}.
-    cook_id names this run's cook in the cook cache (/inspect, /preview),
-    or is null when the cook was too big to keep.  The summary also
-    carries open_position and exit_connected (graph backtest only).
+    Returns {summary, trades, equity_curve, baseline_curve, groups,
+    combined, cook_id} (plan W5 contract).  groups has one result per
+    Output Group (the implicit "main" for a graph with none); combined is
+    every group together, with exposure_pct and gross_deployed_pct.  The
+    four legacy keys are the group's results when there is one group, and
+    the combined ones (with no trades) when there are more.  cook_id names
+    this run's cook in the cook cache (/inspect, /preview), or is null when
+    the cook was too big to keep.  Each summary also carries open_position
+    and exit_connected (graph backtest only).
     Rule-only debug fields (signal_trace, rule_signals, ema_overlays, regime_series)
     are intentionally absent from the graph backtest response.
 
@@ -186,8 +194,8 @@ def _cache_backtest_cook(req: GraphBacktestRequest, cook) -> str | None:
 
 
 def _with_cook_id(response: GraphBacktestResponse, cook_id: str | None) -> GraphBacktestRouteResponse:
-    """The route response: the backtest's fields (shared, not copied) plus
-    cook_id."""
+    """The route response: the backtest's fields, groups and combined result
+    (shared, not copied) plus cook_id."""
     return GraphBacktestRouteResponse.model_construct(**dict(response), cook_id=cook_id)
 
 
@@ -241,7 +249,10 @@ def _resolve_cook(cook_id: str | None, graph_data: dict | None, window) -> _Reso
 
     try:
         graph = Graph.model_validate(graph_data)
-    except (GraphValidationError, ValidationError) as exc:
+        # Compiled up front: the reference Tickers it reads are part of the
+        # cache key (plan D6, D8).
+        program = compile_graph(graph)
+    except (GraphValidationError, ValidationError, ValueError) as exc:
         raise _GraphProblem(exc) from exc
 
     if window is not None:
@@ -267,6 +278,13 @@ def _resolve_cook(cook_id: str | None, graph_data: dict | None, window) -> _Reso
         df = _fetch(win["ticker"], win["start"], win["end"], win["interval"], source=source)
         if df is None or len(df) == 0:
             raise ValueError(f"No data for {win['ticker']} in {win['start']}..{win['end']}.")
+        # Every reference frame the cook reads, padded exactly as the
+        # backtest fetches them (TTL-cached _fetch).  A reference fetch that
+        # fails is handled like the main frame's.  Only the window's own
+        # groups and the unclaimed nodes they can feed are cooked
+        # (run.window_program, KA-2/KA-4): a stray Ticker is never fetched.
+        refs = fetch_reference_frames(window_program(program, win["ticker"], win["interval"]),
+                                      win["start"], win["end"], source)
     except HTTPException as exc:
         if exc.status_code == 400:
             raise _GraphProblem(ValueError(str(exc.detail))) from exc
@@ -290,12 +308,16 @@ def _resolve_cook(cook_id: str | None, graph_data: dict | None, window) -> _Reso
             "message": f"Could not fetch {win['ticker']} ({win['interval']}) from {win['source']}.",
         }) from exc
 
-    lookup_frames = ((win["ticker"], win["interval"], df),)
+    # The key covers the main frame AND every reference frame, in the order
+    # GraphCook.frames lists them: two windows that differ only in reference
+    # data never share a cook, and a backtest's cook is found again.
+    lookup_frames = ((win["ticker"], win["interval"], df),) + tuple(
+        (sym, itv, ref_df) for (sym, itv), ref_df in refs.items())
     key = cook_cache.key_for(graph, lookup_frames, win)
 
     def cook_and_put():
         try:
-            cook = cook_graph_window(graph, df=df, **win)
+            cook = cook_graph_window(graph, df=df, refs=refs, **win)
         except (GraphValidationError, ValueError) as exc:
             raise _GraphProblem(exc) from exc
         except HTTPException as exc:

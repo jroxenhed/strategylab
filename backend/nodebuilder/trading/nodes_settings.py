@@ -1,16 +1,22 @@
-"""Settings nodes: position size, stop loss, slippage, commission, trailing stop.
+"""Settings nodes: position size, stop loss, slippage, commission, borrow rate.
 
 A settings node takes no input.  It writes its value as a detail attribute
 (plan 3.2: @size_frac, @stop_pct, @slippage_bps ...), one value per cook.
 Its check also leaves the simulator setting it stands for in
 ``annotations["settings"]`` as (key, value) pairs; nodebuilder.compile turns
 those into CompiledProgram.simulator_settings, the out-of-band list the
-Wave 0 overlay code reads (removed in W5).
+Wave 0 overlay code reads (removed in W5).  nodebuilder.trading.sim_bridge
+reads the same values straight from the compiled steps, so it can scope
+them to a group.
 
 Values are checked at compile time with the node named, so a bad one is a
 400 on Run or on deploy rather than a failure on every bot tick.  A
 bypassed settings node does not apply.  Nothing may be wired out of a
-settings node yet (W4/W5 wire them into the size and stop terminals).
+settings node.
+
+The trailing stop became a terminal in W5 (plan D11; nodes_terminals.py).
+Its option lists and trailing_stop_config() stay here, because
+nodebuilder.nodes and the catalog export import them from this module.
 """
 from __future__ import annotations
 
@@ -195,8 +201,37 @@ register_node(
 
 
 # ---------------------------------------------------------------------------
-# Trailing stop: the same five fields as models.TrailingStopConfig, so a rule
-# strategy's trailing stop renders as this node and runs the same.
+# Borrow rate (W5, critic 5): the annual cost of borrowing shares to short.
+# ---------------------------------------------------------------------------
+
+
+def _check_borrow_rate(ctx) -> None:
+    _refuse_direction(ctx)
+    rate = _number(ctx, "Borrow rate", ctx.raw.get("rate", 0.5), minimum=0.0, allow_min=True,
+                   param="rate")
+    ctx.params["rate"] = rate
+    ctx.annotations["settings"] = [("borrow_rate_annual", rate)]
+
+
+register_node(
+    name="borrow_rate", cat="settings",
+    desc=(
+        "Annual cost of borrowing shares for a short, in percent per year. "
+        "Charged on short trades only, for the days held. Default: 0.5%."
+    ),
+    params=(ParamSpec("rate", "number", "annual rate", 0.5, min=0.0, unit="%"),
+            _detail_out("@borrow_rate_annual")),
+    impl=_write_detail(("out",), ("rate",)), check=_check_borrow_rate,
+    detail_writes=("out",), has_output=False,
+    reads=(), writes=("@borrow_rate_annual",), ins=0, outs=1,
+    subtitle="Borrow: 0.5%/yr", setting_key="borrow_rate_annual", module=__name__,
+)
+
+
+# ---------------------------------------------------------------------------
+# Trailing stop helpers: the same five fields as models.TrailingStopConfig,
+# so a rule strategy's trailing stop renders as the trailing_stop terminal
+# and runs the same.  The terminal itself is in nodes_terminals.py.
 # ---------------------------------------------------------------------------
 
 
@@ -219,43 +254,3 @@ def trailing_stop_config(params: dict):
             f"trailing stop source must be one of {TRAILING_STOP_SOURCE_OPTIONS}, got {config.source!r}"
         )
     return config
-
-
-def _check_trailing(ctx) -> None:
-    _refuse_direction(ctx)
-    try:
-        config = trailing_stop_config(ctx.raw)
-    except ValueError as exc:
-        ctx.fail("param_invalid", f"Trailing stop {ctx.node_id!r} has invalid params: {exc}")
-    _number(ctx, "Trailing stop value", config.value, minimum=0.0, allow_min=False, param="value")
-    _number(ctx, "Trailing stop activate_pct", config.activate_pct, minimum=0.0, allow_min=True,
-            param="activate_pct")
-    ctx.params["value"] = float(config.value)
-    ctx.annotations["settings"] = [("trailing_stop", config)]
-
-
-register_node(
-    name="trailing_stop", cat="settings",
-    desc=(
-        "Trailing stop. type=pct trails value % from the peak; type=atr trails "
-        "value x ATR(14). Optionally waits until the trade is activate_pct % in profit."
-    ),
-    params=(
-        ParamSpec("type", "select", "type", TRAILING_STOP_DEFAULTS["type"],
-                  options=TRAILING_STOP_TYPE_OPTIONS),
-        # A percent when type=pct, a multiple of ATR when type=atr.
-        ParamSpec("value", "number", "value", TRAILING_STOP_DEFAULTS["value"],
-                  min=0.0, unit="% or x ATR"),
-        ParamSpec("source", "select", "source", TRAILING_STOP_DEFAULTS["source"],
-                  options=TRAILING_STOP_SOURCE_OPTIONS),
-        ParamSpec("activate_on_profit", "bool", "activate on profit",
-                  TRAILING_STOP_DEFAULTS["activate_on_profit"]),
-        ParamSpec("activate_pct", "number", "activate pct", TRAILING_STOP_DEFAULTS["activate_pct"],
-                  min=0.0, unit="%"),
-        _detail_out("@trail_value"),
-    ),
-    impl=_write_detail(("out",), ("value",)), check=_check_trailing,
-    detail_writes=("out",), has_output=False,
-    reads=(), writes=("@trail_value",), ins=0, outs=1,
-    subtitle="Trail: 5%", setting_key="trailing_stop", module=__name__,
-)

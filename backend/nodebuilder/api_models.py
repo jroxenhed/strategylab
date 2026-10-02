@@ -3,6 +3,7 @@
 Unit 3: AutoRenderResponse
 Unit 8b: GraphBacktestRequest / GraphBacktestResponse
 W4 4.A: InspectRequest / InspectResponse, PreviewRequest / PreviewResponse
+W5 5.B: GraphGroupResult, GraphCombinedResult, GraphBacktestGroupedResponse
 """
 from __future__ import annotations
 
@@ -62,12 +63,65 @@ class GraphBacktestResponse(BaseModel):
     baseline_curve: list[dict]
 
 
-class GraphBacktestRouteResponse(GraphBacktestResponse):
-    """What POST /api/nodebuilder/backtest sends: the backtest plus the id
-    of its cook in the editor's cook cache, for /inspect and /preview (plan
-    D6).  cook_id is None when the cook was not kept (too big for the
-    cache).  GraphBacktestResponse itself stays four keys: bot code and the
-    parity tests use it."""
+class GraphGroupResult(BaseModel):
+    """One Output Group's backtest (plan D7, W5 contract).
+
+    node_id is None and path "/" for the implicit group "main" (a graph
+    with no output_group).  capital is the group's share of the initial
+    capital (initial_capital * weight / sum of weights).  The summary also
+    carries open_position and exit_connected.  baseline_curve is the
+    group's buy-and-hold on its own capital.
+    """
+    name: str
+    node_id: Optional[str] = None
+    path: str
+    symbol: str
+    interval: str
+    direction: Literal["long", "short", "regime_switch"]
+    weight: float
+    capital: float
+    summary: dict
+    trades: list[dict]
+    equity_curve: list[dict]
+    baseline_curve: list[dict] = Field(default_factory=list)
+
+
+class GraphCombinedResult(BaseModel):
+    """Every group together (plan D7): the summed equity on the union of
+    the groups' bars (each group forward-filled).
+
+    The summary has the usual keys (initial_capital, final_value,
+    total_return_pct, buy_hold_return_pct, max_drawdown_pct, sharpe_ratio,
+    num_trades, win_rate_pct and the gain/loss stats over every group's
+    trades) plus:
+      exposure_pct       : share of bars where any group holds a position;
+      gross_deployed_pct : average share of the combined equity held in
+                           positions (shares times close, longs and shorts
+                           alike).
+    """
+    summary: dict
+    equity_curve: list[dict]
+    baseline_curve: list[dict] = Field(default_factory=list)
+
+
+class GraphBacktestGroupedResponse(GraphBacktestResponse):
+    """A graph backtest with its per-group and combined results (W5).
+
+    The four legacy keys are kept: with exactly one group they are that
+    group's results; with more, summary / equity_curve / baseline_curve are
+    the combined ones and trades is empty (each group's trades are in
+    groups[i].trades).  run_graph_backtest still returns the plain
+    four-key GraphBacktestResponse (bot code and the parity tests use it).
+    """
+    groups: list[GraphGroupResult] = Field(default_factory=list)
+    combined: Optional[GraphCombinedResult] = None
+
+
+class GraphBacktestRouteResponse(GraphBacktestGroupedResponse):
+    """What POST /api/nodebuilder/backtest sends: the grouped backtest plus
+    the id of its cook in the editor's cook cache, for /inspect and
+    /preview (plan D6).  cook_id is None when the cook was not kept (too
+    big for the cache)."""
     cook_id: Optional[str] = None
 
 

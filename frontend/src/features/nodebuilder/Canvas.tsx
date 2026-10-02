@@ -55,10 +55,9 @@ import {
 } from './operations'
 import { useDiagnostics, useStreams, useStreamsFresh, useWireFocus } from './useDiagnostics'
 import { reconnectingWireId } from './plugins/wireOps'
-import { connectionProblemIgnoring, fullPortNotice } from './operations/wires'
+import { connectInNetworks, dropCrossesNetwork, fullPortNotice, networkConnectionProblem, WIRE_CROSSES_NETWORK_TEXT } from './operations/wires'
 import {
   connectedPortsByNode,
-  connectionProblem,
   connectWire,
   removeWiresWithTerms,
   wireDiagnostics,
@@ -71,11 +70,14 @@ import { activateCanvas, mountCanvas, publishScreenGraph } from './screen'
 import { anyPluginHandled, hasPluginHook, type CanvasCtx, type TabMenuRequest } from './canvasPlugins'
 import { useNodeTypes } from './nodeTypes'
 import { useEdgeTypes } from './edgeTypes'
+import { frameAtPoint } from './networkOps'
 import {
   absoluteLookup,
+  computeFrameLayouts,
   createEdgeMapper,
   createNodeMapper,
   graphPositionOf,
+  measuredSizeOf,
   sourceNodes,
   stableArray,
   useRfNodeSourcesVersion,
@@ -144,6 +146,18 @@ function withSelected<T extends { id: string; selected?: boolean }>(curr: T[], w
 // ---------------------------------------------------------------------------
 // Canvas (inner) — needs useReactFlow() so it must be a child of ReactFlowProvider
 // ---------------------------------------------------------------------------
+/**
+ * The Tab menu's auto-wire. Siblings get a plain wire; a new node placed
+ * inside a frame (UX-04) is fed from outside through a frame port (FA2),
+ * and a wire across any other network edge throws (the caller skips it).
+ */
+function autoWire(g: Graph, from: string, to: string, toPort?: string): Graph {
+  if ((g.nodes[from]?.parent ?? null) === (g.nodes[to]?.parent ?? null)) {
+    return connectWire(g, { id: newWireId(), from, to, to_port: toPort })
+  }
+  return connectInNetworks(g, { source: from, sourceHandle: 'out', target: to, targetHandle: toPort ?? null })
+}
+
 interface CanvasInnerProps {
   graph: Graph
   editable: boolean
@@ -209,7 +223,17 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   // change gives one fresh node object and one render. Registered node
   // sources (boxes, notes) add their own nodes before or after them.
   const [nodeMapper] = useState(createNodeMapper)
-  const graphRfNodes = useMemo(() => nodeMapper(graph.nodes, editable), [nodeMapper, graph.nodes, editable])
+  // Measured node sizes (React Flow's `measured`, from dimension changes):
+  // frames wrap the real card boxes (FE-05) and wire labels avoid them.
+  // `sizesVersion` bumps when one changes.
+  const sizesRef = useRef<Map<string, { w: number; h: number }>>(new Map())
+  const [sizesVersion, setSizesVersion] = useState(0)
+  const graphRfNodes = useMemo(
+    () => nodeMapper(graph.nodes, editable, sizesRef.current),
+    // sizesVersion: re-lay the frames when a card's measured size changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [nodeMapper, graph.nodes, editable, sizesVersion],
+  )
   const sourcesVersion = useRfNodeSourcesVersion()
   // The network on screen: sources draw only its boxes and notes (EA-4).
   const networkId = useMemo(() => currentParentId({ network, graph }, graph), [network, graph])
@@ -243,9 +267,6 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   // patched onto the local edge mirror (markHotEdges), so hover never
   // re-runs the edge build below.
   const hoveredNodeRef = useRef<string | null>(null)
-  // Measured node sizes, for label placement. `sizesVersion` bumps when one changes.
-  const sizesRef = useRef<Map<string, { w: number; h: number }>>(new Map())
-  const [sizesVersion, setSizesVersion] = useState(0)
 
   const labels = useMemo(() => wireLabels(graph, streams, streamsFresh), [graph, streams, streamsFresh])
   const connectedPorts = useMemo(() => connectedPortsByNode(graph.wires), [graph.wires])
@@ -818,17 +839,14 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   // consumer's default read (an empty `attr` param takes the source's
   // primary write) are one commit, so one undo step.
 
+  // W5 (FA2): a wire from outside a network to a node inside it goes
+  // through a frame port, in the same commit (connectInNetworks).
   const handleConnect = useCallback(
     (params: Connection) => {
       const g = graphRef.current
-      if (connectionProblem(g, params) !== null) return
+      if (networkConnectionProblem(g, params) !== null) return
       try {
-        storeCommit('add wire', graph => connectWire(graph, {
-          id: newWireId(),
-          from: params.source,
-          to: params.target,
-          to_port: params.targetHandle ?? undefined,
-        }))
+        storeCommit('add wire', graph => connectInNetworks(graph, params))
       } catch {
         // Refused (a cycle, or no port at one end). isValidConnection below
         // already showed the drag as invalid, so there is nothing to add.
@@ -839,10 +857,12 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
 
   // Tells React Flow, during the drag, whether a wire may be dropped here:
   // no self-loop, no cycle, no second wire into a port that has one, no
-  // port past the node's last one. While a wire end is being moved
-  // (reconnect, 3.G), that wire's own port does not count as full.
+  // port past the node's last one, no wire across a network edge (S31).
+  // While a wire end is being moved (reconnect, 3.G), that wire's own port
+  // does not count as full. A drop on a port across a network edge says why
+  // (handleConnectEnd reads the drop's own ends, FE-09).
   const isValidConnection = useCallback(
-    (c: ConnectionLike) => connectionProblemIgnoring(graphRef.current, c, reconnectingWireId()) === null,
+    (c: ConnectionLike) => networkConnectionProblem(graphRef.current, c, reconnectingWireId()) === null,
     [],
   )
 
@@ -959,15 +979,19 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
   )
 
   const handleConnectEnd = useCallback(
-    (event: MouseEvent | TouchEvent) => {
+    (event: MouseEvent | TouchEvent, state?: FinalConnectionState) => {
       restoreSelectRef.current?.()
       restoreSelectRef.current = null
+      // Only the port the wire was dropped on counts, not one passed on the way.
+      const crossed = !!state && dropCrossesNetwork(graphRef.current, state, reconnectingWireId())
       if (!editable || !pendingWireRef.current) return
       // The pane, or the empty inside of a box or note (UX-02).
       const onPane = isEmptyCanvasTarget(event.target)
       if (!onPane) {
         // Dropped on a handle / something else — let handleConnect deal with it.
         pendingWireRef.current = null
+        // A port across a network edge refused the wire (S31): say why.
+        if (crossed) useNodeBuilderStore.getState().showFlash(WIRE_CROSSES_NETWORK_TEXT)
         return
       }
       // A wire end being moved (reconnect) dropped on empty canvas: wireOps
@@ -1015,12 +1039,21 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
         tabMenuGraph,
         Object.values(nodes).map(n => ({ x: n.position[0], y: n.position[1] })),
       )
+      // The network on screen (EA-4), or the frame under the cursor in it
+      // (S31, UX-04): a terminal made over an Output Group joins the group.
+      // A request from code (splice, connect into a port) keeps the
+      // network on screen, as its wiring expects.
+      const onScreen = currentParentId(useNodeBuilderStore.getState(), graphRef.current)
+      const request0 = tabRequestRef.current
+      const frame = request0?.onCreate
+        ? null
+        : frameAtPoint(nodes, computeFrameLayouts(nodes, measuredSizeOf(sizesRef.current)), tabMenuGraph, onScreen)
+      const parent = frame ?? onScreen
       const newNode: GraphNode = {
         id,
         type: catalogEntry.name,
-        name: uniqueName(graphRef.current, catalogEntry.name, null),
-        // The network on screen (EA-4).
-        parent: currentParentId(useNodeBuilderStore.getState(), graphRef.current),
+        name: uniqueName(graphRef.current, catalogEntry.name, parent),
+        parent,
         // Write names are made unique in the graph (@rsi, then @rsi_2).
         params: withUniqueWrites(
           graphRef.current,
@@ -1069,7 +1102,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
             try {
               // A drag that started at an input wires into that very port.
               const toPort = !isFromSource ? pending.handleId ?? undefined : undefined
-              storeCommit('add wire', g => connectWire(g, { id: newWireId(), from: fromId, to: toId, to_port: toPort }))
+              storeCommit('add wire', g => autoWire(g, fromId, toId, toPort))
             } catch {
               // A cycle, or the dragged input port already has a wire
               // (connectWire refuses a full port): skip the auto-wire.
@@ -1082,7 +1115,7 @@ function CanvasInner({ graph, editable }: CanvasInnerProps) {
           && canWire(nodes[selectedNodeId]?.type, newNode.type)
         ) {
           try {
-            storeCommit('add wire', g => connectWire(g, { id: newWireId(), from: selectedNodeId, to: id }))
+            storeCommit('add wire', g => autoWire(g, selectedNodeId, id))
           } catch {
             // Cycle — skip auto-wire silently
           }

@@ -12,7 +12,9 @@
  * - `Esc` calls `onCancel`. So does the `✕` button.
  * - `Enter` clicks the primary button, unless focus is in a textarea, on a
  *   button or link (those keep their own Enter), or an inner widget already
- *   handled the key (`preventDefault`).
+ *   handled the key (`preventDefault`). With `submitKey="mod-enter"` plain
+ *   Enter never does; Cmd/Ctrl+Enter clicks the primary from anywhere in
+ *   the dialog (body, footer, header), or with focus fallen out of it.
  * - On close, focus goes back to `returnFocusTo`, else to whatever had focus
  *   when the dialog opened.
  *
@@ -64,6 +66,12 @@ export interface DialogProps {
   'data-testid'?: string
   /** id of an element that describes the dialog (its main sentence). */
   ariaDescribedBy?: string
+  /**
+   * Which key presses the primary. 'enter' (default): plain Enter, as
+   * above. 'mod-enter': only Cmd/Ctrl+Enter, wherever focus is; plain Enter
+   * never submits (money paths such as Spawn bots, S34).
+   */
+  submitKey?: 'enter' | 'mod-enter'
 }
 
 const ParentDialog = createContext<string | null>(null)
@@ -126,6 +134,7 @@ export function Dialog({
   initialFocusRef,
   returnFocusTo,
   ariaDescribedBy,
+  submitKey = 'enter',
   ...rest
 }: DialogProps) {
   const id = useId()
@@ -137,9 +146,9 @@ export function Dialog({
     typeof document !== 'undefined' ? document.activeElement : null,
   )
   // Latest props for the listeners, so they never go stale.
-  const latest = useRef({ onCancel, returnFocusTo })
+  const latest = useRef({ onCancel, returnFocusTo, submitKey })
   useLayoutEffect(() => {
-    latest.current = { onCancel, returnFocusTo }
+    latest.current = { onCancel, returnFocusTo, submitKey }
   })
 
   // Join the stack, take focus; on close give focus back.
@@ -188,6 +197,14 @@ export function Dialog({
         e.preventDefault()
         return
       }
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && latest.current.submitKey === 'mod-enter') {
+        // Focus fell out (a focused field was disabled by a submit): the
+        // dialog still answers its submit key.
+        e.preventDefault()
+        const primary = findPrimary(panel)
+        if (primary && !primary.disabled) primary.click()
+        return
+      }
       if (e.key === 'Tab') {
         e.preventDefault()
         const items = focusables(panel)
@@ -210,6 +227,23 @@ export function Dialog({
       e.preventDefault()
       e.stopPropagation()
       onCancel()
+      return
+    }
+    if (e.key === 'Enter' && submitKey === 'mod-enter') {
+      if (e.defaultPrevented || e.nativeEvent.isComposing) return
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) {
+        // Plain Enter never submits here. On a field it does nothing (a
+        // checkbox or text field has no Enter of its own to keep).
+        const t = e.target as HTMLElement | null
+        if (t && t.tagName === 'INPUT') e.preventDefault()
+        return
+      }
+      // Cmd/Ctrl+Enter: the primary, even from a footer button (whose own
+      // Enter would click it, e.g. Cancel).
+      e.preventDefault()
+      e.stopPropagation()
+      const primary = findPrimary(panel)
+      if (primary && !primary.disabled) primary.click()
       return
     }
     if (e.key === 'Enter') {

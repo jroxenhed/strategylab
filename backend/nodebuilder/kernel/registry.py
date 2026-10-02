@@ -229,7 +229,14 @@ class NodeType:
     bypassable   : False when the bypass flag has no meaning and is ignored
                    (a data source, a terminal).
     fixed_writes : (name, dtype) points written whatever the params (a
-                   data source's columns).
+                   data source's columns).  The catalog shows these.
+    writes_for   : optional ``writes_for(params) -> ((name, dtype), ...)``,
+                   for a type whose fixed writes depend on a param (a
+                   reference Ticker's ``prefix`` gives ``@spy_close``...).
+                   It gets the node's params as stored or with defaults
+                   filled in, so it must cope with a missing or bad value.
+                   Read the writes through ``fixed_writes_for(params)``,
+                   never ``fixed_writes`` directly.
     detail_writes: names of write params that write detail values.
     primary      : the primary write when the node has no write params.
     legacy_reads : v1/v2 wire labels this node honours, label -> write param
@@ -257,10 +264,33 @@ class NodeType:
     legacy_ignore: frozenset[str] = frozenset()
     meta: Mapping[str, Any] = field(default_factory=dict)
     module: str = ""
+    writes_for: Optional[Callable[[Mapping[str, Any]], tuple]] = None
 
     @property
     def name(self) -> str:
         return self.entry.name
+
+    def fixed_writes_for(self, params: Optional[Mapping[str, Any]]) -> tuple[tuple[str, str], ...]:
+        """The (name, dtype) points this node writes whatever its write
+        params say, for these *params* (``fixed_writes`` unless the type
+        has a ``writes_for`` hook)."""
+        if self.writes_for is None:
+            return self.fixed_writes
+        return tuple(self.writes_for(params or {}))
+
+    def primary_for(self, params: Optional[Mapping[str, Any]]) -> Optional[str]:
+        """The fixed primary write for these *params*.  With a writes_for
+        hook, the primary keeps its place: the Ticker's ``@close`` is the
+        fourth fixed write, so a prefixed Ticker's primary is its fourth
+        (``@spy_close``)."""
+        if self.primary is None or self.writes_for is None:
+            return self.primary
+        static = [n for n, _d in self.fixed_writes]
+        if self.primary not in static:
+            return self.primary
+        k = static.index(self.primary)
+        dynamic = self.fixed_writes_for(params)
+        return dynamic[k][0] if k < len(dynamic) else self.primary
 
     @property
     def params(self) -> tuple[ParamSpec, ...]:
@@ -374,6 +404,7 @@ def register_node(
     legacy_ignore: Iterable[str] = (),
     meta: Optional[Mapping[str, Any]] = None,
     module: Optional[str] = None,
+    writes_for: Optional[Callable[[Mapping[str, Any]], tuple]] = None,
 ) -> NodeType:
     """Build a NodeType (with its catalog entry) and register it.
 
@@ -409,7 +440,7 @@ def register_node(
         detail_writes=frozenset(detail_writes), primary=primary,
         legacy_reads=dict(legacy_reads or {}), legacy_strict=legacy_strict,
         legacy_ignore=frozenset(legacy_ignore),
-        meta=dict(meta or {}), module=module,
+        meta=dict(meta or {}), module=module, writes_for=writes_for,
     ))
 
 

@@ -52,6 +52,109 @@
      "parent": null
     }
    }
+  },
+  "groups": {
+   "nodes": {
+    "n_aapl": {
+     "id": "n_aapl",
+     "type": "ticker",
+     "name": "aapl",
+     "parent": null
+    },
+    "n_aapl2": {
+     "id": "n_aapl2",
+     "type": "ticker",
+     "name": "aapl2",
+     "parent": null
+    },
+    "n_regime": {
+     "id": "n_regime",
+     "type": "subnet",
+     "name": "regime",
+     "parent": null
+    },
+    "n_spy": {
+     "id": "n_spy",
+     "type": "ticker",
+     "name": "spy",
+     "parent": "n_regime"
+    },
+    "n_net": {
+     "id": "n_net",
+     "type": "subnet",
+     "name": "net",
+     "parent": null
+    },
+    "g_long": {
+     "id": "g_long",
+     "type": "output_group",
+     "name": "long_leg",
+     "parent": null,
+     "params": {
+      "ticker": "/aapl"
+     }
+    },
+    "g_b": {
+     "id": "g_b",
+     "type": "output_group",
+     "name": "b_leg",
+     "parent": null,
+     "params": {
+      "ticker": "/aapl2"
+     }
+    },
+    "g_short": {
+     "id": "g_short",
+     "type": "output_group",
+     "name": "short_leg",
+     "parent": null,
+     "params": {
+      "ticker": "/regime/spy"
+     }
+    },
+    "g_rel": {
+     "id": "g_rel",
+     "type": "output_group",
+     "name": "rel_leg",
+     "parent": null,
+     "params": {
+      "ticker": "regime/spy"
+     }
+    },
+    "g_inner": {
+     "id": "g_inner",
+     "type": "output_group",
+     "name": "inner_leg",
+     "parent": "n_net",
+     "params": {
+      "ticker": "tk"
+     }
+    },
+    "n_tk": {
+     "id": "n_tk",
+     "type": "ticker",
+     "name": "tk",
+     "parent": "g_inner"
+    },
+    "g_up": {
+     "id": "g_up",
+     "type": "output_group",
+     "name": "up_leg",
+     "parent": "n_net",
+     "params": {
+      "ticker": "../aapl"
+     }
+    },
+    "n_other": {
+     "id": "n_other",
+     "type": "rsi",
+     "name": "rsi",
+     "parent": null,
+     "params": {
+      "ticker": "/aapl"
+     }
+    }
+   }
   }
  },
  "is_valid_name": [
@@ -577,6 +680,104 @@
     "error": "node_not_found"
    },
    "why": "unknown id"
+  }
+ ],
+ "rewrite_path_refs": [
+  {
+   "graph": "groups",
+   "id": "n_aapl",
+   "new_name": "msft",
+   "expect": {
+    "tickers": {
+     "g_long": "/msft",
+     "g_b": "/aapl2",
+     "g_short": "/regime/spy",
+     "g_rel": "regime/spy",
+     "g_inner": "tk",
+     "g_up": "/msft"
+    }
+   },
+   "why": "absolute exact match moves; /aapl2 is not under /aapl; a relative ../aapl that no longer lands becomes absolute; a non-group ticker param is left alone"
+  },
+  {
+   "graph": "groups",
+   "id": "n_regime",
+   "new_name": "risk",
+   "expect": {
+    "tickers": {
+     "g_long": "/aapl",
+     "g_b": "/aapl2",
+     "g_short": "/risk/spy",
+     "g_rel": "/risk/spy",
+     "g_inner": "tk",
+     "g_up": "../aapl"
+    }
+   },
+   "why": "absolute prefix under the renamed network moves; a relative ref resolved against the root becomes absolute"
+  },
+  {
+   "graph": "groups",
+   "id": "n_net",
+   "new_name": "net2",
+   "expect": {
+    "tickers": {
+     "g_long": "/aapl",
+     "g_b": "/aapl2",
+     "g_short": "/regime/spy",
+     "g_rel": "regime/spy",
+     "g_inner": "tk",
+     "g_up": "../aapl"
+    }
+   },
+   "why": "relative refs inside the renamed network still land, so they stay as written"
+  },
+  {
+   "graph": "groups",
+   "id": "g_inner",
+   "new_name": "leg2",
+   "expect": {
+    "tickers": {
+     "g_long": "/aapl",
+     "g_b": "/aapl2",
+     "g_short": "/regime/spy",
+     "g_rel": "regime/spy",
+     "g_inner": "tk",
+     "g_up": "../aapl"
+    }
+   },
+   "why": "renaming the group itself: its own relative ref still lands"
+  },
+  {
+   "graph": "groups",
+   "id": "n_tk",
+   "new_name": "tk2",
+   "expect": {
+    "tickers": {
+     "g_long": "/aapl",
+     "g_b": "/aapl2",
+     "g_short": "/regime/spy",
+     "g_rel": "regime/spy",
+     "g_inner": "/net/inner_leg/tk2",
+     "g_up": "../aapl"
+    }
+   },
+   "why": "a relative ref to a renamed child no longer lands and becomes the absolute new path"
+  },
+  {
+   "graph": "groups",
+   "id": "n_spy",
+   "new_name": "qqq",
+   "expect": {
+    "tickers": {
+     "g_long": "/aapl",
+     "g_b": "/aapl2",
+     "g_short": "/regime/qqq",
+     "g_rel": "/regime/qqq",
+     "g_inner": "tk",
+     "g_up": "../aapl"
+    }
+   },
+   "why": "a leaf rename inside a network"
   }
  ]
 }

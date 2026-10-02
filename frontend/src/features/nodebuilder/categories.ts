@@ -16,6 +16,7 @@ export const CATS = {
   settings:   { color: "var(--nb-cat-settings)",   glyph: "S" },
   code:       { color: "var(--nb-cat-code)",       glyph: "{}" },
   output:     { color: "var(--nb-cat-output)",     glyph: "O" },
+  network:    { color: "var(--nb-cat-network)",    glyph: "N" },
 } as const;
 
 export type CatKey = keyof typeof CATS;

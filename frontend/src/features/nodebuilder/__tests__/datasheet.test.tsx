@@ -247,6 +247,17 @@ describe('target resolution', () => {
     expect(resolveSheetTarget(g, { selectedNodeId: null, selectedWireIds: [] }, 'net1')).toBeNull()
     expect(resolveSheetTarget(null, { selectedNodeId: 'rsi', selectedWireIds: [] }, null)).toBeNull()
   })
+
+  it('never targets a network or boundary node, which has no stream', () => {
+    const g = makeGraph()
+    for (const type of ['output_group', 'subnet', 'regime_net', 'subnet_input', 'subnet_output']) {
+      const withNet = { ...g, nodes: { ...g.nodes, grp: { ...g.nodes.rsi, id: 'grp', name: 'grp', type, display: true } } }
+      // A selected group frame falls through to the display node on screen.
+      expect(resolveSheetTarget(withNet, { selectedNodeId: 'grp', selectedWireIds: [] }, null)).toEqual({ kind: 'display', nodeId: 'xb' })
+      const onlyNet = { ...withNet, nodes: { ...withNet.nodes, xb: { ...g.nodes.xb, display: false } } }
+      expect(resolveSheetTarget(onlyNet, { selectedNodeId: 'grp', selectedWireIds: [] }, null)).toBeNull()
+    }
+  })
 })
 
 describe('paging helpers', () => {

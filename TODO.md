@@ -4,7 +4,7 @@ This file holds open work only. Finished work lives in TODO-archive.md, half for
 
 ## Features
 
-- [ ] <a id="f435"></a> **F435** Build the node builder in waves W0 to W7 from docs/plans/2026-09-29-node-builder-finish-plan.md, with code nodes that run real Python. Waves 0 to 4 are in: a fast column engine, a Houdini-style editor, and the data sheet, sparklines and chart split. Wave 5, networks and bot spawn, is next. The live paper gate G1 waits on John. [medium] [features]
+- [ ] <a id="f435"></a> **F435** Build the node builder in waves W0 to W7 from docs/plans/2026-09-29-node-builder-finish-plan.md, with code nodes that run real Python. Waves 0 to 5 are in: a fast column engine, a Houdini-style editor, the data sheet and chart split, and pair graphs that spawn stopped bots. Wave 6, sub-network assets, is next. The live paper gate G1 waits on John. [medium] [features]
 ## Architecture
 
 - [ ] <a id="f438"></a> **F438** The Form 4 event filter keys transaction_codes, min_dollar_total and exclude_10b51 are validated in backend/research/streams/form4.py but never applied. The code comments blame F389, which is closed, and the module docstring still says the r1 wiring is missing when it shipped. Apply the keys at dose time and fix both stale comments. [easy] [arch]

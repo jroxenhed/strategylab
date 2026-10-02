@@ -65,3 +65,23 @@ describe('paths vectors: renameNode', () => {
     expect(JSON.stringify(g)).toBe(before) // the input is never changed
   })
 })
+
+describe('paths vectors: rewritePathRefs (output_group ticker)', () => {
+  const tickersOf = (g: PathGraph) => {
+    const out: Record<string, unknown> = {}
+    for (const [id, n] of Object.entries(g.nodes)) {
+      const node = n as PathGraph['nodes'][string] & { type?: string; params?: Record<string, unknown> }
+      if (node.type === 'output_group') out[id] = node.params?.ticker
+    }
+    return out
+  }
+  it.each(vectors.rewrite_path_refs)('$why', (c) => {
+    const g = graphs[c.graph]
+    const before = JSON.stringify(g)
+    const renamed = renameNode(g, c.id, c.new_name)
+    expect(tickersOf(renamed)).toEqual(c.expect.tickers)
+    const other = renamed.nodes.n_other as unknown as { params?: Record<string, unknown> }
+    expect(other.params?.ticker).toBe('/aapl') // a non-group ticker param is not a path ref
+    expect(JSON.stringify(g)).toBe(before)
+  })
+})

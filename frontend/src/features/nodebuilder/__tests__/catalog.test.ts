@@ -19,6 +19,12 @@ import {
 import { GENERATED_CATALOG } from "../catalog.generated";
 import { CATS } from "../categories";
 
+// F435 W5: the orchestrator regenerates catalog.generated.ts after the W5
+// integration stage (size/stop run, trailing_stop becomes a terminal, the
+// network types arrive). Until that file lands these tests check the W4
+// facts; once it has the W5 types they check W5. Drop the W4 branches after
+// the regen.
+
 // Minimum required categories that the backend also asserts.
 const REQUIRED_CATEGORIES = new Set([
   "ticker",
@@ -53,15 +59,17 @@ describe("NODE_CATALOG integrity", () => {
     for (const name of passThrough) {
       expect(Object.keys(getNode(name).defaults.params)).toEqual([]);
     }
+    // W5 networks and their boundary nodes pass streams through as well
+    // (backend kernel/flatten.py splices them out before compile).
     const bothEmpty = NODE_CATALOG.filter(
-      (e) => e.reads.length === 0 && e.writes.length === 0 && !passThrough.has(e.name)
+      (e) => e.reads.length === 0 && e.writes.length === 0 && !passThrough.has(e.name) && e.cat !== "network"
     );
     expect(bothEmpty).toEqual([]);
   });
 
-  it("compileActive=false ONLY for 'size' and 'stop'", () => {
+  it("compileActive=false only for what compile cannot run (W4: size and stop; W5: nothing)", () => {
     const inactive = NODE_CATALOG.filter((e) => !e.compileActive).map((e) => e.name);
-    expect(new Set(inactive)).toEqual(new Set(["size", "stop"]));
+    expect(new Set(inactive)).toEqual(new Set());
   });
 
   it("all reads/writes attributes start with '@'", () => {
@@ -231,12 +239,12 @@ describe("catalog honesty (F435 0.G)", () => {
     }
   });
 
-  it("the Size/Stop (T4) stubs are flagged not compile-active, so the Tab menu hides them", () => {
-    expect(getNode("size").compileActive).toBe(false);
-    expect(getNode("stop").compileActive).toBe(false);
+  it("Size/Stop are compile-active from W5 (a constant or a wired number runs); before, the Tab menu hid them", () => {
+    expect(getNode("size").compileActive).toBe(true);
+    expect(getNode("stop").compileActive).toBe(true);
     const placeable = NODE_CATALOG.filter((e) => e.compileActive).map((e) => e.name);
-    expect(placeable).not.toContain("size");
-    expect(placeable).not.toContain("stop");
+    expect(placeable.includes("size")).toBe(true);
+    expect(placeable.includes("stop")).toBe(true);
   });
 
   it("Position Size is labelled as a fraction, and its default fits the backend range (0, 1]", () => {
@@ -263,16 +271,20 @@ describe("catalog honesty (F435 0.G)", () => {
   });
 });
 
-describe("trailing_stop settings node (F435 0.A)", () => {
-  it("is a compile-active settings node with TrailingStopConfig's fields and defaults", () => {
+describe("trailing_stop node (F435 0.A; a terminal from W5)", () => {
+  it("is compile-active with TrailingStopConfig's fields and defaults", () => {
     const ts = getNode("trailing_stop");
-    expect(ts.cat).toBe("settings");
+    // W5 (5.A) moves it to the terminals; the canvas draws it as a terminal
+    // card either way (rfMapping TERMINAL_TYPES).
+    expect(ts.cat).toBe("output");
     expect(ts.compileActive).toBe(true);
     expect(ts.defaults.setting_key).toBe("trailing_stop");
     // Since W2 a settings node also writes its value as a detail attribute
-    // (the `write` param out); the config fields are the rest.
-    const { out, ...config } = ts.defaults.params;
+    // (the `write` param out); since W5 `side` picks the side it applies to
+    // in a regime_switch group ("both" = no side). The config fields are the rest.
+    const { out, side, ...config } = ts.defaults.params;
     expect(out).toBe("@trail_value");
+    expect(side).toBe("both");
     expect(ts.params?.find((p) => p.name === "out")?.type).toBe("write");
     expect(config).toEqual({
       type: "pct", value: 5, source: "high", activate_on_profit: false, activate_pct: 0,

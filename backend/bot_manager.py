@@ -31,7 +31,7 @@ from models import TrailingStopConfig, DynamicSizingConfig, SkipAfterStopConfig,
 from nodebuilder.models import Graph, GraphValidationError
 from nodebuilder.api_models import GraphBacktestRequest
 from nodebuilder.run import run_graph_backtest
-from nodebuilder.sim_settings import apply_to_bot_config
+from nodebuilder.trading.sim_bridge import apply_to_bot_config
 from routes.backtest import run_backtest
 from signal_engine import migrate_rule, Rule
 from shared import _fetch
@@ -39,10 +39,100 @@ from broker import get_trading_provider, OrderRequest as BrokerOrderRequest
 from journal import (_log_trade, _load_trades, compute_realized_pnl, first_bot_entry_time,
                      compute_bidirectional_pnl, first_bot_bidirectional_entry_time,
                      compute_bot_avg_cost_bps, DATA_DIR)
-from bot_runner import BotRunner, compile_bot_graph
+from bot_runner import BotRunner, compile_bot_graph, graph_bot_live
 
 
 DATA_PATH = str(DATA_DIR / "bots.json")
+
+
+class SymbolConflictError(ValueError):
+    """Two bots would trade the same symbol in a way the exclusive-symbol
+    guard refuses (same direction, or either one trades both sides).
+    ``names`` holds the spawn group names involved, for the route."""
+
+    def __init__(self, message: str, names: tuple = ()) -> None:
+        super().__init__(message)
+        self.names = tuple(names)
+
+
+class InPositionError(ValueError):
+    """The bot holds a position, so its graph cannot be changed."""
+
+
+class ReferenceUnavailableError(Exception):
+    """A reference Ticker a graph bot's group reads cannot be fetched on the
+    bot's data source (F435 W5 LM-1).  ``detail`` is the API refusal body:
+    code ``reference_unavailable``, message, symbol, interval, data_source,
+    group and groups."""
+
+    def __init__(self, detail: dict) -> None:
+        super().__init__(detail.get("message", "reference_unavailable"))
+        self.detail = detail
+
+
+def probe_references(config: "BotConfig", program=None, *, seen: Optional[dict] = None) -> None:
+    """Fetch each reference frame a graph bot's group reads, once, on the
+    bot's data source, over the window the bot's ticks fetch (F435 W5 LM-1).
+
+    Raises ReferenceUnavailableError for the first one that fails or comes
+    back empty, so a symbol the source does not serve (an index on
+    alpaca-iex, say) is refused at spawn, add and start instead of leaving a
+    bot that can never work out a signal.  Nothing for a rule bot or a
+    group with no reference.  *program* skips the compile; *seen* shares the
+    results ((symbol, interval, source) -> problem or None) across the legs
+    of one spawn.  Network I/O and maybe a compile: thread pool only, never
+    the event loop."""
+    if config.kind != "graph" or config.graph is None:
+        return
+    from datetime import date
+    from nodebuilder.prepare import live_fetch_start
+    from shared import provider_max_days
+
+    if program is None:
+        program = compile_bot_graph(config.graph, config.bot_id)
+    live = graph_bot_live(program, config)
+    own = (str(config.symbol).strip().upper(), config.interval)
+    source = config.data_source
+    for sym, itv in live.references:
+        if (sym, itv) == own:
+            continue
+        key = (sym, itv, source)
+        if seen is not None and key in seen:
+            why = seen[key]
+        else:
+            why = None
+            try:
+                start = live_fetch_start(live.program, itv, config.trailing_stop,
+                                         max_days=provider_max_days(source, itv))
+                df = _fetch(sym, start, date.today().isoformat(), itv, source)
+                if df is None or len(df) == 0:
+                    why = "no bars came back"
+            except Exception as exc:  # any provider error: the bot could not run
+                why = str(getattr(exc, "detail", None) or exc) or type(exc).__name__
+            if seen is not None:
+                seen[key] = why
+        if why is not None:
+            group = config.graph_group or getattr(live.group, "name", None)
+            raise ReferenceUnavailableError({
+                "code": "reference_unavailable",
+                "message": (f"Reference ticker {sym} ({itv}) could not be loaded from "
+                            f"{source}: {why}."),
+                "symbol": sym, "interval": itv, "data_source": source,
+                "group": group, "groups": [group] if group else [],
+            })
+
+
+def symbols_conflict(a: "BotConfig", b: "BotConfig") -> bool:
+    """True when the exclusive-symbol guard keeps *a* and *b* from running
+    together: the same symbol, and the same direction or either one a bot
+    that trades both sides (is_bidirectional)."""
+    if normalize_symbol(a.symbol) != normalize_symbol(b.symbol):
+        return False
+    return a.is_bidirectional or b.is_bidirectional or a.direction == b.direction
+
+
+def _side_label(cfg: "BotConfig") -> str:
+    return "both sides" if cfg.is_bidirectional else cfg.direction
 
 # ---------------------------------------------------------------------------
 # BotConfig
@@ -101,6 +191,24 @@ class BotConfig(BaseModel):
     borrow_rate_annual: float = Field(default=0.5, ge=0)
     kind: Literal["rule", "graph"] = "rule"  # default "rule" for existing bots.json safety
     graph: Optional[Graph] = None
+    # F435 W5 (plan D7): which saved graph, revision and Output Group this
+    # graph bot runs.  `graph` is the bot's own snapshot of that revision, so
+    # a later save of the graph never changes a live bot; graph_update moves
+    # graph and graph_rev together.  graph_direction_mode is the group's
+    # direction ("regime_switch" trades both sides; `direction` is then
+    # "long").  All None for rule bots and for graph bots made before W5.
+    graph_id: Optional[str] = None
+    graph_rev: Optional[int] = None
+    graph_group: Optional[str] = None
+    graph_direction_mode: Optional[Literal["long", "short", "regime_switch"]] = None
+
+    @property
+    def is_bidirectional(self) -> bool:
+        """True when the bot can hold either side: a rule bot with its regime
+        on, or a graph bot running a regime_switch group.  Such a bot sizes
+        from the P&L of both sides and needs its symbol to itself."""
+        return bool(self.regime and self.regime.enabled) or (
+            self.kind == "graph" and self.graph_direction_mode == "regime_switch")
 
     @field_validator('long_position_size', 'short_position_size', mode='before')
     @classmethod
@@ -138,6 +246,9 @@ class BotState:
     entry_bar_count: int = 0
     trail_peak: Optional[float] = None
     trail_stop_price: Optional[float] = None
+    # A graph bot with a wired Stop terminal: the stop (%) read at the entry
+    # bar, fixed until the exit, as the backtest does (None: no such stop).
+    entry_stop_pct: Optional[float] = None
 
     # Pending close: set when the bot submits an exit order, consumed once the
     # fill is observed. Lets a later "externally-closed" tick recognize its own
@@ -171,6 +282,10 @@ class BotState:
     # U9: graph-mode runtime cache (NOT persisted to bots.json)
     graph_hash: Optional[str] = None          # SHA-256 of last compiled graph; triggers recompile on change
     compiled_program: Optional[Any] = None    # CompiledProgram — Any to avoid circular import; rebuilt on first tick
+    # F435 W5 LM-3: True from an entry order until its fill sets entry_price,
+    # so graph_update refuses while a position is being opened.  Runtime
+    # only (NOT persisted): after a restart no order is in flight.
+    entry_in_flight: bool = False
 
     def append_slippage_bps(self, bps: float) -> None:
         """Append a slippage sample and cap the list at 1000 to prevent unbounded growth."""
@@ -209,6 +324,7 @@ class BotState:
             "entry_time": self.entry_time,
             "trail_peak": self.trail_peak,
             "trail_stop_price": self.trail_stop_price,
+            "entry_stop_pct": self.entry_stop_pct,
             "pending_close_order_id": self.pending_close_order_id,
             "pending_close_reason": self.pending_close_reason,
             "consec_sl_count": self.consec_sl_count,
@@ -256,10 +372,19 @@ class BotManager:
         self.bot_fund: float = 0.0
         self.bots: dict[str, tuple[BotConfig, BotState]] = {}  # bot_id → (config, state)
         self.tasks: dict[str, asyncio.Task] = {}               # bot_id → running Task
-        self._save_lock = threading.Lock()                     # see save()
+        # See save().  An RLock: an add holds it across insert, save and
+        # rollback (_insert_and_save), and save() takes it again inside.
+        self._save_lock = threading.RLock()
+        # Held while an add checks the fund and inserts, so two adds (say two
+        # spawns) cannot both pass the fund or symbol check.  Routes run in
+        # the thread pool, so adds can overlap.
+        self._add_lock = threading.RLock()
         # bots.json rows load() could not read: (bot_id of the loaded bot
         # they followed, or None, raw row).  save() writes them back as is.
         self._unloaded: list[tuple[Optional[str], dict]] = []
+        # bot_id -> (config, graph) prepare_start checked in the thread pool,
+        # so start_bot does not compile that same config again on the loop.
+        self._start_checked: dict[str, tuple] = {}
 
     # -- Fund management ----------------------------------------------------
 
@@ -294,30 +419,27 @@ class BotManager:
     # -- Bot lifecycle -------------------------------------------------------
 
     @staticmethod
-    def _check_graph(config: BotConfig):
+    def _check_graph(config: BotConfig, program=None):
         """Compile a graph bot's graph and return the program.
 
         Raises a GraphValidationError (with node_id) for a bad graph, so the
         route can answer 400 instead of the bot failing on its first tick.
-        Also runs the Settings overlay a tick applies, so a value the bot
-        config refuses fails here and not on every tick.  Returns None for a
-        rule bot.
+        Checks the bot's own Output Group the way a tick does
+        (bot_runner.graph_bot_live: the group exists, trades the bot's symbol
+        and direction, has no rule regime), and runs the group's settings
+        overlay, so a value the bot config refuses fails here and not on
+        every tick.  *program* skips the compile when the caller has one.
+        Returns None for a rule bot.
         """
         if config.kind != "graph":
             return None
         if config.graph is None:
             raise GraphValidationError("A graph bot needs a graph.", node_id=None)
-        # A live tick gates a regime bot, but the graph backtest has no regime,
-        # so the bot would trade differently from its backtest.  Refuse it.
-        if config.regime is not None and config.regime.enabled:
-            raise GraphValidationError(
-                "A graph bot cannot use a regime filter yet: its backtest runs "
-                "without one.  Turn the regime off.",
-                node_id=None,
-            )
-        program = compile_bot_graph(config.graph, config.bot_id)
+        if program is None:
+            program = compile_bot_graph(config.graph, config.bot_id)
+        live = graph_bot_live(program, config)
         try:
-            apply_to_bot_config(config, program.simulator_settings)
+            apply_to_bot_config(config, live.plan)
         except (ValidationError, TypeError, ValueError) as exc:
             raise GraphValidationError(
                 f"The graph's Settings nodes give a bot config value that is not "
@@ -328,34 +450,84 @@ class BotManager:
 
     def add_bot(self, config: BotConfig) -> str:
         self._check_graph(config)
-        if self.bot_fund == 0:
-            raise ValueError("Bot fund is not set. Set a bot fund before adding bots.")
-        self._validate_allocation(config.allocated_capital)
-        bot_id = str(uuid.uuid4())
-        config.bot_id = bot_id
-        self.bots[bot_id] = (config, BotState())
-        self.save()
+        with self._add_lock:
+            if self.bot_fund == 0:
+                raise ValueError("Bot fund is not set. Set a bot fund before adding bots.")
+            self._validate_allocation(config.allocated_capital)
+            bot_id = str(uuid.uuid4())
+            config.bot_id = bot_id
+            self._insert_and_save({bot_id: (config, BotState())})
         return bot_id
+
+    def add_bots(self, configs: list[BotConfig], *, programs: Optional[list] = None) -> list[str]:
+        """Add several bots at once, all stopped: all of them or none.
+
+        Every config is checked first (graph, group, settings overlay), then,
+        under one lock, the exclusive-symbol guard (against each other and
+        every existing bot, running or not), the fund (their capital
+        together) and the insert, then one save.  Raises ValueError (fund),
+        SymbolConflictError, or GraphValidationError, and adds nothing.
+        *programs* (one compiled program per config, or None) skips the
+        compiles.  Used by POST /api/graphs/{id}/spawn (plan D7).
+        """
+        if not configs:
+            raise ValueError("No bots to add.")
+        for n, config in enumerate(configs):
+            self._check_graph(config, programs[n] if programs else None)
+        with self._add_lock:
+            for n, a in enumerate(configs):
+                for b in configs[n + 1:]:
+                    if symbols_conflict(a, b):
+                        raise SymbolConflictError(
+                            f"{a.graph_group or a.strategy_name} and "
+                            f"{b.graph_group or b.strategy_name} both trade "
+                            f"{normalize_symbol(a.symbol)} ({_side_label(a)} and "
+                            f"{_side_label(b)}).  One bot per symbol and direction.",
+                            names=tuple(x for x in (a.graph_group, b.graph_group) if x))
+                for bid, (other, _state) in self.bots.items():
+                    if symbols_conflict(a, other):
+                        raise SymbolConflictError(
+                            f"{a.graph_group or a.strategy_name} trades "
+                            f"{normalize_symbol(a.symbol)} {_side_label(a)}, and bot "
+                            f"{other.strategy_name!r} ({bid}) already trades "
+                            f"{normalize_symbol(other.symbol)} {_side_label(other)}.  "
+                            f"One bot per symbol and direction.",
+                            names=tuple(x for x in (a.graph_group,) if x))
+            if self.bot_fund == 0:
+                raise ValueError("Bot fund is not set. Set a bot fund before adding bots.")
+            self._validate_allocation(sum(c.allocated_capital for c in configs))
+            new: dict[str, tuple[BotConfig, BotState]] = {}
+            for config in configs:
+                config.bot_id = str(uuid.uuid4())
+                new[config.bot_id] = (config, BotState())
+            # One write with every leg, then the legs go live in memory: a
+            # failed write adds none, on disk or in memory (LM-11).
+            self._insert_and_save(new)
+        return list(new)
 
     def start_bot(self, bot_id: str):
         if bot_id not in self.bots:
             raise KeyError(f"Bot {bot_id} not found")
         config, state = self.bots[bot_id]
+        # What prepare_start checked in the thread pool, if it ran (LM-10).
+        checked = self._start_checked.pop(bot_id, None)
         if bot_id in self.tasks and not self.tasks[bot_id].done():
             raise ValueError(f"Bot {bot_id} is already running")
-        # Guard: regime bots require exclusive symbol access; non-regime bots block same direction
+        # Guard: a bot that trades both sides (a rule regime bot or a
+        # regime_switch graph bot) needs its symbol to itself; other bots
+        # block the same direction.
         for bid, task in self.tasks.items():
             if bid != bot_id and not task.done():
                 other_cfg, _ = self.bots[bid]
                 if other_cfg.symbol == config.symbol:
-                    if config.regime and config.regime.enabled:
+                    if config.is_bidirectional:
                         raise ValueError(
                             f"Regime bot on {config.symbol} requires exclusive symbol access "
                             f"(bot {bid} is already running on {config.symbol})"
                         )
-                    if other_cfg.regime and other_cfg.regime.enabled:
+                    if other_cfg.is_bidirectional:
                         raise ValueError(
-                            f"Bot {bid} has regime enabled on {config.symbol} — "
+                            f"Bot {bid} trades both sides of {config.symbol} — "
                             f"regime bots require exclusive symbol access"
                         )
                     if other_cfg.direction == config.direction:
@@ -366,23 +538,59 @@ class BotManager:
         # bad setting) would fail on every tick, before any exit check, and
         # leave an open position unmanaged while the bot looks "running".
         # Refuse to start instead, and say why on the card and in an alert.
-        try:
-            self._check_graph(config)
-        except GraphValidationError as exc:
-            state.status = "error"
-            state.pause_reason = f"Graph does not compile: {exc}"
-            state.error_message = state.pause_reason
-            self.save()
-            from notifications import notify_error
-            asyncio.create_task(notify_error(
-                symbol=config.symbol,
-                error_msg=state.pause_reason,
-                bot_id=bot_id,
-            ))
-            raise
+        # The start routes compile in the thread pool first (prepare_start);
+        # this config is then not compiled again here, on the event loop.
+        if checked is None or checked[0] is not config or checked[1] is not config.graph:
+            try:
+                self._check_graph(config)
+            except GraphValidationError as exc:
+                self.refuse_start(bot_id, exc)
+                raise
         runner = BotRunner(config, state, self)
         task = asyncio.create_task(runner.run())
         self.tasks[bot_id] = task
+
+    def prepare_start(self, bot_id: str) -> None:
+        """The slow part of starting a bot, for the thread pool (F435 W5
+        LM-10): compile the graph and check the bot's group and settings
+        (_check_graph), then fetch each reference frame once on the bot's
+        data source (probe_references, LM-1).  start_bot, called next on the
+        event loop, then skips its own compile of this config, so start and
+        start-all never compile on the loop that runs every bot's ticks.
+
+        The probe runs only for a bot with no tracked position: a bot that
+        holds one must start even while a reference is down, because its
+        ticks still run the price exits (LM-1).
+
+        Raises KeyError, ValueError (already running), GraphValidationError
+        (the caller then calls refuse_start on the event loop) or
+        ReferenceUnavailableError.  Thread pool only."""
+        if bot_id not in self.bots:
+            raise KeyError(f"Bot {bot_id} not found")
+        config, state = self.bots[bot_id]
+        task = self.tasks.get(bot_id)
+        if task is not None and not task.done():
+            raise ValueError(f"Bot {bot_id} is already running")
+        program = self._check_graph(config)
+        if program is not None and state.entry_price is None:
+            probe_references(config, program)
+        self._start_checked[bot_id] = (config, config.graph)
+
+    def refuse_start(self, bot_id: str, exc: GraphValidationError) -> None:
+        """A start refused because the bot's graph no longer compiles: say
+        why on the card and alert (create_task, never await).  Event loop
+        only."""
+        config, state = self.bots[bot_id]
+        state.status = "error"
+        state.pause_reason = f"Graph does not compile: {exc}"
+        state.error_message = state.pause_reason
+        self.save()
+        from notifications import notify_error
+        asyncio.create_task(notify_error(
+            symbol=config.symbol,
+            error_msg=state.pause_reason,
+            bot_id=bot_id,
+        ))
 
     def stop_bot(self, bot_id: str, close_position: bool = False):
         if bot_id not in self.bots:
@@ -400,6 +608,10 @@ class BotManager:
         state.pending_regime_flip = False
 
         if close_position:
+            # The trade's wired stop goes with the position (LM-6).  A Stop
+            # that keeps the position keeps it too, so Start resumes the
+            # position with the stop it was entered with.
+            state.entry_stop_pct = None
             try:
                 provider = get_trading_provider(config.broker)
                 provider.close_position(config.symbol)
@@ -475,10 +687,12 @@ class BotManager:
     def _backtest_graph_bot(self, config: BotConfig, state: BotState, start: str, end: str):
         """Backtest a graph bot with the graph backtest, not the empty rule lists.
 
-        The request carries the bot config's plain fields.  The graph's Settings
-        nodes then win inside run_graph_backtest, the same overlay a live tick
-        applies (nodebuilder.sim_settings).  Per-direction fields are not sent:
-        the graph backtest never reads them, and a live graph bot clears them.
+        The request carries the bot config's plain fields.  The graph's
+        terminals and Settings nodes then win, the same overlay a live tick
+        applies (sim_bridge.apply_to_bot_config).  Per-direction fields are
+        not sent: the graph backtest never reads them, and a live graph bot
+        clears them.  A graph with several Output Groups backtests only the
+        bot's own group, on the bot's own capital.
         """
         try:
             if config.graph is None:
@@ -502,13 +716,39 @@ class BotManager:
                 trading_hours=config.trading_hours,
                 direction=config.direction,
             )
-            result = run_graph_backtest(req)
-            state.backtest_summary = dict(result.summary)
+            program = self._check_graph(config)
+            live = graph_bot_live(program, config)
+            if live.group.implicit:
+                result = run_graph_backtest(req)
+                state.backtest_summary = dict(result.summary)
+            else:
+                state.backtest_summary = self._backtest_own_group(config, live, req)
         except Exception as e:
             state.backtest_summary = {"error": str(e)}
         finally:
             state.status = "stopped"
             self.save()
+
+    @staticmethod
+    def _backtest_own_group(config: BotConfig, live, req) -> dict:
+        """The bot's Output Group backtested the way the bot trades it: the
+        group's own program and plan, on the bot's symbol, interval (which
+        the spawn dialog can override) and capital (sim_bridge.run_group, the
+        bridge run.py simulates each group with)."""
+        from nodebuilder.run import _open_position
+        from nodebuilder.trading import sim_bridge
+        from shared import _fetch, require_valid_source
+
+        source = require_valid_source(config.data_source)
+        df = _fetch(config.symbol, req.start, req.end, config.interval, source=source)
+        if df is None or len(df) == 0:
+            raise ValueError(f"No data for {config.symbol} in {req.start}..{req.end} ({config.interval}).")
+        run = sim_bridge.run_group(live.program, df, req, plan=live.plan,
+                                   ticker=config.symbol, interval=config.interval)
+        summary = dict(run.sim["summary"])
+        summary["open_position"] = _open_position(run.sim["trades"], float(df["Close"].iloc[-1]))
+        summary["exit_connected"] = bool(live.group.exit_connected)
+        return summary
 
     def get_bot(self, bot_id: str) -> tuple[BotConfig, BotState]:
         if bot_id not in self.bots:
@@ -521,16 +761,67 @@ class BotManager:
         config, state = self.bots[bot_id]
         if state.status == "running":
             raise ValueError("Stop the bot before editing its config")
+        # A bot made from a saved graph keeps graph and graph_rev together,
+        # and its direction comes from its group: a new revision goes
+        # through graph_update, never this edit.
+        if config.graph_id and {"graph", "direction"} & updates.keys():
+            raise ValueError(
+                f"This bot runs saved graph {config.graph_id}; its graph and direction "
+                f"change only through POST /api/bots/{bot_id}/graph_update.")
         # Apply updates to config
         config_dict = config.model_dump()
         config_dict.update(updates)
         new_config = BotConfig(**config_dict)
-        if {"graph", "regime", "kind"} & updates.keys():
-            # Refuse a bad graph (or a regime on a graph bot) before it
-            # replaces the working config.
+        if {"graph", "regime", "kind", "direction"} & updates.keys():
+            # Refuse a bad graph (or a regime on a graph bot, or a direction
+            # its group does not trade) before it replaces the working config.
             self._check_graph(new_config)
         self.bots[bot_id] = (new_config, state)
         self.save()
+
+    def update_graph(self, bot_id: str, graph: Graph, rev: int, program=None) -> BotConfig:
+        """Move a graph bot to revision *rev* of its saved graph (plan D7).
+
+        Checks the new graph first (_check_graph: compile, group, symbol,
+        direction, settings), then apply_graph_update.  Refuses with
+        InPositionError while the bot holds a position.  The route
+        (POST /api/bots/{id}/graph_update) runs the check in the thread pool
+        and only apply_graph_update on the event loop.
+        """
+        if bot_id not in self.bots:
+            raise KeyError(f"Bot {bot_id} not found")
+        config, state = self.bots[bot_id]
+        if state.entry_price is not None or state.entry_in_flight:
+            raise InPositionError("The bot is in a position; close it before updating its graph.")
+        candidate = BotConfig.model_validate(
+            {**config.model_dump(exclude={"graph"}), "graph": graph, "graph_rev": rev})
+        self._check_graph(candidate, program)
+        return self.apply_graph_update(bot_id, candidate.graph, rev)
+
+    def apply_graph_update(self, bot_id: str, graph: Graph, rev: int) -> BotConfig:
+        """Set a checked graph and its rev on the bot, together and in place,
+        so a running bot picks the new graph up on its next tick (its runner
+        holds this config object; it recompiles when the graph hash
+        changes).  Refuses with InPositionError while the bot holds a
+        position or an entry order is in flight (entry_in_flight: ordered,
+        not yet filled, LM-3).  No I/O: the caller saves.  Call from the
+        event loop with no await between the caller's own checks and this
+        call."""
+        if bot_id not in self.bots:
+            raise KeyError(f"Bot {bot_id} not found")
+        config, state = self.bots[bot_id]
+        if state.entry_price is not None or state.entry_in_flight:
+            raise InPositionError("The bot is in a position; close it before updating its graph.")
+        # Under _save_lock (DI-06): a save in a worker thread (runners save
+        # through asyncio.to_thread) dumps graph and graph_rev in two steps,
+        # and the GIL can switch between them, so without the lock it could
+        # write the old graph with the new rev.  With it a save sees the old
+        # pair or the new pair.  The lock is held only for the length of a
+        # save, which is brief.
+        with self._save_lock:
+            config.__dict__.update(graph=graph, graph_rev=rev)
+            config.__pydantic_fields_set__.update(("graph", "graph_rev"))
+        return config
 
     def manual_buy(self, bot_id: str) -> dict:
         """Place a manual buy for a bot using its allocation config."""
@@ -543,9 +834,17 @@ class BotManager:
         if state.status != "running":
             raise ValueError("Bot must be running to place a manual buy")
 
-        # A graph bot sizes from its graph's Position Size node, as its ticks do.
+        # A graph bot sizes from its group's Size terminal or Position Size
+        # node, as its ticks do.  A wired Size or Stop is read from the cook
+        # at each entry, which a manual buy does not run, so it is refused.
         if config.kind == "graph" and config.graph is not None:
-            config = apply_to_bot_config(config, self._check_graph(config).simulator_settings)
+            program = self._check_graph(config)
+            live = graph_bot_live(program, config)
+            if live.plan.size is not None or live.plan.stop is not None:
+                raise ValueError(
+                    "This graph sets its size or stop from a wired value on each bar; "
+                    "a manual buy cannot read it.  Let the bot enter on its signal.")
+            config = apply_to_bot_config(config, live.plan)
 
         provider = get_trading_provider(config.broker)
 
@@ -556,9 +855,8 @@ class BotManager:
         df = _fetch(config.symbol, start_date, end_date, config.interval, config.data_source)
         price = float(df["Close"].iloc[-1])
 
-        # Calculate qty
-        is_regime = bool(config.regime and config.regime.enabled)
-        if is_regime:
+        # Calculate qty (a bot that trades both sides sizes from both sides' P&L)
+        if config.is_bidirectional:
             current_capital = config.allocated_capital + compute_bidirectional_pnl(config.symbol, config.bot_id, since=config.pnl_epoch)
         else:
             current_capital = config.allocated_capital + compute_realized_pnl(config.symbol, config.direction, bot_id=config.bot_id, since=config.pnl_epoch)
@@ -619,12 +917,13 @@ class BotManager:
         return {"qty": qty, "fill_price": fill_price, "slippage_bps": round(cost_bps, 2)}
 
     def list_bots(self) -> list[dict]:
+        from nodebuilder.storage import graph_head
+
         all_trades = _load_trades()
         result = []
         for bot_id, (config, state) in self.bots.items():
             epoch = config.pnl_epoch
-            is_regime = bool(config.regime and config.regime.enabled)
-            if is_regime:
+            if config.is_bidirectional:
                 total_pnl = round(compute_bidirectional_pnl(config.symbol, bot_id, since=epoch, trades=all_trades), 2)
                 first_trade_time = first_bot_bidirectional_entry_time(config.symbol, bot_id, since=epoch, trades=all_trades)
             else:
@@ -659,8 +958,25 @@ class BotManager:
                 "pending_regime_flip": state.pending_regime_flip,
                 "was_running": state.was_running,
                 "kind": config.kind,
+                **self._graph_summary(config, graph_head),
             })
         return result
+
+    @staticmethod
+    def _graph_summary(config: BotConfig, graph_head) -> dict:
+        """The graph fields of a bot summary (plan W5 5.D).  graph_name and
+        graph_latest_rev come from the graph store's in-memory head index
+        (graph_head), never from a graph file; both are None when the bot has
+        no graph_id or its graph was deleted."""
+        head = graph_head(config.graph_id) if config.graph_id else None
+        return {
+            "graph_id": config.graph_id,
+            "graph_rev": config.graph_rev,
+            "graph_group": config.graph_group,
+            "graph_direction_mode": config.graph_direction_mode,
+            "graph_name": head[1] if head is not None else None,
+            "graph_latest_rev": head[0] if head is not None else None,
+        }
 
     def reset_pnl(self, bot_id: str) -> str:
         """Bump pnl_epoch to now so displayed P&L/trades/slippage start fresh.
@@ -719,6 +1035,25 @@ class BotManager:
             # is worth the per-save shutil.copy2 at current file sizes.
             atomic_write_text(DATA_PATH, json.dumps(data, indent=2, default=str), backup_depth=1)
 
+    def _insert_and_save(self, new: dict) -> None:
+        """Add the bots in *new* (bot_id -> (config, state)) and save, all or
+        nothing (F435 W5 LM-11).
+
+        The insert, the save and a rollback all happen under _save_lock (an
+        RLock, so save() takes it again on this thread).  A runner's
+        concurrent save (asyncio.to_thread) either ran before the insert or
+        waits until the bots are saved or rolled back, so bots.json never
+        holds some of the new bots, and a failed save leaves none of them,
+        in memory or on disk."""
+        with self._save_lock:
+            self.bots.update(new)
+            try:
+                self.save()
+            except Exception:
+                for bot_id in new:
+                    self.bots.pop(bot_id, None)
+                raise
+
     def _rows_to_save(self) -> list[dict]:
         """The bots.json rows: every loaded bot, plus every row load() could
         not read, written back unchanged in its old place (after the loaded
@@ -753,6 +1088,8 @@ class BotManager:
             # which Wave 1 code refuses.  Keep the file as it was, once, so
             # a rollback has a copy it can read.
             self._write_pre_w2_copy(data, raw_text)
+            # F435 W5 (DI-08): likewise before W5 adds its graph_* fields.
+            self._write_pre_w5_copy(data, raw_text)
             self.bot_fund = data.get("bot_fund", 0.0)
             self._unloaded = []
             previous: Optional[str] = None  # the last bot that loaded
@@ -810,6 +1147,42 @@ class BotManager:
         try:
             atomic_write_text(path, raw_text, backup_depth=0)
             logger.info("Wrote %s before rewriting graphs as version %d", path, CURRENT_GRAPH_VERSION)
+        except Exception:
+            logger.exception("Could not write %s", path)
+
+    # The fields W5 adds to every bots.json row (plan D7).  A row without
+    # them was written by code from before Wave 5.
+    W5_CONFIG_FIELDS = ("graph_id", "graph_rev", "graph_group", "graph_direction_mode")
+
+    @classmethod
+    def _write_pre_w5_copy(cls, data: Any, raw_text: str) -> None:
+        """Copy bots.json to bots.json.pre-w5 when it was written by code
+        from before Wave 5 (F435 W5, DI-08): a row whose config lacks the W5
+        graph_* fields.
+
+        Written once, like the pre-w2 copy: an existing copy is never
+        overwritten, so it stays the last file Wave 4 code wrote.  Wave 4
+        code reads a W5 file but drops the graph_* fields on its first save,
+        so after rolling forward again a regime_switch bot would be refused
+        on every tick and every spawned bot would lose its graph link.  To
+        roll back to Wave 4: stop the server, put this copy back as
+        bots.json, then start the Wave 4 build (bots and state written since
+        are lost, including bots spawned from saved graphs)."""
+        path = DATA_PATH + ".pre-w5"
+        if os.path.exists(path):
+            return
+        rows = data.get("bots", []) if isinstance(data, dict) else []
+        old = False
+        for row in rows if isinstance(rows, list) else []:
+            cfg = row.get("config") if isinstance(row, dict) else None
+            if isinstance(cfg, dict) and any(k not in cfg for k in cls.W5_CONFIG_FIELDS):
+                old = True
+                break
+        if not old:
+            return
+        try:
+            atomic_write_text(path, raw_text, backup_depth=0)
+            logger.info("Wrote %s before rewriting bots.json with the Wave 5 fields", path)
         except Exception:
             logger.exception("Could not write %s", path)
 

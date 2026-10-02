@@ -119,7 +119,7 @@ const MENU_BY_CATEGORY: Record<string, NodeCatalogEntry[]> = groupByCategory(MEN
 const MENU_BY_NAME: Map<string, NodeCatalogEntry> = new Map(MENU_CATALOG.map(e => [e.name, e]))
 
 // Categories with nothing to offer are left out.
-const CAT_ORDER: CatKey[] = (['ticker', 'indicator', 'comparison', 'logic', 'settings', 'output'] as CatKey[])
+const CAT_ORDER: CatKey[] = (['ticker', 'indicator', 'comparison', 'logic', 'settings', 'output', 'network'] as CatKey[])
   .filter(c => (MENU_BY_CATEGORY[c]?.length ?? 0) > 0)
 
 const MENU_HEIGHT = 420

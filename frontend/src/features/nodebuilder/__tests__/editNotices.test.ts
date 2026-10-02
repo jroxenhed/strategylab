@@ -1,6 +1,7 @@
 /**
- * editNotices.ts + store edit-copy actions (F435 W0 0.E): regime strip,
- * vertical spacing, unsupported-node list, edit tracking and discard.
+ * editNotices.ts + store edit-copy actions (F435 W0 0.E): the copy keeps
+ * regime (W5), vertical spacing, unsupported-node list, edit tracking and
+ * discard.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
@@ -11,7 +12,13 @@ import {
   findUnsupportedNodes,
   prepareEditableCopy,
 } from '../editNotices'
+import { NODE_CATALOG, type NodeCatalogEntry } from '../catalog'
 import { hasEdits, useNodeBuilderStore } from '../store'
+
+/** The catalog with `compileActive` forced for the named types (independent of the generated file). */
+function catalogWith(active: Record<string, boolean>): NodeCatalogEntry[] {
+  return NODE_CATALOG.map(e => (e.name in active ? { ...e, compileActive: active[e.name] } : e))
+}
 
 function node(id: string, type: string, y = 100): GraphNode {
   const name = id.split('/').pop() || type
@@ -46,11 +53,10 @@ function autoGraph(): Graph {
 }
 
 describe('prepareEditableCopy', () => {
-  it('removes regime nodes and their wires, and reports them', () => {
-    const { graph, regimeRemoved } = prepareEditableCopy(autoGraph())
-    expect(regimeRemoved).toEqual(['/regime/ma'])
-    expect(Object.keys(graph.nodes)).not.toContain('/regime/ma')
-    expect(graph.wires.map(w => w.id)).toEqual(['w1', 'w2'])
+  it('keeps regime nodes and their wires (W5 runs regime)', () => {
+    const { graph } = prepareEditableCopy(autoGraph())
+    expect(Object.keys(graph.nodes)).toContain('/regime/ma')
+    expect(graph.wires.map(w => w.id)).toEqual(['w1', 'w2', 'w3'])
     expect(graph.readOnly).toBe(false)
   })
 
@@ -67,13 +73,6 @@ describe('prepareEditableCopy', () => {
     expect(g.nodes['/entry/rsi'].position).toEqual([10, 100])
     expect(g.readOnly).toBe(true)
   })
-
-  it('reports nothing when there is no regime', () => {
-    const g = autoGraph()
-    delete g.nodes['/regime/ma']
-    g.wires = g.wires.filter(w => w.id !== 'w3')
-    expect(prepareEditableCopy(g).regimeRemoved).toEqual([])
-  })
 })
 
 describe('findUnsupportedNodes', () => {
@@ -81,19 +80,21 @@ describe('findUnsupportedNodes', () => {
     const g = autoGraph()
     g.nodes['/size'] = node('/size', 'size')
     g.wires.push(wire('ws', '/entry/rsi', '/size'))
-    const list = findUnsupportedNodes(g)
+    const list = findUnsupportedNodes(g, catalogWith({ size: false }))
     expect(list).toEqual([
       { id: '/entry/odd', type: 'is_above_signal', reason: 'unknown' },
       { id: '/size', type: 'size', reason: 'inactive' },
     ])
   })
 
-  it('does not warn about an unwired Size or Stop terminal (compile ignores it)', () => {
+  it('judges an unwired Size or Stop like any node: its constant applies since W5', () => {
     const g = autoGraph()
     delete g.nodes['/entry/odd']
     g.nodes['/size'] = node('/size', 'size')
     g.nodes['/stop'] = node('/stop', 'stop')
-    expect(findUnsupportedNodes(g)).toEqual([])
+    expect(findUnsupportedNodes(g, catalogWith({ size: true, stop: true }))).toEqual([])
+    // No special case left: a catalog that cannot run them lists them, wired or not.
+    expect(findUnsupportedNodes(g, catalogWith({ size: false, stop: false })).map(u => u.id)).toEqual(['/size', '/stop'])
   })
 
   it('lists per-direction settings and comparisons with a rule detail, as compile refuses them', () => {
@@ -139,10 +140,11 @@ describe('store edit copy', () => {
     useNodeBuilderStore.getState().discardEdits()
   })
 
-  it('loadFromAutoRender keeps the removed regime ids and starts with no edits', () => {
+  it('loadFromAutoRender keeps regime nodes and starts with no edits', () => {
     useNodeBuilderStore.getState().loadFromAutoRender(autoGraph())
     const s = useNodeBuilderStore.getState()
-    expect(s.regimeRemoved).toEqual(['/regime/ma'])
+    expect(s.graph?.nodes['/regime/ma']).toBeDefined()
+    expect('regimeRemoved' in s).toBe(false)
     expect(s.graph?.nodes['/entry/rsi'].position).toEqual([10, 180])
     expect(hasEdits(s)).toBe(false)
   })
@@ -153,11 +155,10 @@ describe('store edit copy', () => {
     expect(hasEdits(useNodeBuilderStore.getState())).toBe(true)
   })
 
-  it('newGraph starts clean and clears the regime notice', () => {
+  it('newGraph starts clean', () => {
     useNodeBuilderStore.getState().loadFromAutoRender(autoGraph())
     useNodeBuilderStore.getState().newGraph()
     const s = useNodeBuilderStore.getState()
-    expect(s.regimeRemoved).toEqual([])
     expect(hasEdits(s)).toBe(false)
     useNodeBuilderStore.getState().addNode(node('/ticker', 'ticker'))
     expect(hasEdits(useNodeBuilderStore.getState())).toBe(true)
@@ -169,7 +170,6 @@ describe('store edit copy', () => {
     useNodeBuilderStore.getState().discardEdits()
     const s = useNodeBuilderStore.getState()
     expect(s.graph).toBeNull()
-    expect(s.regimeRemoved).toEqual([])
     expect(hasEdits(s)).toBe(false)
   })
 

@@ -1,0 +1,214 @@
+/* Network frame (spec S31) and Output Group header (S32a).
+   Tokens only; no blur, no shadow on frames (foundation 8.1). */
+
+.nodebuilder-root .nb-frame {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border-radius: var(--nb-radius-frame);
+  border: 1px solid rgba(129, 140, 248, 0.45);
+  background: rgba(129, 140, 248, 0.04);
+}
+.nodebuilder-root .nb-frame--group {
+  border-color: rgba(241, 245, 249, 0.28);
+  background: rgba(241, 245, 249, 0.025);
+}
+.nodebuilder-root .nb-frame:hover { border-color: rgba(129, 140, 248, 0.7); }
+.nodebuilder-root .nb-frame--group:hover { border-color: rgba(241, 245, 249, 0.45); }
+.nodebuilder-root .nb-frame--selected { box-shadow: 0 0 0 1.5px var(--nb-selection); }
+.nodebuilder-root .nb-frame--error,
+.nodebuilder-root .nb-frame--error:hover { border-color: rgba(248, 113, 113, 0.6); }
+
+.nodebuilder-root .nb-frame__tab {
+  position: absolute;
+  left: 8px;
+  top: 6px;
+  height: 26px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 0 4px;
+  border-radius: 4px;
+  background: var(--nb-bg);
+  border: none;
+  color: var(--nb-text);
+  font: 600 12px/16px var(--nb-font-sans, inherit);
+  cursor: grab;
+  max-width: calc(100% - 16px);
+  white-space: nowrap;
+}
+.nodebuilder-root .nb-frame__tab:focus-visible { outline: 1px solid var(--nb-border-focus); }
+
+.nodebuilder-root .nb-frame__glyph {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 10px/16px var(--nb-font-mono, monospace);
+  color: var(--nb-text-on-color);
+  flex-shrink: 0;
+}
+.nodebuilder-root .nb-frame__name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nodebuilder-root .nb-frame__meta {
+  font: 400 10px/16px var(--nb-font-mono, monospace);
+  color: var(--nb-text-muted);
+}
+.nodebuilder-root .nb-frame__bypass-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--nb-flag-bypass, var(--nb-warn));
+  flex-shrink: 0;
+}
+
+.nodebuilder-root .nb-frame__empty {
+  position: absolute;
+  inset: 32px 16px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--nb-text-dim, var(--nb-text-muted));
+  font: 400 12px/16px var(--nb-font-sans, inherit);
+  pointer-events: none;
+}
+
+/* Ports on the frame edge: a 10px circle with a 2px ring in the frame color. */
+.nodebuilder-root .nb-frame .nb-frame__port {
+  width: 10px;
+  height: 10px;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 50%;
+  background: var(--nb-bg);
+  border: 2px solid var(--nb-cat-network);
+}
+.nodebuilder-root .nb-frame--group .nb-frame__port { border-color: var(--nb-cat-output); }
+.nodebuilder-root .nb-frame .nb-frame__port--out { background: var(--nb-cat-network); }
+/* The inside half of a boundary port only starts wires; it is not drawn twice. */
+.nodebuilder-root .nb-frame .nb-frame__port--inner { opacity: 0; pointer-events: none; }
+.nodebuilder-root .nb-frame__port-label {
+  position: absolute;
+  top: -15px;
+  transform: translateX(-50%);
+  font: 400 9px/12px var(--nb-font-mono, monospace);
+  color: var(--nb-text-muted);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* Ghost card for a missing terminal (S32a). */
+.nodebuilder-root .nb-frame__ghost {
+  position: absolute;
+  width: 118px;
+  height: 46px;
+  box-sizing: border-box;
+  border: 1px dashed rgba(248, 113, 113, 0.5);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--nb-error);
+  font: 400 11px/16px var(--nb-font-mono, monospace);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+.nodebuilder-root .nb-frame__ghost:disabled { cursor: default; }
+
+/* ---- Output Group header (S32a) ---------------------------------------- */
+
+.nodebuilder-root .nb-dir-pill,
+.nodebuilder-root .nb-ticker-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 3px;
+  border: none;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.nodebuilder-root .nb-dir-pill {
+  font: 600 10px/16px var(--nb-font-sans, inherit);
+  letter-spacing: 0.06em;
+}
+.nodebuilder-root .nb-dir-pill--long { background: rgba(52, 211, 153, 0.16); color: var(--nb-ok); }
+.nodebuilder-root .nb-dir-pill--short { background: rgba(248, 113, 113, 0.16); color: var(--nb-error); }
+.nodebuilder-root .nb-dir-pill--switch { background: var(--nb-tint-network); color: var(--nb-cat-network); }
+.nodebuilder-root .nb-ticker-chip {
+  font: 500 10px/16px var(--nb-font-mono, monospace);
+  background: var(--nb-tint-ticker);
+  color: var(--nb-cat-ticker);
+}
+.nodebuilder-root .nb-ticker-chip--missing { background: rgba(248, 113, 113, 0.16); color: var(--nb-error); }
+.nodebuilder-root .nb-group-weight {
+  font: 400 10px/16px var(--nb-font-mono, monospace);
+  color: var(--nb-text-muted);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.nodebuilder-root .nb-group-weight--zero { color: var(--nb-warn); }
+.nodebuilder-root .nb-group-weight-input {
+  width: 40px;
+  height: 16px;
+  box-sizing: border-box;
+  font: 400 10px/14px var(--nb-font-mono, monospace);
+  background: var(--nb-bg-input);
+  color: var(--nb-text);
+  border: 1px solid var(--nb-border);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+.nodebuilder-root .nb-group-weight-input[aria-invalid="true"] { border-color: var(--nb-error); }
+
+/* The header lists open in a portal popover (ui/Popover, FE-06), so they
+   sit above every card. The popover shell is bare; the list draws itself. */
+.nodebuilder-root.nb-popover.nb-group-popover {
+  padding: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+.nodebuilder-root .nb-group-pop {
+  position: relative;
+  min-width: 220px;
+  outline: none;
+  padding: 4px 0;
+  border-radius: 8px;
+  background: var(--nb-bg-elevated);
+  box-shadow: var(--nb-shadow-popover);
+  cursor: default;
+}
+.nodebuilder-root .nb-group-pop__title {
+  padding: 2px 10px 4px;
+  font: 600 11px/16px var(--nb-font-sans, inherit);
+  color: var(--nb-text-muted);
+}
+.nodebuilder-root .nb-group-pop__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 10px;
+  font: 400 12px/16px var(--nb-font-sans, inherit);
+  color: var(--nb-text-secondary, var(--nb-text));
+  cursor: pointer;
+}
+.nodebuilder-root .nb-group-pop__row[aria-selected="true"],
+.nodebuilder-root .nb-group-pop__row--active { background: var(--nb-bg-hover, var(--nb-bg-active)); color: var(--nb-text); }
+.nodebuilder-root .nb-group-pop__hint {
+  margin-left: auto;
+  font: 400 10px/16px var(--nb-font-mono, monospace);
+  color: var(--nb-text-muted);
+}

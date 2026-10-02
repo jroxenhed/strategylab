@@ -63,7 +63,7 @@ describe('NoticeStack', () => {
     render(
       <NoticeStack
         extra={[
-          { key: 'regime_removed', severity: 'warn', text: 'r' },
+          { key: 'run_error', severity: 'warn', text: 'r' },
           { key: 'unsupported_nodes', severity: 'error', text: 'u' },
         ]}
       />,
@@ -81,7 +81,7 @@ describe('NoticeStack', () => {
     render(
       <NoticeStack
         extra={[
-          { key: 'regime_removed', severity: 'warn', text: 'r' },
+          { key: 'run_error', severity: 'warn', text: 'r' },
           { key: 'unsupported_nodes', severity: 'error', text: 'u' },
         ]}
       />,

@@ -29,6 +29,7 @@ import nodebuilder.migrate as migrate_mod
 from nodebuilder.compile import compile as compile_graph
 from nodebuilder.evaluator import cook_signals
 from nodebuilder.migrate import CURRENT_GRAPH_VERSION, migrate_graph_data
+from nodebuilder.trading import nodes_groups
 from nodebuilder.models import (
     CyclicGraphError,
     DanglingWireError,
@@ -68,7 +69,9 @@ def _outcome(graph: Graph) -> tuple:
     except GraphValidationError as exc:
         return ("refused", getattr(exc, "code", type(exc).__name__), exc.node_id)
     entry, exit_ = cook_signals(program, _DF)
-    settings = tuple((s.key, s.value) for s in program.simulator_settings)
+    # W5: the simulator settings live on the group plan (5.B Needs 2).
+    plan = nodes_groups.group_named(program, None).plan_for(None)
+    settings = tuple(sorted(plan.fields.items(), key=lambda kv: kv[0]))
     return ("ok", entry.tobytes(), exit_.tobytes(), settings, program.exit_attr is None)
 
 

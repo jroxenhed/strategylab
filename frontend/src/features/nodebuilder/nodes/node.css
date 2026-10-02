@@ -182,3 +182,9 @@
   pointer-events: none;
 }
 .nodebuilder-root.nb-hover-tip[hidden] { display: none; }
+
+/* A stop row with no stop shows a dim "none" (S32b). */
+.nodebuilder-root .nb-param-none::placeholder {
+  color: var(--nb-text-dim);
+  opacity: 1;
+}

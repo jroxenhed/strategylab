@@ -4,10 +4,15 @@
  * Follow mode, in order: the selected wire; else the selected (primary)
  * node; else the display-flag node of the network on screen; else nothing.
  * Pin mode keeps one target until it is unpinned or deleted.
+ *
+ * A network or boundary node (an Output Group, Subnet or Regime frame, or a
+ * port) is never a target: flatten removes it before the cook, so it has no
+ * stream and /inspect would answer 404 target_not_found.
  */
 
 import type { Graph } from '../../../api/nodebuilder'
 import type { InspectTarget } from '../../../api/nodebuilderInspect'
+import { BOUNDARY_TYPES, NETWORK_TYPES } from '../rfMapping'
 
 export type SheetTarget =
   | { kind: 'wire'; wireId: string; fromId: string; toId: string }
@@ -26,11 +31,17 @@ export function resolveSheetTarget(graph: Graph | null, sel: SheetSelection, par
     const w = graph.wires.find(x => x.id === wid)
     if (w && graph.nodes[w.from] && graph.nodes[w.to]) return { kind: 'wire', wireId: w.id, fromId: w.from, toId: w.to }
   }
-  if (sel.selectedNodeId && graph.nodes[sel.selectedNodeId]) return { kind: 'node', nodeId: sel.selectedNodeId }
+  const selected = sel.selectedNodeId ? graph.nodes[sel.selectedNodeId] : undefined
+  if (selected && hasStream(selected.type)) return { kind: 'node', nodeId: selected.id }
   for (const n of Object.values(graph.nodes)) {
-    if (n.display && (n.parent ?? null) === parentId) return { kind: 'display', nodeId: n.id }
+    if (n.display && hasStream(n.type) && (n.parent ?? null) === parentId) return { kind: 'display', nodeId: n.id }
   }
   return null
+}
+
+/** False for network and boundary nodes, which never cook. */
+function hasStream(type: string): boolean {
+  return !NETWORK_TYPES.has(type) && !BOUNDARY_TYPES.has(type)
 }
 
 /** True while the target's node or wire is still in the graph. */

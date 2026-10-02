@@ -119,10 +119,18 @@ def test_unwired_entry_names_the_entry_node(client):
     _assert_graph_error(client.post(URL, json=body), "/entry")
 
 
-def test_regime_node_is_400_with_node_id(client):
+def test_stray_regime_path_ticker_runs_and_changes_nothing(client):
+    """W5 retired the regime refusal (plan D8): a stray, unwired
+    /regime/ticker with no prefix compiles, and the backtest is the one the
+    graph gives without it."""
+    plain = client.post(URL, json=_rsi_entry())
+    assert plain.status_code == 200, plain.text
     body = _rsi_entry()
     body["graph"]["nodes"]["/regime/ticker"] = _n("/regime/ticker", "ticker")
-    _assert_graph_error(client.post(URL, json=body), "/regime/ticker")
+    resp = client.post(URL, json=body)
+    assert resp.status_code == 200, resp.text
+    for key in ("summary", "trades", "equity_curve", "baseline_curve"):
+        assert resp.json()[key] == plain.json()[key]
 
 
 def test_crossover_of_derived_signal_runs(client):
@@ -241,7 +249,9 @@ def test_success_summary_has_open_position_and_exit_connected(client):
     assert resp.status_code == 200, resp.text
     data = resp.json()
     # W4: the route adds cook_id (the Data Sheet / sparklines read the cook).
-    assert set(data) == {"summary", "trades", "equity_curve", "baseline_curve", "cook_id"}
+    # W5: per-group results and the combined fund (plan W5 contract).
+    assert set(data) == {"summary", "trades", "equity_curve", "baseline_curve", "cook_id",
+                         "groups", "combined"}
     assert data["summary"]["exit_connected"] is True
     assert "open_position" in data["summary"]
     assert data["summary"]["num_trades"] > 0

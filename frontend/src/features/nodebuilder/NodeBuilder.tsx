@@ -63,8 +63,6 @@ import { GraphChartSplit, GraphSheet, type ChartBarModel } from './GraphChartSpl
 import { useAutoCook } from './useAutoCook'
 import {
   findUnsupportedNodes,
-  REGIME_LEARN_MORE_TEXT,
-  REGIME_REMOVED_TEXT,
   UNSUPPORTED_PREFIX,
   UNSUPPORTED_SUFFIX,
   unsupportedLabel,
@@ -85,6 +83,7 @@ import NoticeStack from './NoticeStack'
 import { pushNotice, resolveNotice, type Notice } from './notices'
 import { runLegacySeed, seedBannerText } from './persistence'
 import { useGraphSession } from './useGraphSession'
+import { graphHasGroups } from './ownership'
 import { BuilderContext, Slot, type BuilderApi } from './slots'
 import { isTypingTarget } from './canvasHelpers'
 import './tokens.css'
@@ -130,7 +129,6 @@ function NodeBuilder({ request, graphViewActive, graphWindow = null, onRunGraph,
   const dirty = useNodeBuilderStore(hasEdits)
   const graphMeta = useNodeBuilderStore(s => s.graphMeta)
   const layoutEpoch = useNodeBuilderStore(s => s.layoutEpoch)
-  const regimeRemoved = useNodeBuilderStore(s => s.regimeRemoved)
   const loadFromAutoRender = useNodeBuilderStore(s => s.loadFromAutoRender)
   const selectNode = useNodeBuilderStore(s => s.select)
 
@@ -215,7 +213,6 @@ function NodeBuilder({ request, graphViewActive, graphWindow = null, onRunGraph,
     [editMode, storeGraph],
   )
   // The regime banner's "Learn more" shows one more sentence.
-  const [regimeHelp, setRegimeHelp] = useState(false)
 
   // The window runs and cooks use: the sidebar's when App passes it (D11).
   // On its own (tests), the builder falls back to the loaded request.
@@ -242,7 +239,8 @@ function NodeBuilder({ request, graphViewActive, graphWindow = null, onRunGraph,
   // ...or when capital, direction or an APPLIES TO GRAPH setting changed in
   // the settings panel since the run (CI-09). App-driven runs only: on its
   // own (tests) the builder runs from the loaded request.
-  const runSettingsKey = useGraphRunSettingsKey()
+  // A graph with Output Groups sends no direction (D7), so its key has none.
+  const runSettingsKey = useGraphRunSettingsKey(graphHasGroups(storeGraph))
   const settingsStale = result != null && onRunGraph != null
     && requestSettingsKey(result.request) !== runSettingsKey
   const resultStale = graphStale || windowStale || settingsStale
@@ -475,16 +473,6 @@ function NodeBuilder({ request, graphViewActive, graphWindow = null, onRunGraph,
       ),
       onDismiss: () => setRunError(null),
       actions: [{ label: 'Retry', run: () => handleRunBacktest() }],
-    })
-  }
-  if (editMode && regimeRemoved.length > 0) {
-    derivedNotices.push({
-      key: 'regime_removed',
-      severity: 'warn',
-      text: regimeHelp ? `${REGIME_REMOVED_TEXT} ${REGIME_LEARN_MORE_TEXT}` : REGIME_REMOVED_TEXT,
-      actions: [
-        { label: 'Learn more', title: REGIME_LEARN_MORE_TEXT, run: () => setRegimeHelp(v => !v), testId: 'nb-regime-learn-more' },
-      ],
     })
   }
   if (unsupported.length > 0) {

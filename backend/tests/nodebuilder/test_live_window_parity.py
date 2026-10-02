@@ -30,7 +30,7 @@ from bot_manager import BotConfig, BotState
 from bot_runner import cook_graph_bar
 from models import Rule, StrategyRequest, TrailingStopConfig
 from nodebuilder.compile import compile as nb_compile
-from nodebuilder.evaluator import RegimeUnsupportedError, cook_program, cook_signals
+from nodebuilder.evaluator import cook_program, cook_signals
 from nodebuilder.from_rules import auto_render
 from nodebuilder.models import Graph
 from nodebuilder.prepare import (
@@ -227,10 +227,9 @@ def _float_columns(program, df: pd.DataFrame) -> dict[tuple[str, str], np.ndarra
 
 @pytest.mark.parametrize("frame, graph, interval, trailing_stop", _cases())
 def test_cook_over_live_window_matches_full_history(frame, graph, interval, trailing_stop):
-    try:
-        program = nb_compile(graph)
-    except RegimeUnsupportedError:  # pragma: no cover - the regime fixtures are not listed
-        pytest.skip("regime graphs do not compile until W5")
+    # The regime fixtures are not listed: their regime frame is a reference
+    # Ticker, whose own live window test_reference_tickers.py covers.
+    program = nb_compile(graph)
     df = _frame(frame)
     full_entry, full_exit = cook_signals(program, df)
     full_floats = _float_columns(program, df)

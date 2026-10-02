@@ -170,43 +170,49 @@ def test_regime_mode_emits_subtree():
     regime_paths = [p for p in g.nodes if p.startswith("/regime/")]
     assert regime_paths, "Regime sub-tree nodes must be emitted"
 
-    # Regime ticker must exist
-    assert any("ticker" in g.nodes[p].type for p in regime_paths), "Regime ticker must exist"
+    # W5 (plan D8): the regime is a Regime network feeding the regime
+    # terminal inside the implicit group "main", which switches direction.
+    assert g.nodes["/regime"].type == "regime_net"
+    assert g.nodes["/regime_terminal"].type == "regime"
+    assert g.nodes["/main"].type == "output_group"
+    assert g.nodes["/main"].params["direction"] == "regime_switch"
+    assert any(w.from_path == "/regime" and w.to_path == "/regime_terminal" for w in g.wires)
 
-    # Regime gate AND nodes must exist
-    assert "/and_regime_buy_gate" in g.nodes
-    assert "/and_regime_sell_gate" in g.nodes
+    # Its Ticker is a prefixed reference on the regime timeframe.
+    [ticker] = [p for p in regime_paths if g.nodes[p].type == "ticker"]
+    assert g.nodes[ticker].params["prefix"] == "regime"
+    assert g.nodes[ticker].params["interval"] == "1d"
 
-    # Gates must wire to entry/exit
-    buy_gate_wires = [w for w in g.wires if w.from_path == "/and_regime_buy_gate" and w.to_path == "/entry"]
-    sell_gate_wires = [w for w in g.wires if w.from_path == "/and_regime_sell_gate" and w.to_path == "/exit"]
-    assert buy_gate_wires, "Regime buy gate must wire to /entry"
-    assert sell_gate_wires, "Regime sell gate must wire to /exit"
+    # buy_rules / sell_rules are not drawn: the rule backtest ignores them
+    # when a regime is on.  The old AND gates are gone.
+    assert not any(n.type == "rsi" for n in g.nodes.values())
+    assert "/and_regime_buy_gate" not in g.nodes and "/and_regime_sell_gate" not in g.nodes
+
+    # And the render compiles: regime graphs are supported now.
+    from nodebuilder.compile import compile as nb_compile
+    nb_compile(g)
 
 
 # ---------------------------------------------------------------------------
 # 6. Per-direction B23 mode
 # ---------------------------------------------------------------------------
 
-def test_per_direction_b23_mode():
+def test_per_direction_lists_without_a_regime_are_not_drawn():
+    """DI-09: with the regime off the rule backtest trades buy_rules /
+    sell_rules and never reads the per-direction lists (run_backtest:
+    b23_mode = regime.enabled), so the render draws the plain lists only."""
     req = _make_req(
-        buy_rules=[],
-        sell_rules=[],
+        buy_rules=[Rule(indicator="rsi", condition="below", value=40)],
+        sell_rules=[Rule(indicator="rsi", condition="above", value=60)],
         long_buy_rules=[Rule(indicator="rsi", condition="below", value=30)],
         short_buy_rules=[Rule(indicator="rsi", condition="above", value=70)],
+        long_stop_loss_pct=3.0,
     )
     g = auto_render(req)
-
-    # Per-direction logic nodes must exist
-    assert "/logic_long_buy" in g.nodes
-    assert "/logic_short_buy" in g.nodes
-
-    # OR combiner must exist (two buy-side logic paths)
-    assert "/or_b23_buy" in g.nodes, "OR combiner for b23 buy must exist"
-
-    # Entry must be reachable
-    entry_reachable = any(w.to_path == "/entry" for w in g.wires)
-    assert entry_reachable, "Entry must have at least one incoming wire in b23 mode"
+    assert g.nodes["/entry"].params.get("signal") and g.nodes["/exit"].params.get("signal")
+    assert not any(nid.startswith(("/logic_long", "/logic_short", "/or_b23", "/stop_long"))
+                   for nid in g.nodes)
+    assert not any(n.type == "output_group" for n in g.nodes.values())
 
 
 # ---------------------------------------------------------------------------
@@ -455,12 +461,17 @@ def test_auto_render_names_every_node_uniquely():
     assert all(is_valid_name(n) for n in names)
     assert len(names) == len(set(names))
     for node_id, node in g.nodes.items():
-        assert node.parent is None
+        # W5: the regime render nests nodes in the group "main" and the
+        # Regime network.
+        assert node.parent in (None, "/main", "/regime")
         assert node.name == sanitize_name(node_id.lstrip("/"))
 
 
 def test_auto_render_ports_follow_wire_order():
-    g = auto_render(_v2_req())
+    # Without the regime and the long rule sets, so the buy rules are drawn:
+    # /logic_buy takes two inputs.  The regime render has no node with two.
+    g = auto_render(_v2_req().model_copy(
+        update={"regime": None, "long_buy_rules": None, "long_sell_rules": None}))
     count: dict[str, int] = {}
     for w in g.wires:
         k = count.get(w.to_path, 0)

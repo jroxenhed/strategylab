@@ -21,9 +21,9 @@ from nodebuilder.evaluator import (
     CompiledProgram,
     FamilyCapExceededError,
     MissingTerminalError,
-    RegimeUnsupportedError,
     cook_program,
 )
+from nodebuilder.trading import nodes_groups
 
 
 # ---------------------------------------------------------------------------
@@ -40,6 +40,12 @@ def _wire(wire_id: str, from_path: str, to_path: str) -> Wire:
 
 def _make_graph(nodes: dict[str, Node], wires: list[Wire]) -> Graph:
     return Graph(nodes=nodes, wires=wires)
+
+
+def _fields(prog) -> dict:
+    """The simulator fields the graph sets, by request field name (the
+    implicit group's plan; CompiledProgram.simulator_settings is gone in W5)."""
+    return dict(nodes_groups.group_named(prog, None).plan.fields)
 
 
 def _rsi_entry_graph(rsi_params: dict | None = None) -> Graph:
@@ -130,26 +136,27 @@ def test_cycle_via_validation():
 
 
 # ---------------------------------------------------------------------------
-# test_regime_path_raises
+# test_regime_path_compiles
 # ---------------------------------------------------------------------------
 
-def test_regime_path_raises():
-    """Graph with a /regime/ node raises RegimeUnsupportedError at compile."""
+def test_regime_path_compiles():
+    """A /regime/ node id is no longer refused (W5, plan D8: regime is a
+    network and a Regime terminal in the graph)."""
     nodes = {
         "/ticker": _node("/ticker", "ticker"),
-        "/regime/trend": _node("/regime/trend", "rsi"),
+        "/regime/trend": _node("/regime/trend", "rsi", {"out": "@trend"}),
         "/rsi": _node("/rsi", "rsi", {"period": 14, "type": "sma"}),
         "/below": _node("/below", "below", {"threshold": 30.0}),
         "/entry": _node("/entry", "entry"),
     }
     wires = [
+        _wire("w0", "/ticker", "/regime/trend"),
         _wire("w1", "/ticker", "/rsi"),
         _wire("w2", "/rsi", "/below"),
         _wire("w3", "/below", "/entry"),
     ]
-    g = _make_graph(nodes, wires)
-    with pytest.raises(RegimeUnsupportedError):
-        nb_compile(g)
+    prog = nb_compile(_make_graph(nodes, wires))
+    assert "/regime/trend" in {s.node_id for s in prog.steps}
 
 
 # ---------------------------------------------------------------------------
@@ -245,10 +252,10 @@ def test_size_stop_terminals_no_op():
     # Should compile cleanly
     assert prog.entry_attr.startswith("@")
 
-    # No SimulatorSettings from size/stop (they're catalog-only at T2)
-    setting_keys = {s.key for s in prog.simulator_settings}
-    assert "size" not in setting_keys
-    assert "stop" not in setting_keys
+    # An empty size or stop terminal sets nothing (sim_bridge.plan_group).
+    plan = nodes_groups.group_named(prog, None).plan
+    assert "position_size" not in plan.fields and "stop_loss_pct" not in plan.fields
+    assert plan.size is None and plan.stop is None
 
 
 # ---------------------------------------------------------------------------
@@ -324,9 +331,9 @@ def test_settings_extracted():
     g = _make_graph(nodes, wires)
     prog = nb_compile(g)
 
-    setting_map = {s.key: s.value for s in prog.simulator_settings}
+    setting_map = _fields(prog)
     assert setting_map.get("position_size") == pytest.approx(0.5)
-    assert setting_map.get("stop_loss") == pytest.approx(5.0)
+    assert setting_map.get("stop_loss_pct") == pytest.approx(5.0)
     assert setting_map.get("slippage_bps") == pytest.approx(3.0)
 
 
@@ -507,22 +514,19 @@ def test_trailing_stop_node_emits_config_setting():
               "activate_on_profit": True, "activate_pct": 1.5}
     g = _with_extra({"/trail": _node("/trail", "trailing_stop", params)})
     prog = nb_compile(g)
-    [setting] = [s for s in prog.simulator_settings if s.key == "trailing_stop"]
-    assert setting.value == TrailingStopConfig(**params)
+    assert _fields(prog)["trailing_stop"] == TrailingStopConfig(**params)
 
 
 def test_trailing_stop_missing_params_take_config_defaults():
     g = _with_extra({"/trail": _node("/trail", "trailing_stop", {"value": 3})})
     prog = nb_compile(g)
-    [setting] = [s for s in prog.simulator_settings if s.key == "trailing_stop"]
-    assert setting.value == TrailingStopConfig(value=3.0)
+    assert _fields(prog)["trailing_stop"] == TrailingStopConfig(value=3.0)
 
 
 def test_trailing_stop_text_booleans_from_a_select_are_read():
     """The canvas select stores activate_on_profit as the text 'true'/'false'."""
     g = _with_extra({"/trail": _node("/trail", "trailing_stop", {"activate_on_profit": "true"})})
-    [setting] = [s for s in nb_compile(g).simulator_settings if s.key == "trailing_stop"]
-    assert setting.value.activate_on_profit is True
+    assert _fields(nb_compile(g))["trailing_stop"].activate_on_profit is True
 
 
 @pytest.mark.parametrize("params", [
@@ -549,16 +553,27 @@ def test_per_direction_settings_are_refused(node_type, params):
 
 
 @pytest.mark.parametrize("terminal", ["size", "stop"])
-def test_wired_size_stop_terminal_is_refused(terminal):
-    """An unwired one is ignored (test_size_stop_terminals_no_op); a wired one
-    would look like it sizes or stops trades while doing nothing."""
+def test_wired_size_stop_terminal_takes_a_number_not_a_signal(terminal):
+    """Since W5 (5.A) a wired Size or Stop terminal runs: it reads a number
+    at each entry bar.  A true/false signal wired in is refused on the
+    terminal (attr_type); an unwired one sets nothing
+    (test_size_stop_terminals_no_op)."""
     g = _with_extra(
         {f"/{terminal}": _node(f"/{terminal}", terminal)},
         [_wire("wt", "/below", f"/{terminal}")],
     )
-    with pytest.raises(UnsupportedNodeError) as info:
+    with pytest.raises(GraphValidationError) as info:
         nb_compile(g)
     assert info.value.node_id == f"/{terminal}"
+    assert getattr(info.value, "code", None) == "attr_type"
+
+    g = _with_extra(
+        {f"/{terminal}": _node(f"/{terminal}", terminal)},
+        [_wire("wt", "/rsi", f"/{terminal}")],
+    )
+    plan = nodes_groups.group_named(nb_compile(g), None).plan
+    read = getattr(plan, terminal)
+    assert read is not None and read.node_id == f"/{terminal}" and read.attr == "@rsi"
 
 
 # Wave 2 registered rising / turns_up / stochastic / adx as real types, so the
@@ -823,13 +838,13 @@ def test_settings_numbers_given_as_text_are_read():
         "/size": _node("/size", "position_size", {"size": "0.5"}),
         "/stop": _node("/stop", "stop_loss", {"pct": "3"}),
     })
-    values = {s.key: s.value for s in nb_compile(g).simulator_settings}
-    assert values == {"position_size": 0.5, "stop_loss": 3.0}
+    values = _fields(nb_compile(g))
+    assert values == {"position_size": 0.5, "stop_loss_pct": 3.0}
 
 
 def test_bypassed_settings_node_does_not_apply():
     g = _with_extra({"/stop": _node("/stop", "stop_loss", {"pct": 3.0}, bypass=True)})
-    assert nb_compile(g).simulator_settings == []
+    assert _fields(nb_compile(g)) == {}
 
 
 def test_wire_into_settings_node_is_refused():

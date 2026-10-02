@@ -14,6 +14,23 @@ graph (``@rsi``, ``@rsi_2``), exactly as the v2 -> v3 migration stores them.
 Every rule the rule builder can make is drawn so that the graph backtest
 gives the same trades as the rule backtest (``signal_engine.eval_rule``),
 including ``negated`` (a NOT node; bar 0 stays False) and the bar-0 guard.
+
+A strategy with a regime filter (plan D8) is drawn the way the rule
+backtest runs it: one Output Group ``main`` with direction
+``regime_switch`` (long rules while the regime is on, short rules while it
+is off; the rule backtest ignores the plain buy/sell lists then), an Entry
+and an Exit per side, a ``regime_net`` network (the regime's own Ticker on
+the regime timeframe with prefix ``regime``, its rules or indicator, the
+min_bars rule as a rolling minimum, and the one-bar lag the rule backtest
+always applies), and a Regime terminal with the strategy's on_flip.
+
+The simulator values are drawn too, because in graph view the request no
+longer carries them (add_settings): position size, stop loss, slippage,
+commission and borrow rate as settings nodes; the trailing stop and the
+time stop as terminals (inside the group for a regime strategy); and, for
+a regime strategy only, the per-side size, stop, trailing stop and time
+stop as terminals with ``side``.  Without a regime the per-direction rule
+lists and values are not drawn: the rule backtest does not read them.
 A rule that the rule engine can never fire (no value and no reference, a
 series it cannot find) is drawn as a "never" node, so a NOT on it is True
 from bar 1, as in eval_rules.  The one thing still refused out loud is a
@@ -28,6 +45,19 @@ from models import StrategyRequest, RegimeConfig
 from signal_engine import Rule, _clamp_lookback, migrate_rule
 from nodebuilder.migrate import default_name, unique_name
 from nodebuilder.models import STREAM_SCHEMA_VERSION, Graph, Node, Wire
+
+# The five price fields a Ticker writes (nodes_data.BAR_FIELDS).
+_BAR_FIELDS: tuple[str, ...] = ("@open", "@high", "@low", "@close", "@volume")
+
+# The regime render (plan D8): node ids and the regime Ticker's prefix.
+_GROUP_ID = "/main"         # its name is "main", the implicit group's name (plan D7)
+_REGIME_NET_ID = "/regime"
+_REGIME_TERMINAL_ID = "/regime_terminal"
+_REGIME_PREFIX = "regime"
+
+# The borrow rate a graph run uses when no borrow_rate node sets one
+# (nodebuilder.api_models.GraphBacktestRequest.borrow_rate_annual).
+_GRAPH_BORROW_DEFAULT = 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +211,9 @@ class _GraphBuilder:
         self.wires: list[Wire] = []
         # node id -> read param -> what it reads (names filled in at the end)
         self.reads: dict[str, dict[str, _Read]] = {}
+        # Ticker node id -> its prefix, for the Tickers that have one (the
+        # regime's reference Ticker): reads of its @close become @<p>_close.
+        self.prefixes: dict[str, str] = {}
 
         # Layout trackers per column
         self._col_y: dict[float, float] = {}
@@ -252,7 +285,24 @@ class _GraphBuilder:
                 self._read(path, "source", _Ref(ticker_path, "@close"))
             else:
                 self._connect(ticker_path, path)
+            if ticker_path in self.prefixes:
+                self._read_prefixed_bars(path, catalog_name, ticker_path)
         return path
+
+    def _read_prefixed_bars(self, path: str, node_type: str, ticker_path: str) -> None:
+        """A node on a prefixed Ticker names every price field it reads: its
+        defaults (@high, @low, @volume...) are the plain names, which only a
+        Ticker with no prefix writes."""
+        from nodebuilder.kernel import registry
+        import nodebuilder.trading  # noqa: F401  (registers every node type)
+
+        nt = registry.get(node_type)
+        if nt is None:
+            return
+        for spec in nt.read_params():
+            if spec.type == "attr" and spec.default in _BAR_FIELDS \
+                    and spec.name not in self.reads.get(path, {}):
+                self._read(path, spec.name, _Ref(ticker_path, spec.default))
 
     def _math(self, path: str, op: str, a: _Ref, b: _Ref) -> _Ref:
         """A math node a <op> b (shared by path)."""
@@ -472,9 +522,12 @@ class _GraphBuilder:
 
     def _never(self, path: str, pos: tuple[float, float], tp: str) -> None:
         """A rule the rule engine never fires: "bar number below 0", False on
-        every bar.  A NOT after it is True from bar 1, as in eval_rules."""
+        every bar.  A NOT after it is True from bar 1, as in eval_rules.
+
+        A prefixed Ticker writes no bar number, so on one it is "close below
+        0" (a price is never below 0), False on every bar the same way."""
         self._add_node(path, "below", {"threshold": 0}, pos)
-        self._read(path, "a", _Ref(tp, "@index"))
+        self._read(path, "a", _Ref(tp, "@close" if tp in self.prefixes else "@index"))
 
     def _emit_rule_set(
         self,
@@ -560,33 +613,35 @@ class _GraphBuilder:
     # Regime sub-tree
     # ------------------------------------------------------------------
 
-    def add_regime(
-        self,
-        regime: RegimeConfig,
-        ticker: str,
-        source: str,
-        ticker_path: str,
-        buy_logic_path: Optional[str],
-        sell_logic_path: Optional[str],
-        entry_path: str,
-        exit_path: str,
-    ) -> None:
-        """Emit regime sub-tree and gate buy/sell into entry/exit via AND nodes.
+    def add_regime_network(self, regime: RegimeConfig, ticker: str, interval: str,
+                           source: str) -> str:
+        """The regime network (``regime_net``, plan D8): the regime's own
+        Ticker (same symbol, the regime timeframe, prefix ``regime``), its
+        rules or single indicator, the min_bars rule, the rule backtest's
+        one-bar lag, and a Subnet output.  Returns the node whose output is
+        the regime signal (the one wired into the Subnet output).
 
-        Compile refuses a graph with a regime (regime_unsupported) until W5;
-        the sub-tree is drawn so the viewer shows it.
+        The rule backtest (routes.backtest._compute_regime_series) evaluates
+        the regime on bars fetched from before the window, holds it for
+        min_bars bars (a rolling minimum), then aligns it with
+        shared.align_htf_to_ltf, which always shifts one regime bar.  The
+        graph aligns a coarser regime frame with that same function, so the
+        lag node is drawn only when the regime timeframe is the base
+        interval or finer (there the graph's alignment does not shift).
         """
-        prefix = "/regime"
+        prefix = _REGIME_NET_ID
         y_off = _REGIME_Y_OFFSET
-
-        # Regime ticker (same symbol, different timeframe)
-        regime_ticker = self.add_ticker(ticker, regime.timeframe, source, prefix=prefix, y_offset=y_off)
+        regime_ticker = self.add_ticker(ticker, regime.timeframe, source, prefix=prefix,
+                                        y_offset=y_off)
+        self.nodes[regime_ticker].params["prefix"] = _REGIME_PREFIX
+        self.prefixes[regime_ticker] = _REGIME_PREFIX
 
         if regime.rules:
-            regime_logic_path = self._emit_rule_set(
+            last = self._emit_rule_set(
                 "regime", list(regime.rules), regime.logic, regime_ticker,
                 prefix=prefix, y_base=y_off,
             )
+            assert last is not None
         else:
             # Legacy single-indicator regime: price above / below the
             # indicator, or the indicator rising / falling.
@@ -602,118 +657,93 @@ class _GraphBuilder:
                 self._add_node(regime_cmp_path, cmp_type, {}, pos)
                 self._read(regime_cmp_path, "a", _Ref(regime_ticker, "@close"))
                 self._read(regime_cmp_path, "b", _Ref(regime_ind))
+            last = f"{prefix}/logic_regime"
+            self._add_node(last, "and", {}, (y_off, _COL_LOGIC))
+            self._read(last, "terms", [_Ref(regime_cmp_path)])
 
-            regime_logic_path = f"{prefix}/logic_regime"
-            self._add_node(regime_logic_path, "and", {}, (y_off, _COL_LOGIC))
-            self._read(regime_logic_path, "terms", [_Ref(regime_cmp_path)])
-
-        if regime_logic_path is None:
-            return
-
-        # Gate buy side
-        if buy_logic_path is not None:
-            gate_buy = "/and_regime_buy_gate"
-            self._add_node(gate_buy, "and", {}, (0.0, _COL_REGIME_GATE))
-            self._read(gate_buy, "terms", [_Ref(regime_logic_path), _Ref(buy_logic_path)])
-            self._read(entry_path, "signal", _Ref(gate_buy))
-        else:
-            # No buy logic — wire regime directly to entry
-            self._read(entry_path, "signal", _Ref(regime_logic_path))
-
-        # Gate sell side
-        if sell_logic_path is not None:
-            gate_sell = "/and_regime_sell_gate"
-            self._add_node(gate_sell, "and", {}, (_ROW_PITCH, _COL_REGIME_GATE))
-            self._read(gate_sell, "terms", [_Ref(regime_logic_path), _Ref(sell_logic_path)])
-            self._read(exit_path, "signal", _Ref(gate_sell))
-        else:
-            self._read(exit_path, "signal", _Ref(regime_logic_path))
+        # min_bars: on only after min_bars regime bars in a row (a rolling
+        # minimum of the 0/1 signal; NaN, so off, until the window fills).
+        is_bool = True
+        row = _COL_LOGIC + 100.0
+        if int(regime.min_bars) > 1:
+            held = f"{prefix}/held"
+            self._add_node(held, "rolling", {"op": "min", "window": int(regime.min_bars)},
+                           (y_off, row))
+            self._read(held, "a", _Ref(last))
+            last, is_bool, row = held, False, row + 100.0
+        if _regime_lags(regime.timeframe, interval):
+            lag = f"{prefix}/lag"
+            self._add_node(lag, "shift", {"bars": 1}, (y_off, row))
+            self._read(lag, "a", _Ref(last))
+            last, is_bool, row = lag, False, row + 100.0
+        if not is_bool:
+            on = f"{prefix}/on"
+            self._add_node(on, "above", {"threshold": 0.5}, (y_off, row))
+            self._read(on, "a", _Ref(last))
+            last, row = on, row + 100.0
+        output = f"{prefix}/output"
+        self._add_node(output, "subnet_output", {}, (y_off, row))
+        self._connect(last, output)
+        return last
 
     # ------------------------------------------------------------------
     # Settings nodes
     # ------------------------------------------------------------------
 
-    def add_settings(self, req: StrategyRequest) -> None:
+    def add_settings(self, req: StrategyRequest, *, regime: bool = False) -> None:
+        """The strategy's simulator values as settings nodes and terminals,
+        so the graph runs with exactly the values the rule backtest uses
+        (DI-01, DI-02): in graph view the request does not carry them.
+
+        Every strategy: position size, slippage and commission (settings
+        nodes), the borrow rate when it is not the graph run's default, the
+        stop loss when set (a settings node), the
+        trailing stop and the time stop (max_bars_held) when set
+        (terminals).  A regime strategy (*regime*) also gets the per-side
+        values the rule backtest reads first in its dual mode (B25:
+        long_stop_loss_pct and so on) as terminals with ``side``; the shared
+        ones above stay the fallback, as in routes.backtest._dir_stop.
+        Without a regime the rule backtest never reads the per-side fields,
+        so they are not drawn (DI-09).
+        """
         y = _SETTINGS_Y_START
-        b23_mode = _is_b23_mode(req)
 
-        self._add_node(
-            "/setting_position_size",
-            "position_size",
-            {"size": req.position_size},
-            (_SETTINGS_X, y),
-        )
-        y += _SETTINGS_Y_PITCH
+        def put(path: str, node_type: str, params: dict[str, Any]) -> None:
+            nonlocal y
+            self._add_node(path, node_type, params, (_SETTINGS_X, y))
+            y += _SETTINGS_Y_PITCH
 
-        # Stop loss — simple mode
-        if not b23_mode:
-            if req.stop_loss_pct is not None:
-                self._add_node(
-                    "/setting_stop_loss",
-                    "stop_loss",
-                    {"pct": req.stop_loss_pct},
-                    (_SETTINGS_X, y),
-                )
-                y += _SETTINGS_Y_PITCH
-        else:
-            # Per-direction stop loss nodes
-            if req.long_stop_loss_pct is not None:
-                self._add_node(
-                    "/setting_long_stop_loss",
-                    "stop_loss",
-                    {"pct": req.long_stop_loss_pct, "direction": "long"},
-                    (_SETTINGS_X, y),
-                )
-                y += _SETTINGS_Y_PITCH
-            if req.short_stop_loss_pct is not None:
-                self._add_node(
-                    "/setting_short_stop_loss",
-                    "stop_loss",
-                    {"pct": req.short_stop_loss_pct, "direction": "short"},
-                    (_SETTINGS_X, y),
-                )
-                y += _SETTINGS_Y_PITCH
-
-        self._add_node(
-            "/setting_slippage",
-            "slippage",
-            {"bps": req.slippage_bps},
-            (_SETTINGS_X, y),
-        )
-        y += _SETTINGS_Y_PITCH
-
-        self._add_node(
-            "/setting_commission",
-            "commission",
-            {"per_share_rate": req.per_share_rate, "min_per_order": req.min_per_order},
-            (_SETTINGS_X, y),
-        )
-        y += _SETTINGS_Y_PITCH
-
-        # Trailing stop (generic node, not in Core 14 — viewer falls back)
-        if not b23_mode and req.trailing_stop is not None:
-            self._add_node(
-                "/setting_trailing_stop",
-                "trailing_stop",
-                req.trailing_stop.model_dump(),
-                (_SETTINGS_X, y),
-            )
-        elif b23_mode:
-            if req.long_trailing_stop is not None:
-                self._add_node(
-                    "/setting_long_trailing_stop",
-                    "trailing_stop",
-                    {**req.long_trailing_stop.model_dump(), "direction": "long"},
-                    (_SETTINGS_X, y),
-                )
-                y += _SETTINGS_Y_PITCH
-            if req.short_trailing_stop is not None:
-                self._add_node(
-                    "/setting_short_trailing_stop",
-                    "trailing_stop",
-                    {**req.short_trailing_stop.model_dump(), "direction": "short"},
-                    (_SETTINGS_X, y),
-                )
+        put("/setting_position_size", "position_size", {"size": req.position_size})
+        if req.stop_loss_pct is not None:
+            put("/setting_stop_loss", "stop_loss", {"pct": req.stop_loss_pct})
+        put("/setting_slippage", "slippage", {"bps": req.slippage_bps})
+        put("/setting_commission", "commission",
+            {"per_share_rate": req.per_share_rate, "min_per_order": req.min_per_order})
+        # The borrow rate: drawn when it is not the rate a graph run uses
+        # with no borrow_rate node (GraphBacktestRequest's default), so
+        # stored renders keep their shape and every run gets the rule's rate.
+        if float(req.borrow_rate_annual) != _GRAPH_BORROW_DEFAULT:
+            put("/setting_borrow_rate", "borrow_rate", {"rate": req.borrow_rate_annual})
+        # Terminals (W5): the trailing stop and the time stop.
+        if req.trailing_stop is not None:
+            put("/setting_trailing_stop", "trailing_stop", req.trailing_stop.model_dump())
+        if req.max_bars_held is not None:
+            put("/setting_time_stop", "time_stop", {"max_bars": int(req.max_bars_held)})
+        if not regime:
+            return
+        for side in ("long", "short"):
+            size = getattr(req, f"{side}_position_size")
+            if size is not None:
+                put(f"/size_{side}", "size", {"constant": size, "side": side})
+            stop = getattr(req, f"{side}_stop_loss_pct")
+            if stop is not None:
+                put(f"/stop_{side}", "stop", {"constant": stop, "side": side})
+            trail = getattr(req, f"{side}_trailing_stop")
+            if trail is not None:
+                put(f"/trailing_stop_{side}", "trailing_stop", {**trail.model_dump(), "side": side})
+            bars = getattr(req, f"{side}_max_bars_held")
+            if bars is not None:
+                put(f"/time_stop_{side}", "time_stop", {"max_bars": int(bars), "side": side})
 
     # ------------------------------------------------------------------
     # Finish: store write names, then turn every read into names
@@ -738,6 +768,9 @@ class _GraphBuilder:
 
         def _name(ref: _Ref) -> str:
             if ref.slot is not None and ref.slot.startswith("@"):
+                prefix = self.prefixes.get(ref.node)
+                if prefix and ref.slot in _BAR_FIELDS:
+                    return f"@{prefix}_{ref.slot[1:]}"
                 return ref.slot
             node = self.nodes[ref.node]
             slot = ref.slot
@@ -767,24 +800,17 @@ class _GraphBuilder:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _is_b23_mode(req: StrategyRequest) -> bool:
-    """True if any per-direction rule list is populated (b23 mode)."""
-    return any([
-        req.long_buy_rules,
-        req.long_sell_rules,
-        req.short_buy_rules,
-        req.short_sell_rules,
-    ])
-
-
 def _resolve_indicator_from_regime(regime: RegimeConfig) -> tuple[str, dict[str, Any]]:
-    """Resolve a single-indicator regime to (catalog_name, params)."""
+    """Resolve a single-indicator regime to (catalog_name, params).
+
+    The rule backtest computes it with indicators.compute_instance, so the
+    defaults are that function's: an MA with no type is an EMA (compute_ma),
+    with no period 20.  RegimeConfig's own default params name both
+    ({"period": 200, "type": "sma"})."""
     ind = regime.indicator
     ip = regime.indicator_params or {}
     if ind == "ma":
-        ma_type = ip.get("type", "sma")
-        node_name = "ema" if ma_type == "ema" else "sma"
-        return node_name, {"period": ip.get("period", 200)}
+        return _ma_node(ip.get("period", 20), ip.get("type", "ema"))
     if ind == "rsi":
         return "rsi", {"period": ip.get("period", 14), "type": ip.get("type", "sma")}
     if ind == "macd":
@@ -814,14 +840,20 @@ def auto_render(req: StrategyRequest) -> Graph:
       - Deterministic node paths for stable test snapshots
       - No dangling wires (Pydantic model_validator enforces this)
       - No cycles (Pydantic model_validator enforces this)
+
+    A strategy with a regime filter becomes one Output Group (see
+    _render_regime); every other strategy is a graph with no group (the
+    implicit group "main", plan D7), as before W5.
     """
     ticker = req.ticker
     interval = req.interval
     source = req.source
-    b23_mode = _is_b23_mode(req)
     has_regime = req.regime is not None and req.regime.enabled
 
     builder = _GraphBuilder(ticker, interval, source)
+
+    if has_regime:
+        return _render_regime(builder, req)
 
     # Primary ticker node
     ticker_path = builder.add_ticker(ticker, interval, source)
@@ -829,97 +861,127 @@ def auto_render(req: StrategyRequest) -> Graph:
     # Entry / Exit terminal nodes
     entry_path = "/entry"
     exit_path = "/exit"
-    # Entry at col 5 if regime (gate nodes in col 4), else col 4
-    terminal_x = _COL_TERMINAL if has_regime else _COL_REGIME_GATE
-    builder._add_node(entry_path, "entry", {}, (0.0, terminal_x))
-    builder._add_node(exit_path, "exit", {}, (_ROW_PITCH, terminal_x))
+    builder._add_node(entry_path, "entry", {}, (0.0, _COL_REGIME_GATE))
+    builder._add_node(exit_path, "exit", {}, (_ROW_PITCH, _COL_REGIME_GATE))
 
     # Settings nodes (always)
     builder.add_settings(req)
 
     # --- Rule set emission -----------------------------------------------
+    # Without a regime the rule backtest trades buy_rules / sell_rules and
+    # never reads the per-direction lists (routes.backtest.run_backtest:
+    # ``b23_mode = regime.enabled``), so neither does the render (DI-09).
+    buy_logic_path = builder._emit_rule_set(
+        "buy", list(req.buy_rules), req.buy_logic, ticker_path, y_base=0.0
+    )
+    sell_logic_path = builder._emit_rule_set(
+        "sell", list(req.sell_rules), req.sell_logic, ticker_path,
+        y_base=len(req.buy_rules) * _ROW_PITCH
+    )
 
-    if not b23_mode:
-        # Simple mode: buy_rules + sell_rules
-        buy_logic_path = builder._emit_rule_set(
-            "buy", list(req.buy_rules), req.buy_logic, ticker_path, y_base=0.0
-        )
-        sell_logic_path = builder._emit_rule_set(
-            "sell", list(req.sell_rules), req.sell_logic, ticker_path,
-            y_base=len(req.buy_rules) * _ROW_PITCH
-        )
-
-    else:
-        # B23 mode: per-direction rule sets
-        long_buy_logic = builder._emit_rule_set(
-            "long_buy",
-            list(req.long_buy_rules or []),
-            req.long_buy_logic,
-            ticker_path,
-            y_base=0.0,
-        )
-        long_sell_logic = builder._emit_rule_set(
-            "long_sell",
-            list(req.long_sell_rules or []),
-            req.long_sell_logic,
-            ticker_path,
-            y_base=len(req.long_buy_rules or []) * _ROW_PITCH,
-        )
-        short_buy_logic = builder._emit_rule_set(
-            "short_buy",
-            list(req.short_buy_rules or []),
-            req.short_buy_logic,
-            ticker_path,
-            y_base=(len(req.long_buy_rules or []) + len(req.long_sell_rules or [])) * _ROW_PITCH,
-        )
-        short_sell_logic = builder._emit_rule_set(
-            "short_sell",
-            list(req.short_sell_rules or []),
-            req.short_sell_logic,
-            ticker_path,
-            y_base=(
-                len(req.long_buy_rules or [])
-                + len(req.long_sell_rules or [])
-                + len(req.short_buy_rules or [])
-            ) * _ROW_PITCH,
-        )
-
-        # Combine per-direction logic into a single OR for entry/exit
-        # Long and short buy → OR → entry
-        buy_logic_path = _either(builder, "/or_b23_buy", long_buy_logic, short_buy_logic, 0.0)
-        sell_logic_path = _either(builder, "/or_b23_sell", long_sell_logic, short_sell_logic,
-                                  _ROW_PITCH)
-
-    if not has_regime:
-        # Direct wire: logic → terminals
-        if buy_logic_path:
-            builder._read(entry_path, "signal", _Ref(buy_logic_path))
-        if sell_logic_path:
-            builder._read(exit_path, "signal", _Ref(sell_logic_path))
-
-    # --- Regime sub-tree -------------------------------------------------
-
-    if has_regime:
-        assert req.regime is not None
-        builder.add_regime(
-            req.regime,
-            ticker,
-            source,
-            ticker_path,
-            buy_logic_path,
-            sell_logic_path,
-            entry_path,
-            exit_path,
-        )
+    # Direct wire: logic → terminals
+    if buy_logic_path:
+        builder._read(entry_path, "signal", _Ref(buy_logic_path))
+    if sell_logic_path:
+        builder._read(exit_path, "signal", _Ref(sell_logic_path))
 
     return builder.build()
 
 
-def _either(builder: _GraphBuilder, path: str, long_path: Optional[str],
-            short_path: Optional[str], x: float) -> Optional[str]:
-    """An OR over the long and short logic when both exist, else the one there is."""
-    if long_path and short_path:
-        builder._add_node(path, "or", {}, (x, _COL_LOGIC + 100))
-        builder._read(path, "terms", [_Ref(long_path), _Ref(short_path)])
-        return path
-    return long_path or short_path
+def _emit_sides(builder: _GraphBuilder, req: StrategyRequest, ticker_path: str):
+    """The four per-direction rule sets (long buy, long sell, short buy,
+    short sell), each its logic node path or None when the list is empty."""
+    long_buy = list(req.long_buy_rules or [])
+    long_sell = list(req.long_sell_rules or [])
+    short_buy = list(req.short_buy_rules or [])
+    short_sell = list(req.short_sell_rules or [])
+    return (
+        builder._emit_rule_set("long_buy", long_buy, req.long_buy_logic, ticker_path, y_base=0.0),
+        builder._emit_rule_set("long_sell", long_sell, req.long_sell_logic, ticker_path,
+                               y_base=len(long_buy) * _ROW_PITCH),
+        builder._emit_rule_set("short_buy", short_buy, req.short_buy_logic, ticker_path,
+                               y_base=(len(long_buy) + len(long_sell)) * _ROW_PITCH),
+        builder._emit_rule_set("short_sell", short_sell, req.short_sell_logic, ticker_path,
+                               y_base=(len(long_buy) + len(long_sell) + len(short_buy))
+                               * _ROW_PITCH),
+    )
+
+
+def _regime_lags(timeframe: str, interval: str) -> bool:
+    """True when the graph must draw the rule regime's one-bar lag itself:
+    the regime timeframe is the base interval or finer, where the graph's
+    alignment (an exact join) does not shift (nodebuilder.trading.align)."""
+    from nodebuilder.trading.align import INTERVAL_SECONDS
+
+    tf, base = INTERVAL_SECONDS.get(timeframe), INTERVAL_SECONDS.get(interval)
+    if tf is None or base is None:
+        return timeframe == interval
+    return tf <= base
+
+
+def _render_regime(builder: _GraphBuilder, req: StrategyRequest) -> Graph:
+    """A regime strategy as the rule backtest runs it (plan D8).
+
+    The rule backtest turns on its dual mode whenever the regime is on
+    (routes.backtest.run_backtest: ``b23_mode = regime.enabled``): while the
+    regime is on it trades the long rules, while it is off the short rules,
+    and the plain buy/sell lists are not read.  So the graph is one Output
+    Group ``main`` with direction ``regime_switch`` holding:
+
+    - the primary Ticker and the four per-direction rule sets;
+    - Entry and Exit per side (``side`` long / short).  An empty list never
+      fires, as eval_rules([]) is False, so it is drawn as a "never" node;
+    - the ``regime_net`` network (add_regime_network) and a Regime terminal
+      whose on_flip is the strategy's own (RegimeConfig defaults to
+      close_only, the terminal to hold, so it is always written out).
+
+    Settings nodes stay at the root, where they apply to the group.  Every
+    terminal (the trailing stop, the time stop and the per-side size, stop,
+    trailing stop and time stop of add_settings) sits in the group (DI-03).
+    """
+    regime = req.regime
+    assert regime is not None
+    ticker_path = builder.add_ticker(req.ticker, req.interval, req.source)
+
+    sides = _emit_sides(builder, req, ticker_path)
+    builder.add_settings(req, regime=True)
+
+    terminals = (
+        ("/entry", "entry", "long", sides[0], (0.0, _COL_TERMINAL)),
+        ("/exit", "exit", "long", sides[1], (_ROW_PITCH, _COL_TERMINAL)),
+        ("/entry_short", "entry", "short", sides[2], (2 * _ROW_PITCH, _COL_TERMINAL)),
+        ("/exit_short", "exit", "short", sides[3], (3 * _ROW_PITCH, _COL_TERMINAL)),
+    )
+    for path, kind, side, logic, pos in terminals:
+        builder._add_node(path, kind, {"side": side}, pos)
+        if logic is None:
+            logic = f"/never_{kind}_{side}"
+            builder._never(logic, (pos[0], _COL_LOGIC), ticker_path)
+        builder._read(path, "signal", _Ref(logic))
+
+    # The regime network and its terminal.  The terminal reads the network's
+    # output stream: the wire runs from the network node, the read names the
+    # signal the network's last node writes.
+    last = builder.add_regime_network(regime, req.ticker, req.interval, req.source)
+    builder._add_node(_REGIME_NET_ID, "regime_net", {}, (_REGIME_Y_OFFSET, _COL_REGIME_GATE))
+    builder._add_node(_REGIME_TERMINAL_ID, "regime", {"on_flip": regime.on_flip},
+                      (4 * _ROW_PITCH, _COL_TERMINAL))
+    builder.reads.setdefault(_REGIME_TERMINAL_ID, {})["signal"] = _Ref(last)
+    builder._connect(_REGIME_NET_ID, _REGIME_TERMINAL_ID)
+
+    # The group, then every node's network.
+    builder._add_node(_GROUP_ID, "output_group", {
+        "direction": "regime_switch",
+        "ticker": builder.nodes[ticker_path].name,
+        "capital_weight": 1.0,
+    }, (-40.0, -60.0))
+    from nodebuilder.trading.sim_bridge import SETTING_TYPES
+
+    for node_id, node in builder.nodes.items():
+        if node_id == _GROUP_ID or node.type in SETTING_TYPES:
+            node.parent = None
+        elif node_id.startswith(_REGIME_NET_ID + "/"):
+            node.parent = _REGIME_NET_ID
+        else:
+            node.parent = _GROUP_ID
+    return builder.build()

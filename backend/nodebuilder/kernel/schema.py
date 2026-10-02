@@ -433,7 +433,7 @@ class NodeResult:
     def writes(self) -> tuple[str, ...]:
         names = tuple(self.write_names.values())
         if self.node_type is not None:
-            names += tuple(n for n, _d in self.node_type.fixed_writes)
+            names += tuple(n for n, _d in self.node_type.fixed_writes_for(self.params))
         return names
 
 
@@ -490,10 +490,12 @@ def primary_write(node: Node, node_type: Optional[NodeType],
     wps = node_type.write_params()
     if wps:
         return write_names.get(node.id, {}).get(wps[0].name, wps[0].default)
-    if node_type.primary:
-        return node_type.primary
-    if node_type.fixed_writes:
-        return node_type.fixed_writes[0][0]
+    primary = node_type.primary_for(node.params)
+    if primary:
+        return primary
+    fixed = node_type.fixed_writes_for(node.params)
+    if fixed:
+        return fixed[0][0]
     return None
 
 
@@ -512,7 +514,7 @@ def assign_write_names(graph: Graph, order: Optional[list[Node]] = None) -> dict
         nt = _registry.get(node.type)
         if nt is None:
             continue
-        taken.update(n for n, _d in nt.fixed_writes)
+        taken.update(n for n, _d in nt.fixed_writes_for(node.params))
         for spec in nt.write_params():
             value = (node.params or {}).get(spec.name)
             if is_attr_name(value):
@@ -808,7 +810,7 @@ def _write_list(nt: NodeType, names: Mapping[str, str],
     constant node's ``as_detail``).
     """
     detail_if = nt.meta.get("detail_if", {}) if nt.meta else {}
-    out = [(n, POINT, d) for n, d in nt.fixed_writes]
+    out = [(n, POINT, d) for n, d in nt.fixed_writes_for(params)]
     for spec in nt.write_params():
         flag = detail_if.get(spec.name)
         on = flag is not None and params is not None and _flag_on(params.get(flag))

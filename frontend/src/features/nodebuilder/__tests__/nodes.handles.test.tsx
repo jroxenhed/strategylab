@@ -13,6 +13,7 @@ import TickerNode from '../nodes/TickerNode'
 import OutputNode from '../nodes/OutputNode'
 import IndicatorNode from '../nodes/IndicatorNode'
 import SettingsNode from '../nodes/SettingsNode'
+import { rfTypeFor } from '../rfMapping'
 
 beforeAll(() => {
   // jsdom has no DOMMatrixReadOnly; React Flow reads it when measuring nodes.
@@ -107,15 +108,20 @@ describe('settings node labels in the read-only view', () => {
     return container.textContent ?? ''
   }
 
-  it('shows a pct trailing stop with its value', () => {
-    const text = renderOne('trailing_stop', { type: 'pct', value: 3 })
-    expect(text).toContain('Trailing Stop')
-    expect(text).toContain('3% trail')
-  })
-
-  it('shows an ATR trailing stop with activation', () => {
-    const text = renderOne('trailing_stop', { type: 'atr', value: 2, activate_on_profit: true, activate_pct: 1.5 })
-    expect(text).toContain('2x ATR trail after +1.5%')
+  it('a trailing stop is a terminal since W5: it draws as a terminal card (S32b)', () => {
+    expect(rfTypeFor('trailing_stop')).toBe('nbOutput')
+    expect(rfTypeFor('time_stop')).toBe('nbOutput')
+    const n = node('s', 'nbOutput', 'trailing_stop', false)
+    ;(n.data as { params: Record<string, unknown> }).params = { type: 'atr', value: 2, activate_on_profit: true, activate_pct: 1.5 }
+    const { container } = render(
+      <div style={{ width: 800, height: 600 }}>
+        <ReactFlow nodes={[n]} edges={[]} nodeTypes={nodeTypes} />
+      </div>,
+    )
+    const text = container.textContent ?? ''
+    expect(text).toContain('trailing')
+    expect(text).toContain('>+1.5 %')
+    expect(text).not.toContain('Trailing Stop')
   })
 
   it('tells long and short stops apart', () => {

@@ -55,13 +55,6 @@ NO_EXIT_ATTR = "@always_false"
 """The exit attribute of a program whose Exit gets no signal."""
 
 
-class RegimeUnsupportedError(GraphValidationError):
-    """Raised when a graph contains a /regime/ node, which is not supported
-    by the graph evaluator yet (W5)."""
-
-    code = "regime_unsupported"
-
-
 class MissingTerminalError(GraphValidationError):
     """Raised when compile() finds no Entry terminal in the graph.
 
@@ -69,12 +62,6 @@ class MissingTerminalError(GraphValidationError):
     no signal."""
 
     code = "missing_terminal"
-
-
-class HTFGraphNotSupportedError(GraphValidationError):
-    """Raised by the bot runner when a graph bot uses HTF intervals."""
-
-    code = "unsupported_node"
 
 
 class FamilyCapExceededError(GraphValidationError):
@@ -123,7 +110,12 @@ class CompiledProgram:
     entry_attr   : the attribute the Entry terminal reads.
     exit_attr    : the attribute the Exit terminal reads, or NO_EXIT_ATTR.
     entry_node / exit_node : the terminals whose input streams carry them.
-    simulator_settings : derived from the settings nodes (see SimulatorSetting).
+                   With Output Groups these name the FIRST group's entry and
+                   exit (the long side for a regime_switch group); code that
+                   runs a group reads ``groups`` instead.
+    groups       : one nodebuilder.trading.nodes_groups.GroupProgram per
+                   Output Group, in file order, or one implicit group
+                   called "main" when the graph has none (plan D7).
     required_lookback_bars : bars of history the graph needs before its
         signals are good (the bot's fetch window, plan D5).
     stream_schema: the stream format version (plan 3.1).
@@ -135,7 +127,6 @@ class CompiledProgram:
     steps: tuple
     entry_attr: str
     exit_attr: str
-    simulator_settings: list
     entry_node: Optional[str] = None
     exit_node: Optional[str] = None
     required_lookback_bars: int = 0
@@ -143,6 +134,7 @@ class CompiledProgram:
     schemas: Mapping[str, Any] = field(default_factory=dict)
     indicator_specs: tuple = ()
     per_bar_program: tuple = ()
+    groups: tuple = ()
 
     def step(self, node_id: str):
         """The Step for *node_id* (KeyError when it has none)."""
@@ -207,6 +199,7 @@ def cook_program(
     bars: Optional[Mapping[str, Any]] = None,
     keep: Optional[set] = None,
     keep_all: bool = False,
+    refs: Any = None,
 ):
     """Run every node of *program* once over the frame.  Returns a
     kernel.evaluate.CookResult.
@@ -214,6 +207,14 @@ def cook_program(
     Pass an OHLCV DataFrame, or an index plus bars (as bars_from_frame
     gives).  By default only the terminals' streams are kept (plus any node
     ids in *keep*); keep_all keeps every node's output stream (an inspector).
+
+    *refs* (nodebuilder.trading.align.ReferenceFrames, which
+    prepare.build_graph_attrs puts in attrs) holds the bars of every
+    reference Ticker (plan D8).  A graph that reads a reference Ticker cooks
+    each reference frame on its own bars and aligns it onto this frame
+    (align.cook_domains); one with none cooks exactly as before.  A graph
+    with a reference Ticker and no *refs* raises ValueError: a Ticker never
+    reads another symbol's bars by mistake.
     CPU work: never call this on the bot's event loop.
     """
     from nodebuilder.kernel.evaluate import cook
@@ -227,7 +228,23 @@ def cook_program(
         keep_ids = None
     else:
         keep_ids = {n for n in (program.entry_node, program.exit_node) if n} | set(keep or ())
+    from nodebuilder.trading import align as _align
+
+    if _align.ticker_roles(program).needs_domains:
+        return _align.cook_domains(program, index, bars, refs, keep=keep_ids)
     return cook(program.steps, index, {"bars": bars}, keep=keep_ids)
+
+
+def cook_attrs(program: CompiledProgram, attrs: Mapping[str, Any], *,
+               keep: Optional[set] = None, keep_all: bool = False):
+    """cook_program over the bars in a build_graph_attrs dict, with the
+    reference frames it carries (the one cook run.py, sim_bridge and
+    evaluate_graph all make)."""
+    from nodebuilder.trading.align import REFS_KEY
+
+    index, bars = bars_from_attrs(attrs)
+    return cook_program(program, index=index, bars=bars, keep=keep, keep_all=keep_all,
+                        refs=attrs.get(REFS_KEY))
 
 
 def signal_columns(program: CompiledProgram, result) -> tuple[np.ndarray, np.ndarray]:
@@ -244,9 +261,11 @@ def signal_columns(program: CompiledProgram, result) -> tuple[np.ndarray, np.nda
 
 def cook_signals(program: CompiledProgram, df: Optional[pd.DataFrame] = None, *,
                  index: Optional[pd.Index] = None,
-                 bars: Optional[Mapping[str, Any]] = None) -> tuple[np.ndarray, np.ndarray]:
-    """Cook *program* and return its (entry, exit) bool columns."""
-    return signal_columns(program, cook_program(program, df, index=index, bars=bars))
+                 bars: Optional[Mapping[str, Any]] = None,
+                 refs: Any = None) -> tuple[np.ndarray, np.ndarray]:
+    """Cook *program* and return its (entry, exit) bool columns (*refs*: the
+    reference frames, as cook_program takes them)."""
+    return signal_columns(program, cook_program(program, df, index=index, bars=bars, refs=refs))
 
 
 # ---------------------------------------------------------------------------
@@ -270,8 +289,10 @@ def evaluate_graph(
     """
     cached = attrs.get(_COOK_KEY)
     if cached is None or cached[0] is not program:
+        from nodebuilder.trading.align import REFS_KEY
+
         index, bars = bars_from_attrs(attrs)
-        entry, exit_ = cook_signals(program, index=index, bars=bars)
+        entry, exit_ = cook_signals(program, index=index, bars=bars, refs=attrs.get(REFS_KEY))
         cached = (program, entry, exit_)
         attrs[_COOK_KEY] = cached
     _prog, entry, exit_ = cached

@@ -100,6 +100,33 @@ class InvalidParentError(GraphValidationError):
     """A node's parent does not exist, or its parents loop back to it."""
 
 
+class WireCrossesNetworkError(GraphValidationError):
+    """A wire joins two nodes that sit in different networks (plan D7).
+
+    Wires connect siblings only.  A stream enters a network through the
+    network node's input ports and leaves through its output.  node_id is
+    the node the wire goes into, port its input port.
+    """
+
+    code = "wire_crosses_network"
+
+    def __init__(self, message: str, node_id: str, port: Optional[str]) -> None:
+        super().__init__(message, node_id=node_id)
+        self.port = port
+
+
+class ReservedNodeIdError(GraphValidationError):
+    """A stored node id contains ``::``, which only flattened ids may use."""
+
+    code = "graph_invalid"
+
+
+# Separator of composite ids: an asset instance's children get the flat id
+# ``outerId::innerId`` when the graph is flattened (plan D3, D7).  A stored
+# node id may never contain it.
+COMPOSITE_ID_SEP = "::"
+
+
 # ---------------------------------------------------------------------------
 # Data models
 # ---------------------------------------------------------------------------
@@ -122,7 +149,9 @@ class Node(BaseModel):
 
     parent: Optional[str] = None
     """Id of the network node this node sits in; None means root.  Replaces
-    the unused v1 field subgraph."""
+    the unused v1 field subgraph.  Wires connect only nodes with the same
+    parent (plan D7); kernel/flatten.py turns the nested graph into one flat
+    graph before compile."""
 
     params: dict[str, Any] = Field(default_factory=dict)
     position: tuple[float, float] = (0.0, 0.0)
@@ -237,6 +266,15 @@ class Graph(BaseModel):
                     f"Node id mismatch: nodes[{key!r}].id == {node.id!r}"
                 )
 
+        # 1a. "::" is kept for the ids flatten gives asset children (W6).
+        for key in self.nodes:
+            if COMPOSITE_ID_SEP in key:
+                raise ReservedNodeIdError(
+                    f"Node id {key!r} contains {COMPOSITE_ID_SEP!r}, which is kept "
+                    "for the ids of nodes inside library assets.",
+                    node_id=key,
+                )
+
         # 1b. Names are valid and unique among siblings; parents exist and do
         # not loop.  /validate lists every issue; loading stops at the first.
         issues = name_issues(self.nodes)
@@ -281,6 +319,12 @@ class Graph(BaseModel):
                     port=wire.to_port,
                 )
             seen_ports.add(key)
+
+        # 2c. Wires connect siblings only (plan D7).
+        crossing = network_wire_issues(self.nodes, self.wires)
+        if crossing:
+            first = crossing[0]
+            raise WireCrossesNetworkError(first["message"], first["node_id"], first["port"])
 
         # 3. No cycles
         _assert_acyclic(self)
@@ -344,6 +388,47 @@ def port_ordered(wires: list) -> list:
         for slot, src in zip(indexes, sorted(indexes, key=_key)):
             out[slot] = wires[src]
     return out
+
+
+# ---------------------------------------------------------------------------
+# Networks
+# ---------------------------------------------------------------------------
+
+
+CROSSING_HINT = "Wires connect nodes in the same network. Route through a network port."
+
+
+def network_wire_issues(nodes: dict, wires: list) -> list[dict]:
+    """Every wire that joins two nodes in different networks, in wire order.
+
+    Each item is ``{"code": "wire_crosses_network", "node_id", "port",
+    "wire_id", "message"}``; node_id is the node the wire goes into.  Two
+    nodes are in the same network when they have the same ``parent``.  A
+    wire with an end that does not exist is skipped (that is a dangling
+    wire, reported on its own).  *nodes* maps id to anything with a
+    ``parent`` attribute.
+    """
+    issues: list[dict] = []
+    for wire in wires:
+        src = nodes.get(wire.from_path)
+        dst = nodes.get(wire.to_path)
+        if src is None or dst is None or src.parent == dst.parent:
+            continue
+        issues.append({
+            "code": "wire_crosses_network",
+            "node_id": wire.to_path,
+            "port": wire.to_port,
+            "wire_id": wire.id,
+            "message": (
+                f"Wire {wire.id!r} goes from {wire.from_path!r} ({_where(src.parent)}) "
+                f"to {wire.to_path!r} ({_where(dst.parent)}).  {CROSSING_HINT}"
+            ),
+        })
+    return issues
+
+
+def _where(parent: Optional[str]) -> str:
+    return "at the root" if parent is None else f"inside {parent!r}"
 
 
 # ---------------------------------------------------------------------------

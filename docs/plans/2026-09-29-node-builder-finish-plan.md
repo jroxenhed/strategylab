@@ -852,6 +852,16 @@ export const GRAPH_OWNED_FIELDS: readonly string[]   // W4: position_size, stop_
 
 ### Wave 5: Lifecycle, networks, Output Groups, reference tickers, regime, bot spawn
 
+**Status: done (2026-10-02).** Items 5.0 and 5.A to 5.F are in. A five-reviewer wave found 59 findings; all 5 P1 were confirmed and fixed (a failed reference fetch stopped exit management; a regime_switch bot ignored its own short after Stop and Start; same-interval daily references from another calendar could leak data from after the close; a rule strategy opened as a graph lost its stops, time stop and borrow rate), and the rest are fixed or deferred to section 10. A live Playwright run passed: a two-group pair graph gave the same group and combined numbers as the API, and Spawn created two stopped bots. Contract notes for later waves:
+
+- **Network types.** `subnet`, `output_group` and `regime_net` are networks; `subnet_input` (param `port`, the network's `in<k>`) and `subnet_output` are boundary nodes. `kernel/flatten.py` removes them before analysis; node ids that contain `::` are reserved. The regime network is `regime_net`, not `regime` as D8 says: `regime` is the terminal.
+- **Terminals.** `size`, `stop`, `trailing_stop` (now a terminal, TrailingStopConfig params), `time_stop` and `regime` (`on_flip`). Entry and Exit have `side`; size, stop, trailing_stop and time_stop have `side` (`both | long | short`), used only in a `regime_switch` group, one per side.
+- **Groups.** `CompiledProgram.groups` (one `GroupProgram` each) replaces `simulator_settings`. The response adds `groups` and `combined` (`exposure_pct`, `gross_deployed_pct`); the legacy fields come from the group when there is one, and from the combined result (trades empty) when there are more. A group with capital weight 0 compiles with the warning `group_weight_zero`, is not simulated and is left out of the response; spawn refuses it.
+- **Direction (D7 versus D11).** A graph with no `output_group` takes the request direction, and the sidebar sends it. With groups, each group's `direction` wins and the sidebar greys Direction.
+- **Reference tickers.** Each reference Ticker cooks on its own padded frame (`trading/align.py`) and joins the group's bars by bar close. A same-interval daily or longer reference joins exactly only when both frames share one calendar; otherwise it shifts one bar. A Ticker with `prefix` writes `@<prefix>_close` and so on.
+- **from_rules.** A regime strategy renders as one `regime_switch` group `main` with a `regime_net` network, a `shift` node where the rule engine lags one bar, and a `regime` terminal with `on_flip` set. Every strategy renders `time_stop` and, when not 0.5, `borrow_rate`.
+- **Bots.** `POST /api/graphs/{id}/spawn` (all legs checked, one `add_bots`, bots stopped, sidebar gates `trading_hours`, `skip_after_stop`, `dynamic_sizing`), `POST /api/bots/{id}/graph_update` (refused in position, while an entry is in flight, or on a symbol, direction or interval change), `BotConfig.is_bidirectional`, and the error `reference_unavailable`. The first Wave 5 boot writes `bots.json.pre-w5`.
+
 **Goal.** A pair-style strategy is one canvas, with per-group and combined results, and spawns two stopped bots. Regime strategies edit and run with the regime intact.
 
 **Order (critic 21, 22).**
@@ -1393,3 +1403,10 @@ Also ask after W2 and after W5: does the graph now beat the rule builder for the
 - **Deviations accepted:** the Data Sheet is a drawer under the split, not a third panel; graph Results sit in the right sidebar; the stale bar's Cook button runs the backtest; markers use the rule chart's colours.
 - **A cleaner seam for graph run settings:** `getGraphRunSettings()` on the StrategyBuilder handle instead of reading the `strategylab-strategy` localStorage key.
 - **Status bar after a backtest** can show the backtest cook while a "fix errors to cook" preview note waits.
+
+**Deferred from the Wave 5 review (2026-10-02).** Full notes: `.run/F435/w5/decisions.md` and the `fix-*.md` reports (local only).
+
+- **Design calls for the Fable UI/UX pass.** The trailing_stop card rows (FA3: two rows against today's three), the S32b terminal card states and accessibility attributes, the group tab's role, the S32a Inspector group section, an implicit `main` frame, a confirm on a direction change, `+ New Ticker`, the group strip's tabpanel wiring and colours, the frame drop-target highlight, resize grips, ghost slot placement, card view (X) and dive, and the rest of S32c beyond the prefix row.
+- **`meta` on graph nodes (FA1 view state)** still needs a backend schema field.
+- **A broker position-check failure in a normal tick** marks the bar done and skips that bar's exits. This predates Wave 5; it waits on a TODO slot (john-questions Q2).
+- **Session restore of a deleted graph** logs one 404 in the console before the editor falls back.

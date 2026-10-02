@@ -173,21 +173,73 @@ export function renameNode<G extends PathGraph>(graph: G, nodeId: string, newNam
   return rewritePathRefs(next, oldPath, nodePath(next, nodeId))
 }
 
-// Points stored path strings at a renamed node's new path. Nothing stores
-// paths yet; W6 adds promoted-param targets and W7 adds ch() strings, and
-// both get rewritten here (including paths under oldPath). `onlyNodes`
-// limits the rewrite to refs stored on those nodes: a paste renames the
-// pasted copies, and only refs inside the pasted set follow (FC-9); refs
-// elsewhere still mean the originals.
+// Points stored path strings at a renamed (or moved) node's new path,
+// including paths under oldPath. Today one param stores a path: an Output
+// Group's `ticker` (W5); W6 adds promoted-param targets and W7 adds ch()
+// strings, and both get rewritten here. `onlyNodes` limits the rewrite to
+// refs stored on those nodes: a paste renames the pasted copies, and only
+// refs inside the pasted set follow (FC-9); refs elsewhere still mean the
+// originals.
+//
+// A relative ref is resolved the way the server resolves a group's ticker
+// (against the group, then its parent, then the root). It is rewritten only
+// when it pointed into oldPath and no longer lands at the same node; it then
+// becomes the absolute new path.
 export function rewritePathRefs<G extends PathGraph>(
   graph: G,
   oldPath: string,
   newPath: string,
   onlyNodes?: ReadonlySet<string>,
 ): G {
-  // Nothing to rewrite until W6/W7 store paths.
-  void oldPath
-  void newPath
-  void onlyNodes
-  return graph
+  if (oldPath === newPath || oldPath === '/' || oldPath === '') return graph
+  const under = (p: string) => p === oldPath || p.startsWith(oldPath + '/')
+  const toNew = (p: string) => (under(p) ? newPath + p.slice(oldPath.length) : p)
+  const toOld = (p: string) => (p === newPath || p.startsWith(newPath + '/') ? oldPath + p.slice(newPath.length) : p)
+  let nodes: Record<string, PathNode> | null = null
+  for (const [id, raw] of Object.entries(graph.nodes)) {
+    if (onlyNodes && !onlyNodes.has(id)) continue
+    const node = raw as PathNode & { type?: string; params?: Record<string, unknown> }
+    if (node.type !== 'output_group') continue
+    const ref = node.params?.ticker
+    if (typeof ref !== 'string' || ref === '') continue
+    let next = ref
+    if (ref.startsWith('/')) {
+      next = toNew(ref)
+    } else {
+      const bases: Array<string | null> = [id, node.parent, null]
+      for (const base of bases) {
+        let newBase = '/'
+        try {
+          newBase = base === null ? '/' : nodePath(graph, base)
+        } catch {
+          continue
+        }
+        const oldAbs = joinPath(toOld(newBase), ref)
+        if (oldAbs === null || !under(oldAbs)) continue
+        const want = toNew(oldAbs)
+        next = joinPath(newBase, ref) === want ? ref : want
+        break
+      }
+    }
+    if (next === ref) continue
+    nodes ??= { ...graph.nodes }
+    nodes[id] = { ...node, params: { ...node.params, ticker: next } } as PathNode
+  }
+  return nodes ? ({ ...graph, nodes } as G) : graph
+}
+
+// The absolute path `rel` names from the node at absolute path `base`
+// (Houdini rules, as findByPath). Null when it climbs above the root.
+export function joinPath(base: string, rel: string): string | null {
+  const parts = rel.startsWith('/') ? [] : base.split('/').filter(p => p !== '')
+  for (const part of rel.split('/')) {
+    if (part === '' || part === '.') continue
+    if (part === '..') {
+      if (parts.length === 0) return null
+      parts.pop()
+      continue
+    }
+    parts.push(part)
+  }
+  return parts.length === 0 ? null : '/' + parts.join('/')
 }

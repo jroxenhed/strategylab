@@ -1,10 +1,13 @@
 /**
- * "Set by graph" greyed fields (F435 W4 item 4.D; plan D11; spec S29).
+ * "Set by graph" greyed fields (F435 W4 item 4.D, W5; plan D7, D11; spec S29).
  *
- * - With graphViewActive, the four W4 graph-owned groups in the settings
- *   panel are disabled, titled "Set by graph" and carry a GRAPH pill; the
+ * - With graphViewActive, the seven graph-owned groups in the settings
+ *   panel (W4's four plus trailing stop, time stop and borrow rate) are
+ *   disabled, titled "Set by graph" and carry a GRAPH pill; the
  *   sidebar-owned fields (capital) are untouched; the three settings with
  *   no node yet carry "APPLIES TO GRAPH".
+ * - The direction is greyed only when the graph has Output Groups
+ *   (decisions-5C); without groups it applies to graph runs.
  * - Without graph view the panel is exactly as before (no note, no pills,
  *   nothing disabled).
  * - Changing a greyed value does not change the request buildGraphRequest
@@ -28,16 +31,19 @@ import StrategyBuilder from '../../strategy/StrategyBuilder'
 import { buildGraphRequest, readGraphRunSettings } from '../graphRun'
 import {
   APPLIES_TITLE,
-  APPLIES_UNTIL_W5_TITLE,
   GRAPH_APPLIES_FIELDS,
   GRAPH_NOTE_ID,
   GRAPH_NOTE_TEXT,
   GRAPH_OWNED_FIELDS,
+  GROUP_OWNED_FIELDS,
+  graphHasGroups,
   isGraphOwned,
+  ownedFields,
   SET_BY_GRAPH,
 } from '../ownership'
+import type { Graph } from '../../../api/nodebuilder'
 
-function renderPanel(graphViewActive: boolean) {
+function renderPanel(graphViewActive: boolean, graphHasGroups = false) {
   return render(
     <StrategyBuilder
       ticker="AAPL"
@@ -47,15 +53,30 @@ function renderPanel(graphViewActive: boolean) {
       dataSource="yahoo"
       onResult={() => {}}
       graphViewActive={graphViewActive}
+      graphHasGroups={graphHasGroups}
     />,
   )
 }
 
+/** A graph with one Output Group. */
+function groupsGraph(): Graph {
+  const g = emptyGraph()
+  return {
+    ...g,
+    nodes: {
+      grp: {
+        id: 'grp', type: 'output_group', name: 'long_leg', parent: null, params: { direction: 'long' },
+        position: [0, 0], display: false, bypass: false,
+      },
+    },
+  }
+}
+
 /** The request a graph run would send, from what the settings panel saved. */
-function graphRequestNow() {
+function graphRequestNow(graph: Graph = emptyGraph()) {
   const s = readGraphRunSettings()
   return buildGraphRequest(
-    emptyGraph(),
+    graph,
     { ticker: 'AAPL', start: '2025-01-02', end: '2025-12-31', interval: '1d', source: 'yahoo', initial_capital: s.initial_capital },
     s.extras,
   )
@@ -69,16 +90,33 @@ beforeEach(() => localStorage.clear())
 afterEach(() => cleanup())
 
 describe('the owned-field list (D11)', () => {
-  it('is the W4 list, in one place', () => {
-    expect([...GRAPH_OWNED_FIELDS]).toEqual(['position_size', 'stop_loss_pct', 'slippage_bps', 'commission_pct'])
+  it('is the W5 list, in one place', () => {
+    expect([...GRAPH_OWNED_FIELDS]).toEqual([
+      'position_size', 'stop_loss_pct', 'slippage_bps', 'commission_pct',
+      'trailing_stop', 'max_bars_held', 'borrow_rate_annual',
+    ])
+    expect([...GROUP_OWNED_FIELDS]).toEqual(['direction'])
     expect([...GRAPH_APPLIES_FIELDS]).toEqual(['dynamic_sizing', 'skip_after_stop', 'trading_hours'])
     expect(isGraphOwned('stop_loss_pct')).toBe(true)
+    expect(isGraphOwned('max_bars_held')).toBe(true)
     expect(isGraphOwned('initial_capital')).toBe(false)
+  })
+
+  it('owns the direction only for a graph with Output Groups (D7)', () => {
+    expect(isGraphOwned('direction')).toBe(false)
+    expect(isGraphOwned('direction', true)).toBe(true)
+    expect(ownedFields(true)).toContain('direction')
+    expect(ownedFields(false)).not.toContain('direction')
+    expect(graphHasGroups(emptyGraph())).toBe(false)
+    expect(graphHasGroups(groupsGraph())).toBe(true)
+    expect(graphHasGroups(null)).toBe(false)
   })
 })
 
 describe('StrategyBuilder in graph view (S29)', () => {
-  it('greys the four graph-owned groups with "Set by graph" and a GRAPH pill', () => {
+  it('greys the seven graph-owned groups with "Set by graph" and a GRAPH pill', () => {
+    // Short, so the borrow rate shows.
+    localStorage.setItem('strategylab-strategy', JSON.stringify({ direction: 'short' }))
     renderPanel(true)
     const note = screen.getByTestId('sb-graph-note')
     expect(note.id).toBe(GRAPH_NOTE_ID)
@@ -105,35 +143,57 @@ describe('StrategyBuilder in graph view (S29)', () => {
   })
 
   it('leaves the sidebar-owned capital alone and marks the settings that still apply', () => {
+    localStorage.setItem('strategylab-strategy', JSON.stringify({ direction: 'short' }))
     renderPanel(true)
     const capital = screen.getByText('Capital ($)').parentElement!.querySelector('input')!
     expect(capital).not.toBeDisabled()
     expect(screen.getAllByText('GRAPH')).toHaveLength(GRAPH_OWNED_FIELDS.length)
+    // 3 settings with no node yet + the direction (no Output Group: it applies).
     const applies = screen.getAllByText('APPLIES TO GRAPH')
-    // 3 settings with no node yet + direction, time stop and trailing stop
-    // (graph-owned only from W5; borrow rate shows only for shorts).
-    expect(applies.filter(p => p.getAttribute('title') === APPLIES_TITLE)).toHaveLength(3)
-    expect(applies.filter(p => p.getAttribute('title') === APPLIES_UNTIL_W5_TITLE)).toHaveLength(3)
-    expect(applies).toHaveLength(6)
+    expect(applies.every(p => p.getAttribute('title') === APPLIES_TITLE)).toBe(true)
+    expect(applies).toHaveLength(4)
+    expect(screen.queryByTestId('sb-applies-w5')).toBeNull()
   })
 
-  it('marks time stop, trailing stop and (for shorts) borrow rate APPLIES TO GRAPH (UX-04)', () => {
-    localStorage.setItem('strategylab-strategy', JSON.stringify({ direction: 'short' }))
+  it('greys time stop, trailing stop and borrow rate: graph-owned from W5 (UX-04)', () => {
+    localStorage.setItem('strategylab-strategy', JSON.stringify({
+      direction: 'short', trailingEnabled: true, trailingConfig: { type: 'pct', value: 5, source: 'high', activate_on_profit: true, activate_pct: 1 },
+    }))
     renderPanel(true)
-    for (const label of ['Time Stop (bars)', 'Trailing Stop', 'Borrow rate (%/yr)']) {
-      const row = screen.getByText(label).closest('div')!
-      expect(within(row).getByTestId('sb-applies-w5'), label).toHaveAttribute('title', APPLIES_UNTIL_W5_TITLE)
-      for (const el of row.querySelectorAll('input')) expect(el, label).not.toBeDisabled()
+    for (const f of ['max_bars_held', 'trailing_stop', 'borrow_rate_annual']) {
+      const group = screen.getByTestId(`sb-owned-${f}`)
+      expect(group.getAttribute('title'), f).toBe(SET_BY_GRAPH)
+      expect(within(group).getByText('GRAPH'), f).toHaveAttribute('title', SET_BY_GRAPH)
+      for (const el of group.querySelectorAll('input, select')) expect(el, f).toBeDisabled()
     }
+    // The trailing stop's whole config is greyed, not only its checkbox.
+    expect(screen.getByTestId('sb-owned-trailing_stop').querySelectorAll('input, select')).toHaveLength(6)
   })
 
-  it('shows the direction in graph view, marked APPLIES TO GRAPH, and a click changes the run (UX-05)', () => {
+  it('without Output Groups the direction applies to graph runs, and a click changes the run (UX-05, D7)', () => {
     renderPanel(true)
+    const group = screen.getByTestId('sb-owned-direction')
+    expect(group.getAttribute('title')).toBeNull()
     const row = screen.getByTestId('sb-graph-direction')
-    expect(within(row).getByTestId('sb-applies-w5')).toBeInTheDocument()
+    expect(within(row).getByText('APPLIES TO GRAPH')).toHaveAttribute('title', APPLIES_TITLE)
     expect(within(row).getByRole('button', { name: 'Long' })).toHaveAttribute('aria-pressed', 'true')
     fireEvent.click(within(row).getByRole('button', { name: 'Short' }))
     expect(within(row).getByRole('button', { name: 'Short' })).toHaveAttribute('aria-pressed', 'true')
+    expect(graphRequestNow().direction).toBe('short')
+  })
+
+  it('with Output Groups the direction is greyed "Set by graph" and never sent (D11)', () => {
+    localStorage.setItem('strategylab-strategy', JSON.stringify({ direction: 'short' }))
+    renderPanel(true, true)
+    const group = screen.getByTestId('sb-owned-direction')
+    expect(group.getAttribute('title')).toBe(SET_BY_GRAPH)
+    expect(within(group).getByText('GRAPH')).toHaveAttribute('title', SET_BY_GRAPH)
+    for (const b of within(group).getAllByRole('button')) {
+      expect(b).toBeDisabled()
+      expect(b.getAttribute('aria-describedby')).toBe(GRAPH_NOTE_ID)
+    }
+    expect(within(group).queryByText('APPLIES TO GRAPH')).toBeNull()
+    expect('direction' in graphRequestNow(groupsGraph())).toBe(false)
     expect(graphRequestNow().direction).toBe('short')
   })
 
@@ -189,38 +249,33 @@ describe('a greyed field cannot change a graph run (D11)', () => {
   })
 })
 
-describe('settings the graph owns only from W5 still reach graph runs (UX-04, CI-02)', () => {
-  it('sends trailing stop, time stop and borrow rate from the settings panel', () => {
+describe('trailing stop, time stop and borrow rate never reach graph runs (W5, D11)', () => {
+  it('are not sent even when the settings panel has them on', () => {
     const trailing = { type: 'pct', value: 5, source: 'high', activate_on_profit: false, activate_pct: 0 }
     localStorage.setItem('strategylab-strategy', JSON.stringify({
       direction: 'short', trailingEnabled: true, trailingConfig: trailing, maxBarsHeld: 30, borrowRateAnnual: 1.25,
       stopLoss: 4, posSize: 40, slippageBps: 9, perShareRate: 0.0035, minPerOrder: 0.35,
     }))
-    const req = graphRequestNow() as unknown as Record<string, unknown>
-    expect(req).toMatchObject({ direction: 'short', trailing_stop: trailing, max_bars_held: 30, borrow_rate_annual: 1.25 })
-    // The W4 graph-owned fields still never go out.
-    for (const f of GRAPH_OWNED_FIELDS) expect(f in req, f).toBe(false)
-    expect('per_share_rate' in req).toBe(false)
-    expect('min_per_order' in req).toBe(false)
+    for (const g of [emptyGraph(), groupsGraph()]) {
+      const req = graphRequestNow(g) as unknown as Record<string, unknown>
+      for (const f of GRAPH_OWNED_FIELDS) expect(f in req, f).toBe(false)
+      expect('per_share_rate' in req).toBe(false)
+      expect('min_per_order' in req).toBe(false)
+    }
+    // Only the graph without groups carries the sidebar direction.
+    expect(graphRequestNow().direction).toBe('short')
   })
 
-  it('leaves them out when off: trailing disabled, no time stop', () => {
-    localStorage.setItem('strategylab-strategy', JSON.stringify({
-      trailingEnabled: false, trailingConfig: { type: 'pct', value: 5 }, maxBarsHeld: '',
-    }))
-    const req = graphRequestNow() as unknown as Record<string, unknown>
-    expect('trailing_stop' in req).toBe(false)
-    expect('max_bars_held' in req).toBe(false)
-  })
-
-  it('the panel UI changes reach the request', () => {
-    renderPanel(true)
+  it('changing them in the panel leaves the request unchanged', () => {
+    // Out of graph view the fields are editable, so the user can change them.
+    renderPanel(false)
+    const before = graphRequestNow()
     const timeStop = screen.getByText('Time Stop (bars)').parentElement!.querySelector('input')!
     fireEvent.change(timeStop, { target: { value: '12' } })
     fireEvent.click(screen.getByText('Trailing Stop').querySelector('input')!)
-    const req = graphRequestNow()
-    expect(req.max_bars_held).toBe(12)
-    expect(req.trailing_stop).toMatchObject({ type: 'pct' })
+    const saved = JSON.parse(localStorage.getItem('strategylab-strategy')!)
+    expect(saved).toMatchObject({ maxBarsHeld: 12, trailingEnabled: true })
+    expect(graphRequestNow()).toEqual(before)
   })
 })
 

@@ -36,8 +36,10 @@ from models import StrategyRequest, TrailingStopConfig
 from nodebuilder.api_models import GraphBacktestRequest
 from nodebuilder.compile import compile as nb_compile
 from nodebuilder.models import Graph
-from nodebuilder.run import _apply_settings_overrides, run_graph_backtest
-from nodebuilder.sim_settings import BOT_DIRECTION_FIELDS, apply_to_bot_config
+from nodebuilder.run import run_graph_backtest
+from nodebuilder.sim_settings import BOT_DIRECTION_FIELDS
+from nodebuilder.trading import nodes_groups, sim_bridge
+from nodebuilder.trading.sim_bridge import apply_to_bot_config
 
 
 # ---------------------------------------------------------------------------
@@ -143,11 +145,16 @@ def _bot_config(graph: Graph | None, **overrides) -> BotConfig:
     return BotConfig(**base)
 
 
+def _plan(graph: Graph, direction: str = "long"):
+    """The simulator plan of the graph's only group (W5: program.groups)."""
+    return nodes_groups.group_named(nb_compile(graph), None).plan_for(direction)
+
+
 def _backtest_settings(graph: Graph, **req_fields) -> dict:
     """The simulator fields the graph backtest runs with for this graph."""
     req = GraphBacktestRequest(graph=graph, ticker="AAPL", start="2024-01-01",
                                end="2025-01-01", **req_fields)
-    return _apply_settings_overrides(req, nb_compile(graph).simulator_settings)
+    return sim_bridge.strategy_fields(sim_bridge.request_fields(req), _plan(graph, req.direction))
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +230,7 @@ def _entry_order(provider: _StubProvider):
 def test_overlay_stop_equals_backtest_stop():
     graph = _graph({"stop_loss": {"pct": 3.0}})
     cfg = _bot_config(graph, stop_loss_pct=10.0)
-    eff = apply_to_bot_config(cfg, nb_compile(graph).simulator_settings)
+    eff = apply_to_bot_config(cfg, _plan(graph, cfg.direction))
     assert eff.stop_loss_pct == 3.0
     assert eff.stop_loss_pct == _backtest_settings(graph, stop_loss_pct=10.0)["stop_loss_pct"]
     # The overlay is a copy: the stored config is unchanged.
@@ -271,7 +278,7 @@ def test_without_graph_stop_the_config_stop_still_applies():
     """No Stop Loss node: the bot config's plain stop is used, as in the backtest request."""
     graph = _graph()
     cfg = _bot_config(graph, stop_loss_pct=10.0, long_stop_loss_pct=20.0)
-    eff = apply_to_bot_config(cfg, nb_compile(graph).simulator_settings)
+    eff = apply_to_bot_config(cfg, _plan(graph, cfg.direction))
     assert eff.stop_loss_pct == 10.0 == _backtest_settings(graph, stop_loss_pct=10.0)["stop_loss_pct"]
     # The graph backtest never reads per-direction fields, so live clears them.
     for name in BOT_DIRECTION_FIELDS:
@@ -288,7 +295,7 @@ def test_overlay_clears_every_per_direction_field():
         long_trailing_stop=ts, short_trailing_stop=ts,
         long_max_bars_held=3, short_max_bars_held=3,
     )
-    eff = apply_to_bot_config(cfg, nb_compile(graph).simulator_settings)
+    eff = apply_to_bot_config(cfg, _plan(graph, cfg.direction))
     for name in BOT_DIRECTION_FIELDS:
         assert getattr(eff, name) is None, name
     assert eff.position_size == 0.5
@@ -297,7 +304,7 @@ def test_overlay_clears_every_per_direction_field():
 def test_graph_trailing_stop_and_slippage_win():
     graph = _graph({"trailing_stop": {"type": "pct", "value": 4.0}, "slippage": {"bps": 7.0}})
     cfg = _bot_config(graph, trailing_stop=TrailingStopConfig(type="pct", value=12.0), slippage_bps=1.0)
-    eff = apply_to_bot_config(cfg, nb_compile(graph).simulator_settings)
+    eff = apply_to_bot_config(cfg, _plan(graph, cfg.direction))
     bt = _backtest_settings(graph, trailing_stop=TrailingStopConfig(type="pct", value=12.0), slippage_bps=1.0)
     assert eff.trailing_stop.value == 4.0 == bt["trailing_stop"].value
     assert eff.slippage_bps == 7.0 == bt["slippage_bps"]
@@ -306,7 +313,7 @@ def test_graph_trailing_stop_and_slippage_win():
 def test_commission_keys_are_skipped_for_bots():
     """BotConfig has no commission fields; the overlay must not fail on them."""
     graph = _graph({"commission": {"per_share_rate": 0.0035, "min_per_order": 0.35}})
-    eff = apply_to_bot_config(_bot_config(graph), nb_compile(graph).simulator_settings)
+    eff = apply_to_bot_config(_bot_config(graph), _plan(graph))
     assert not hasattr(eff, "per_share_rate")
 
 
@@ -317,7 +324,7 @@ def test_commission_keys_are_skipped_for_bots():
 @pytest.mark.parametrize("size, expected", [(100, 1.0), (1, 1.0), (0.5, 0.5), (0.001, 0.01)])
 def test_size_overlay_matches_backtest_clamp(size, expected):
     graph = _graph({"position_size": {"size": size}})
-    eff = apply_to_bot_config(_bot_config(graph), nb_compile(graph).simulator_settings)
+    eff = apply_to_bot_config(_bot_config(graph), _plan(graph))
     settings = _backtest_settings(graph)
     backtest_size = StrategyRequest(ticker="AAPL", start="2024-01-01", end="2025-01-01",
                                     buy_rules=[], sell_rules=[],
@@ -407,11 +414,21 @@ def test_backtest_bot_graph_error_is_recorded():
 # 4. add_bot / update_bot refuse a bad graph with 400 {detail, node_id}
 # ---------------------------------------------------------------------------
 
+class _FlatBroker:
+    """PATCH with a new graph asks the broker for the bot's position (F435
+    W5 LM-3); this one holds nothing and allows no other call."""
+
+    def get_positions(self):
+        return []
+
+
 @pytest.fixture
-def client_real_mgr():
+def client_real_mgr(monkeypatch):
+    import bot_manager as bot_manager_mod
     import routes.bots as bots_route
     from main import app
 
+    monkeypatch.setattr(bot_manager_mod, "get_trading_provider", lambda *a, **k: _FlatBroker())
     mgr = BotManager()
     mgr.bot_fund = 100_000.0
     mgr.save = lambda: None
@@ -474,13 +491,41 @@ def test_add_bot_cyclic_graph_is_400_not_500(client_real_mgr):
     assert "node_id" in r.json()
 
 
-def test_add_bot_htf_graph_is_400(client_real_mgr):
-    client, _ = client_real_mgr
-    graph = _graph().model_dump(by_alias=True)
-    graph["nodes"]["/above"]["params"]["timeframe"] = "1h"
-    r = client.post("/api/bots", json=_add_body(graph))
-    assert r.status_code == 400, r.text
-    assert r.json()["node_id"] == "/above"
+def _htf_reference_graph() -> dict:
+    """The bot's own close minus SPY's daily close (a prefixed reference
+    Ticker, plan D8) above 0 -> Entry; close below 0 -> Exit."""
+    nodes = {
+        "/ticker": {"id": "/ticker", "type": "ticker", "params": {}},
+        "/spy": {"id": "/spy", "type": "ticker",
+                 "params": {"symbol": "SPY", "interval": "1d", "prefix": "spy"}},
+        "/diff": {"id": "/diff", "type": "math",
+                  "params": {"op": "sub", "a": "@close", "b": "@spy_close", "out": "@diff"}},
+        "/above": {"id": "/above", "type": "above", "params": {"a": "@diff", "threshold": 0.0}},
+        "/below": {"id": "/below", "type": "below", "params": {"threshold": 0.0}},
+        "/entry": {"id": "/entry", "type": "entry", "params": {}},
+        "/exit": {"id": "/exit", "type": "exit", "params": {}},
+    }
+    wires = [
+        {"id": "w1", "from": "/ticker", "to": "/diff", "to_port": "in0"},
+        {"id": "w2", "from": "/spy", "to": "/diff", "to_port": "in1"},
+        {"id": "w3", "from": "/diff", "to": "/above", "to_port": "in0"},
+        {"id": "w4", "from": "/above", "to": "/entry", "to_port": "in0"},
+        {"id": "w5", "from": "/ticker", "to": "/below", "to_port": "in0"},
+        {"id": "w6", "from": "/below", "to": "/exit", "to_port": "in0"},
+    ]
+    return {"_version": 3, "nodes": nodes, "wires": wires}
+
+
+def test_add_bot_htf_graph_is_added(client_real_mgr):
+    """W5 (plan D8): HTFGraphNotSupportedError is retired.  An hourly bot
+    whose graph reads a daily reference Ticker is accepted and keeps it."""
+    client, mgr = client_real_mgr
+    body = {**_add_body(_htf_reference_graph()), "interval": "1h"}
+    r = client.post("/api/bots", json=body)
+    assert r.status_code == 200, r.text
+    cfg, _state = mgr.bots[r.json()["bot_id"]]
+    assert cfg.interval == "1h"
+    assert cfg.graph.nodes["/spy"].params == {"symbol": "SPY", "interval": "1d", "prefix": "spy"}
 
 
 def test_add_bot_good_graph_is_added(client_real_mgr):

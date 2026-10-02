@@ -52,6 +52,12 @@ with open(os.path.join(_HERE, "vectors", "paths.json")) as _fh:
     _PATHS = json.load(_fh)
 
 _NAMES = [name for name, _ in _STRATEGIES]
+# The two regime strategies.  Their v1 graphs ended in RegimeUnsupportedError
+# until W5; since then they compile and are checked by their signals (plan
+# section 10), and a fresh auto-render draws them as a regime_switch group,
+# a different (rule-backtest) shape that test_backtest_parity covers.
+_REGIME_NAMES = ("regime_mode", "per_direction_b23")
+_PLAIN_NAMES = [name for name in _NAMES if name not in _REGIME_NAMES]
 
 
 def _load_df(name: str) -> pd.DataFrame:
@@ -88,8 +94,23 @@ def _signals(graph: Graph, df: pd.DataFrame) -> dict:
             entries.append(i)
         if s["exit"]:
             exits.append(i)
-    settings = sorted(repr((s.key, s.value)) for s in program.simulator_settings)
+    settings = sorted(repr(pair) for pair in _setting_pairs(program))
     return {"entries": entries, "exits": exits, "settings": settings}
+
+
+def _setting_pairs(program) -> list[tuple]:
+    """The graph's simulator settings as the (key, value) pairs the v1
+    goldens recorded from ``program.simulator_settings`` (gone in W5).
+
+    W5 keeps them per group as request field names (5.B Needs 2); map each
+    back to its Wave 0 settings key (stop_loss_pct -> stop_loss).
+    """
+    from nodebuilder.sim_settings import SETTING_FIELDS
+    from nodebuilder.trading import nodes_groups
+
+    key_of = {field: key for key, field in SETTING_FIELDS.items()}
+    plan = nodes_groups.group_named(program, None).plan_for(None)
+    return [(key_of.get(name, name), value) for name, value in plan.fields.items()]
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +139,7 @@ def test_v1_autorender_graph_migrates(name):
         seen[w.to_path] = k + 1
 
 
-@pytest.mark.parametrize("name", _NAMES)
+@pytest.mark.parametrize("name", _PLAIN_NAMES)
 def test_migrated_v1_matches_fresh_autorender(name):
     """from_rules names nodes as the migration does, and both cook the same.
 
@@ -132,26 +153,72 @@ def test_migrated_v1_matches_fresh_autorender(name):
     migrated = Graph.model_validate(_V1["api"][name])
     fresh = auto_render(req)
     assert migrated.version == fresh.version == migrate.CURRENT_GRAPH_VERSION
+    w5_added = _w5_render_additions(req)
     for node_id, node in fresh.nodes.items():
         if node_id.startswith("/regime/"):
             # W2 from_rules draws a regime rule with no series (ma without
             # params) as a "never" node, as eval_rules reads it; v1 drew an
             # EMA 20 there.  Regime graphs do not compile until W5 either way.
             continue
+        if node_id in w5_added:
+            continue
         assert node_id in migrated.nodes, node_id
         assert (migrated.nodes[node_id].type, migrated.nodes[node_id].name) == (node.type, node.name)
     df = _load_df(name)
-    assert _signals(migrated, df) == _signals(fresh, df)
+    want = _signals(migrated, df)
+    want["settings"] = _with_w5_settings(want["settings"], req)
+    assert _signals(fresh, df) == want
 
 
-@pytest.mark.parametrize("name", _NAMES)
+def _w5_render_additions(req) -> dict:
+    """Node id -> setting pair that a fresh render draws since W5 (DI-02)
+    and a v1 render did not: the time stop, because in graph view the
+    request no longer carries max_bars_held, so the graph must."""
+    out = {}
+    if req.max_bars_held is not None:
+        out["/setting_time_stop"] = ("max_bars_held", int(req.max_bars_held))
+    return out
+
+
+def _with_w5_settings(settings: list, req) -> list:
+    """*settings* (a v1 golden) plus exactly the W5 additions."""
+    return sorted(settings + [repr(pair) for pair in _w5_render_additions(req).values()])
+
+
+@pytest.mark.parametrize("name", _PLAIN_NAMES)
 def test_parity_fixture_signals_identical_after_migration(name):
     """Every parity-fixture graph fires on exactly the same bars as before v2."""
     golden = _V1["signals"][name]
     df = _load_df(name)
     migrated = Graph.model_validate(_V1["api"][name])
     assert _signals(migrated, df) == golden
-    assert _signals(auto_render(dict(_STRATEGIES)[name]), df) == golden
+    req = dict(_STRATEGIES)[name]
+    fresh_golden = {**golden, "settings": _with_w5_settings(golden["settings"], req)}
+    assert _signals(auto_render(req), df) == fresh_golden
+
+
+@pytest.mark.parametrize("name", _REGIME_NAMES)
+def test_v1_regime_graph_signals_after_migration(name):
+    """The v1 regime graphs (golden: RegimeUnsupportedError, Wave 0 refused
+    them) compile since W5 and fire where their drawing says: entry =
+    regime AND (long buy OR short buy), exit likewise (the rule engine
+    evaluates that, tests/nodebuilder/_v1_regime_oracle.py).  A fresh
+    auto-render of the same strategy is one regime_switch Output Group."""
+    from nodebuilder.trading import nodes_groups
+    from tests.nodebuilder._v1_regime_oracle import v1_regime_signals
+
+    assert _V1["signals"][name] == {"error": "RegimeUnsupportedError"}
+    req = dict(_STRATEGIES)[name]
+    df = _load_df(name)
+    got = _signals(Graph.model_validate(_V1["api"][name]), df)
+    want_entries, want_exits = v1_regime_signals(req, df)
+    assert want_entries and want_exits
+    assert (got["entries"], got["exits"]) == (want_entries, want_exits)
+
+    fresh = compile_graph(auto_render(req))
+    group = nodes_groups.group_named(fresh, None)
+    assert (group.name, group.direction) == ("main", "regime_switch")
+    assert group.plan.regime is not None and group.on_flip == req.regime.on_flip
 
 
 @pytest.mark.parametrize("name", sorted(_V1["botsjson"]))
@@ -387,9 +454,40 @@ def test_vector_rename_node(case):
     assert g.model_dump() == before, "rename_node must not change its input"
 
 
-def test_rewrite_path_refs_is_a_stub_until_w7():
-    """W6/W7 fill it; for now it must exist and change nothing."""
-    g = _vector_graph("tree")
+def _group_tickers(g: Graph) -> dict:
+    return {i: n.params.get("ticker") for i, n in g.nodes.items() if n.type == "output_group"}
+
+
+@pytest.mark.parametrize("case", _PATHS["rewrite_path_refs"], ids=lambda c: c["why"][:40])
+def test_vector_rewrite_path_refs(case):
+    """rename_node rewrites output_group params.ticker like frontend paths.rewritePathRefs."""
+    g = _vector_graph(case["graph"])
     before = g.model_dump()
-    migrate._rewrite_path_refs(g, "/rsi", "/rsi_fast")
-    assert g.model_dump() == before
+    renamed = rename_node(g, case["id"], case["new_name"])
+    assert _group_tickers(renamed) == case["expect"]["tickers"]
+    # A non-group node's ticker param is never a path ref.
+    assert renamed.nodes["n_other"].params == g.nodes["n_other"].params
+    assert g.model_dump() == before, "rename_node must not change its input"
+
+
+def test_rewrite_path_refs_direct_and_guards():
+    g = _vector_graph("groups")
+    before = g.model_dump()
+    # No-op cases: same path, the root, an empty path, a path nothing points at.
+    for old, new in (("/aapl", "/aapl"), ("/", "/x"), ("", "/x"), ("/rsi", "/rsi_fast")):
+        migrate._rewrite_path_refs(g, old, new)
+        assert g.model_dump() == before
+    # only_nodes limits the rewrite to refs stored on those nodes.
+    g2 = g.model_copy(deep=True)
+    g2.nodes["n_aapl"] = g2.nodes["n_aapl"].model_copy(update={"name": "msft"})
+    migrate._rewrite_path_refs(g2, "/aapl", "/msft", only_nodes={"g_up"})
+    assert g2.nodes["g_up"].params["ticker"] == "/msft"
+    assert g2.nodes["g_long"].params["ticker"] == "/aapl"
+
+
+def test_join_path_matches_find_by_path_rules():
+    assert migrate._join_path("/net/leg", "../aapl") == "/net/aapl"
+    assert migrate._join_path("/net", "./tk") == "/net/tk"
+    assert migrate._join_path("/net", "/abs/x") == "/abs/x"
+    assert migrate._join_path("/", "..") is None
+    assert migrate._join_path("/net", "..") is None
