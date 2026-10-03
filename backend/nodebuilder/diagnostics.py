@@ -108,6 +108,36 @@ SEVERITY_BY_CODE: dict[str, Severity] = {
     "asset_cycle": "error",
     "interface_mismatch": "error",
     "promoted_invalid": "error",
+    # W6 code the plan table lists but W6 never registered.  ref_broken: a
+    # ch() reference (W7) that points at no node, param or attribute.
+    "ref_broken": "error",
+    # W7 errors (code at three levels, design note 4.8).  code_syntax:
+    # invalid Python, a bad @ sigil, or binding the reserved name stream.
+    # code_limit: a snippet over 8 KB.  code_runtime: an exception while the
+    # code ran.  code_timeout: the wall-clock guard fired.  code_type: a
+    # wrong result (a series in a scalar param, a misaligned write, two
+    # conflicting ch*() specs).  ch_dynamic: a ch*() name, path or keyword
+    # that is not a literal.  attr_dynamic: an attribute write whose name is
+    # not a literal.  ch_cycle: params that read each other in a loop
+    # (kernel/params.py).  code_disabled: code while SL_CODE_NODES=0.
+    # param_not_codeable: an expression on a param read before any cook (a
+    # Ticker's symbol, interval or prefix, a simulator or bot setting, a
+    # code node's lookback_bars).  ticker_param_not_codeable is its older
+    # Ticker-only name, kept registered as an alias; nothing emits it now.
+    "code_syntax": "error",
+    "code_limit": "error",
+    "code_runtime": "error",
+    "code_timeout": "error",
+    "code_type": "error",
+    "ch_dynamic": "error",
+    "attr_dynamic": "error",
+    "ch_cycle": "error",
+    "code_disabled": "error",
+    "ticker_param_not_codeable": "error",
+    "param_not_codeable": "error",
+    # W7 warning (S46).  code_writes_nothing: a Wrangle, or a node's code
+    # block, whose code sets no attribute (nodes_code.silent_code).
+    "code_writes_nothing": "warning",
 }
 
 CODES: frozenset[str] = frozenset(SEVERITY_BY_CODE)
@@ -137,8 +167,16 @@ def make(
     param: Optional[str] = None,
     port: Optional[str] = None,
     severity: Optional[Severity] = None,
+    line: Optional[int] = None,
+    col: Optional[int] = None,
+    end_line: Optional[int] = None,
+    end_col: Optional[int] = None,
 ) -> Diagnostic:
-    """Build a Diagnostic.  The severity comes from the code unless given."""
+    """Build a Diagnostic.  The severity comes from the code unless given.
+
+    line/col (W7 code positions): line 1-based, col 0-based, in characters
+    of the user's own text; end_line and end_col the same.
+    """
     return Diagnostic(
         node_id=node_id,
         severity=severity or SEVERITY_BY_CODE.get(code, "error"),
@@ -146,6 +184,10 @@ def make(
         message=message,
         param=param,
         port=port,
+        line=line,
+        col=col,
+        end_line=end_line,
+        end_col=end_col,
     )
 
 
@@ -183,14 +225,25 @@ def error_message(exc: BaseException) -> str:
 
 
 def from_error(exc: BaseException) -> Diagnostic:
-    """A Diagnostic for one raised error (code, node, param and port kept)."""
+    """A Diagnostic for one raised error (code, node, param and port kept,
+    and the place in the code for a code error, W7)."""
     return make(
         code_for_error(exc),
         error_message(exc),
         node_id=getattr(exc, "node_id", None),
         param=getattr(exc, "param", None),
         port=getattr(exc, "port", None),
+        line=_int_or_none(getattr(exc, "line", None)),
+        col=_int_or_none(getattr(exc, "col", None)),
+        end_line=_int_or_none(getattr(exc, "end_line", None)),
+        end_col=_int_or_none(getattr(exc, "end_col", None)),
     )
+
+
+def _int_or_none(value: Any) -> Optional[int]:
+    """A position field as an int; anything else (a SyntaxError's own
+    attributes are named differently) as None."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def has_errors(diagnostics: Iterable[Diagnostic]) -> bool:

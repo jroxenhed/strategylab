@@ -181,6 +181,12 @@ class FlatGraph:
     visible_of     : every node id of the input graph (networks and boundary
                      nodes too) -> the id the user sees, for ids that differ
                      (nodes inside a locked asset instance).
+    network_params : network id -> its stored params, with any value an
+                     outer network promoted into it laid over.  ch("../name")
+                     from inside a network reads these (W7, kernel/params.py;
+                     a promoted param is read from its target, where flatten
+                     put its value); ``source`` keeps the pre-flatten paths
+                     ch() resolves against.
     """
     graph: Graph
     flat_to_source: dict[str, str]
@@ -192,6 +198,7 @@ class FlatGraph:
     inputs: dict[str, dict[int, Optional[str]]] = field(default_factory=dict)
     promoted_from: dict[tuple[str, str], tuple[str, str]] = field(default_factory=dict)
     visible_of: dict[str, str] = field(default_factory=dict)
+    network_params: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @property
     def nested(self) -> bool:
@@ -656,6 +663,8 @@ class _Flattener:
         flat = self.graph.model_copy(update={"nodes": flat_nodes, "wires": flat_wires})
         networks = {nid: self.nodes[nid] for nid, k in self.kinds.items() if k == NETWORK_META}
         visible = {nid: self._visible(nid) for nid in self.nodes}
+        network_params = {nid: {**(net.params or {}), **overrides.get(nid, {})}
+                          for nid, net in networks.items()}
         return FlatGraph(
             graph=flat,
             flat_to_source={nid: visible[nid] for nid in flat_nodes},
@@ -669,6 +678,7 @@ class _Flattener:
                     for nid in networks},
             promoted_from=dict(self.promoted_from),
             visible_of={nid: v for nid, v in visible.items() if v != nid},
+            network_params=network_params,
         )
 
 

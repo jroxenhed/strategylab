@@ -47,6 +47,13 @@ export interface InspectorSection {
   when?(props: InspectorSectionProps): boolean
   /** Optional right-side header text (`3`, `1 error`). */
   Count?: ComponentType<InspectorSectionProps>
+  /**
+   * The key its open state is kept under (default: `id`). W7's Code section
+   * keeps a separate state for nodes with and without code.
+   */
+  stateKey?(props: InspectorSectionProps): string
+  /** Open state before the user ever toggles it (default: the built-in default, open). */
+  defaultOpen?(props: InspectorSectionProps): boolean
   Component: ComponentType<InspectorSectionProps>
 }
 

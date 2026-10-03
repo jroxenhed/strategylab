@@ -61,21 +61,33 @@ def eval_hash(graph: Any) -> str:
 
     Kept: the format versions, each node's id, type, parent, params and
     bypass flag, its promoted params, asset_ref and locked flag (W6: a
-    promoted value or a pinned asset version changes what compiles), and
+    promoted value or a pinned asset version changes what compiles), its
+    code and spare params (W7; expression values are params already), and
     every wire's ends, ports and attr (in list order, since a wire without a
-    port is placed by its order).  Left out: positions, names, the display
-    flag, meta, readOnly and annotations (boxes, notes), and wire ids, none
-    of which the cook reads.
+    port is placed by its order).  Node names are kept only when the graph
+    has code or promoted params: ch() paths and promoted targets find nodes
+    by name, so there a rename can change a value.  Left out: positions,
+    the display flag, meta, readOnly and annotations (boxes, notes), and
+    wire ids, none of which the cook reads.
     """
     nodes = []
+    names_matter = False
     for nid in sorted(graph.nodes):
         n = graph.nodes[nid]
-        nodes.append([
+        row = [
             n.id, n.type, n.parent, n.params, bool(n.bypass),
             [p.model_dump() for p in n.promoted],
             n.asset_ref.model_dump() if n.asset_ref is not None else None,
             bool(n.locked),
-        ])
+        ]
+        code = getattr(n, "code", None) or ""
+        spares = getattr(n, "spare_params", None) or []
+        if code or spares:
+            row += [code, [sp.model_dump() for sp in spares]]
+        nodes.append(row)
+        if code or spares or n.promoted or any(
+                isinstance(v, dict) and "expr" in v for v in (n.params or {}).values()):
+            names_matter = True
     wires = [
         [w.from_path, w.to_path, w.from_port, w.to_port, w.attr]
         for w in graph.wires
@@ -86,6 +98,8 @@ def eval_hash(graph: Any) -> str:
         "nodes": nodes,
         "wires": wires,
     }
+    if names_matter:
+        body["names"] = {nid: graph.nodes[nid].name for nid in sorted(graph.nodes)}
     text = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(text.encode()).hexdigest()
 

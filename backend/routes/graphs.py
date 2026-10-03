@@ -37,6 +37,13 @@ revision ``rev``, all or nothing (one BotManager.add_bots call, one save).
     other asset problem (a cycle), and any error the editor's compile of a
     graph with a locked instance reports (an interface_mismatch), is 400
     graph_invalid with the problems as diagnostics.
+  - 400 {"detail": {"code": "code_disabled", "message", "node_ids",
+    "diagnostics"}} while SL_CODE_NODES=0 and the graph holds code (F435
+    W7, design note 4.9).  Saving such a graph still works.
+
+Code audit (W7, design note 4.10): every save (POST, PUT, seed) of a graph
+that holds code, and every spawn, logs one ``code_audit`` line per snippet
+on the ``strategylab.code_audit`` logger, with the X-Forwarded-Email user.
 
 Bodies are read by hand so the 2 MB limit is checked before JSON parsing, and
 all file work and graph parsing run in the thread pool, never on the event loop.
@@ -197,6 +204,83 @@ def _bad_name(exc: InvalidNameError) -> RequestValidationError:
     return RequestValidationError(
         [{"type": "value_error", "loc": ("body", "name"), "msg": str(exc), "input": None}]
     )
+
+
+# ---------------------------------------------------------------------------
+# Code (F435 W7): the audit trail and the kill switch
+# ---------------------------------------------------------------------------
+
+
+def forwarded_email(request: Optional[Request]) -> Optional[str]:
+    """The signed-in user's email as oauth2-proxy forwards it, for the code
+    audit lines (None on the Mac, where nothing sets it)."""
+    if request is None:
+        return None
+    return request.headers.get("x-forwarded-email") or None
+
+
+def audit_graph(event: str, graph: Any, email: Optional[str] = None, **fields: Any) -> None:
+    """One ``code_audit`` line per code snippet of *graph* (W7, design note
+    4.10).  Nothing is ever refused because of it: a failure is logged and
+    ignored.  Cheap (a hash of each snippet), but call it from the thread
+    pool with the save it belongs to."""
+    try:
+        from nodebuilder.code import audit_log, iter_code_snippets
+
+        snippets = iter_code_snippets(graph)
+        if snippets:
+            audit_log(event, snippets, email=email, **fields)
+    except Exception:
+        logger.exception("code audit (%s) failed", event)
+
+
+def _holds_code(env: dict) -> bool:
+    """True when a saved graph holds a code snippet (a plain scan, no
+    hashing), so a save without code makes no extra thread-pool call."""
+    from nodebuilder.code import has_code
+
+    try:
+        return has_code(env.get("graph") or {})
+    except Exception:  # an odd stored shape: let the audit itself decide
+        return True
+
+
+def _audit_saved(env: dict, email: Optional[str]) -> dict:
+    audit_graph("graph_save", env.get("graph"), email, graph_id=env.get("id"), rev=env.get("rev"))
+    return env
+
+
+def _seed_and_audit(legacy: Any, email: Optional[str]) -> dict:
+    """Seed import, then one audit line per code snippet of each imported
+    graph (they are saves too)."""
+    store = get_store()
+    out = store.seed(legacy)
+    for graph_id in out.get("imported", []):
+        try:
+            _audit_saved(store.get(graph_id), email)
+        except Exception:
+            logger.exception("code audit of seeded graph %s failed", graph_id)
+    return out
+
+
+def code_disabled_detail(graph: Graph, **extra) -> Optional[dict]:
+    """``detail`` code ``code_disabled`` when SL_CODE_NODES=0 and *graph*
+    holds code (W7, design note 4.9), else None.  Spawn and graph_update
+    refuse such a graph with it; a save still works (it is data)."""
+    from nodebuilder.code import ENV_SWITCH, code_enabled
+    from nodebuilder.trading.nodes_code import code_node_ids, disabled_found
+
+    if code_enabled():
+        return None
+    ids = code_node_ids(graph)
+    if not ids:
+        return None
+    diagnostics = [diag.model_dump() for diag, _err in disabled_found(graph)]
+    return snapshot_detail(
+        "code_disabled",
+        f"Code nodes are turned off on this server ({ENV_SWITCH}=0), and this graph holds code "
+        f"({len(ids)} node(s)), so no bot can run it.", node_ids=ids, diagnostics=diagnostics,
+        **extra)
 
 
 # Errors a graph that does not parse can raise from Graph.model_validate.
@@ -481,7 +565,7 @@ async def list_graphs():
 @router.post("/seed")
 async def seed_graphs(request: Request):
     body = await _read_body(request, SeedBody)
-    return await run_in_threadpool(get_store().seed, body.legacy)
+    return await run_in_threadpool(_seed_and_audit, body.legacy, forwarded_email(request))
 
 
 @router.get("/{graph_id}")
@@ -519,6 +603,8 @@ async def create_graph(request: Request):
         return _name_taken()
     except _PARSE_ERRORS as exc:
         return await _graph_error(exc, body.graph)
+    if _holds_code(env):
+        await run_in_threadpool(_audit_saved, env, forwarded_email(request))
     return JSONResponse(status_code=201, content=env)
 
 
@@ -526,7 +612,7 @@ async def create_graph(request: Request):
 async def save_graph(graph_id: str, request: Request):
     body = await _read_body(request, SaveGraphBody)
     try:
-        return await run_in_threadpool(
+        env = await run_in_threadpool(
             get_store().update,
             graph_id,
             body.rev,
@@ -546,6 +632,9 @@ async def save_graph(graph_id: str, request: Request):
         return _name_taken()
     except _PARSE_ERRORS as exc:
         return await _graph_error(exc, body.graph)
+    if _holds_code(env):
+        await run_in_threadpool(_audit_saved, env, forwarded_email(request))
+    return env
 
 
 def _gate_copy(gate):
@@ -553,15 +642,19 @@ def _gate_copy(gate):
     return gate.model_copy(deep=True) if gate is not None else None
 
 
-def _spawn_sync(mgr, graph_id: str, body: SpawnBody) -> dict:
+def _spawn_sync(mgr, graph_id: str, body: SpawnBody, email: Optional[str] = None) -> dict:
     """Validate every leg, then add every bot in one add_bots call."""
     from bot_manager import (BotConfig, BotManager, ReferenceUnavailableError, SymbolConflictError,
                              probe_references)
     from bot_runner import compile_bot_graph
     from nodebuilder.trading import nodes_groups
 
-    # 1. The saved revision, compiled once.
+    # 1. The saved revision, compiled once.  With SL_CODE_NODES=0 a graph
+    # that holds code is refused first, with its own code (W7).
     env, graph = load_graph_snapshot(graph_id, body.rev)
+    refusal = code_disabled_detail(graph)
+    if refusal is not None:
+        raise SnapshotRefused(400, refusal)
     try:
         program = compile_bot_graph(graph)
     except GraphValidationError as exc:
@@ -640,6 +733,8 @@ def _spawn_sync(mgr, graph_id: str, body: SpawnBody) -> dict:
         raise SnapshotRefused(400, snapshot_detail("fund", str(exc)))
     logger.info("spawned %d stopped bot(s) from graph %s rev %s: %s",
                 len(ids), graph_id, env["rev"], ", ".join(ids))
+    for bid in ids:  # the code audit trail (W7): one line per snippet per bot
+        audit_graph("spawn", graph, email, bot_id=bid, graph_id=graph_id, rev=env["rev"])
     return {"bots": [
         {"bot_id": bid, "group": cfg.graph_group, "symbol": cfg.symbol,
          "direction": cfg.graph_direction_mode, "running": False}
@@ -659,7 +754,7 @@ async def spawn_bots(graph_id: str, request: Request):
 
     mgr = bots_route._get_manager()
     try:
-        out = await run_in_threadpool(_spawn_sync, mgr, graph_id, body)
+        out = await run_in_threadpool(_spawn_sync, mgr, graph_id, body, forwarded_email(request))
     except SnapshotRefused as exc:
         return exc.response()
     return JSONResponse(status_code=201, content=out)

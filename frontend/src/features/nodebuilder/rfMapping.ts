@@ -74,6 +74,8 @@ export const TERMINAL_TYPES: ReadonlySet<string> = new Set([
  */
 export function rfTypeFor(backendType: string): string {
   if (NETWORK_TYPES.has(backendType)) return FRAME_RF_TYPE
+  // W7 (S46): the Wrangle draws its code block as the node body.
+  if (backendType === 'wrangle') return 'nbWrangle'
   if (TERMINAL_TYPES.has(backendType)) return CATEGORY_TO_RF_TYPE.output
   const entry = CATALOG_BY_NAME.get(backendType)
   if (!entry) return 'indicator'  // generic fallback

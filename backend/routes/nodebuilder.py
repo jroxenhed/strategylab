@@ -5,24 +5,32 @@ POST /api/nodebuilder/backtest     — Unit 8b
 POST /api/nodebuilder/validate     — W1 item 1.C
 POST /api/nodebuilder/inspect      — W4 item 4.A (the wire inspector, plan D6)
 POST /api/nodebuilder/preview      — W4 item 4.A (node sparklines, plan D6)
+POST /api/nodebuilder/parse_code   — W7 item 7.C (checks code while the user types)
+GET  /api/nodebuilder/code_capabilities — W7 item 7.C (the kill switch, limits, sl helpers)
 
 Graph errors return HTTP 400 in the plan 4.4 shape:
 {"detail": <message>, "node_id": <id or null>, "code": <diagnostic code>,
  "diagnostics": [Diagnostic]}, so the editor can show the message, badge the
-node at fault and every other problem the graph has.
+node at fault and every other problem the graph has.  A code failure while
+cooking (W7: code_runtime, code_type, attr_missing, code_timeout after the
+60 s guard...) is such a 400 too, with the line and column in the code.
+These routes are plain defs: FastAPI runs them in its thread pool, so a
+cook (code included) never runs on the event loop.  /validate and
+/parse_code never run code (prepare only).
 """
 from __future__ import annotations
 
 import logging
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple, Optional
 
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from models import StrategyRequest
 from nodebuilder import cook_cache
+from nodebuilder.code import CodeError
 from nodebuilder.api_models import (
     AutoRenderResponse,
     GraphBacktestRequest,
@@ -55,6 +63,10 @@ from nodebuilder.run import (  # noqa: F401
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/nodebuilder", tags=["nodebuilder"])
+
+PARSE_CODE_MAX_CHARS = 262_144
+"""The most characters /parse_code takes (32 times the 8 KB snippet limit,
+which is reported as code_limit): a robustness cap, not a code rule."""
 
 
 @router.post("/auto_render", response_model=AutoRenderResponse, response_model_by_alias=True)
@@ -94,18 +106,224 @@ def post_validate(payload: dict[str, Any] = Body(...)):
     Never fetches market data and never runs a backtest.  A graph that does
     not parse is still a 200 here, with graph_invalid (or the matching code)
     in the list and no streams; only a body without a "graph" key is a 422.
+
+    W7: param_deps lists one edge per literal ch() reference that points
+    somewhere: {"reader_id", "reader_param", "target_id", "target"}
+    (reader_param is null for a call in a code block or a Wrangle body;
+    target is a param name or an @attr).  [] when there are none.  A code
+    write with no annotation has "dtype": "any" in streams.  Code is
+    prepared (parsed and compiled), never run.
     """
     if "graph" not in payload:
         raise RequestValidationError(
             [{"type": "missing", "loc": ("body", "graph"), "msg": "Field required", "input": payload}]
         )
-    result = validate_graph_full(payload["graph"])
+    from nodebuilder.compile import capture_checks
+
+    with capture_checks() as checks:
+        result = validate_graph_full(payload["graph"])
     return {
         "ok": not has_errors(result.diagnostics),
         "diagnostics": [d.model_dump() for d in result.diagnostics],
         "streams": result.streams,
         "stream_schema": STREAM_SCHEMA_VERSION,
+        "param_deps": list(checks[-1].param_deps) if checks else [],
     }
+
+
+# ---------------------------------------------------------------------------
+# W7: parse_code and code_capabilities
+# ---------------------------------------------------------------------------
+
+
+class ParseCodeRequest(BaseModel):
+    """The parse_code body (plan W7 contract).  ``param`` is optional: the
+    param an expression sits on (its diagnostics then carry it).
+    ``expected`` ({"type", "options"?}) is the type of that param: an
+    expression that is one literal value is checked against it.  ``code``
+    is capped far above the 8 KB snippet limit (that limit is a code_limit
+    diagnostic), so one request cannot hold an unbounded string."""
+    model_config = ConfigDict(extra="ignore")
+
+    code: str = Field(max_length=PARSE_CODE_MAX_CHARS)
+    context: Literal["expr", "node_code", "wrangle"]
+    expected: Optional[dict[str, Any]] = None
+    graph: Optional[dict[str, Any]] = None
+    node_id: Optional[str] = None
+    param: Optional[str] = None
+
+
+def _code_graph(graph_data: Optional[dict], node_id: Optional[str]):
+    """(node, check) for a parse_code request: the node the code belongs to
+    (a models.Node, the raw node dict, or None) and a compile pass over the
+    graph (None when the graph does not parse).  Never runs code."""
+    if not isinstance(graph_data, dict):
+        return None, None
+    from nodebuilder.compile import check_graph
+    from nodebuilder.migrate import migrate_graph_data
+
+    try:
+        graph = Graph.model_validate(migrate_graph_data(graph_data))
+    except Exception:  # a graph mid-edit may not parse; the code is still checked
+        raw = graph_data.get("nodes")
+        node = raw.get(node_id) if isinstance(raw, dict) and node_id else None
+        return (node if isinstance(node, dict) else None), None
+    node = graph.nodes.get(node_id) if node_id else None
+    try:
+        check = check_graph(graph, code_switch=False)
+    except Exception:  # never a 500 for a graph the editor is still building
+        logger.exception("parse_code: the graph check failed")
+        check = None
+    return node, check
+
+
+def _attr_lookup(check, node_id: Optional[str], context: str):
+    """lookup(name) -> (class, dtype) of an attribute the code reads, from
+    the stream it sees: the node's merged input stream for an expression or
+    a Wrangle, its output stream (input plus its own outputs) for a code
+    block.  None when the stream is not known."""
+    analysis = getattr(check, "analysis", None)
+    res = analysis.nodes.get(node_id) if (analysis is not None and node_id) else None
+    if res is None:
+        return None
+    schema = res.out_schema if context == "node_code" else (res.in_schema or res.out_schema)
+    if schema is None:
+        return None
+
+    def lookup(name: str):
+        info = schema.lookup(f"@{name}")
+        return (info.kind, info.dtype) if info is not None else None
+
+    return lookup
+
+
+def _literal_problem(prepared, expected: Optional[dict], node_id: Optional[str],
+                     param: Optional[str]) -> list:
+    """code_type (or param_invalid for an unknown option) when an expression
+    is one literal value that does not fit the param's *expected* type, on
+    the whole expression.  Nothing runs: only a literal is read
+    (ast.literal_eval)."""
+    import ast
+
+    from nodebuilder.code import CodeError, check_expr_result
+    from nodebuilder.code.sugar import normalize_newlines, split_lines
+    from nodebuilder.diagnostics import make as make_diagnostic
+
+    if prepared.context != "expr" or not prepared.ok or not isinstance(expected, dict):
+        return []
+    kind = expected.get("type")
+    if kind not in ("int", "number", "float", "bool", "string", "str", "select"):
+        return []
+    options = expected.get("options")
+    options = [o for o in options if isinstance(o, str)] if isinstance(options, list) else None
+    try:
+        value = ast.literal_eval(prepared.source.strip())
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        return []   # not one literal: its type is known only when it runs
+    try:
+        check_expr_result(value, kind, options)
+    except CodeError as exc:
+        lines = split_lines(normalize_newlines(prepared.source))
+        return [make_diagnostic(exc.code, exc.message, node_id=node_id, param=param, line=1,
+                                col=0, end_line=len(lines), end_col=len(lines[-1]))]
+    except ValueError:
+        return []
+    return []
+
+
+def _path_problems(prepared, check, node_id: Optional[str], param: Optional[str]) -> list:
+    """ref_broken for each ch() path of the code that points at nothing in
+    the graph (a missing node or param, an attribute nobody writes), at the
+    call's line and column.  The same rules as compile (kernel/params.py)."""
+    from nodebuilder.diagnostics import make as make_diagnostic
+    from nodebuilder.kernel import params as kparams
+
+    plan = getattr(check, "plan", None)
+    paths = prepared.paths
+    if plan is None or not node_id or not paths or node_id not in plan.flat.graph.nodes:
+        return []
+    children = kparams.child_index(plan._source.nodes)
+    out = []
+    for cr in paths:
+        ref = kparams._build_ref(plan, node_id, param, cr, children)
+        if ref.problem is None:
+            continue
+        out.append(make_diagnostic(ref.problem_code or "ref_broken", ref.problem,
+                                   node_id=node_id, param=param,
+                                   line=cr.line, col=cr.col, end_line=cr.end_line,
+                                   end_col=cr.end_col))
+    return out
+
+
+@router.post("/parse_code")
+def post_parse_code(payload: dict[str, Any] = Body(...)):
+    """Check one piece of code while the user types (W7, surfaces S44-S48).
+
+    Body: {"code", "context": "expr" | "node_code" | "wrangle", "expected":
+    {"type"} | null, "graph": Graph | null, "node_id": str | null, "param":
+    str | null (optional: the param an expression sits on)}.
+
+    Reply: {"ok", "params", "reads", "writes", "result_type": null,
+    "diagnostics"}.  params are the spare params the code declares with
+    ch*() (lookback_bars first for a code block or a Wrangle, unless the
+    code declares it); reads and writes are attributes, every write a
+    point of dtype bool, float (from its annotation) or "any"; a read's
+    class and dtype come from the stream the node sees in *graph*.
+    Diagnostics: prepare()'s (code_syntax, code_limit, ch_dynamic,
+    attr_dynamic, code_type, ref_broken for a bare ch() with no
+    declaration), ref_broken for a ch() path that points at nothing in
+    *graph*, and code_disabled while SL_CODE_NODES=0.
+
+    Positions: ``line`` is 1-based and ``col`` 0-based, both counting
+    characters of the user's own text (before the @name rewrite), as
+    Python reports them (SyntaxError lineno and offset - 1, ast lineno and
+    col_offset).  ``end_line`` and ``end_col`` follow the same rule and may
+    be null.
+
+    Runs prepare() only: the code is parsed, scanned and compiled, never
+    executed.  result_type is always null in W7 (no code runs here).  An
+    expression that is one literal value is checked against *expected*
+    (code_type when it does not fit; read with ast.literal_eval, not run).
+    """
+    from nodebuilder.code import code_enabled, disabled_diagnostic, prepare
+
+    req = _parse_body(ParseCodeRequest, payload)
+    param = req.param if req.context == "expr" else None
+    node, check = _code_graph(req.graph, req.node_id)
+    prepared = prepare(req.code, req.context, node if node is not None else req.node_id,
+                       node_id=req.node_id, param=param)
+    stream_lookup = _attr_lookup(check, req.node_id, req.context)
+
+    def lookup(name: str):
+        # A read of what the code itself wrote earlier has that write's dtype.
+        found = stream_lookup(name) if stream_lookup is not None else None
+        if found is None and name in prepared.writes:
+            return "point", prepared.write_dtypes.get(name, "any")
+        return found
+
+    body = prepared.to_parse_result(lookup)
+    diagnostics = [d.to_diagnostic() for d in prepared.diagnostics]
+    diagnostics += _literal_problem(prepared, req.expected, req.node_id, param)
+    diagnostics += _path_problems(prepared, check, req.node_id, param)
+    if not code_enabled():
+        off = disabled_diagnostic(req.node_id).to_diagnostic()
+        off.param = param
+        diagnostics.insert(0, off)
+    body["diagnostics"] = [d.model_dump() for d in diagnostics]
+    body["ok"] = not has_errors(diagnostics)
+    return body
+
+
+@router.get("/code_capabilities")
+def get_code_capabilities():
+    """Whether code nodes are on (SL_CODE_NODES; unset means on), the
+    language, the limits (source size, default lookback_bars, the bot and
+    backtest cook timeouts), the modules code sees, the sl helpers with
+    signature, return kind and a one-line doc (editor completion, S47), and
+    how many timed-out cooks are still running (leaked_cooks)."""
+    from nodebuilder.code import capabilities
+
+    return capabilities()
 
 
 @router.post(
@@ -155,6 +373,10 @@ def post_graph_backtest(payload: dict[str, Any] = Body(...)):
         response, cook = run_graph_backtest_cooked(req)
         return _with_cook_id(response, _cache_backtest_cook(req, cook))
     except GraphValidationError as exc:
+        return _graph_error(exc, graph_data)
+    except CodeError as exc:
+        # Code failed while cooking (W7): code_runtime, code_type, attr_missing,
+        # ref_broken, code_timeout... with the line and column in the code.
         return _graph_error(exc, graph_data)
     except ValueError as exc:
         # Not a graph problem (no data, say): code request_invalid.
@@ -318,7 +540,8 @@ def _resolve_cook(cook_id: str | None, graph_data: dict | None, window) -> _Reso
     def cook_and_put():
         try:
             cook = cook_graph_window(graph, df=df, refs=refs, **win)
-        except (GraphValidationError, ValueError) as exc:
+        except (GraphValidationError, ValueError, CodeError) as exc:
+            # CodeError (W7): code failed or ran past the 60 s guard.
             raise _GraphProblem(exc) from exc
         except HTTPException as exc:
             if exc.status_code == 400:

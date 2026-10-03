@@ -60,6 +60,8 @@ export interface BotState {
   activity_log: BotActivityEntry[]
   error_message?: string
   pause_reason?: string
+  /** Code failed while a position is open: price exits only until flat, then it pauses (F435 W7). */
+  code_exits_only?: boolean
 }
 
 export interface BotSummary {
@@ -82,6 +84,8 @@ export interface BotSummary {
   first_trade_time?: string | null
   last_tick?: string
   pause_reason?: string
+  /** Code failed while a position is open: price exits only until flat, then it pauses (F435 W7). */
+  code_exits_only?: boolean
   equity_snapshots?: { time: string; value: number }[]
   regime_direction?: string | null
   position_direction?: string | null

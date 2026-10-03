@@ -8,6 +8,13 @@ step once over the full index: a running node gets the merge of the streams
 on its input ports and returns its output stream; a bypassed (or off) node
 passes the stream on its in0 along unchanged.
 
+Code (W7): a node's params may hold expressions, and code may read other
+nodes' params and attributes through ch() paths (kernel/params.py).  A
+step can carry ``after`` (nodes a ch() read needs cooked first; part of
+``depends_on``, so the cook order and stream lifetimes respect them) and a
+``param_hook`` the cook calls before the impl to evaluate the node's
+expressions.  Each cook keeps a kernel.params.ParamScope in its env.
+
 Cook order is a topological order that runs consumers soon after their
 producers.  A stream carries everything upstream of it, so columns are
 freed by reads, not by references: compile knows which (writer, name) each
@@ -44,6 +51,12 @@ class Step:
     writes    : the attribute names the node writes.
     read_from : (writer node id, name) for each read, so the cook knows
                 when a column is no longer needed.
+    after     : nodes this one must cook after, beyond its inputs: a ch()
+                read of their @attr or of an expression param (W7).
+    param_hook: ``hook(inputs, params, scope) -> Params``, called before the
+                impl to evaluate the node's expression params (W7).
+    plan      : the kernel.params.ParamPlan the step was built with (W7), so
+                code in an impl can resolve ch() paths.
     """
     node_id: str
     type: str
@@ -56,6 +69,9 @@ class Step:
     writes: tuple[str, ...]
     read_from: tuple[tuple[Optional[str], str], ...] = ()
     weight: int = 0             # how many non-bool columns it reads (cook order hint)
+    after: tuple[str, ...] = ()
+    param_hook: Optional[Callable[..., Any]] = None
+    plan: Any = None
 
     @property
     def node_path(self) -> str:
@@ -64,6 +80,8 @@ class Step:
 
     def depends_on(self) -> tuple[str, ...]:
         if self.mode == RUN:
+            if self.after:
+                return self.inputs + tuple(a for a in self.after if a not in self.inputs)
             return self.inputs
         if self.mode == PASS and self.pass_from is not None:
             return (self.pass_from,)
@@ -75,6 +93,7 @@ def analyze_graph(
     *,
     unknown_error: Optional[Callable[..., Any]] = None,
     preset_broken: Iterable[str] = (),
+    extra_io: Optional[Callable[..., Any]] = None,
 ):
     """Flatten *graph* (plan D7), then check the flat graph.
 
@@ -87,6 +106,7 @@ def analyze_graph(
     which network a node sits in.
 
     preset_broken holds source ids, as analyze's argument does.
+    extra_io is passed on to analyze (W7: what a node's code adds).
     """
     from nodebuilder.kernel.flatten import flatten
     from nodebuilder.kernel.schema import analyze
@@ -99,14 +119,24 @@ def analyze_graph(
         for fid, sid in flat.flat_to_source.items():
             by_source.setdefault(sid, []).append(fid)
         preset = [fid for sid in preset_broken for fid in by_source.get(sid, ())]
-    analysis = analyze(flat.graph, unknown_error=unknown_error, preset_broken=preset)
+    analysis = analyze(flat.graph, unknown_error=unknown_error, preset_broken=preset,
+                       extra_io=extra_io)
     if flat.found or flat.nested:
         analysis.found = list(flat.found) + flat.remap(analysis.found)
     return analysis, flat
 
 
-def build_steps(analysis: Analysis) -> tuple[Step, ...]:
-    """One Step per checked node, in topological order."""
+def build_steps(analysis: Analysis, plan: Any = None) -> tuple[Step, ...]:
+    """One Step per checked node, in topological order.
+
+    *plan* (W7) is the kernel.params.ParamPlan of the same flat graph.  With
+    it, a running step gets its ch() ordering edges (``after``), its
+    expression hook, and the columns its code and ch() reads need kept
+    alive; the steps are then put in an order that respects the ch() edges
+    too.  A plan with no code changes nothing.
+    """
+    if plan is not None and not (plan.snippets or plan.refs):
+        plan = None
     steps: list[Step] = []
     for nid in analysis.order:
         res = analysis.nodes.get(nid)
@@ -114,15 +144,57 @@ def build_steps(analysis: Analysis) -> tuple[Step, ...]:
             continue
         mode = {RUN: RUN, PASS: PASS, INACTIVE: EMPTY}[res.status]
         impl = res.node_type.impl if (res.node_type is not None and mode == RUN) else None
+        extra: dict[str, Any] = {}
+        if mode == RUN:
+            read_from = _read_sources(res)
+            if res.extra is not None and res.extra.reads_any and res.in_schema is not None:
+                read_from += tuple((info.written_by, name)
+                                   for name, info in res.in_schema.points.items())
+            if plan is not None:
+                read_from += tuple(plan.attr_reads.get(nid, ()))
+                extra = dict(after=tuple(plan.after.get(nid, ())),
+                             param_hook=plan.hook(nid), plan=plan)
+            read_from = tuple(dict.fromkeys(read_from))
         steps.append(Step(
             node_id=nid, type=res.type, mode=mode, impl=impl, params=res.params,
             inputs=res.inputs if mode == RUN else (), pass_from=res.pass_from,
             reads=res.read_names if mode == RUN else (),
             writes=res.writes if mode == RUN else (),
-            read_from=_read_sources(res) if mode == RUN else (),
+            read_from=read_from if mode == RUN else (),
             weight=_weight(res) if mode == RUN else 0,
+            **extra,
         ))
+    if any(s.after for s in steps):
+        steps = _respect_after(steps)
     return tuple(steps)
+
+
+def _respect_after(steps: list[Step]) -> list[Step]:
+    """*steps* in an order where every step comes after everything it
+    depends on (its ch() edges included).  A step already in place keeps
+    its place; a loop (a compile error) leaves the rest in order."""
+    by_id = {s.node_id: s for s in steps}
+    done: set[str] = set()
+    out: list[Step] = []
+    for first in steps:
+        stack: list[str] = [first.node_id]
+        visiting: set[str] = set()
+        while stack:
+            nid = stack[-1]
+            if nid in done:
+                stack.pop()
+                continue
+            visiting.add(nid)
+            pending = [u for u in by_id[nid].depends_on()
+                       if u in by_id and u not in done and u not in visiting]
+            if pending:
+                stack.append(pending[0])
+                continue
+            stack.pop()
+            visiting.discard(nid)
+            done.add(nid)
+            out.append(by_id[nid])
+    return out
 
 
 def _weight(res) -> int:
@@ -161,7 +233,7 @@ def cook_order(steps: Iterable[Step]) -> tuple[Step, ...]:
     for s in steps:
         deps = [u for u in s.depends_on() if u in by_id]
         consumed.update(deps)
-        heavy[s.node_id] = max([s.weight] + [heavy[u] for u in deps])
+        heavy[s.node_id] = max([s.weight] + [heavy.get(u, 0) for u in deps])
     sinks = [s.node_id for s in steps if s.node_id not in consumed]
     done: set[str] = set()
     out: list[Step] = []
@@ -226,6 +298,14 @@ def cook(
     run_env.setdefault("memo", {})
     keep_all = keep is None
     keep_set = set(keep or ())
+    streams: dict[str, Stream] = {}
+    plan = next((s.plan for s in order if s.plan is not None), None)
+    scope = None
+    if plan is not None:
+        from nodebuilder.kernel.params import SCOPE_KEY, ParamScope
+
+        scope = ParamScope(streams, plan)
+        run_env[SCOPE_KEY] = scope
 
     remaining: dict[str, int] = {}
     for s in order:
@@ -244,17 +324,22 @@ def cook(
             last_use[src] = max(last_use.get(src, -1), use)
     key_last: dict[int, int] = {}
 
-    streams: dict[str, Stream] = {}
     for i, s in enumerate(order):
         if s.mode == RUN:
             ins = [streams[u] for u in s.inputs]
             merged = merge_streams(ins) if ins else Stream.empty(store)
             params = s.params.with_env(run_env) if s.params is not None else Params({}, s.node_id, run_env)
+            if s.param_hook is not None:
+                params = s.param_hook(merged, params, scope)
+            if scope is not None:
+                scope.set_params(s.node_id, params)
             out = s.impl(merged, params) if s.impl is not None else merged
         elif s.mode == PASS and s.pass_from is not None:
             out = streams[s.pass_from]
         else:
             out = Stream.empty(store)
+        if s.mode != RUN and scope is not None and s.params is not None:
+            scope.set_params(s.node_id, s.params)
         streams[s.node_id] = out
         if keep_all:
             continue

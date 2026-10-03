@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Graph, GraphWire } from '../../../api/nodebuilder'
+import { isExprValue, type Graph, type GraphWire } from '../../../api/nodebuilder'
 import type { Diagnostic } from '../../../api/nodebuilderValidate'
 import type { ParamSpec } from '../catalog'
 import { getActiveCanvas } from '../commands'
@@ -36,6 +36,9 @@ import { boundaryOutput, NETWORK_TYPES } from '../rfMapping'
 import { LIFECYCLE_TEXT } from '../assetLifecycle'
 import { FLASH_MS, flashParam, setSectionOpen, useInspectorUi } from './state'
 import { catVars, categoryOf, diagnosticsCountText, sameValue, stepNumberField, useInspectorSelect, valueText } from './util'
+import { visibleParams } from '../code/codeOps'
+import { useCodeSectionOpen } from '../code/codeUi'
+import { SpareParamRows } from '../code/SpareParams'
 
 // ---------------------------------------------------------------------------
 // Parameters
@@ -97,9 +100,21 @@ export function ParametersSection({ nodeId, node, editable }: InspectorSectionPr
   const entry = catalogEntry(node.type)
   const specs = useMemo(() => entry?.params ?? [], [entry])
   const updateNodeParams = useNodeBuilderStore(s => s.updateNodeParams)
-  const merged = useMemo(() => ({ ...defaultsOf(specs), ...node.params }), [specs, node.params])
+  const merged = useMemo(
+    () => visibleParams({ ...defaultsOf(specs), ...node.params }, new Set(specs.map(s => s.name)), node),
+    [specs, node],
+  )
   const rows = rowsFor(merged, specs, true)
   const rootRef = useRef<HTMLDivElement>(null)
+  // W7 (S48): spare params show here only while the Code section is closed.
+  const codeOpen = useCodeSectionOpen(node)
+  const spareCount = node.spare_params?.length ?? 0
+  const spares = !codeOpen && spareCount > 0 ? (
+    <>
+      <div className="nb-spare-sub" data-testid="nb-spare-subtitle">Spare parameters</div>
+      <SpareParamRows nodeId={nodeId} node={node} variant="inspector" editable={editable} />
+    </>
+  ) : null
 
   // A diagnostics click flashes the row (S05) and may focus its field.
   const flash = useInspectorUi(s => s.flash)
@@ -115,14 +130,17 @@ export function ParametersSection({ nodeId, node, editable }: InspectorSectionPr
     return () => clearTimeout(t)
   }, [flash, nodeId])
 
-  if (rows.length === 0) return <div className="nb-insp-empty">No parameters.</div>
+  if (rows.length === 0) return spares ?? <div className="nb-insp-empty">No parameters.</div>
 
   return (
     <div ref={rootRef} className="nb-insp-params" style={catVars(categoryOf(node.type))}>
       {rows.map(({ key, value, spec }) => {
         const stored = key in node.params
-        const changed = spec != null && stored && !sameValue(node.params[key], spec.default)
-        const slider = spec && (spec.type === 'number' || spec.type === 'int')
+        // A param in code mode has no literal to slide or reset: the slider
+        // and the changed dot would write a number over the expression (UX-2).
+        const code = isExprValue(node.params[key]) || isExprValue(value)
+        const changed = !code && spec != null && stored && !sameValue(node.params[key], spec.default)
+        const slider = !code && spec && (spec.type === 'number' || spec.type === 'int')
           && typeof spec.min === 'number' && typeof spec.max === 'number'
         const unit = spec?.unit ? ` (${spec.unit})` : ''
         return (
@@ -169,13 +187,15 @@ export function ParametersSection({ nodeId, node, editable }: InspectorSectionPr
           </div>
         )
       })}
+      {spares}
     </div>
   )
 }
 
 export function ParametersCount({ node }: InspectorSectionProps) {
   const specs = catalogEntry(node.type)?.params ?? []
-  const n = rowsFor({ ...defaultsOf(specs), ...node.params }, specs, true).length
+  const visible = visibleParams({ ...defaultsOf(specs), ...node.params }, new Set(specs.map(s => s.name)), node)
+  const n = rowsFor(visible, specs, true).length + (node.spare_params?.length ?? 0)
   return <>{n || ''}</>
 }
 

@@ -43,6 +43,14 @@
  * The specs come from the `specs` prop, else from the catalog entry of the
  * node's type in the store. Without either, rows fall back to `paramTypes`.
  *
+ * Code mode (W7, spec S44): a plain value row (number, int, bool, string,
+ * select) whose catalog spec does not say `code_able: false` gets an `=`
+ * toggle in the gutter (shown on hover). Clicking it, or pressing `=` in the
+ * field, turns the row into an expression row (code/ExprInput.tsx); a value
+ * of the form `{ expr }` always draws that way. Ticker symbol, interval and
+ * prefix never take code. With code off on the server the toggle is hidden
+ * and expression rows are read-only.
+ *
  * Promoted params (W6, spec S40):
  * - A child param that its network promoted shows the network's value,
  *   read-only, with a `↑` glyph and the tooltip "Promoted to ../name. Edit
@@ -79,6 +87,11 @@ import {
 } from '../operations/promote'
 import { goUpAndSelect } from '../assetUi'
 import '../assets.css'
+import { isExprValue } from '../../../api/nodebuilder'
+import { ExprParamRow } from '../code/ExprInput'
+import { initialExprText, isCodeableParam, literalFor, visibleParams } from '../code/codeOps'
+import { clearParse, exprSlot, requestCodeBanner, useCodeEnabled } from '../code/codeStore'
+import '../code/code.css'
 
 /** Which special widget a param gets, from its ParamSpec; null for a plain field. */
 export type StreamWidget = 'attr' | 'time_range' | 'days' | 'write'
@@ -139,10 +152,16 @@ export function ParamRows({
   views?: Readonly<Record<string, ParamView>>
 }) {
   const nodeType = useNodeBuilderStore(s => s.graph?.nodes[nodeId]?.type)
+  // W7 (S48): on a node with code, spare values are drawn by the spare list.
+  const nodeCode = useNodeBuilderStore(s => s.graph?.nodes[nodeId]?.code)
+  const spareSpecs = useNodeBuilderStore(s => s.graph?.nodes[nodeId]?.spare_params)
   const allSpecs = specs ?? paramSpecsOf(nodeType)
+  const shownParams = visibleParams(params, new Set(paramSpecsOf(nodeType).map(s => s.name).concat(allSpecs.map(s => s.name))), {
+    type: nodeType ?? '', code: nodeCode, spare_params: spareSpecs,
+  })
   return (
     <div className="nodrag nopan" style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      {rowsFor(params, allSpecs, showWrites).map(({ key, value, spec }) => (
+      {rowsFor(shownParams, allSpecs, showWrites).map(({ key, value, spec }) => (
         <ParamRow
           key={key}
           nodeId={nodeId}
@@ -234,6 +253,14 @@ export interface ParamRowProps {
   label?: string
 }
 
+/** Extra props of a plain value row (W7). */
+interface ValueRowCodeProps {
+  /** The `=` toggle, when this row can take code. */
+  codeToggle?: React.ReactNode
+  /** `=` typed in the field: enter code mode with the field's text. */
+  onEqualsKey?(text: string): void
+}
+
 /** The test id of a param field; the Inspector variant has its own. */
 function paramTestId(nodeId: string, paramKey: string, variant: ParamRowProps['variant']): string {
   return variant === 'inspector' ? `nb-param-inspector-${nodeId}-${paramKey}` : `nb-param-${nodeId}-${paramKey}`
@@ -244,6 +271,14 @@ export function ParamRow(props: ParamRowProps) {
   const fromSidebar = useSidebarParamValue(props.nodeId, props.paramKey)
   // W6 (S40): a param promoted to the parent network is edited there.
   const promotion = usePromotion(props.nodeId, props.paramKey)
+  // W7 (S44): code mode. `entering` holds the starting text while the row
+  // has just switched to an expression and nothing is committed yet.
+  const nodeType = useNodeBuilderStore(s => s.graph?.nodes[props.nodeId]?.type)
+  // Only a node of the editable store graph can take code (not the
+  // read-only view, not a locked asset's insides).
+  const graphEditable = useNodeBuilderStore(s => !!s.graph && !s.graph.readOnly && props.nodeId in s.graph.nodes)
+  const codeOn = useCodeEnabled()
+  const [entering, setEntering] = useState<string | null>(null)
   if (promotion) {
     return <PromotedChildRow {...props} networkId={promotion.networkId} name={promotion.name} valueText={promotion.valueText} />
   }
@@ -257,8 +292,73 @@ export function ParamRow(props: ParamRowProps) {
     )
   }
   const widget = streamWidgetFor(props.spec, props.value)
+  const codeable = graphEditable && !widget && isCodeableParam(nodeType, props.spec, props.paramKey)
+  const label = props.label ?? (props.spec?.label || props.paramKey)
+  if (isExprValue(props.value) || (entering !== null && codeable)) {
+    const expr = isExprValue(props.value) ? props.value.expr : null
+    const leave = () => {
+      setEntering(null)
+      clearParse(props.nodeId, exprSlot(props.paramKey))
+      if (expr === null) return
+      const s = useNodeBuilderStore.getState()
+      const node = s.graph?.nodes[props.nodeId]
+      if (!node) return
+      s.updateNodeParams(props.nodeId, { [props.paramKey]: literalFor(node, props.paramKey, props.spec?.default ?? null) })
+    }
+    return (
+      <ExprParamRow
+        nodeId={props.nodeId}
+        paramKey={props.paramKey}
+        expr={expr}
+        literal={props.value}
+        spec={props.spec}
+        label={label}
+        variant={props.variant ?? 'node'}
+        entering={expr === null}
+        initialText={entering ?? ''}
+        disabled={!codeOn || !graphEditable}
+        onLeave={() => setEntering(null)}
+        onCommitted={() => setEntering(null)}
+        toggle={codeOn && codeable ? (
+          <ExprToggle label={label} pressed onClick={leave} />
+        ) : null}
+      />
+    )
+  }
   if (widget && props.spec) return <StreamParamRow {...props} spec={props.spec} widget={widget} />
-  return <ValueParamRow {...props} />
+  const enter = (text?: string) => {
+    if (!codeOn) { requestCodeBanner(); return }
+    setEntering(text ?? initialExprText(props.value ?? props.spec?.default))
+  }
+  return (
+    <ValueParamRow
+      {...props}
+      codeToggle={codeOn && codeable ? <ExprToggle label={label} pressed={false} onClick={() => enter()} /> : null}
+      onEqualsKey={codeOn && codeable ? text => enter(props.typeSpec?.type === 'number' ? text : initialExprText(text)) : undefined}
+    />
+  )
+}
+
+/**
+ * The `=` glyph in a row's gutter (S44): enters code mode, or in code mode
+ * goes back to a value. Drawn beside the row's label element, not inside
+ * it, so it is not part of the field's accessible name.
+ */
+export function ExprToggle({ label, pressed, onClick }: { label: string; pressed: boolean; onClick(): void }) {
+  return (
+    <button
+      type="button"
+      className="nb-expr-toggle nodrag nopan"
+      aria-label={`Use an expression for ${label}`}
+      aria-pressed={pressed}
+      title={pressed ? 'Back to a value (keeps the expression in undo)' : 'Expression (=)'}
+      data-testid="nb-expr-toggle"
+      onPointerDown={e => e.stopPropagation()}
+      onClick={e => { e.preventDefault(); e.stopPropagation(); onClick() }}
+    >
+      =
+    </button>
+  )
 }
 
 const streamRowStyle: React.CSSProperties = {
@@ -312,8 +412,15 @@ function ValueParamRow({
   variant,
   view: viewProp,
   label,
-}: ParamRowProps) {
+  codeToggle,
+  onEqualsKey,
+}: ParamRowProps & ValueRowCodeProps) {
   const rowLabel = label ?? paramKey
+  // The `=` toggle sits next to the label element, not inside it, so its
+  // text never joins the field's accessible name (UX-10).
+  const withToggle = (label: React.ReactElement) => codeToggle
+    ? <div className="nb-expr-host" style={{ position: 'relative' }}>{label}{codeToggle}</div>
+    : label
   const updateNodeParams = useNodeBuilderStore(s => s.updateNodeParams)
   const resolvedType = typeSpec?.type ?? (typeof value === 'number' ? 'number' : 'string')
   const isNumber = resolvedType === 'number'
@@ -394,6 +501,7 @@ function ValueParamRow({
     // A select has no typing to protect, so it always shows the store value.
     return (
       <>
+      {withToggle(
       <label style={labelStyle} onContextMenu={e => openParamMenu(e, nodeId, paramKey)}>
         <span style={{ flexShrink: 0 }}>{rowLabel}</span>
         <select
@@ -410,7 +518,8 @@ function ValueParamRow({
             <option key={opt} value={opt}>{opt}</option>
           ))}
         </select>
-      </label>
+      </label>,
+      )}
       {message}
       </>
     )
@@ -420,6 +529,7 @@ function ValueParamRow({
 
   return (
     <>
+    {withToggle(
     <label style={labelStyle} onContextMenu={e => openParamMenu(e, nodeId, paramKey)}>
       <span style={{ flexShrink: 0 }}>{rowLabel}</span>
       <input
@@ -447,6 +557,13 @@ function ValueParamRow({
           else resync()
         }}
         onKeyDown={e => {
+          if (e.key === '=' && onEqualsKey) {
+            // S44: `=` in a value field switches the row to an expression.
+            e.preventDefault()
+            dirtyRef.current = false
+            onEqualsKey(draft)
+            return
+          }
           if (e.key === 'Enter') {
             e.preventDefault();
             (e.target as HTMLInputElement).blur()
@@ -461,7 +578,8 @@ function ValueParamRow({
         style={invalidMessage ? invalidFieldStyle : fieldStyle}
       />
       {unitText && <span data-testid="param-unit" style={unitStyle}>{unitText}</span>}
-    </label>
+    </label>,
+    )}
     {message}
     </>
   )

@@ -594,3 +594,47 @@ describe('BotCard state: undefined defensive path', () => {
     expect(screen.getByText('AAPL', { exact: false })).toBeInTheDocument()
   })
 })
+
+// ---------------------------------------------------------------------------
+// F435 W7: code failed with a position open (exits only until flat)
+// ---------------------------------------------------------------------------
+
+describe('BotCard code exits-only state', () => {
+  it('shows the exits-only row when code_exits_only is true (full card)', () => {
+    renderCard({ status: 'running', has_position: true, code_exits_only: true })
+    const row = screen.getByTestId('bot-code-exits-only')
+    expect(row.textContent).toBe('Code failed: managing exits until flat')
+  })
+
+  it('shows the exits-only text in the compact row too', () => {
+    renderCompactCard({ status: 'running', has_position: true, code_exits_only: true })
+    expect(screen.getByTestId('bot-code-exits-only').textContent).toBe('Code failed: managing exits until flat')
+  })
+
+  it('shows the exits-only row from the detail state once the card is expanded', async () => {
+    const { fetchBotDetail } = await import('../../api/bots')
+    vi.mocked(fetchBotDetail).mockReset()   // drops a once-value an earlier test left queued
+    vi.mocked(fetchBotDetail).mockResolvedValue({
+      config: {} as BotConfig,
+      state: {
+        status: 'running', trades_count: 0, equity_snapshots: [], activity_log: [],
+        code_exits_only: true,
+      },
+    } as unknown as Awaited<ReturnType<typeof fetchBotDetail>>)
+    renderCard({ status: 'running', has_position: true })   // an older summary: no flag
+    expect(screen.queryByTestId('bot-code-exits-only')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /show log/i }))
+    expect((await screen.findByTestId('bot-code-exits-only')).textContent)
+      .toBe('Code failed: managing exits until flat')
+    vi.mocked(fetchBotDetail).mockReset()
+    cleanup()
+  })
+
+  it('shows nothing when code_exits_only is false or missing', () => {
+    renderCard({ status: 'running', has_position: true, code_exits_only: false })
+    expect(screen.queryByTestId('bot-code-exits-only')).toBeNull()
+    cleanup()
+    renderCompactCard({ status: 'running' })
+    expect(screen.queryByTestId('bot-code-exits-only')).toBeNull()
+  })
+})

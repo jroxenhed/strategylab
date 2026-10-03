@@ -34,6 +34,7 @@ MODULE_ORDER: tuple[str, ...] = (
     "nodes_time",
     "nodes_network",
     "nodes_groups",
+    "nodes_code",     # W7: the Wrangle node (category code)
 )
 
 

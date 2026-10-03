@@ -36,7 +36,7 @@ The TypeScript copy of these helpers is
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional
 
 from pydantic import BaseModel
 
@@ -889,11 +889,12 @@ def _rewrite_path_refs(
 
     The twin of frontend ``paths.rewritePathRefs``; the shared vectors in
     tests/nodebuilder/vectors/paths.json hold both to the same answers.
-    Two kinds of ref are stored today: an Output Group's ``ticker`` param
-    (W5) and the ``target`` of each promoted param on a network (W6, see
-    ``_rewrite_promoted``).  W7 adds ``ch()`` strings.  *graph* is the
-    graph after the rename.  *only_nodes* limits the rewrite to refs stored
-    on those nodes.
+    Three kinds of ref are stored: an Output Group's ``ticker`` param (W5),
+    the ``target`` of each promoted param on a network (W6, see
+    ``_rewrite_promoted``), and ``ch()`` path strings in a node's code and
+    in its expression params (W7, see ``_rewrite_code_refs``).  *graph* is
+    the graph after the rename.  *only_nodes* limits the rewrite to refs
+    stored on those nodes.
 
     An absolute ref is rewritten when it is *old_path* or lies under
     ``old_path + "/"``.  A relative ref is resolved the way the server
@@ -922,6 +923,8 @@ def _rewrite_path_refs(
         if getattr(node, "promoted", None):
             _rewrite_promoted(graph, node_id, under, to_new, to_old)
             node = graph.nodes[node_id]
+        _rewrite_code_refs(graph, node_id, under, to_new, to_old)
+        node = graph.nodes[node_id]
         if node.type != "output_group":
             continue
         ref = (node.params or {}).get("ticker")
@@ -982,6 +985,148 @@ def _rewrite_promoted(graph: "Graph", node_id: str, under, to_new, to_old) -> No
         changed = True
     if changed:
         graph.nodes[node_id] = node.model_copy(update={"promoted": promoted})
+
+
+def _rewrite_code_refs(graph: "Graph", node_id: str, under, to_new, to_old) -> None:
+    """Rewrite the ``ch()`` paths in node *node_id*'s code and expression
+    params after a rename (W7).
+
+    A ch() path starts at the node that holds the code (``../vol/p`` is
+    the sibling ``vol``).  A path is rewritten when the node it named lies
+    on the renamed path and the same string no longer reaches it: an
+    absolute path stays absolute, a relative one stays relative to the
+    node.  Only the string inside the quotes changes; the rest of the code
+    is left exactly as the user wrote it.
+    """
+    from nodebuilder.models import expr_text
+
+    node = graph.nodes[node_id]
+    code = getattr(node, "code", None)
+    params = node.params or {}
+    if not (isinstance(code, str) and "/" in code) and not any(
+            "/" in (expr_text(v) or "") for v in params.values()):
+        return
+    try:
+        new_base = node_path(graph, node_id)
+    except KeyError:
+        return
+    old_base = to_old(new_base)
+
+    def fix(path: str) -> Optional[str]:
+        node_part, sep, target = path.rpartition("/")
+        if not sep or not target or not node_part:
+            return None  # a bare name, or "/x" (the root has no params)
+        old_abs = _join_path(old_base, node_part)
+        if old_abs is None or not under(old_abs):
+            return None
+        want = to_new(old_abs)
+        if path.startswith("/"):
+            return f"{want}/{target}"
+        if _join_path(new_base, node_part) == want:
+            return None
+        return f"{_relative_path(new_base, want)}/{target}"
+
+    update: dict[str, Any] = {}
+    if isinstance(code, str):
+        new_code = rewrite_ch_paths(code, fix)
+        if new_code != code:
+            update["code"] = new_code
+    new_params = None
+    for name, value in params.items():
+        text = expr_text(value)
+        if text is None:
+            continue
+        new_text = rewrite_ch_paths(text, fix)
+        if new_text != text:
+            new_params = dict(params) if new_params is None else new_params
+            new_params[name] = {"expr": new_text}
+    if new_params is not None:
+        update["params"] = new_params
+    if update:
+        graph.nodes[node_id] = node.model_copy(update=update)
+
+
+_CH_FUNCS = frozenset({"ch", "chf", "chi", "chs", "chb", "chv"})
+# A string token's prefix (r, u...) and its opening quote.
+_QUOTE_RE = re.compile(r"""^([A-Za-z]*)('''|\"\"\"|'|")""")
+_UNSAFE_IN_PATH = ("'", '"', "\\", "\n", "\r")
+
+
+def rewrite_ch_paths(source: str, fix: Callable[[str], Optional[str]]) -> str:
+    """*source* with the name of each literal ``ch*()`` call replaced by
+    ``fix(name)`` when that returns a new name (None keeps it).
+
+    The name is the first argument (or ``name=``) when it is a plain string
+    literal.  The code is read with Python's tokenizer, so other strings,
+    comments and the ``@attr`` sugar are never touched, and the quote style
+    is kept.  Code that does not tokenize is changed only up to the problem.
+    """
+    import ast as _ast
+    import io
+    import tokenize
+
+    if not source or "(" not in source:
+        return source
+    lines = source.splitlines(keepends=True)
+    edits: list[tuple[int, int, int, str]] = []  # (row, start col, end col, new text)
+    window: list = []  # the last few significant tokens
+
+    def literal(tok: Any) -> Optional[str]:
+        if tok.type != tokenize.STRING or tok.start[0] != tok.end[0]:
+            return None
+        m = _QUOTE_RE.match(tok.string)
+        if m is None or any(c in m.group(1).lower() for c in "fb"):
+            return None
+        try:
+            value = _ast.literal_eval(tok.string)
+        except (ValueError, SyntaxError):
+            return None
+        return value if isinstance(value, str) else None
+
+    def consider(tok: Any) -> None:
+        # ch("...") or ch(name="..."), where ch is not an attribute of
+        # something else (sl.ch would be another function).
+        if len(window) >= 2 and window[-1].string == "(":
+            call, before = window[-2], (window[-3] if len(window) >= 3 else None)
+        elif (len(window) >= 4 and window[-1].string == "=" and window[-2].string == "name"
+              and window[-3].string == "("):
+            call, before = window[-4], (window[-5] if len(window) >= 5 else None)
+        else:
+            return
+        if call.type != tokenize.NAME or call.string not in _CH_FUNCS:
+            return
+        if before is not None and before.type == tokenize.OP and before.string == ".":
+            return
+        value = literal(tok)
+        if value is None or "/" not in value:
+            return
+        new = fix(value)
+        if new is None or new == value or any(c in new for c in _UNSAFE_IN_PATH):
+            return
+        m = _QUOTE_RE.match(tok.string)
+        prefix, quote = m.group(1), m.group(2)
+        edits.append((tok.start[0], tok.start[1], tok.end[1], f"{prefix}{quote}{new}{quote}"))
+
+    skip = {tokenize.NL, tokenize.NEWLINE, tokenize.COMMENT, tokenize.INDENT,
+            tokenize.DEDENT, tokenize.ENCODING}
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+            if tok.type in skip:
+                continue
+            if tok.type == tokenize.STRING:
+                consider(tok)
+            window.append(tok)
+            if len(window) > 6:
+                del window[0]
+    except (tokenize.TokenError, SyntaxError, IndentationError):
+        pass
+    if not edits:
+        return source
+    # Apply from the end of the text, so earlier columns stay right.
+    for row, start, end, text in sorted(edits, reverse=True):
+        line = lines[row - 1]
+        lines[row - 1] = line[:start] + text + line[end:]
+    return "".join(lines)
 
 
 def _relative_path(base: str, target: str) -> str:

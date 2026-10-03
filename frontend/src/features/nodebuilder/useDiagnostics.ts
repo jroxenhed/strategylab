@@ -117,6 +117,16 @@ function localKey(nodeId: string, param: string): string {
   return `${nodeId}\u0000${param}`
 }
 
+/** Same node, code and position: the same code problem from either source. */
+function codeDiagKey(d: Diagnostic): string {
+  return `${d.node_id}\u0000${d.code}\u0000${d.line}\u0000${d.col}`
+}
+
+/** Prefix of the local keys that hold one code snippet's parse problems (W7). */
+function codeSlotPrefix(nodeId: string, slot: string): string {
+  return `${nodeId}\u0000code:${slot}\u0000`
+}
+
 const DIAG_FIELDS = [
   'node_id', 'path', 'severity', 'code', 'message', 'param', 'port', 'line', 'col', 'end_line', 'end_col',
 ] as const
@@ -144,7 +154,12 @@ function derive(
   const serverUnsupported = new Set<string>()
   for (const d of server) if (d.node_id && UNSUPPORTED_CODES.has(d.code)) serverUnsupported.add(d.node_id)
   const clientOnly = unsupported.filter(d => !d.node_id || !serverUnsupported.has(d.node_id))
-  const diagnostics = [...server, ...clientOnly, ...Object.values(local)]
+  // A code problem from parse_code (W7) that /validate also reports is
+  // counted once: same node, code and position.
+  const serverCode = new Set<string>()
+  for (const d of server) if (d.line != null) serverCode.add(codeDiagKey(d))
+  const localList = Object.values(local).filter(d => d.line == null || !serverCode.has(codeDiagKey(d)))
+  const diagnostics = [...server, ...clientOnly, ...localList]
   const byNode: Record<string, Diagnostic[]> = {}
   let errorCount = 0
   let warningCount = 0
@@ -271,6 +286,9 @@ async function runValidate(): Promise<void> {
     const res = await validateGraph(graph, ctrl.signal)
     if (id !== requestId) return
     inFlight = null
+    for (const l of [...validateListeners]) {
+      try { l(res) } catch (err) { console.error('validate listener failed', err) }
+    }
     update({
       server: res.diagnostics,
       streams: res.streams,
@@ -505,6 +523,43 @@ export function setLocalParamInvalid(nodeId: string, param: string, message: str
       },
     },
   })
+}
+
+/**
+ * Report the parse problems of one code snippet (W7: a param expression or
+ * a node's code block), or clear them with an empty list. `slot` names the
+ * snippet: `expr:<param>` or `code`. Like a bad number field, they count as
+ * errors at once, so the badge, the counts and Run agree with the editor
+ * before /validate answers. Never starts a request.
+ */
+export function setLocalCodeDiagnostics(nodeId: string, slot: string, list: readonly Diagnostic[]): void {
+  const prefix = codeSlotPrefix(nodeId, slot)
+  const { local } = useDiagStore.getState()
+  const next: Record<string, Diagnostic> = {}
+  for (const [k, v] of Object.entries(local)) if (!k.startsWith(prefix)) next[k] = v
+  const path = useNodeBuilderStore.getState().graph?.nodes[nodeId]?.name
+  list.forEach((d, i) => {
+    next[`${prefix}${i}`] = {
+      ...d,
+      node_id: nodeId,
+      path: d.path ?? (path ? `/${path}` : null),
+      param: d.param ?? (slot.startsWith('expr:') ? slot.slice(5) : null),
+    }
+  })
+  const before = Object.keys(local).filter(k => k.startsWith(prefix)).map(k => local[k])
+  const after = Object.keys(next).filter(k => k.startsWith(prefix)).map(k => next[k])
+  if (sameDiagnostics(before, after)) return
+  update({ local: next })
+}
+
+/** Called with every good /validate answer (W7 reads `param_deps` from it). */
+type ValidateListener = (res: Awaited<ReturnType<typeof validateGraph>>) => void
+const validateListeners = new Set<ValidateListener>()
+
+/** Listen to every good /validate answer. Returns the function that stops listening. */
+export function onValidateAnswer(listener: ValidateListener): () => void {
+  validateListeners.add(listener)
+  return () => { validateListeners.delete(listener) }
 }
 
 /** Tests only: forget everything and cancel any request. */

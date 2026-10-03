@@ -12,7 +12,8 @@ group, plan D7).  Groups are combined by nodes_groups.combine.  The
 editor's backtest keeps every node's stream from that cook (keep_all) so
 the wire inspector can read it from the cook cache (plan D6) without
 cooking again; the bot path keeps only the terminals.  This module never
-imports the cook cache: the route does.
+imports the cook cache: the route does.  A graph with code (W7) cooks
+under the route wall-clock guard (guarded_cook, 60 s).
 
 _apply_settings_overrides, _settings_to_strategy_request and
 _make_cached_eval are the Wave 0 to 4 helpers.  The backtest no longer
@@ -20,6 +21,7 @@ uses them; they stay for the tests that import them.
 """
 from __future__ import annotations
 
+import functools
 import operator
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
@@ -183,6 +185,27 @@ class GraphCook:
     frames: tuple = ()
 
 
+def guarded_cook(program, fn, *args, label: str = "cook", **kwargs):
+    """``fn(*args, **kwargs)``, the cook of *program*, under the route
+    wall-clock guard when the program runs user code (W7, design note 4.7):
+    it runs on the code-cook pool and is waited for at most
+    nodebuilder.code.ROUTE_COOK_TIMEOUT_S (read at call time); past that it
+    raises nodebuilder.code.CodeTimeout naming the code node that was
+    running, and the thread runs on by itself (counted in leaked_cooks).
+
+    A program without code, or a caller already inside a guarded cook (a
+    bot tick), cooks right here as before.  Call it from a worker thread
+    (a sync route, the thread pool), never on an event loop: it blocks
+    while it waits."""
+    from nodebuilder.code import runtime as _code_runtime
+
+    if not getattr(program, "has_code", False) or _code_runtime.current_guard() is not None:
+        return fn(*args, **kwargs)
+    return _code_runtime.call_guarded(
+        functools.partial(fn, *args, **kwargs),
+        timeout_s=_code_runtime.ROUTE_COOK_TIMEOUT_S, label=label)
+
+
 def cook_attrs(program, attrs: dict, *, keep_all: bool = False):
     """Cook *program* over the bars in *attrs* (as build_graph_attrs makes
     them, reference frames included) and return the kernel CookResult.
@@ -261,7 +284,9 @@ def cook_graph_window(
         raise ValueError(f"No data for {ticker} in {start}..{end} ({interval}).")
     refs = fetch_reference_frames(program, start, end, src, given=refs)
     attrs = build_graph_attrs(program, df, frames=refs, interval=interval)
-    return GraphCook(program=program, result=cook_attrs(program, attrs, keep_all=True), df=df,
+    result = guarded_cook(program, cook_attrs, program, attrs, keep_all=True,
+                          label=f"inspect cook {ticker} {interval}")
+    return GraphCook(program=program, result=result, df=df,
                      frames=((ticker, interval, df),) + _ref_frames_list(refs))
 
 
@@ -491,7 +516,9 @@ def run_graph_backtest_cooked(
         keep: set[str] = set()
         for leg in frame_legs:
             keep |= leg.plan.keep_ids()
-        result = _sb.cook(frame_program, attrs, keep, keep_all=keep_all)
+        # A program with code cooks under the 60 s wall-clock guard (W7).
+        result = guarded_cook(frame_program, _sb.cook, frame_program, attrs, keep,
+                              keep_all=keep_all, label=f"backtest cook {lead.symbol} {lead.interval}")
         date_strs = _format_time_index(frame_df.index, lead.interval)
         last_close = float(frame_df["Close"].iloc[-1])
 

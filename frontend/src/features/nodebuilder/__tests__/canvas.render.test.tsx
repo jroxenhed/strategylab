@@ -91,6 +91,33 @@ describe('Canvas (editable)', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument()
   })
 
+  it('Tab follows the focus rule (foundation 6): a toolbar button keeps Tab for focus moves, the canvas opens the menu', () => {
+    // As NodeBuilder lays it out: the toolbar sits inside the builder root,
+    // outside the canvas. Seen in a scripted run: after the Spawn dialog
+    // closed, focus was back on its toolbar button, so Tab over the empty
+    // canvas moved focus instead of opening the menu. That is intended.
+    const g = makeGraph()
+    useNodeBuilderStore.getState().openGraph(g, { id: null, rev: 0, name: 'test' })
+    const utils = render(
+      <BuilderRoot>
+        <button type="button" data-testid="toolbar-btn">Spawn bots</button>
+        <Canvas graph={g} />
+      </BuilderRoot>,
+    )
+    const root = utils.container.querySelector('.nodebuilder-root') as HTMLElement
+    root.getClientRects = () => ({ length: 1 }) as unknown as DOMRectList
+    const canvas = utils.container.querySelector('.nodebuilder-root .nodebuilder-root') as HTMLElement
+    canvas.getClientRects = () => ({ length: 1 }) as unknown as DOMRectList
+    const btn = screen.getByTestId('toolbar-btn')
+    btn.focus()
+    act(() => { fireEvent.keyDown(btn, { key: 'Tab' }) })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    // With the canvas focused (a press on the pane focuses it), Tab opens the menu.
+    canvas.focus()
+    act(() => { fireEvent.keyDown(canvas, { key: 'Tab' }) })
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
   it('deletes the selected node on Delete', () => {
     mount()
     act(() => { useNodeBuilderStore.getState().select('r') })

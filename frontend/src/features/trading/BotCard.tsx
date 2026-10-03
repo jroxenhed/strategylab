@@ -10,6 +10,7 @@ import DailyPnlChart from './DailyPnlChart'
 import { INFO_COLUMN_FLEX, StatCell, btnStyle } from './ui'
 import { graphActionError, plainErrorText, updateBotGraph } from '../../api/graphSpawn'
 import { requestOpenGraph } from '../nodebuilder/graphLinks'
+import { CodeExitsOnlyRow, PauseReasonRow } from './BotPauseRows'
 
 const SAVED_KEY = 'strategylab-saved-strategies'
 
@@ -487,6 +488,8 @@ export default function BotCard({
                   rev {summary.graph_rev} → {summary.graph_latest_rev}
                 </span>
               )}
+              {/* Code failed with a position open: exits only until flat (F435 W7). */}
+              {summary.code_exits_only && <CodeExitsOnlyRow inline />}
             </span>
 
             {/* P&L: dollar + percentage */}
@@ -858,11 +861,16 @@ export default function BotCard({
             />
           </div>
 
-          {/* Pause reason (structural IBKR reject) */}
+          {/* Code failed with a position open: exits only until flat (F435 W7) */}
+          {(detail?.state?.code_exits_only ?? summary.code_exits_only) && <CodeExitsOnlyRow />}
+
+          {/* Pause reason (structural IBKR reject; W7 code pauses) */}
           {(detail?.state?.pause_reason ?? summary.pause_reason) && (
-            <div style={{ fontSize: 11, color: 'var(--gh-yellow-warm)', background: 'rgba(240,183,78,0.08)', padding: '3px 8px', borderRadius: 3 }}>
-              {detail?.state?.pause_reason ?? summary.pause_reason}
-            </div>
+            <PauseReasonRow
+              reason={(detail?.state?.pause_reason ?? summary.pause_reason) as string}
+              graphId={summary.graph_id ?? null}
+              group={summary.graph_group ?? null}
+            />
           )}
 
           {/* Backtest summary (always visible if available) */}

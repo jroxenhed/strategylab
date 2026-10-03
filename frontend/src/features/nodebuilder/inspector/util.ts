@@ -108,6 +108,8 @@ export function modKeyLabel(): string {
 export function valueText(v: unknown): string {
   if (v === null || v === undefined) return ''
   if (Array.isArray(v)) return v.join(', ')
+  // W7 (S44 read-only): an expression shows as `= <text>`.
+  if (typeof v === 'object' && typeof (v as { expr?: unknown }).expr === 'string') return `= ${(v as { expr: string }).expr}`
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)
 }

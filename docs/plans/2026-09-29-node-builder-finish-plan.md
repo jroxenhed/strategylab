@@ -1105,6 +1105,15 @@ export interface AssetListItem { name: string; versions: number[]; latest: numbe
 
 ### Wave 7: Code at three levels (T5)
 
+**Status: done (2026-10-03).** Items 7.A to 7.D are in. A five-reviewer wave found 54 findings; all 11 P1 were confirmed and fixed, and the rest are fixed or deferred to section 10. A live Playwright run passed: an RSI period expression and a Wrangle feeding Exit validate, backtest (+22.72 %, 1 trade) and edit in Monaco with error marks. Contract notes:
+
+- **Params read before the cook** (Ticker symbol/interval/prefix, every terminal and settings param the simulator plan reads, Output Group params, promoted defaults, `lookback_bars`) refuse an expression with `param_not_codeable` (`ticker_param_not_codeable` stays as an alias). The catalog marks them `code_able: false`.
+- **Window params with an expression**: a param-only expression (no `@attr`, only params through `ch*`) is evaluated at compile time with the cook's own code and sizes the lookback exactly; one that reads data uses the spec max, and the cook raises `code_type` if the window is still too small. The vision example's RSI window is 211 bars, not 5001.
+- **Wrangle default output**: a Wrangle with exactly one write uses it as its primary write; with several writes the reader names one. New warning `code_writes_nothing`.
+- **Executors**: code cooks run on their own pool (`code.runtime.CODE_EXECUTOR`, 4 threads `sl-code`), compile-time evaluation on a 2-thread `compile_pool`; the guard counts from cook start.
+- **John's open-position rule** holds on every path, including the kill switch and a syntax error at load: a bot with a position runs price-only exits until flat (`BotState.code_exits_only`, persisted, shown on the bot card), then pauses.
+- **Bundle**: Monaco loads only the editor API, the python language and the editor worker; `dist` went from about 19 MB to 8.6 MB.
+
 **Precondition: met.** John decided the code-nodes design note on 2026-09-30: real Python everywhere, no sandbox. slx is rejected.
 
 **Goal.** Per-parameter expressions, per-node code blocks and Wrangle nodes in real Python, with the `@attr` sugar, `ch()` references and auto-promoted params, Monaco, and edit-time diagnostics. Code failures pause one bot; they never crash the backend or block the event loop.
@@ -1429,3 +1438,9 @@ Also ask after W2 and after W5: does the graph now beat the rule builder for the
 
 - **Design calls for the Fable UI/UX pass.** Asset Manager version pills, Used-by rows and list layout (S42); breadcrumb roving tabindex and the first crumb; the network-deleted notice as a toast; the collapse rename field and its accessible name; "Edit in Inspector" in Save as asset; RULES/LIBRARY tags and attribute chips in Tab menu rows; boundary type-slot hover; the network colour as a token; and a key for the Asset Manager (Cmd+Shift+A was removed, because Chrome on macOS uses it).
 - **Network registry params** (Output Group direction, ticker and weight; regime_net params) cannot be promoted, by design.
+
+**Deferred from the Wave 7 review (2026-10-03).** Full notes: `.run/F435/w7/decisions.md` and the `fix-*.md` reports (local only).
+
+- **Design calls for the Fable UI/UX pass**: editor height that grows with content, the header spinner, the "Use expression =" row menu, the Inspector layout of the expression row, spare-row details (S48), and the Wrangle body order (S46).
+- **Reference padding for expression windows**: `align.step_needs` still pads a reference ticker for the stand-in value of an expression window.
+- **Small UI items from the live check**: the toolbar stays "unsaved" after undoing back to the saved code, and the Inspector stream section says "writes none" for a Wrangle that writes an attribute.

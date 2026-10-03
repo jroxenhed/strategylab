@@ -67,7 +67,7 @@ function Banner({ notice }: { notice: Notice }) {
   return (
     <div
       className={`nb-banner nb-banner--${notice.severity}`}
-      role={alert ? 'alert' : 'status'}
+      role={notice.role ?? (alert ? 'alert' : 'status')}
       data-testid={`nb-banner-${notice.key}`}
       onMouseEnter={hold}
       onMouseLeave={release}

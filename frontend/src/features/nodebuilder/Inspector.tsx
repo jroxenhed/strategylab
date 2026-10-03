@@ -72,6 +72,8 @@ import {
 } from './inspector/util'
 // The built-in node sections register themselves on load.
 import './inspector/NodeSections'
+// W7: the Code section (code blocks, Wrangle bodies) registers itself too.
+import './code/CodeSection'
 import './inspector/inspector.css'
 
 /** Keyboard resize step on the handle (S14 accessibility). */
@@ -135,6 +137,8 @@ function NodeView({ nodeId, editable }: { nodeId: string; editable: boolean }) {
           id={s.id}
           title={s.title}
           count={s.Count ? <SectionPart C={s.Count} {...props} /> : undefined}
+          stateKey={s.stateKey?.(props)}
+          defaultOpen={s.defaultOpen?.(props)}
         >
           <SectionPart C={s.Component} {...props} />
         </InspectorSectionShell>
@@ -191,7 +195,8 @@ const InspectorBody = memo(function InspectorBody() {
     case 'multi':
       return <MultiView nodeIds={view[1]} editable={editable} />
     case 'node':
-      return <NodeView nodeId={view[1]} editable={editable} />
+      // Keyed by node: per-node drafts, timers and editors never carry over to another node (FE-2).
+      return <NodeView key={view[1]} nodeId={view[1]} editable={editable} />
     case 'wire':
       return <WireView wireId={view[1]} editable={editable} />
     case 'wires':

@@ -28,6 +28,7 @@ import ComparisonNode from './nodes/ComparisonNode'
 import LogicNode from './nodes/LogicNode'
 import SettingsNode from './nodes/SettingsNode'
 import OutputNode from './nodes/OutputNode'
+import WrangleNode from './nodes/WrangleNode'
 import { KeyedStack } from './keyedStack'
 
 /** A React Flow node renderer. */
@@ -43,6 +44,8 @@ for (const [name, C] of Object.entries({
   logic: LogicNode,
   settings: SettingsNode,
   nbOutput: OutputNode,
+  // W7 (S46): the Wrangle code node.
+  nbWrangle: WrangleNode,
 })) registry.push(name, memo(C) as NodeComponent)
 
 let current: NodeTypes = Object.fromEntries(registry.entries())

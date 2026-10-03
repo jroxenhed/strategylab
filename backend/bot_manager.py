@@ -39,7 +39,8 @@ from broker import get_trading_provider, OrderRequest as BrokerOrderRequest
 from journal import (_log_trade, _load_trades, compute_realized_pnl, first_bot_entry_time,
                      compute_bidirectional_pnl, first_bot_bidirectional_entry_time,
                      compute_bot_avg_cost_bps, DATA_DIR)
-from bot_runner import BotRunner, compile_bot_graph, graph_bot_live
+from bot_runner import (BotRunner, CODE_COMPILE_CODES, compile_bot_graph, graph_bot_live,
+                        is_code_refusal)
 
 
 DATA_PATH = str(DATA_DIR / "bots.json")
@@ -133,6 +134,75 @@ def symbols_conflict(a: "BotConfig", b: "BotConfig") -> bool:
 
 def _side_label(cfg: "BotConfig") -> str:
     return "both sides" if cfg.is_bidirectional else cfg.direction
+
+
+# Compile codes about a bot's code rather than its graph (W7): a start
+# refused for one of these gets the code pause_reason, and a bot that holds
+# a position starts in the exits-only state instead (OPEN POSITION RULE).
+# One set with the runner's (bot_runner.CODE_COMPILE_CODES).
+CODE_REFUSAL_CODES = CODE_COMPILE_CODES
+
+
+def holds_position(state: "BotState") -> bool:
+    """True when the bot's state says it holds a position, or it is in the
+    exits-only state (code_exits_only: a Stop that kept the position clears
+    entry_price but keeps this)."""
+    return (state.entry_price is not None or state.position_direction is not None
+            or state.code_exits_only)
+
+
+def exits_only_reason(config: "BotConfig", state: "BotState",
+                      exc: BaseException) -> Optional[str]:
+    """The code pause_reason when a graph bot refused for its code must
+    still run, in the exits-only state, because it holds a position (W7,
+    OPEN POSITION RULE: BS-01, CR-3); None when the refusal stands (a flat
+    bot, a rule bot, a refusal that is not about code)."""
+    if config.kind != "graph" or not holds_position(state):
+        return None
+    return code_pause_reason(config, exc)
+
+
+def _node_name(config: "BotConfig", node_id: Optional[str]) -> Optional[str]:
+    graph = config.graph
+    node = graph.nodes.get(node_id) if (graph is not None and node_id) else None
+    return (node.name or node_id) if node is not None else None
+
+
+def code_pause_reason(config: "BotConfig", exc: BaseException) -> Optional[str]:
+    """The pause_reason for a refusal about the bot's code (design note
+    4.7, 4.9, 4.11): ``code_disabled``, ``code_syntax: <node> line 3``, or
+    ``<code>: <node> line N: <message>``.  None for any other error."""
+    code = getattr(exc, "code", None)
+    if not is_code_refusal(exc):
+        return None
+    from nodebuilder.code import CodeDiagnostic, pause_reason
+
+    diag = CodeDiagnostic(code, str(exc), line=getattr(exc, "line", None),
+                          col=getattr(exc, "col", None), node_id=getattr(exc, "node_id", None))
+    return pause_reason(diag, _node_name(config, diag.node_id))
+
+
+def code_load_problem(config: "BotConfig") -> Optional[str]:
+    """The pause_reason a graph bot loads with from bots.json because of its
+    code (design note 4.11), or None: ``code_disabled`` while
+    SL_CODE_NODES=0 and the graph holds code; ``code_syntax: <node> line
+    3`` (or another prepare code) when a snippet does not prepare.  Runs
+    prepare() only (parse, scan, compile): nothing is executed, and loading
+    writes no audit line."""
+    if config.kind != "graph" or config.graph is None:
+        return None
+    from nodebuilder.code import code_enabled, pause_reason
+    from nodebuilder.trading import nodes_code
+
+    if not nodes_code.code_node_ids(config.graph):
+        return None
+    if not code_enabled():
+        return "code_disabled"
+    found = nodes_code.first_code_problem(config.graph)
+    if found is None:
+        return None
+    diag, name = found
+    return pause_reason(diag, name)
 
 # ---------------------------------------------------------------------------
 # BotConfig
@@ -279,6 +349,20 @@ class BotState:
     was_running: bool = False                  # True if bot was running when server last restarted
     user_stopped: bool = False                 # F445: set by an explicit Stop; bot_watch skips these
 
+    # F435 W7 (OPEN POSITION RULE, BS-05/BS-06): the graph bot's code failed
+    # or was refused (code_disabled, a snippet that no longer prepares)
+    # while it held a position.  Until it is flat it places no entry and no
+    # signal exit and runs only the price exits (stop, trailing stop, time
+    # stop) of that position; then it pauses with code_exits_reason.
+    # Persisted, so a restart resumes the bot in this state; never an
+    # error_message, which would keep auto-resume from starting it.
+    code_exits_only: bool = False
+    code_exits_reason: Optional[str] = None
+    # The group's settings fields (stop, trailing stop, time stop, ...) as
+    # the last good tick applied them (bot_runner.exit_fields_json), for
+    # those price exits when no plan can be compiled any more.
+    graph_exit_fields: Optional[dict] = None
+
     # U9: graph-mode runtime cache (NOT persisted to bots.json)
     graph_hash: Optional[str] = None          # SHA-256 of last compiled graph; triggers recompile on change
     compiled_program: Optional[Any] = None    # CompiledProgram — Any to avoid circular import; rebuilt on first tick
@@ -342,6 +426,9 @@ class BotState:
             "pending_regime_flip": self.pending_regime_flip,
             "was_running": self.was_running,
             "user_stopped": self.user_stopped,
+            "code_exits_only": self.code_exits_only,
+            "code_exits_reason": self.code_exits_reason,
+            "graph_exit_fields": self.graph_exit_fields,
         }
 
     @classmethod
@@ -540,15 +627,49 @@ class BotManager:
         # Refuse to start instead, and say why on the card and in an alert.
         # The start routes compile in the thread pool first (prepare_start);
         # this config is then not compiled again here, on the event loop.
+        # W7 (OPEN POSITION RULE): a refusal about the bot's code while it
+        # holds a position starts it in the exits-only state instead.
         if checked is None or checked[0] is not config or checked[1] is not config.graph:
             try:
                 self._check_graph(config)
+                exits_reason = None
             except GraphValidationError as exc:
-                self.refuse_start(bot_id, exc)
-                raise
+                exits_reason = exits_only_reason(config, state, exc)
+                if exits_reason is None:
+                    self.refuse_start(bot_id, exc)
+                    raise
+        else:
+            exits_reason = checked[2]
+        if exits_reason is not None:
+            self._start_exits_only(bot_id, config, state, exits_reason)
         runner = BotRunner(config, state, self)
         task = asyncio.create_task(runner.run())
         self.tasks[bot_id] = task
+        self._audit_start(bot_id, config, state)
+
+    @staticmethod
+    def _audit_start(bot_id: str, config: "BotConfig", state: "BotState") -> None:
+        """The code audit trail on a bot start (W7, design note 4.10): one
+        ``code_audit event=bot_start`` line per code snippet in the backend
+        log, and one summary line in the bot's own log.  Never refuses
+        anything; a failure here is logged and ignored."""
+        if config.kind != "graph" or config.graph is None:
+            return
+        try:
+            from nodebuilder.code import audit_log, iter_code_snippets
+
+            snippets = iter_code_snippets(config.graph)
+            if not snippets:
+                return
+            audit_log("bot_start", snippets, bot_id=bot_id, graph_id=config.graph_id,
+                      rev=config.graph_rev)
+            listed = ", ".join(f"{s.name} {s.level} sha256 {s.sha256[:12]}" for s in snippets)
+            state.append_activity_log({
+                "time": datetime.now(timezone.utc).isoformat(), "level": "INFO",
+                "msg": f"Code audit: {len(snippets)} snippet(s) start with this bot: {listed}",
+            })
+        except Exception:
+            logger.exception("code audit on start of bot %s failed", bot_id)
 
     def prepare_start(self, bot_id: str) -> None:
         """The slow part of starting a bot, for the thread pool (F435 W5
@@ -564,25 +685,51 @@ class BotManager:
 
         Raises KeyError, ValueError (already running), GraphValidationError
         (the caller then calls refuse_start on the event loop) or
-        ReferenceUnavailableError.  Thread pool only."""
+        ReferenceUnavailableError.  Thread pool only.
+
+        A refusal about the bot's code (W7) does not raise for a bot that
+        holds a position: start_bot then starts it in the exits-only state
+        (exits_only_reason), and no reference is probed."""
         if bot_id not in self.bots:
             raise KeyError(f"Bot {bot_id} not found")
         config, state = self.bots[bot_id]
         task = self.tasks.get(bot_id)
         if task is not None and not task.done():
             raise ValueError(f"Bot {bot_id} is already running")
-        program = self._check_graph(config)
-        if program is not None and state.entry_price is None:
+        try:
+            program = self._check_graph(config)
+        except GraphValidationError as exc:
+            # W7: refused for its code while it holds a position: it starts
+            # in the exits-only state (start_bot), which reads no reference.
+            reason = exits_only_reason(config, state, exc)
+            if reason is None:
+                raise
+            self._start_checked[bot_id] = (config, config.graph, reason)
+            return
+        if program is not None and state.entry_price is None and not state.code_exits_only:
             probe_references(config, program)
-        self._start_checked[bot_id] = (config, config.graph)
+        self._start_checked[bot_id] = (config, config.graph, None)
+
+    def _start_exits_only(self, bot_id: str, config: "BotConfig", state: "BotState",
+                          reason: str) -> None:
+        """A start whose compile refused the bot's code while it holds a
+        position (W7, OPEN POSITION RULE): the runner manages only the price
+        exits of that position and pauses with *reason* once flat."""
+        state.code_exits_only = True
+        state.code_exits_reason = reason
+        logger.warning("bot %s (%s) starts managing only the price exits of its position "
+                       "(%s); it pauses once flat", bot_id, config.symbol, reason)
 
     def refuse_start(self, bot_id: str, exc: GraphValidationError) -> None:
         """A start refused because the bot's graph no longer compiles: say
         why on the card and alert (create_task, never await).  Event loop
-        only."""
+        only.  A refusal about the bot's code (W7: SL_CODE_NODES=0, code
+        that does not prepare) gets the code pause_reason
+        (``code_disabled``, ``code_syntax: <node> line 3``)."""
         config, state = self.bots[bot_id]
         state.status = "error"
-        state.pause_reason = f"Graph does not compile: {exc}"
+        state.pause_reason = (code_pause_reason(config, exc)
+                              or f"Graph does not compile: {exc}")
         state.error_message = state.pause_reason
         self.save()
         from notifications import notify_error
@@ -615,6 +762,11 @@ class BotManager:
             try:
                 provider = get_trading_provider(config.broker)
                 provider.close_position(config.symbol)
+                # Flat: the exits-only state of a code failure (W7) ends.
+                # A Stop that keeps the position, or a close that failed,
+                # keeps it, so the next Start still runs only the exits.
+                state.code_exits_only = False
+                state.code_exits_reason = None
             except Exception:
                 pass
 
@@ -735,7 +887,7 @@ class BotManager:
         group's own program and plan, on the bot's symbol, interval (which
         the spawn dialog can override) and capital (sim_bridge.run_group, the
         bridge run.py simulates each group with)."""
-        from nodebuilder.run import _open_position
+        from nodebuilder.run import _open_position, guarded_cook
         from nodebuilder.trading import sim_bridge
         from shared import _fetch, require_valid_source
 
@@ -743,8 +895,10 @@ class BotManager:
         df = _fetch(config.symbol, req.start, req.end, config.interval, source=source)
         if df is None or len(df) == 0:
             raise ValueError(f"No data for {config.symbol} in {req.start}..{req.end} ({config.interval}).")
-        run = sim_bridge.run_group(live.program, df, req, plan=live.plan,
-                                   ticker=config.symbol, interval=config.interval)
+        # A group with code cooks under the 60 s wall-clock guard (W7).
+        run = guarded_cook(live.program, sim_bridge.run_group, live.program, df, req,
+                           plan=live.plan, ticker=config.symbol, interval=config.interval,
+                           label=f"bot {config.bot_id} backtest")
         summary = dict(run.sim["summary"])
         summary["open_position"] = _open_position(run.sim["trades"], float(df["Close"].iloc[-1]))
         summary["exit_connected"] = bool(live.group.exit_connected)
@@ -821,6 +975,10 @@ class BotManager:
         with self._save_lock:
             config.__dict__.update(graph=graph, graph_rev=rev)
             config.__pydantic_fields_set__.update(("graph", "graph_rev"))
+            # W7: new code on a flat bot (the route also asked the broker)
+            # ends an exits-only state left by the old code.
+            state.code_exits_only = False
+            state.code_exits_reason = None
         return config
 
     def manual_buy(self, bot_id: str) -> dict:
@@ -833,6 +991,10 @@ class BotManager:
             raise ValueError("Bot already has an open position")
         if state.status != "running":
             raise ValueError("Bot must be running to place a manual buy")
+        if state.code_exits_only:
+            raise ValueError(
+                f"The bot's code failed ({state.code_exits_reason}); it places no entries and "
+                f"manages only the exits of its position until it is flat, then pauses.")
 
         # A graph bot sizes from its group's Size terminal or Position Size
         # node, as its ticks do.  A wired Size or Stop is read from the cook
@@ -957,6 +1119,9 @@ class BotManager:
                 "position_direction": state.position_direction,
                 "pending_regime_flip": state.pending_regime_flip,
                 "was_running": state.was_running,
+                # W7: code failed, the bot manages only its exits until flat.
+                "code_exits_only": state.code_exits_only,
+                "code_exits_reason": state.code_exits_reason,
                 "kind": config.kind,
                 **self._graph_summary(config, graph_head),
             })
@@ -1095,6 +1260,8 @@ class BotManager:
             self._write_pre_w6_copy(data, raw_text)
             self.bot_fund = data.get("bot_fund", 0.0)
             self._unloaded = []
+            code_paused: list[tuple[str, str]] = []
+            code_exits: list[tuple[str, str]] = []  # in a position: exits only (W7)
             previous: Optional[str] = None  # the last bot that loaded
             for entry in data.get("bots", []):
                 raw_entry = copy.deepcopy(entry)
@@ -1112,13 +1279,79 @@ class BotManager:
                     )
                     self._unloaded.append((previous, raw_entry))
                     continue
+                reason = self._code_load_check(config, state)
+                if reason is not None:
+                    (code_exits if state.code_exits_only else code_paused).append(
+                        (config.bot_id, reason))
                 self.bots[config.bot_id] = (config, state)
                 previous = config.bot_id
             if self.bots:
                 self.save()
             self._alert_unloaded()
+            self._alert_code_paused(code_paused, code_exits)
         except Exception:
             logger.exception("Failed to load bots.json")
+
+    @staticmethod
+    def _code_load_check(config: "BotConfig", state: "BotState") -> Optional[str]:
+        """The bots.json load check of a graph bot's code (W7, design note
+        4.11): prepare() on every snippet, never run.  A snippet that does
+        not prepare, or any code while SL_CODE_NODES=0, loads a flat bot
+        paused (status error, pause_reason, never auto-resumed); the other
+        bots load normally and the manager never raises.
+
+        A bot that holds a position is not paused (OPEN POSITION RULE,
+        BS-01, CR-3): it loads in the exits-only state (code_exits_only,
+        with the reason), so auto-resume starts it if it was running, and
+        it runs only the price exits of that position, then pauses once
+        flat.  Returns the reason, or None."""
+        try:
+            reason = code_load_problem(config)
+        except Exception as exc:  # a check that cannot run must not stop the load
+            logger.exception("bot %s: code check on load failed", config.bot_id)
+            reason = f"code_syntax: the code could not be checked on load ({type(exc).__name__})"
+        if reason is None:
+            return None
+        if holds_position(state):
+            state.code_exits_only = True
+            state.code_exits_reason = reason
+            logger.warning("bot %s (%s) holds a position and its code is refused (%s): it "
+                           "manages only the price exits of that position, then pauses once "
+                           "flat", config.bot_id, config.symbol, reason)
+            return reason
+        state.status = "error"
+        state.pause_reason = reason
+        state.error_message = reason
+        logger.warning("bot %s (%s) loads paused: %s", config.bot_id, config.symbol, reason)
+        return reason
+
+    def _alert_code_paused(self, paused: list[tuple[str, str]],
+                           exits: Optional[list[tuple[str, str]]] = None) -> None:
+        """One alert naming every bot that loaded paused because of its
+        code, and every bot that holds a position and loaded in the
+        exits-only state (fire-and-forget: create_task when a loop runs,
+        else a log line)."""
+        exits = exits or []
+        if not paused and not exits:
+            return
+        parts = []
+        if paused:
+            parts.append(f"{len(paused)} graph bot(s) loaded paused because of their code: "
+                         + "; ".join(f"{bid}: {reason}" for bid, reason in paused))
+        if exits:
+            parts.append(f"{len(exits)} graph bot(s) hold a position and their code is refused: "
+                         f"they manage only the stop, trailing stop and time stop of that "
+                         f"position, then pause once flat: "
+                         + "; ".join(f"{bid}: {reason}" for bid, reason in exits))
+        msg = ".  ".join(parts)
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            logger.error("%s (no event loop, no alert sent)", msg)
+            return
+        from notifications import notify_error
+        asyncio.create_task(notify_error(symbol="bots.json", error_msg=msg,
+                                         bot_id=",".join(bid for bid, _r in paused + exits)))
 
     @staticmethod
     def _write_pre_w2_copy(data: Any, raw_text: str) -> None:

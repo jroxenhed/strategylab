@@ -147,6 +147,17 @@ class CompiledProgram:
         """True when any running node reads *name* (say @volume)."""
         return any(name in s.reads for s in self.steps)
 
+    @property
+    def has_code(self) -> bool:
+        """True when cooking this program runs user code (W7): a parameter
+        expression, a code block or a Wrangle.  Such a cook is waited for
+        with the wall-clock guard (design note 4.7)."""
+        for s in self.steps:
+            plan = getattr(s, "plan", None)
+            if plan is not None and getattr(plan, "has_code", False):
+                return True
+        return False
+
     def stream_schemas_json(self) -> dict[str, dict]:
         """Each node's output stream in the /validate form (plan 3.3)."""
         return {nid: schema.to_json() for nid, schema in self.schemas.items()}

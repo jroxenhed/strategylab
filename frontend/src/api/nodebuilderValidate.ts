@@ -38,6 +38,12 @@ export type KnownDiagnosticCode =
   | 'setting_shadowed' | 'group_weight_zero' | 'setting_unscoped'
   // W6 (asset instances and promoted params)
   | 'asset_missing' | 'asset_cycle' | 'interface_mismatch' | 'promoted_invalid'
+  // W7 (code at three levels)
+  | 'code_syntax' | 'code_limit' | 'code_runtime' | 'code_timeout' | 'code_type'
+  | 'ch_dynamic' | 'attr_dynamic' | 'ch_cycle' | 'code_disabled' | 'ticker_param_not_codeable'
+  | 'ref_broken' | 'code_writes_nothing'
+  // A param read before the cook (ticker, plan or settings fields) holds an expression.
+  | 'param_not_codeable'
 
 export type DiagnosticCode = KnownDiagnosticCode | (string & {})
 
@@ -63,6 +69,35 @@ export interface ValidateResponse {
    * A node missing here has no known stream (it could not be checked).
    */
   streams: Record<string, StreamSchema>
+  /**
+   * W7: one edge per literal `ch()` reference (S48 "read by" glyph).
+   * `reader_param` is null when the call is in a code block or a Wrangle.
+   * Empty when there are none, or from a server older than W7.
+   * `validateGraph` always fills it; optional only so older hand-built
+   * replies (tests) stay valid.
+   */
+  param_deps?: ParamDep[]
+}
+
+/** One `ch()` reference: `reader_id` reads `target` (a param name or an `@attr`) of `target_id`. */
+export interface ParamDep {
+  reader_id: string
+  reader_param: string | null
+  target_id: string
+  target: string
+}
+
+/** The `param_deps` list from a validate reply, keeping only well-formed edges. */
+export function readParamDeps(raw: unknown): ParamDep[] {
+  if (!Array.isArray(raw)) return []
+  const out: ParamDep[] = []
+  for (const e of raw) {
+    if (!e || typeof e !== 'object') continue
+    const { reader_id, reader_param, target_id, target } = e as Record<string, unknown>
+    if (typeof reader_id !== 'string' || typeof target_id !== 'string' || typeof target !== 'string') continue
+    out.push({ reader_id, reader_param: typeof reader_param === 'string' ? reader_param : null, target_id, target })
+  }
+  return out
 }
 
 function readAttrs(raw: unknown): AttrInfo[] {
@@ -118,6 +153,7 @@ export async function validateGraph(graph: Graph, signal?: AbortSignal): Promise
     ok: data?.ok ?? true,
     diagnostics: Array.isArray(data?.diagnostics) ? data.diagnostics : [],
     streams: readStreams(data?.streams),
+    param_deps: readParamDeps((data as { param_deps?: unknown } | undefined)?.param_deps),
   }
 }
 

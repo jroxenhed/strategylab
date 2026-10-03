@@ -92,11 +92,15 @@ class TestCatalogIntegrity:
           subnet_output, output_group): flatten removes them and splices
           the streams through, so they read and write nothing of their own
           (5.0 Needs 4, 5.B Needs 9).  Told apart by registry meta.
+        - The Wrangle (W7): its code decides what it reads and writes, so
+          its catalog entry lists neither (/validate and parse_code report
+          them per node).  It has no built-in params either: its params are
+          the spare params its code declares.
         - All others: both non-empty is expected but any one suffices.
         """
         from nodebuilder.kernel import registry
 
-        pass_through = {"merge"}
+        pass_through = {"merge", "wrangle"}
         for name in pass_through:
             entry = next(e for e in NODE_CATALOG if e.name == name)
             assert not entry.params, f"{name} is exempt only while it has no params"
@@ -507,9 +511,34 @@ class TestParamAndPortSpecs:
         assert not specs["interval"].code_able
         group = {p.name: p.code_able for p in get_node("output_group").params}
         assert group == {"direction": False, "ticker": False, "capital_weight": False}
+        # W7 fix PC-2: every param the simulator plan or the bot reads before
+        # the cook is not code-able either (sim_bridge.PLAN_READ_PARAMS); all
+        # other params are.
+        from nodebuilder.trading.sim_bridge import PLAN_READ_PARAMS
+
         for entry in NODE_CATALOG:
-            if entry.name not in ("ticker", "output_group"):
-                assert all(p.code_able for p in entry.params), entry.name
+            if entry.name in ("ticker", "output_group"):
+                continue
+            plan_reads = set(PLAN_READ_PARAMS.get(entry.name, ()))
+            for p in entry.params:
+                assert p.code_able == (p.name not in plan_reads), (entry.name, p.name)
+
+    def test_every_param_the_plan_reads_is_not_code_able(self):
+        """W7 fix PC-2 / BS-04: a terminal's or settings node's value params are
+        read by sim_bridge.plan_group before any cook, so none may hold an
+        expression: each is listed in PLAN_READ_PARAMS and code_able False.
+        A new value param on such a type fails here until it is classified."""
+        from nodebuilder.kernel.schema import NOT_CODEABLE_KINDS
+        from nodebuilder.trading.nodes_terminals import TERMINAL_TYPES
+        from nodebuilder.trading.sim_bridge import PLAN_READ_PARAMS, SETTING_TYPES
+
+        for type_name in TERMINAL_TYPES + SETTING_TYPES:
+            entry = get_node(type_name)
+            values = {p.name for p in entry.params if p.type not in NOT_CODEABLE_KINDS}
+            assert values == set(PLAN_READ_PARAMS[type_name]), type_name
+            for p in entry.params:
+                if p.name in values:
+                    assert not p.code_able, (type_name, p.name)
 
     def test_int_limits_match_what_compile_accepts(self):
         """A period at min and max compiles; one step outside is refused."""

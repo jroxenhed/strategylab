@@ -1,0 +1,238 @@
+{
+  "_comment": "Design note 4.2 sugar vectors (F435 W7). rewritten is the exact rewrite of source (equal to source when the text is left alone); error is the code_syntax position (line 1-based, col 0-based, characters of the user's text). column_map: [line, rewritten_col, user_col] pairs, measured on the 2026-09-30 prototype.",
+  "vectors": [
+    {
+      "id": 1,
+      "source": "@close",
+      "rewritten": "stream[\"close\"]",
+      "error": null,
+      "why": "line start, no following def"
+    },
+    {
+      "id": 2,
+      "source": "@x = @close * 2",
+      "rewritten": "stream[\"x\"] = stream[\"close\"] * 2",
+      "error": null,
+      "why": "line start write; read after ="
+    },
+    {
+      "id": 3,
+      "source": "y = (@high + @low) / 2",
+      "rewritten": "y = (stream[\"high\"] + stream[\"low\"]) / 2",
+      "error": null,
+      "why": "after ( and +"
+    },
+    {
+      "id": 4,
+      "source": "f(@close, n=@period)",
+      "rewritten": "f(stream[\"close\"], n=stream[\"period\"])",
+      "error": null,
+      "why": "after ( and ="
+    },
+    {
+      "id": 5,
+      "source": "z = a @ b",
+      "rewritten": "z = a @ b",
+      "error": null,
+      "why": "after a name: matmul"
+    },
+    {
+      "id": 6,
+      "source": "z = a@b",
+      "rewritten": "z = a@b",
+      "error": null,
+      "why": "after a name: matmul"
+    },
+    {
+      "id": 7,
+      "source": "z = f(x) @ w",
+      "rewritten": "z = f(x) @ w",
+      "error": null,
+      "why": "after ): matmul"
+    },
+    {
+      "id": 8,
+      "source": "z = m[0] @ w",
+      "rewritten": "z = m[0] @ w",
+      "error": null,
+      "why": "after ]: matmul"
+    },
+    {
+      "id": 9,
+      "source": "z = x @ @close",
+      "rewritten": "z = x @ stream[\"close\"]",
+      "error": null,
+      "why": "first @ binary, second after @"
+    },
+    {
+      "id": 10,
+      "source": "z = True @ w",
+      "rewritten": "z = True @ w",
+      "error": null,
+      "why": "True is a value"
+    },
+    {
+      "id": 11,
+      "source": "@x += 1",
+      "rewritten": "stream[\"x\"] += 1",
+      "error": null,
+      "why": "augmented write"
+    },
+    {
+      "id": 12,
+      "source": "a, @b = 1, @c",
+      "rewritten": "a, stream[\"b\"] = 1, stream[\"c\"]",
+      "error": null,
+      "why": "after ,"
+    },
+    {
+      "id": 13,
+      "source": "v = -@close",
+      "rewritten": "v = -stream[\"close\"]",
+      "error": null,
+      "why": "after unary -"
+    },
+    {
+      "id": 14,
+      "source": "v = not @flag",
+      "rewritten": "v = not stream[\"flag\"]",
+      "error": null,
+      "why": "after keyword not"
+    },
+    {
+      "id": 15,
+      "source": "d = {\"k\": @close}",
+      "rewritten": "d = {\"k\": stream[\"close\"]}",
+      "error": null,
+      "why": "after :"
+    },
+    {
+      "id": 16,
+      "source": "if @close > 0: @flag = True",
+      "rewritten": "if stream[\"close\"] > 0: stream[\"flag\"] = True",
+      "error": null,
+      "why": "after if and :"
+    },
+    {
+      "id": 17,
+      "source": "@x = 1; @y = 2",
+      "rewritten": "stream[\"x\"] = 1; stream[\"y\"] = 2",
+      "error": null,
+      "why": "after ;"
+    },
+    {
+      "id": 18,
+      "source": "x = (1 +\n     @close)",
+      "rewritten": "x = (1 +\n     stream[\"close\"])",
+      "error": null,
+      "why": "previous token + on the line above"
+    },
+    {
+      "id": 19,
+      "source": "s = \"@close\"  # uses @close",
+      "rewritten": "s = \"@close\"  # uses @close",
+      "error": null,
+      "why": "string and comment"
+    },
+    {
+      "id": 20,
+      "source": "t = f\"{@close}\"",
+      "rewritten": "t = f\"{stream[\"close\"]}\"",
+      "error": null,
+      "why": "f-string field (Python 3.12 tokenizes f-strings)"
+    },
+    {
+      "id": 21,
+      "source": "@x: bool = @a > @b",
+      "rewritten": "stream[\"x\"]: bool = stream[\"a\"] > stream[\"b\"]",
+      "error": null,
+      "why": "annotated write"
+    },
+    {
+      "id": 22,
+      "source": "@staticmethod\ndef f(): pass",
+      "rewritten": "@staticmethod\ndef f(): pass",
+      "error": null,
+      "why": "decorator"
+    },
+    {
+      "id": 23,
+      "source": "@functools.lru_cache(maxsize=None)\ndef g(x): return x",
+      "rewritten": "@functools.lru_cache(maxsize=None)\ndef g(x): return x",
+      "error": null,
+      "why": "decorator (the = is inside brackets)"
+    },
+    {
+      "id": 24,
+      "source": "@x = 1\ndef f(): pass",
+      "rewritten": "stream[\"x\"] = 1\ndef f(): pass",
+      "error": null,
+      "why": "assignment at depth 0, so not a decorator"
+    },
+    {
+      "id": 25,
+      "source": "def f():\n    return @close",
+      "rewritten": "def f():\n    return stream[\"close\"]",
+      "error": null,
+      "why": "after return"
+    },
+    {
+      "id": 26,
+      "source": "g = lambda: @close",
+      "rewritten": "g = lambda: stream[\"close\"]",
+      "error": null,
+      "why": "after :"
+    },
+    {
+      "id": 27,
+      "source": "x = @ close",
+      "rewritten": null,
+      "error": {
+        "code": "code_syntax",
+        "line": 1,
+        "col": 4
+      },
+      "why": "space after the sigil"
+    },
+    {
+      "id": 28,
+      "source": "x = @Close",
+      "rewritten": null,
+      "error": {
+        "code": "code_syntax",
+        "line": 1,
+        "col": 4
+      },
+      "why": "name not lowercase"
+    }
+  ],
+  "column_map": [
+    {
+      "source": "@x = @close * 2",
+      "to_user": [
+        [
+          1,
+          22,
+          5
+        ],
+        [
+          1,
+          30,
+          12
+        ]
+      ],
+      "to_rewritten": [
+        [
+          1,
+          5,
+          14
+        ],
+        [
+          1,
+          12,
+          30
+        ]
+      ]
+    }
+  ]
+}
