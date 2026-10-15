@@ -296,6 +296,15 @@ class AlpacaTradingProvider:
 _CACHE_MISS = object()  # sentinel for IBKRTradingProvider TTL cache
 
 
+def ibkr_bracket_stops_enabled() -> bool:
+    """IBKR_BRACKET_STOPS turns on IBKR bracket entries (F449).  Off by
+    default: the bracket code is kept but not used until a paper Gateway
+    test has passed (see the F449 report for the conditions).  With it off,
+    an IBKR entry that asks for a stop is a plain market order and the
+    bot's polling stop is the only stop, like an Alpaca short."""
+    return os.environ.get("IBKR_BRACKET_STOPS", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 class IBKRTradingProvider:
     """TradingProvider backed by ib_insync.
 
@@ -305,6 +314,14 @@ class IBKRTradingProvider:
     """
 
     name = "ibkr"
+
+    @property
+    def supports_short_stop_bracket(self) -> bool:
+        """A short entry may carry a stop: submit_order then sends it as a
+        bracket with a buy stop above entry (F449).  Only while
+        IBKR_BRACKET_STOPS is on.  Alpaca has no such flag: its OTO is not
+        used for shorts, so their stops are managed by polling only."""
+        return ibkr_bracket_stops_enabled()
 
     # IBKR error codes that indicate structural problems (retrying won't help)
     _STRUCTURAL_ERRORS = {
@@ -590,15 +607,67 @@ class IBKRTradingProvider:
         self._ensure_connected()
         self._invalidate_cache()
 
+        # Always SMART-routed (F198): never a position's own contract.
         contract = self._contract(order.symbol)
         action = "BUY" if order.side == "buy" else "SELL"
-
-        if order.order_type == "stop" and order.stop_price:
-            ib_order = StopOrder(action, order.qty, order.stop_price)
-        else:
-            ib_order = MarketOrder(action, order.qty)
-
         acct = self._resolve_account(order.account_id)
+
+        if order.order_type == "stop" and order.stop_price and not ibkr_bracket_stops_enabled():
+            # IBKR_BRACKET_STOPS is off (the default): the entry is a plain
+            # market order and no stop is sent to the broker.  A bot checks
+            # its stop by polling, as it does for an Alpaca short.  The old
+            # bare stop order on the entry side is gone: it filled at once as
+            # an entry and left no stop at the broker (F449).
+            import logging
+            logging.getLogger(__name__).info(
+                "[IBKR] %s %s: stop %.2f not sent to the broker (IBKR_BRACKET_STOPS off); "
+                "sending a market order", action, order.symbol, order.stop_price)
+        elif order.order_type == "stop" and order.stop_price:
+            # An entry that carries a stop is a bracket, the same meaning as
+            # Alpaca's OTO (F449): a market parent sent with transmit=False,
+            # then a child stop on the other side with parentId set and
+            # transmit=True, which sends both.  The broker then holds the
+            # protective stop: a sell stop below entry for a long, a buy
+            # stop above entry for a short.  The child is live only once
+            # the parent fills.  This used to send one bare stop order on
+            # the entry side, which filled at once as an entry (a buy stop
+            # below the market) and left no stop at the broker.
+            close_action = "SELL" if action == "BUY" else "BUY"
+            tif = "GTC" if order.time_in_force == "gtc" else "DAY"
+
+            async def _place_bracket():
+                parent = MarketOrder(action, order.qty, orderId=self._ib.client.getReqId(),
+                                     transmit=False, tif=tif)
+                stop = StopOrder(close_action, order.qty, order.stop_price,
+                                 orderId=self._ib.client.getReqId(),
+                                 parentId=parent.orderId, transmit=True, tif=tif)
+                if acct:
+                    parent.account = acct
+                    stop.account = acct
+                parent_trade = self._ib.placeOrder(contract, parent)
+                try:
+                    self._ib.placeOrder(contract, stop)
+                except Exception:
+                    # The parent was never transmitted: cancel it so no entry
+                    # goes out without its stop.
+                    try:
+                        self._ib.cancelOrder(parent)
+                    except Exception:
+                        pass
+                    raise
+                return parent_trade
+            trade = self._run(_place_bracket())
+            return OrderResult(
+                order_id=str(trade.order.orderId),
+                symbol=order.symbol,
+                qty=float(order.qty),
+                side=order.side,
+                status=trade.orderStatus.status.lower(),
+                filled_avg_price=float(trade.orderStatus.avgFillPrice) if trade.orderStatus.avgFillPrice else None,
+                filled_qty=float(trade.orderStatus.filled) if trade.orderStatus.filled else None,
+            )
+
+        ib_order = MarketOrder(action, order.qty)
         if acct:
             ib_order.account = acct
 
@@ -653,21 +722,31 @@ class IBKRTradingProvider:
         acct = self._resolve_account()
 
         async def _close():
-            for p in self._ib.positions():
-                if p.contract.symbol == symbol:
-                    qty = float(p.position)
-                    side = "SELL" if qty > 0 else "BUY"
-                    order = MarketOrder(side, abs(qty))
-                    if acct:
-                        order.account = acct
-                    # F198: route through SMART, not the position's stored exchange.
-                    # IBKR positions filled on NYSE get contract.exchange="NYSE",
-                    # which trips Gateway's Precautionary Settings "direct routed
-                    # orders" guard and IBKR discards the order (code 10311 → 201).
-                    contract = self._contract(symbol)
-                    trade = self._ib.placeOrder(contract, order)
-                    return (trade, qty, side)
-            return None
+            qty = self._position_qty(symbol)
+            if not qty:
+                return None
+            side = "SELL" if qty > 0 else "BUY"
+            # F449: cancel resting orders on the closing side first (a
+            # bracket's child stop).  Left alone, that stop would fire after
+            # the position is flat and open a new position the other way.
+            # A stop that filled meanwhile has closed the position, so the
+            # qty is read again after the cancels: no second exit.  Only
+            # with IBKR_BRACKET_STOPS on: with it off no child stop exists
+            # and the close goes out as before.
+            if ibkr_bracket_stops_enabled() and await self._cancel_closing_orders(symbol, side):
+                qty = self._position_qty(symbol)
+                if not qty or (qty > 0) != (side == "SELL"):
+                    return None
+            order = MarketOrder(side, abs(qty))
+            if acct:
+                order.account = acct
+            # F198: route through SMART, not the position's stored exchange.
+            # IBKR positions filled on NYSE get contract.exchange="NYSE",
+            # which trips Gateway's Precautionary Settings "direct routed
+            # orders" guard and IBKR discards the order (code 10311 → 201).
+            contract = self._contract(symbol)
+            trade = self._ib.placeOrder(contract, order)
+            return (trade, qty, side)
 
         result = self._run(_close())
         if result is None:
@@ -686,16 +765,67 @@ class IBKRTradingProvider:
         self._ensure_connected()
         self._invalidate_cache()
         async def _close_all():
-            for p in self._ib.positions():
+            for p in list(self._ib.positions()):
+                symbol = p.contract.symbol
                 qty = float(p.position)
                 if qty == 0:
                     continue
                 side = "SELL" if qty > 0 else "BUY"
+                # F449: cancel the closing side's resting orders first (a
+                # bracket's child stop), as Alpaca's cancel_orders=True does,
+                # then read the qty again in case one filled meanwhile.  Only
+                # with IBKR_BRACKET_STOPS on (no child stops exist otherwise).
+                if ibkr_bracket_stops_enabled() and await self._cancel_closing_orders(symbol, side):
+                    qty = self._position_qty(symbol)
+                    if not qty or (qty > 0) != (side == "SELL"):
+                        continue
                 order = MarketOrder(side, abs(qty))
                 # F198: SMART-route, see close_position note above.
-                contract = self._contract(p.contract.symbol)
+                contract = self._contract(symbol)
                 self._ib.placeOrder(contract, order)
         self._run(_close_all())
+
+    def _position_qty(self, symbol: str) -> float:
+        """The signed qty of the account's position in symbol (0 when flat),
+        from ib_insync's live position list.  Runs on the main loop."""
+        for p in self._ib.positions():
+            if p.contract.symbol == symbol:
+                return float(p.position)
+        return 0.0
+
+    async def _cancel_closing_orders(self, symbol: str, action: str, wait: float = 2.0) -> list:
+        """Cancel every open order on symbol with this action (the side that
+        closes the position, e.g. a bracket's child stop), then wait up to
+        `wait` seconds for each one to be cancelled or filled.  Runs on the
+        main loop; the waits are asyncio sleeps, so ib_insync keeps reading
+        Gateway messages meanwhile.  Returns the orders it cancelled."""
+        import logging
+        log = logging.getLogger(__name__)
+        pending = []
+        for trade in self._ib.openTrades():
+            if trade.contract.symbol != symbol or trade.order.action != action:
+                continue
+            if trade.isDone():
+                continue
+            if trade.orderStatus.status == "PendingCancel":
+                # Already being cancelled (the bot's exit cancels first):
+                # wait for it, a second cancel only draws a Gateway error.
+                pending.append(trade)
+                continue
+            try:
+                self._ib.cancelOrder(trade.order)
+                pending.append(trade)
+            except Exception as e:
+                log.warning("[IBKR] cancel of order %s on %s failed: %s",
+                            trade.order.orderId, symbol, e)
+        deadline = _time.monotonic() + wait
+        while any(not t.isDone() for t in pending) and _time.monotonic() < deadline:
+            await asyncio.sleep(0.1)
+        for t in pending:
+            if not t.isDone():
+                log.warning("[IBKR] order %s on %s still open after cancel; it may "
+                            "fire once the position is closed", t.order.orderId, symbol)
+        return pending
 
     def cancel_all_orders(self) -> None:
         self._ensure_connected()
