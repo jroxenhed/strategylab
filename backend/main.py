@@ -45,6 +45,7 @@ from routes.graph_library import router as graph_library_router
 from routes.turnaround import router as turnaround_router
 from routes.premises import router as premises_router
 from routes.gateway import router as gateway_router
+from routes.bot_health import router as bot_health_router
 import routes.bots as bots_module
 from bot_manager import BotManager
 from middleware import (
@@ -220,6 +221,8 @@ app.include_router(graph_library_router)
 app.include_router(turnaround_router)
 app.include_router(premises_router)
 app.include_router(gateway_router)
+# Zabbix probe: loopback only, not under /api/ so nginx never proxies it.
+app.include_router(bot_health_router)
 
 
 @app.get("/api/cache")

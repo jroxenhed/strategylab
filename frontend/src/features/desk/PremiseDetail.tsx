@@ -24,6 +24,7 @@ import {
   getAutopsy,
   derivePremise,
 } from '../../api/premises'
+import { isSignedOut } from '../../shared/auth/signedOut'
 
 interface PremiseDetailProps {
   premiseId: string
@@ -699,6 +700,8 @@ export default function PremiseDetail({ premiseId, allPremises = [], onDeleted, 
   useEffect(() => {
     if (premise?.status === 'exploring') {
       pollIntervalRef.current = setInterval(async () => {
+        // Skip polls while signed out (they would only collect 401s).
+        if (isSignedOut()) return
         try {
           const rs = await getRunStatus(premiseId)
           setRunStatus(rs)

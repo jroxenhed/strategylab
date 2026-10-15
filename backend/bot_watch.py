@@ -54,17 +54,30 @@ def _parse(ts) -> Optional[datetime]:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+def should_be_working(state, now: datetime) -> bool:
+    """True for a bot we expect to work now: not stopped by the user, not
+    paused, and it ticked within LOOKBACK. Shared with routes/bot_health.py
+    (the Zabbix endpoint) so the two never disagree."""
+    if state.user_stopped or state.pause_reason:
+        return False
+    last = _parse(state.last_tick)
+    return last is not None and now - last <= LOOKBACK
+
+
+def alive_ids(manager) -> set[str]:
+    """Bot ids whose runner task is still alive."""
+    return {bid for bid, task in list(manager.tasks.items()) if not task.done()}
+
+
 def stalled_bots(manager, now: datetime) -> dict[str, str]:
     """bot_id -> label for each bot that ticked within LOOKBACK but is not working
     now. `manager` needs .bots {id: (BotConfig, BotState)} and .tasks {id: Task}."""
-    alive = {bid for bid, task in manager.tasks.items() if not task.done()}
+    alive = alive_ids(manager)
     out: dict[str, str] = {}
     for bid, (config, state) in list(manager.bots.items()):
-        if state.user_stopped or state.pause_reason:
+        if not should_be_working(state, now):
             continue
         last = _parse(state.last_tick)
-        if last is None or now - last > LOOKBACK:
-            continue
         if bid in alive and state.status == "running":
             if now - last <= HUNG_AFTER:
                 continue

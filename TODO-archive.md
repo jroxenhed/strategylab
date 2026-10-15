@@ -397,3 +397,8 @@ grouped by close month. Never reorder or rewrite previously archived sections.
 - [x] <a id="f445"></a> **F445** Nobody noticed that every bot stood still for two trading sessions after the office move. Send one Slack line at the market open when a bot that ticked in the last five sessions is not running. The Gateway alert loop in backend/gateway.py already sends this kind of line. [medium] [hardening]
 - [x] <a id="f446"></a> **F446** test_run_loop_survives_tick_exception in test_broker_health.py fails now and then in a full backend run, and passes alone. It sleeps 50 ms against a 10 ms heartbeat, which is too tight under load. Wait on an event or poll with a deadline instead of a fixed sleep. [easy] [testing]
 
+## Closed 2026-10
+
+- [x] <a id="f450"></a> **F450** An expired Google sign-in made the page show server errors and every bot as down, while all bots ran. The frontend now treats a 401 as signed out: a banner with a sign-in link, polling stopped, no error text. Every API call sends Accept application/json so oauth2-proxy answers 401, not a redirect. [polish]
+- [x] <a id="f451"></a> **F451** Nothing outside the backend noticed when bots stopped or IB logged out. A local-only endpoint, /internal/bot-health, now gives bot counts, stalled bots, tick age and Gateway state as flat JSON, using the bot watch rules. mfIT wired Zabbix items and triggers to it, off until the deploy. [hardening]
+

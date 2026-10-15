@@ -11,6 +11,7 @@ import { INFO_COLUMN_FLEX, StatCell, btnStyle } from './ui'
 import { graphActionError, plainErrorText, updateBotGraph } from '../../api/graphSpawn'
 import { requestOpenGraph } from '../nodebuilder/graphLinks'
 import { CodeExitsOnlyRow, PauseReasonRow } from './BotPauseRows'
+import { isSignedOut, useSignedOut } from '../../shared/auth/signedOut'
 
 const SAVED_KEY = 'strategylab-saved-strategies'
 
@@ -51,8 +52,11 @@ function ActivityLog({ entries, status }: { entries: BotActivityEntry[], status?
  * lw-charts addSeries colour option — lw-charts does not resolve CSS vars
  * and will silently render the string as an invalid colour (K-01).
  */
-function heartbeatColor(summary: BotSummary, detail: BotDetail | null): string {
+function heartbeatColor(summary: BotSummary, detail: BotDetail | null, signedOut = false): string {
   if (summary.status === 'stopped') return 'var(--gh-text-dim)'  // grey
+  // Signed out: we cannot see new ticks, so an old last_tick says nothing
+  // about the bot. Grey, never red.
+  if (signedOut) return 'var(--gh-text-dim)'
   const lastTick = detail?.state?.last_tick ?? summary.last_tick
   if (!lastTick) return 'var(--gh-text-dim)'
   const elapsed = (Date.now() - new Date(lastTick).getTime()) / 1000
@@ -352,6 +356,7 @@ export default function BotCard({
 }) {
   const [expanded, setExpanded] = useState(false)
   const [detail, setDetail] = useState<BotDetail | null>(null)
+  const signedOut = useSignedOut()
   const [editingAlloc, setEditingAlloc] = useState(false)
   const [allocValue, setAllocValue] = useState('')
   const [editingSpread, setEditingSpread] = useState(false)
@@ -395,7 +400,7 @@ export default function BotCard({
     if (!expanded) { setDetail(null); return }
     let active = true
     const load = async () => {
-      if (document.hidden) return
+      if (document.hidden || isSignedOut()) return
       try {
         const d = await fetchBotDetail(summary.bot_id)
         if (active) setDetail(d)
@@ -458,11 +463,11 @@ export default function BotCard({
 
             {/* Heartbeat dot */}
             <div
-              title={lastTickStr}
+              title={signedOut ? `Signed out: live status not known. ${lastTickStr}` : lastTickStr}
               style={{
                 width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-                background: heartbeatColor(summary, detail),
-                boxShadow: running ? `0 0 4px ${heartbeatColor(summary, detail)}` : 'none',
+                background: heartbeatColor(summary, detail, signedOut),
+                boxShadow: running ? `0 0 4px ${heartbeatColor(summary, detail, signedOut)}` : 'none',
               }}
             />
 
@@ -647,11 +652,11 @@ export default function BotCard({
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {/* Heartbeat dot */}
             <div
-              title={lastTickStr}
+              title={signedOut ? `Signed out: live status not known. ${lastTickStr}` : lastTickStr}
               style={{
                 width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                background: heartbeatColor(summary, detail),
-                boxShadow: running ? `0 0 6px ${heartbeatColor(summary, detail)}` : 'none',
+                background: heartbeatColor(summary, detail, signedOut),
+                boxShadow: running ? `0 0 6px ${heartbeatColor(summary, detail, signedOut)}` : 'none',
               }}
             />
             <span style={{ color: 'var(--gh-text-primary)', fontWeight: 600 }}>

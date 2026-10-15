@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getGatewayStatus, sendGatewayCommand, type GatewayCommand, type GatewayState } from '../../api/gateway'
 import { apiErrorDetail } from '../../shared/utils/errors'
+import { useSignedOut } from '../../shared/auth/signedOut'
 
 const STATE_META: Record<GatewayState, { label: string; color: string; pulse?: boolean }> = {
   logged_in: { label: 'Logged in', color: '#10b981' },
@@ -45,6 +46,8 @@ export default function GatewayPanel() {
     retry: false,
   })
 
+  const signedOut = useSignedOut()
+
   const is404 = (query.error as { response?: { status?: number } } | null)?.response?.status === 404
   if (is404) return null
   if (query.isLoading) return null
@@ -53,7 +56,10 @@ export default function GatewayPanel() {
       <div style={styles.bar}>
         <div style={styles.row}>
           <span style={styles.title}>IB Gateway</span>
-          <span style={styles.error}>Gateway status unavailable</span>
+          {/* A failed sign-in says nothing about the Gateway itself. */}
+          {signedOut
+            ? <span style={{ color: '#8b949e', fontSize: 12 }}>Signed out</span>
+            : <span style={styles.error}>Gateway status unavailable</span>}
         </div>
       </div>
     )

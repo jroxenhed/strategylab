@@ -4,6 +4,7 @@ import type { IChartApi, UTCTimestamp, LineData, Time } from 'lightweight-charts
 import type { StrategyRequest, BacktestSummary } from '../../shared/types'
 import { useRequestTimer } from '../../shared/hooks/useRequestTimer'
 import { apiErrorDetail } from '../../shared/utils/errors'
+import { apiFetch } from '../../api/apiFetch'
 import { api } from '../../api/client'
 import { buildParamOptions, linspace, applyParamPath, groupParamOptions, shouldGroupParamOptions } from './paramOptions'
 import type { ParamOption } from './paramOptions'
@@ -639,7 +640,7 @@ export default function WalkForwardPanel({ lastRequest, onApplyParams, onRunBack
       // Same baseURL as the axios client (default http://localhost:8000) — the
       // SSE endpoint can't go through axios so we re-use the resolved base.
       const apiBase = (api.defaults.baseURL ?? '').replace(/\/$/, '')
-      const resp = await fetch(`${apiBase}/api/backtest/walk_forward/stream`, {
+      const resp = await apiFetch(`${apiBase}/api/backtest/walk_forward/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
