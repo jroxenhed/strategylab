@@ -126,6 +126,19 @@ class ReferenceUnavailableError(RuntimeError):
     counts it toward MAX_CONSEC_ERRORS and alerts (create_task)."""
 
 
+class PositionCheckError(RuntimeError):
+    """The broker could not be asked for the bot's position on a new bar
+    (F449).
+
+    The tick still runs the price exits of a position the bot tracks (stop,
+    trailing stop, time stop) from its own state, places no entry, leaves
+    the bar not done so it is retried on the next tick, and raises this, so
+    run() counts it toward MAX_CONSEC_ERRORS and alerts (create_task, once
+    per outage).  Also raised when the broker lists no position that the
+    bot tracks and nothing confirms the close yet, or when an exit could
+    not be sent because the broker did not confirm the position (LM-3)."""
+
+
 # ---------------------------------------------------------------------------
 # Graph bots: the bot's own Output Group (F435 W5, plan D7 and D8)
 # ---------------------------------------------------------------------------
@@ -569,11 +582,39 @@ class BotRunner(RegimeMixin, ExitsMixin):
         # reads it, also for a regime flip's reverse entry on the same bar.
         self._graph_sample = None
         # The bar whose price exits (stop, trailing stop, time stop) already
-        # ran while a reference frame was down (LM-1).  Exits run once per
-        # bar (_evaluate_exit_reason counts the bar toward the time stop), so
-        # neither the retries of that bar nor its later signal pass run them
-        # again.
+        # ran while a reference frame was down (LM-1) or the broker position
+        # check failed (F449).  Exits run once per bar (_evaluate_exit_reason
+        # counts the bar toward the time stop), so neither the retries of
+        # that bar nor its later signal pass run them again.
         self._exits_bar: str | None = None
+        # The exit decided on _exits_bar whose close was NOT sent (the broker
+        # did not confirm the position), if any.  The retries of that bar
+        # send it again instead of dropping it.  A close that went out (or
+        # that the broker refused) clears it: at most one close per bar
+        # (F449 LM-1).
+        self._exits_bar_reason: str | None = None
+        # What the last exit attempt on _exits_bar did, in plain words for
+        # the alert (F449 LM-2), when its close went out or was refused.
+        self._exits_bar_note: str | None = None
+        # _execute_exit's last outcome: closed / sent / close_failed / not_sent.
+        self._exit_outcome: str | None = None
+        # A tracked position missing from the broker's list is booked only
+        # once confirmed (F449 LM-3, _position_gone_confirmed): the count of
+        # checks in a row that lacked it in a non-empty account, whether the
+        # last reply was an empty account, and whether a miss is waiting.
+        self._missing_checks = 0
+        self._last_account_empty = False
+        self._gone_unconfirmed = False
+        # One urgent alert per outage (F449 LM-5): set when one is sent,
+        # cleared by a tick that got a good broker position check.
+        self._outage_alerted = False
+        self._broker_ok_this_tick = False
+        # What went wrong with the broker position check in the last full
+        # run of _manage_without_signals, and on which bar (F449 meets W7):
+        # the code-failure callers raise it so it counts, and a bar with a
+        # problem is checked again in full on its retries.
+        self._position_problem: str | None = None
+        self._position_problem_bar: str | None = None
         # (graph hash, reference key, kind) already warned about (LM-9).
         self._ref_warned: set = set()
         # A resumed position under a wired Stop whose bar had no stop value:
@@ -713,7 +754,19 @@ class BotRunner(RegimeMixin, ExitsMixin):
         try:
             try:
                 provider = get_trading_provider(cfg.broker)
-                if entry_is_short:
+                if (entry_is_short and _sl and not _ts
+                        and getattr(provider, "supports_short_stop_bracket", False) is True):
+                    # IBKR only, and only with IBKR_BRACKET_STOPS on (F449):
+                    # the short goes out as a bracket with a buy stop above
+                    # entry held at the broker.  The polling stop stays as
+                    # the second line of defence.  Alpaca shorts (and IBKR
+                    # with the flag off) keep polling-only stops.
+                    stop_price = round(price * (1 + _sl / 100), 2)
+                    order_req = BrokerOrderRequest(
+                        symbol=cfg.symbol.upper(), qty=qty, side="sell",
+                        order_type="stop", stop_price=stop_price,
+                    )
+                elif entry_is_short:
                     order_req = BrokerOrderRequest(symbol=cfg.symbol.upper(), qty=qty, side="sell")
                 elif _sl and not _ts:
                     stop_price = round(price * (1 - _sl / 100), 2)
@@ -877,6 +930,9 @@ class BotRunner(RegimeMixin, ExitsMixin):
             check_dir = cfg.direction
         provider = get_trading_provider(cfg.broker)
         positions = await self._run_in_executor(provider.get_positions)
+        # An empty account reply is not proof that a tracked position is
+        # gone (F449 LM-3, _position_gone_confirmed).
+        self._last_account_empty = not positions
         for pos in positions:
             if pos["symbol"] != cfg.symbol.upper():
                 continue
@@ -886,6 +942,8 @@ class BotRunner(RegimeMixin, ExitsMixin):
                 self._resume_position(cfg, state, pos, price,
                                       adopt_side=is_regime or bidirectional,
                                       wired_stop=wired_stop)
+            self._missing_checks = 0
+            self._gone_unconfirmed = False
             return True, abs(pos["qty"])
         return False, 0
 
@@ -940,6 +998,114 @@ class BotRunner(RegimeMixin, ExitsMixin):
             self._log("INFO", f"Stop for the resumed position set from this bar: "
                               f"{state.entry_stop_pct}")
 
+    async def _exits_without_position_check(self, cfg, state, df, price: float, indicators,
+                                            in_hours: bool, bar: str, wired_stop: bool) -> bool:
+        """The broker could not be asked for the position (F449).  A
+        position the bot already tracks (entry_price set) still gets its
+        price exits: stop, trailing stop and time stop, from the bot's own
+        state and bars.  Signal exits and entries wait for a good check.
+
+        Runs once per bar (_exits_bar), so a retried bar does not count
+        twice toward the time stop.  The exit goes through _execute_exit,
+        which asks the broker for the position again and sends no close
+        order unless the broker confirms it on the tracked side, so a
+        failed check can never open a reverse position.
+
+        Returns True when the bar is done: the position closed, or its close
+        went out (or the broker refused it), so it is not sent again on this
+        bar (LM-1)."""
+        if state.entry_price is None:
+            return False
+        i = len(df) - 1
+        if wired_stop:
+            cfg = cfg.model_copy(update={"stop_loss_pct": state.entry_stop_pct})
+        pos_is_short = (state.position_direction == "short" if state.position_direction
+                        else cfg.direction == "short")
+        if self._exits_bar == bar:
+            # A retry of the same bar: the exits already ran; only an exit
+            # whose close could not be sent is tried again.
+            exit_reason = self._exits_bar_reason
+        else:
+            exit_reason = await self._evaluate_exit_reason(
+                cfg, state, price, df, i, pos_is_short, indicators, [], False,
+                signal_exits=False)
+            self._exits_bar = bar
+            self._exits_bar_reason = exit_reason
+            self._exits_bar_note = None
+        if not exit_reason:
+            return False
+        self._log("INFO", f"Exit {exit_reason} while the position check is down")
+        # _execute_exit takes the qty from the broker when it confirms the
+        # position (LM-4); this is only the last known one.
+        self._exit_outcome = None
+        await self._execute_exit(cfg, state, exit_reason, price, self._last_broker_qty or 0,
+                                 pos_is_short, df, i, in_hours, indicators)
+        return self._after_exit_attempt(state, exit_reason)
+
+    def _after_exit_attempt(self, state, exit_reason: str) -> bool:
+        """After an exit tried on _exits_bar.  Returns True when the bar is
+        done: the position closed, or a close went out but is not confirmed
+        yet, or the broker refused it.  A close that went out is never
+        cancelled and sent again on the same bar (F449 LM-1); a later bar
+        that still wants out sends one new close.  Returns False when no
+        order went out (the position was not confirmed): the bar's retries
+        send the exit again."""
+        if state.entry_price is None:
+            self._exits_bar_reason = None
+            self._exits_bar_note = None
+            return True
+        if self._exit_outcome == "sent":
+            self._exits_bar_reason = None
+            self._exits_bar_note = (f"{exit_reason} close order {state.pending_close_order_id} "
+                                    f"sent, its fill is not confirmed yet")
+            return True
+        if self._exit_outcome == "close_failed":
+            self._exits_bar_reason = None
+            self._exits_bar_note = (f"the {exit_reason} close was refused by the broker (see the "
+                                    f"bot log); it is tried again on the next bar if still due")
+            return True
+        self._exits_bar_reason = exit_reason
+        self._exits_bar_note = None
+        return False
+
+    def _unsent_exit(self, bar: str | None = None) -> str | None:
+        """The exit that is due on the bar but whose close was not sent."""
+        if self.state.entry_price is None or not self._exits_bar_reason:
+            return None
+        if bar is not None and self._exits_bar != bar:
+            return None
+        return self._exits_bar_reason
+
+    def _held_note(self, cfg, state, bar: str, waits: str) -> str:
+        """Plain words, for the alert, about the open position on this bar
+        (F449 LM-2).  Each case says only what is true: a stop that is due
+        but not sent is never called "checked"."""
+        if state.entry_price is None:
+            return ""
+        if self._gone_unconfirmed:
+            return (f" (open position: the broker lists no {cfg.symbol} position, but no "
+                    f"closing fill confirms it; the bot keeps it and places no entry. "
+                    f"Check the account by hand.)")
+        unsent = self._unsent_exit(bar)
+        if unsent:
+            return (f" (open position: a {unsent} exit IS DUE BUT ITS CLOSE WAS NOT SENT: the "
+                    f"broker did not confirm the position. It is tried again every poll. "
+                    f"Close {cfg.symbol} by hand if this lasts.)")
+        if self._exits_bar == bar and self._exits_bar_note:
+            return f" (open position: {self._exits_bar_note}; {waits})"
+        if self._exits_bar == bar:
+            return (f" (open position: no stop, trailing stop or time stop was due on this "
+                    f"bar; {waits})")
+        return f" (open position; {waits})"
+
+    def _alert_once(self, cfg, msg: str) -> None:
+        """Send one urgent alert per outage (F449 LM-5), at once, through
+        create_task (never awaited in the polling loop)."""
+        if self._outage_alerted:
+            return
+        self._outage_alerted = True
+        asyncio.create_task(notify_error(symbol=cfg.symbol, error_msg=msg, bot_id=cfg.bot_id))
+
     async def _manage_without_signals(self, cfg, state, df, live: Optional[GraphLive],
                                       is_regime: bool, in_hours: bool, bar: str, *,
                                       why: str = "while a reference is down") -> bool:
@@ -959,9 +1125,26 @@ class BotRunner(RegimeMixin, ExitsMixin):
 
         *live* None (W7: a bot whose code failed with no plan to read): the
         exits come from *cfg* alone, and a stop the trade read from a wired
-        Stop at its entry (entry_stop_pct) is still its stop."""
-        if self._exits_bar == bar:
+        Stop at its entry (entry_stop_pct) is still its stop.
+
+        The broker position check follows F449: when it fails, a tracked
+        position still gets its price exits (_exits_without_position_check);
+        a position missing from the broker's list is booked only once
+        confirmed (_position_gone_confirmed); an exit whose close was not
+        sent (the broker did not confirm the position) is tried again on the
+        bar's retries.  Each of these returns False (never flat, so a bot
+        whose code failed never pauses on an unconfirmed broker answer) and
+        leaves _position_problem set: the reference-outage caller raises
+        anyway, and the code-failure callers raise it
+        (_raise_position_problem), so it counts toward MAX_CONSEC_ERRORS.
+        A bar with such a problem is checked again in full on its retries;
+        its exits still run once (_exits_bar)."""
+        if (self._exits_bar == bar and not self._exits_bar_reason
+                and self._position_problem_bar != bar):
+            self._position_problem = None
             return False
+        self._position_problem = None
+        self._position_problem_bar = None
         price = float(df["Close"].iloc[-1])
         i = len(df) - 1
         state.last_price = price
@@ -971,16 +1154,42 @@ class BotRunner(RegimeMixin, ExitsMixin):
             has_position, broker_qty = await self._broker_position(
                 cfg, state, price, is_regime, wired_stop)
         except Exception as e:
+            # The caller raises (ReferenceUnavailableError, or
+            # _raise_position_problem after a code failure), so this counts.
+            # A tracked position still gets its price exits (F449).
             self._log("WARN", f"Position check failed: {e}")
+            self._position_problem = f"Position check failed: {e}"
+            self._position_problem_bar = bar
+            if state.entry_price is not None:
+                attrs = await self._run_in_executor(build_graph_attrs, None, df,
+                                                    atr_trailing_stop(cfg))
+                if await self._exits_without_position_check(
+                        cfg, state, df, price, attrs, in_hours, bar, wired_stop):
+                    state.last_bar_time = bar
             return False
+        # A good broker check: a code-failure tick that raises nothing ends
+        # the outage (one alert per outage, F449 LM-5).
+        self._broker_ok_this_tick = True
         self._take_pending_stop(state, has_position)
         pos_is_short = (state.position_direction == "short" if state.position_direction
                         else cfg.direction == "short")
         if not has_position:
             if state.entry_price is not None:
+                # One reply without the position is not proof (F449 LM-3):
+                # keep it until the close is confirmed, and never pause a
+                # bot whose code failed on it.  The caller raises, so this
+                # counts.
+                confirmed, fill = await self._position_gone_confirmed(cfg, state, pos_is_short)
+                if not confirmed:
+                    self._broker_ok_this_tick = False
+                    self._position_problem = ("Position not found at the broker, not "
+                                              "confirmed yet")
+                    self._position_problem_bar = bar
+                    return False
                 attrs = await self._run_in_executor(build_graph_attrs, None, df, atr_trailing_stop(cfg))
                 if await self._detect_external_close(cfg, state, has_position, pos_is_short,
-                                                     broker_qty, price, df, i, in_hours, attrs):
+                                                     broker_qty, price, df, i, in_hours, attrs,
+                                                     fill=fill):
                     return True
                 state.entry_price = None
                 state.entry_bar_count = 0
@@ -1000,16 +1209,52 @@ class BotRunner(RegimeMixin, ExitsMixin):
         attrs = await self._run_in_executor(build_graph_attrs, None, df, atr_trailing_stop(cfg))
         if wired_stop:
             cfg = cfg.model_copy(update={"stop_loss_pct": state.entry_stop_pct})
-        exit_reason = await self._evaluate_exit_reason(
-            cfg, state, price, df, i, pos_is_short, attrs, [], is_regime)
-        self._exits_bar = bar
+        if self._exits_bar == bar:
+            # A retry of the same bar: only an exit whose close could not be
+            # sent is tried again (F449).
+            exit_reason = self._exits_bar_reason
+        else:
+            exit_reason = await self._evaluate_exit_reason(
+                cfg, state, price, df, i, pos_is_short, attrs, [], is_regime)
+            self._exits_bar = bar
+            self._exits_bar_reason = exit_reason
+            self._exits_bar_note = None
         if exit_reason:
             self._log("INFO", f"Exit {exit_reason} {why}")
+            self._exit_outcome = None
             await self._execute_exit(cfg, state, exit_reason, price, broker_qty, pos_is_short,
                                      df, i, in_hours, attrs)
-            state.last_bar_time = bar
+            # The bar is done once the position is closed or its close went
+            # out (never resent on this bar, F449 LM-1).  When no order went
+            # out (the broker did not confirm the position) the exit is
+            # retried and the tick counts as a failure.
+            if self._after_exit_attempt(state, exit_reason):
+                state.last_bar_time = bar
+            else:
+                self._broker_ok_this_tick = False
+                self._position_problem = "Exit not sent: the broker did not confirm the position"
+                self._position_problem_bar = bar
             return state.entry_price is None
         return False
+
+    def _raise_position_problem(self, cfg, state) -> None:
+        """After the price exits of a bot whose code failed: a broker
+        position check that failed this tick, a missing position not
+        confirmed gone, or an exit not sent (F449) raises PositionCheckError,
+        so run() counts it toward MAX_CONSEC_ERRORS and alerts once per
+        outage.  A due exit whose close was not sent alerts at once (LM-2),
+        through _alert_once (create_task).  The code failure's own alert is
+        separate (_on_code_failure)."""
+        problem, bar = self._position_problem, self._position_problem_bar
+        if problem is None:
+            return
+        self._position_problem = None
+        held = self._held_note(cfg, state, bar,
+                               "entries and signal exits stay off after the code failure")
+        msg = f"{problem}{held}"
+        if self._unsent_exit(bar):
+            self._alert_once(cfg, msg)
+        raise PositionCheckError(msg)
 
     # -- W7: code that failed or timed out ------------------------------------
 
@@ -1182,6 +1427,9 @@ class BotRunner(RegimeMixin, ExitsMixin):
         self._log("WARN", f"{reason}: no entries or signal exits; the price exits of the open "
                           f"position run until it closes, then the bot pauses")
         await asyncio.to_thread(self.manager.save)
+        # A failed or unconfirmed position check on this tick counts toward
+        # MAX_CONSEC_ERRORS (F449), raised only once the state is saved.
+        self._raise_position_problem(cfg, state)
 
     async def _tick_code_failure(self, state) -> None:
         """A tick after the bot's code failed, or of a run that started in
@@ -1198,6 +1446,7 @@ class BotRunner(RegimeMixin, ExitsMixin):
         from datetime import date, timedelta
 
         fail = self._code_failure
+        self._position_problem = None
         if not fail.plan_tried:
             fail.plan_tried = True
             fail.live = await self._exits_only_live(self.config)
@@ -1239,6 +1488,10 @@ class BotRunner(RegimeMixin, ExitsMixin):
     async def _tick(self):
         cfg = self.config
         state = self.state
+        # Set once this tick gets a good broker position check; run() then
+        # ends the outage (one alert per outage, F449 LM-5).
+        self._broker_ok_this_tick = False
+        self._position_problem = None
         # Rule bots: the regime gate is the rule regime (is_bidirectional).
         # Graph bots: the gate is the group's Regime terminal, set below
         # once the graph is compiled.
@@ -1250,6 +1503,8 @@ class BotRunner(RegimeMixin, ExitsMixin):
         # then a pause once it is flat (decisions-pre "Bot safety rules").
         if cfg.kind == "graph" and self._code_failure is not None:
             await self._tick_code_failure(state)
+            # A failed or unconfirmed position check counts (F449).
+            self._raise_position_problem(cfg, state)
             return
 
         # Graph-mode: compute buy_rules/sell_rules lists only for rule-mode bots
@@ -1429,8 +1684,10 @@ class BotRunner(RegimeMixin, ExitsMixin):
             if problem is not None:
                 self._log("WARN", problem)
                 await self._manage_without_signals(cfg, state, df, live, is_regime, in_hours, last_bar)
-                held = (" (open position: stop, trailing stop and time stop still checked; "
-                        "signal exits wait)" if state.entry_price is not None else "")
+                held = self._held_note(cfg, state, last_bar, "signal exits wait")
+                if self._unsent_exit(last_bar):
+                    # A due exit not sent: tell John at once (LM-2).
+                    self._alert_once(cfg, f"{problem}{held}")
                 raise ReferenceUnavailableError(f"{problem}{held}")
 
         prev_bar_time = state.last_bar_time
@@ -1547,8 +1804,46 @@ class BotRunner(RegimeMixin, ExitsMixin):
             has_position, broker_qty = await self._broker_position(
                 cfg, state, price, is_regime, wired_stop)
         except Exception as e:
+            # F449: returning here after the bar was marked done skipped this
+            # bar's stop, trailing stop and time stop for good, and nothing
+            # counted toward MAX_CONSEC_ERRORS.  Now a tracked position still
+            # gets its price exits, no entry is placed, the bar is retried
+            # next tick unless the position closed, and the tick raises so
+            # run() counts it and alerts (create_task).
             self._log("WARN", f"Position check failed: {e}")
-            return
+            bar_done = False
+            try:
+                bar_done = await self._exits_without_position_check(
+                    cfg, state, df, price, indicators, in_hours, last_bar, wired_stop)
+            finally:
+                if not bar_done:
+                    state.last_bar_time = prev_bar_time
+            held = self._held_note(cfg, state, last_bar, "signal exits and entries wait")
+            msg = f"Position check failed: {e}{held}"
+            if self._unsent_exit(last_bar):
+                # A due exit not sent (an Alpaca short has no broker stop):
+                # tell John at once, not after MAX_CONSEC_ERRORS (LM-2).
+                # A flat bot only counts (LM-5).
+                self._alert_once(cfg, msg)
+            raise PositionCheckError(msg) from e
+        self._broker_ok_this_tick = True
+        pos_is_short = (state.position_direction == "short" if state.position_direction
+                        else cfg.direction == "short")
+        if not has_position and state.entry_price is not None:
+            # The broker's list lacks the position the bot tracks.  One
+            # reply is not proof (F449 LM-3): an empty or odd reply must not
+            # book a P&L row, drop the position or let an entry through.
+            # Until the close is confirmed the bar is retried and the tick
+            # counts as a failure.
+            confirmed, gone_fill = await self._position_gone_confirmed(cfg, state, pos_is_short)
+            if not confirmed:
+                state.last_bar_time = prev_bar_time
+                self._broker_ok_this_tick = False
+                raise PositionCheckError(
+                    "Position not found at the broker, not confirmed yet"
+                    + self._held_note(cfg, state, last_bar, "signal exits and entries wait"))
+        else:
+            gone_fill = None
         self._take_pending_stop(state, has_position)
 
         # 5b. Partial-position reconciliation: detect external shrinkage
@@ -1612,10 +1907,12 @@ class BotRunner(RegimeMixin, ExitsMixin):
         pos_is_short = state.position_direction == "short" if state.position_direction else cfg.direction == "short"
 
         if not has_position:
-            # Detect externally-closed position (e.g. broker SL fill)
+            # Detect externally-closed position (e.g. broker SL fill).  Only
+            # reached once step 5 confirmed it is gone (F449 LM-3).
             if state.entry_price is not None:
                 should_return = await self._detect_external_close(
-                    cfg, state, has_position, pos_is_short, broker_qty, price, df, i, in_hours, indicators
+                    cfg, state, has_position, pos_is_short, broker_qty, price, df, i, in_hours, indicators,
+                    fill=gone_fill,
                 )
                 if should_return:
                     return
@@ -1727,10 +2024,12 @@ class BotRunner(RegimeMixin, ExitsMixin):
                 # return False for an empty list), then override the signal exit
                 # with the pre-computed sell_signal from the graph evaluator.
                 # A bar whose price exits already ran while a reference was
-                # down (LM-1) only gets its signal exit now: running them
-                # again would count the bar twice toward the time stop.
+                # down (LM-1) or the position check failed (F449) only gets
+                # its signal exit now: running them again would count the bar
+                # twice toward the time stop.  A price exit decided then but
+                # not sent (the broker did not confirm the position) is sent.
                 if self._exits_bar == last_bar:
-                    exit_reason = None
+                    exit_reason = self._exits_bar_reason
                 else:
                     exit_reason = await self._evaluate_exit_reason(
                         cfg, state, price, df, i, pos_is_short, indicators, [], is_regime
@@ -1740,14 +2039,37 @@ class BotRunner(RegimeMixin, ExitsMixin):
                 if exit_reason is None and sell_signal:
                     exit_reason = "signal"
             else:
-                exit_reason = await self._evaluate_exit_reason(
-                    cfg, state, price, df, i, pos_is_short, indicators, sell_rules, is_regime
-                )
+                # A bar whose price exits already ran while the position
+                # check was down (F449) only gets its signal exit now, unless
+                # a price exit decided then was not sent: that one is sent.
+                if self._exits_bar == last_bar and self._exits_bar_reason:
+                    exit_reason = self._exits_bar_reason
+                else:
+                    exit_reason = await self._evaluate_exit_reason(
+                        cfg, state, price, df, i, pos_is_short, indicators, sell_rules, is_regime,
+                        price_exits=self._exits_bar != last_bar,
+                    )
 
             if exit_reason:
+                self._exit_outcome = None
                 await self._execute_exit(
                     cfg, state, exit_reason, price, broker_qty, pos_is_short, df, i, in_hours, indicators
                 )
+                if state.entry_price is not None and self._exit_outcome == "not_sent":
+                    # The broker did not confirm the position when the exit
+                    # went to send (an empty or failed reply), so no order
+                    # went out (F449 LM-3).  Keep the position, retry this
+                    # bar next tick with the same exit (no second count
+                    # toward the time stop), and count the failure.
+                    self._exits_bar = last_bar
+                    self._exits_bar_reason = exit_reason
+                    self._exits_bar_note = None
+                    state.last_bar_time = prev_bar_time
+                    self._broker_ok_this_tick = False
+                    msg = ("Exit not sent: the broker did not confirm the position"
+                           + self._held_note(cfg, state, last_bar, "entries wait"))
+                    self._alert_once(cfg, msg)
+                    raise PositionCheckError(msg)
 
     def _on_ibkr_error(self, reqId, errorCode, errorString, is_structural):
         """Called by IBKRTradingProvider on async IBKR errors.
@@ -1828,6 +2150,10 @@ class BotRunner(RegimeMixin, ExitsMixin):
                 try:
                     await self._tick()
                     consec_errors = 0
+                    if self._broker_ok_this_tick:
+                        # A good broker check ends the outage: the next one
+                        # may alert again (F449 LM-5).
+                        self._outage_alerted = False
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
@@ -1839,12 +2165,16 @@ class BotRunner(RegimeMixin, ExitsMixin):
                         self._log("WARN", f"Backing off {RECOVERY_WAIT}s after {MAX_CONSEC_ERRORS} consecutive failures")
                         self.state.error_message = f"Recovering: {e}"
                         await asyncio.to_thread(self.manager.save)
-                        asyncio.create_task(notify_error(
-                            symbol=self.config.symbol,
-                            error_msg=f"{MAX_CONSEC_ERRORS} consecutive tick failures: {e}",
-                            bot_id=self.config.bot_id,
-                        ))
-                        await asyncio.sleep(RECOVERY_WAIT)
+                        # One urgent alert per outage, for every bot, flat or
+                        # not (F449 LM-5): a short broker blip must not page
+                        # John from every bot over and over.  _alert_once
+                        # skips it when this outage already alerted.
+                        self._alert_once(self.config,
+                                         f"{MAX_CONSEC_ERRORS} consecutive tick failures: {e}")
+                        # A due exit whose close was not sent keeps polling
+                        # at the normal pace instead of waiting 30 s.
+                        unsent = self._unsent_exit() and self.state.last_bar_time != self._exits_bar
+                        await asyncio.sleep(interval_secs if unsent else RECOVERY_WAIT)
                         consec_errors = 0
                         self._log("INFO", "Resuming after recovery backoff")
                         self.state.error_message = None

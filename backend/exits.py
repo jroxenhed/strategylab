@@ -60,13 +60,95 @@ def _atr_at(indicators: dict, i: int) -> float:
     return value if math.isfinite(value) else 0.0
 
 
+def _parse_time(value) -> Optional[datetime]:
+    """An ISO time string (or datetime) as an aware UTC datetime, or None
+    when it is missing or cannot be read.  A time with no zone is UTC."""
+    if not value:
+        return None
+    try:
+        t = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return t if t.tzinfo is not None else t.replace(tzinfo=timezone.utc)
+
+
+# A closing fill may carry a time a few seconds before the bot's entry_time
+# (the bot stamps entry_time after it has waited for the entry fill, and the
+# two clocks differ a little).  An earlier trade's close is at least a bar
+# older, so this slack never lets one through.
+_FILL_TIME_SLACK_SECS = 5
+
+# _detect_external_close looks the closing fill up itself unless one is passed.
+_LOOK_UP = object()
+
+
 class ExitsMixin:
 
+    async def _closing_fill(self, cfg: BotConfig, state: BotState, pos_is_short: bool) -> Optional[dict]:
+        """The broker fill that closed the tracked position, or None.
+
+        Only a fill that belongs to this position counts (F449 LM-3): the
+        bot's own close order (pending_close_order_id), or a closing-side
+        fill whose filled_at is not before the position's entry_time.  An
+        older fill from an earlier trade, or a fill with no time (IBKR
+        lists none), never counts.  Raises when the broker cannot be asked."""
+        br = _br()
+        provider = br.get_trading_provider(cfg.broker)
+        filled_orders = await self._run_in_executor(
+            provider.get_orders, "closed", [cfg.symbol.upper()], 5
+        )
+        close_side = "buy" if pos_is_short else "sell"
+        entry_at = _parse_time(getattr(state, "entry_time", None))
+        for o in filled_orders:
+            if o.get("side") != close_side or not o.get("filled_avg_price"):
+                continue
+            if state.pending_close_order_id and o.get("id") == state.pending_close_order_id:
+                return o
+            filled_at = _parse_time(o.get("filled_at"))
+            if entry_at is None or filled_at is None:
+                continue
+            if (filled_at - entry_at).total_seconds() >= -_FILL_TIME_SLACK_SECS:
+                return o
+        return None
+
+    async def _position_gone_confirmed(self, cfg: BotConfig, state: BotState,
+                                       pos_is_short: bool) -> tuple[bool, Optional[dict]]:
+        """The broker's position list lacks a position the bot tracks.  Is
+        it really gone?  (F449 LM-3.)  One empty or odd answer must never
+        book a P&L row or drop the position.  It is gone when:
+          - a fill that belongs to it is found (_closing_fill), or
+          - two position checks in a row, each with other positions in the
+            account (so not an empty reply), both lack it.
+        Returns (confirmed, fill).  fill is None when no fill was found."""
+        try:
+            fill = await self._closing_fill(cfg, state, pos_is_short)
+        except Exception as e:
+            self._log("WARN", f"Failed to query filled orders: {e}")
+            fill = None
+        if fill is not None:
+            self._missing_checks = 0
+            self._gone_unconfirmed = False
+            return True, fill
+        if not self._last_account_empty:
+            self._missing_checks += 1
+        if self._missing_checks >= 2:
+            self._missing_checks = 0
+            self._gone_unconfirmed = False
+            return True, None
+        self._gone_unconfirmed = True
+        self._log("WARN", "The broker shows no position, but nothing confirms the close yet "
+                          "(no closing fill found); the position is kept and checked again")
+        return False, None
+
     async def _detect_external_close(self, cfg: BotConfig, state: BotState, has_position: bool, pos_is_short: bool,
-                                      broker_qty: float, price: float, df: pd.DataFrame, i: int, in_hours: bool, indicators: dict) -> bool:
+                                      broker_qty: float, price: float, df: pd.DataFrame, i: int, in_hours: bool, indicators: dict,
+                                      *, fill=_LOOK_UP) -> bool:
         """Detect externally-closed position (e.g. broker SL fill).
 
-        Called when not has_position but state.entry_price is not None.
+        Called when not has_position but state.entry_price is not None, and
+        only after _position_gone_confirmed said yes.  fill is the closing
+        fill it found (None: none found); left out, it is looked up here.
+        Only a fill that belongs to this position is used (_closing_fill).
         Logs, journals, and optionally pauses bot on drawdown breach.
 
         Returns True if _tick() should return early (drawdown breach), False otherwise.
@@ -75,29 +157,26 @@ class ExitsMixin:
         exit_price = price  # fallback to current price
         exit_qty = 0
         exit_reason = "external"
-        try:
-            provider = br.get_trading_provider(cfg.broker)
-            filled_orders = await self._run_in_executor(
-                provider.get_orders, "closed", [cfg.symbol.upper()], 5
-            )
-            close_side = "buy" if pos_is_short else "sell"
-            for o in filled_orders:
-                if o["side"] == close_side and o.get("filled_avg_price"):
-                    exit_price = float(o["filled_avg_price"])
-                    exit_qty = float(o.get("qty", 0))
-                    order_type = o.get("type", "")
-                    # If this fill matches the bot's own pending close, recover real reason
-                    if state.pending_close_order_id and o.get("id") == state.pending_close_order_id and state.pending_close_reason:
-                        exit_reason = state.pending_close_reason
-                    elif order_type in ("stop", "stop_limit"):
-                        exit_reason = "stop_loss"
-                    elif order_type == "trailing_stop":
-                        exit_reason = "trailing_stop"
-                    else:
-                        exit_reason = "external"
-                    break
-        except Exception as e:
-            self._log("WARN", f"Failed to query filled orders: {e}")
+        if fill is _LOOK_UP:
+            try:
+                fill = await self._closing_fill(cfg, state, pos_is_short)
+            except Exception as e:
+                self._log("WARN", f"Failed to query filled orders: {e}")
+                fill = None
+        if fill is not None:
+            o = fill
+            exit_price = float(o["filled_avg_price"])
+            exit_qty = float(o.get("qty", 0))
+            order_type = o.get("type", "")
+            # If this fill matches the bot's own pending close, recover real reason
+            if state.pending_close_order_id and o.get("id") == state.pending_close_order_id and state.pending_close_reason:
+                exit_reason = state.pending_close_reason
+            elif order_type in ("stop", "stop_limit"):
+                exit_reason = "stop_loss"
+            elif order_type == "trailing_stop":
+                exit_reason = "trailing_stop"
+            else:
+                exit_reason = "external"
 
         sell_qty = exit_qty or broker_qty or 0
         if pos_is_short:
@@ -191,15 +270,50 @@ class ExitsMixin:
         return False
 
     async def _evaluate_exit_reason(self, cfg: BotConfig, state: BotState, price: float, df: pd.DataFrame, i: int, pos_is_short: bool,
-                                     indicators: dict, sell_rules: list, is_regime: bool) -> Optional[str]:
+                                     indicators: dict, sell_rules: list, is_regime: bool, *,
+                                     price_exits: bool = True,
+                                     signal_exits: bool = True) -> Optional[str]:
         """Update trailing stop state and evaluate exit reason.
 
         Increments entry_bar_count, updates trail_peak/trail_stop_price,
         and checks all exit conditions in priority order.
 
+        price_exits=False skips the bar count, the trailing update and the
+        stop, trailing stop and time stop checks (they already ran on this
+        bar, F449).  signal_exits=False skips the sell rules (the broker
+        position check failed, so only price exits run, F449).
+
         Returns exit_reason string, or None if no exit.
         """
         br = _br()
+        exit_reason = None
+        if price_exits:
+            exit_reason = self._price_exit_reason(cfg, state, price, df, i, pos_is_short, indicators)
+
+        if exit_reason is None and signal_exits:
+            # Select sell rules based on position direction (dual rule sets for regime bots)
+            if is_regime and pos_is_short and cfg.short_sell_rules:
+                active_sell_rules = [migrate_rule(r) for r in cfg.short_sell_rules]
+                active_sell_logic = cfg.short_sell_logic
+            elif is_regime and not pos_is_short and cfg.long_sell_rules:
+                active_sell_rules = [migrate_rule(r) for r in cfg.long_sell_rules]
+                active_sell_logic = cfg.long_sell_logic
+            else:
+                active_sell_rules = sell_rules
+                active_sell_logic = cfg.sell_logic
+
+            sell_signal = await self._run_in_executor(
+                br.eval_rules, active_sell_rules, active_sell_logic, indicators, i
+            )
+            if sell_signal:
+                exit_reason = "signal"
+
+        return exit_reason
+
+    def _price_exit_reason(self, cfg: BotConfig, state: BotState, price: float, df: pd.DataFrame, i: int,
+                           pos_is_short: bool, indicators: dict) -> Optional[str]:
+        """Count the bar, update the trailing stop, and check the stop,
+        trailing stop and time stop.  Returns the reason or None."""
         state.entry_bar_count += 1
         exit_reason = None
 
@@ -280,24 +394,6 @@ class ExitsMixin:
         if exit_reason is None and mbh and state.entry_bar_count >= mbh:
             exit_reason = "time_stop"
 
-        if exit_reason is None:
-            # Select sell rules based on position direction (dual rule sets for regime bots)
-            if is_regime and pos_is_short and cfg.short_sell_rules:
-                active_sell_rules = [migrate_rule(r) for r in cfg.short_sell_rules]
-                active_sell_logic = cfg.short_sell_logic
-            elif is_regime and not pos_is_short and cfg.long_sell_rules:
-                active_sell_rules = [migrate_rule(r) for r in cfg.long_sell_rules]
-                active_sell_logic = cfg.long_sell_logic
-            else:
-                active_sell_rules = sell_rules
-                active_sell_logic = cfg.sell_logic
-
-            sell_signal = await self._run_in_executor(
-                br.eval_rules, active_sell_rules, active_sell_logic, indicators, i
-            )
-            if sell_signal:
-                exit_reason = "signal"
-
         return exit_reason
 
     async def _execute_exit(self, cfg: BotConfig, state: BotState, exit_reason: str, price: float, broker_qty: float,
@@ -307,6 +403,11 @@ class ExitsMixin:
         Returns True if exit was executed (including early-return paths).
         """
         br = _br()
+        # What happened, for the caller (F449): "closed" (state cleared),
+        # "sent" (a close went out but is not confirmed yet), "close_failed"
+        # (the broker refused the close) or "not_sent" (the position could
+        # not be confirmed, so no order went out; safe to retry).
+        self._exit_outcome = "not_sent"
         try:
             provider = br.get_trading_provider(cfg.broker)
             # Safety: verify position side matches tracked direction
@@ -314,13 +415,30 @@ class ExitsMixin:
             try:
                 positions = await self._run_in_executor(provider.get_positions)
                 pos_match = False
+                symbol_held = False
                 for pos in positions:
                     if pos["symbol"] == cfg.symbol.upper():
+                        symbol_held = True
                         if pos["side"] == pos_dir_ref:
                             pos_match = True
+                            # Journal the qty the broker just confirmed (F449
+                            # LM-4): the caller's qty can be stale, and the
+                            # close below closes the broker's whole position.
+                            broker_qty = abs(pos["qty"])
                         break
+                if not symbol_held:
+                    # The broker lists no position on the symbol.  That may
+                    # be a broker stop that filled, or an empty or odd
+                    # reply.  One reply is not proof (F449 LM-3): send no
+                    # order, book nothing, keep the position.  The next
+                    # position check confirms it (_position_gone_confirmed)
+                    # before anything is booked.
+                    self._log("WARN", "Position not found at the broker when exiting; "
+                                      "kept until a position check confirms it is gone")
+                    return True
                 if not pos_match:
                     self._log("WARN", f"Position side mismatch — clearing stale state")
+                    self._exit_outcome = "closed"
                     state.entry_price = None
                     state.entry_time = None
                     state.entry_bar_count = 0
@@ -350,6 +468,7 @@ class ExitsMixin:
             close_result = await self._run_in_executor(provider.close_position, cfg.symbol.upper())
         except Exception as e:
             self._log("ERROR", f"Close position failed: {e}")
+            self._exit_outcome = "close_failed"
             return True
 
         # Get actual fill price
@@ -357,6 +476,7 @@ class ExitsMixin:
         self._active_order_ids.add(order_id)
         state.pending_close_order_id = order_id
         state.pending_close_reason = exit_reason
+        self._exit_outcome = "sent"
         self.manager.save()
 
         sell_fill = await self._get_fill_price_provider(provider, order_id, price) if order_id else price
@@ -467,6 +587,7 @@ class ExitsMixin:
                 state.position_direction = None
                 self._last_broker_qty = None
                 self._active_order_ids.clear()
+                self._exit_outcome = "closed"
                 self.manager.save()
                 return True
 
@@ -480,5 +601,6 @@ class ExitsMixin:
         state.position_direction = None
         self._last_broker_qty = None
         self._active_order_ids.clear()
+        self._exit_outcome = "closed"
         self.manager.save()
         return True

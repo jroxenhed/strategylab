@@ -26,7 +26,7 @@ import pytest
 
 import bot_runner
 from bot_manager import BotState
-from bot_runner import BotRunner
+from bot_runner import BotRunner, PositionCheckError
 from tests.nodebuilder.code_graphs import code_bot, wrangle_bot_data
 from tests.test_bot_bidirectional_graph import FakeBroker, _Manager
 from tests.test_graph_spawn import frame
@@ -227,13 +227,16 @@ def test_a_failing_expression_pauses_the_bot_like_failing_code():
 
 def test_a_bot_whose_broker_cannot_be_asked_waits_instead_of_pausing():
     """No position check, no flat to confirm: the bot stays in the failed
-    state (no entries) and looks again next tick."""
+    state (no entries) and looks again next tick.  The failed check counts
+    toward MAX_CONSEC_ERRORS (F449: the tick raises PositionCheckError),
+    and a flat bot sends no outage alert of its own."""
     state = BotState()
     broker = FakeBroker(price=_close())
     broker.get_positions = MagicMock(side_effect=RuntimeError("gateway down"))
     runner = _runner(state=state)
     tick = Tick(broker)
-    tick(runner)
+    with pytest.raises(PositionCheckError, match="gateway down"):
+        tick(runner)
     assert state.status != "error" and runner._code_failure is not None
     assert broker.submitted == []
     broker.get_positions = MagicMock(return_value=[])

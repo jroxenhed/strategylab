@@ -311,7 +311,12 @@ def test_a_restart_in_the_exits_only_state_keeps_it_even_when_the_code_now_runs(
     state2 = mgr2.bots["bot-1"][1]
     assert state2.code_exits_only is True and state2.pause_reason is None
 
-    broker = FakeBroker(price=CLOSE)  # flat: closed while the backend was down
+    # Flat: closed while the backend was down.  The account holds another
+    # symbol, so the replies lacking AAPL are not empty ones: F449 books the
+    # close only after two such checks in a row (one reply is not proof),
+    # and the first check counts as a failure with the position kept.
+    broker = FakeBroker(price=CLOSE)
+    broker.position = {"symbol": "MSFT", "side": "long", "qty": 1, "avg_entry": 1.0}
     live = Live(broker)
     live.run(mgr2, mgr2.resume_was_running)
     assert live.cooks == 0 and broker.submitted == []
@@ -461,3 +466,95 @@ def test_a_window_expression_that_fails_at_compile_is_a_code_failure(disk, direc
     # Worded as the cook's failure would be: the node, the line, the error.
     assert state.pause_reason == "code_runtime: ma line 1: ZeroDivisionError: division by zero"
     assert state.code_exits_only is False and state.entry_price is None
+
+
+# ---------------------------------------------------------------------------
+# Merge of W7 with F449: a code failure while the broker position check
+# fails, or while the broker lists no position that nothing confirms gone.
+# The stricter rule wins: no entry, the price exits of a tracked position
+# still run, "gone" only on confirmation, and every such tick counts.
+# ---------------------------------------------------------------------------
+
+
+class _DownBroker(FakeBroker):
+    """FakeBroker whose position list can fail (a broker outage)."""
+
+    def __init__(self, price, *, down: bool):
+        super().__init__(price=price)
+        self.down = down
+
+    def get_positions(self):
+        if self.down:
+            raise ConnectionError("broker unreachable")
+        return super().get_positions()
+
+
+def test_a_code_failure_while_the_position_check_fails_keeps_the_position_and_counts():
+    """The code fails on a bar where the broker cannot be asked: no entry,
+    the bot does not pause (it may still hold the position), the tick
+    raises so it counts, and only the code failure alerts (no exit was
+    due).  Once the broker answers, an empty account is not proof the
+    position is gone; two non-empty replies that lack it are."""
+    entry = CLOSE * 0.999  # the 2% stop is far
+    cfg = code_bot(wrangle_bot_data(FAILS))
+    state = BotState(status="running", entry_price=entry, trail_peak=entry,
+                     position_direction="long")
+    state.last_bar_time = str(OWN.index[-2])
+    runner = BotRunner(cfg, state, _Manager())
+
+    broker = _DownBroker(CLOSE, down=True)
+    alerts = AsyncMock()
+    with pytest.raises(bot_runner.PositionCheckError, match="Position check failed"):
+        _tick(runner, broker, notify_error=alerts)
+    assert state.code_exits_only is True and state.status == "running"
+    assert state.pause_reason is None and state.entry_price == entry
+    assert broker.submitted == [] and broker.closed == []
+    assert alerts.call_count == 1  # the code failure's one alert, no outage alert
+    assert "code_runtime" in alerts.call_args.kwargs["error_msg"]
+
+    # Broker back, but the account reply is empty: not proof.
+    broker.down = False
+    with pytest.raises(bot_runner.PositionCheckError, match="not confirmed yet"):
+        _tick(runner, broker)
+    assert state.entry_price == entry and state.pause_reason is None
+
+    # Two non-empty replies that lack the position confirm the close.
+    broker.position = {"symbol": "MSFT", "side": "long", "qty": 1, "avg_entry": 1.0}
+    with pytest.raises(bot_runner.PositionCheckError, match="not confirmed yet"):
+        _tick(runner, broker)
+    assert state.entry_price == entry
+    _tick(runner, broker)
+    assert state.entry_price is None
+    assert state.pause_reason.startswith("code_runtime") and state.code_exits_only is False
+    assert broker.submitted == []
+
+
+def test_an_exits_only_stop_that_cannot_be_sent_alerts_once_then_closes():
+    """In the exits-only state the stop is due while the broker is down: no
+    close goes out (the broker did not confirm the position), John is
+    alerted at once (one alert for the outage), the tick counts, and the
+    stop goes out once the broker answers; then the bot pauses."""
+    entry = CLOSE * THROUGH_STOP["long"]
+    cfg = code_bot(wrangle_bot_data(BAD))
+    state = BotState(status="running", entry_price=entry, trail_peak=entry,
+                     position_direction="long", code_exits_only=True,
+                     code_exits_reason="code_syntax: signal_code line 3",
+                     graph_exit_fields={"stop_loss_pct": 2.0})
+    runner = BotRunner(cfg, state, _Manager())
+
+    broker = _DownBroker(CLOSE, down=True)
+    broker.position = {"symbol": "AAPL", "side": "long", "qty": 10, "avg_entry": entry}
+    alerts = AsyncMock()
+    for _ in range(2):
+        with pytest.raises(bot_runner.PositionCheckError, match="NOT SENT"):
+            _tick(runner, broker, notify_error=alerts)
+    assert broker.closed == [] and broker.submitted == []
+    assert state.entry_price == entry and state.pause_reason is None
+    outage = [c for c in alerts.call_args_list if "NOT SENT" in c.kwargs["error_msg"]]
+    assert len(outage) == 1  # one alert per outage
+
+    broker.down = False
+    _tick(runner, broker)
+    assert broker.closed == [("AAPL", "long")] and broker.submitted == []
+    assert state.entry_price is None
+    assert state.pause_reason == "code_syntax: signal_code line 3"
