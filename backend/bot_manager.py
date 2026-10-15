@@ -39,8 +39,8 @@ from broker import get_trading_provider, OrderRequest as BrokerOrderRequest
 from journal import (_log_trade, _load_trades, compute_realized_pnl, first_bot_entry_time,
                      compute_bidirectional_pnl, first_bot_bidirectional_entry_time,
                      compute_bot_avg_cost_bps, DATA_DIR)
-from bot_runner import (BotRunner, CODE_COMPILE_CODES, compile_bot_graph, graph_bot_live,
-                        is_code_refusal)
+from bot_runner import (BotRunner, CODE_COMPILE_CODES, RECOVERY_NOTE, compile_bot_graph,
+                        graph_bot_live, is_code_refusal)
 
 
 DATA_PATH = str(DATA_DIR / "bots.json")
@@ -1518,6 +1518,12 @@ class BotManager:
         never after the user turned a bot off. Bots carrying a pause_reason or
         error_message are left alone (they stopped for a reason a restart does
         not clear). Opt out with BOTS_AUTORESUME=0.
+
+        One exception (review MT-2): the note of run()'s recovery backoff
+        ("Recovering: ...") is not a stop reason.  The bot was still running
+        and would have retried by itself, so it resumes and the note is
+        cleared.  (A bot that holds a position no longer gets that note; this
+        covers a bots.json saved before that change.)
         """
         result: dict[str, list] = {"resumed": [], "skipped": [], "failed": []}
         if os.environ.get("BOTS_AUTORESUME", "1") == "0":
@@ -1525,6 +1531,9 @@ class BotManager:
         for bot_id, (config, state) in list(self.bots.items()):
             if not state.was_running:
                 continue
+            if (not state.pause_reason and state.error_message
+                    and state.error_message.startswith(RECOVERY_NOTE)):
+                state.error_message = None
             if state.pause_reason or state.error_message:
                 result["skipped"].append(bot_id)
                 state.was_running = False

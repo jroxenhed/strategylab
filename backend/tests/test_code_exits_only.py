@@ -558,3 +558,318 @@ def test_an_exits_only_stop_that_cannot_be_sent_alerts_once_then_closes():
     assert broker.closed == [("AAPL", "long")] and broker.submitted == []
     assert state.entry_price is None
     assert state.pause_reason == "code_syntax: signal_code line 3"
+
+
+# ---------------------------------------------------------------------------
+# Review of the merged tick (F449 meets W7): MT-1 .. MT-5
+# ---------------------------------------------------------------------------
+
+MSFT = {"symbol": "MSFT", "side": "long", "qty": 1, "avg_entry": 1.0}
+
+
+class _ReplyBroker(FakeBroker):
+    """FakeBroker whose next position lists are given in order (each a list
+    of positions); once they run out it lists its own position."""
+
+    def __init__(self, price, replies):
+        super().__init__(price=price)
+        self.replies = list(replies)
+        self.position_calls = 0
+
+    def get_positions(self):
+        self.position_calls += 1
+        if self.replies:
+            return [dict(p) for p in self.replies.pop(0)]
+        return super().get_positions()
+
+
+def _untracked_state() -> BotState:
+    """A bot in the exits-only state after a Stop that kept the position:
+    entry_price and position_direction are cleared, code_exits_only and the
+    trade's stop stay (bot_manager.stop_bot)."""
+    return BotState(status="running", entry_price=None, position_direction=None,
+                    entry_stop_pct=2.0, code_exits_only=True,
+                    code_exits_reason="code_syntax: signal_code line 3",
+                    graph_exit_fields={"stop_loss_pct": 2.0})
+
+
+@pytest.mark.parametrize("direction", ["long", "short"])
+def test_mt1_an_untracked_exits_only_bot_does_not_pause_on_an_empty_reply(direction):
+    """MT-1: one empty account reply (a Gateway reconnect) is not proof the
+    bot is flat.  It keeps the state, the tick counts, and the next reply
+    that lists the position resumes it with its stop."""
+    entry = CLOSE * (0.999 if direction == "long" else 1.001)  # the 2% stop is far
+    cfg = code_bot(wrangle_bot_data(BAD), direction=direction)
+    state = _untracked_state()
+    runner = BotRunner(cfg, state, _Manager())
+    pos = {"symbol": "AAPL", "side": direction, "qty": 10, "avg_entry": entry}
+    broker = _ReplyBroker(CLOSE, replies=[[]])
+    broker.position = pos
+
+    with pytest.raises(bot_runner.PositionCheckError, match="no positions at all"):
+        _tick(runner, broker)
+    assert state.status == "running" and state.pause_reason is None
+    assert state.code_exits_only is True
+
+    _tick(runner, broker)  # the position is listed again: resumed, not paused
+    assert state.entry_price == entry and state.code_exits_only is True
+    assert state.pause_reason is None
+    assert broker.closed == [] and broker.submitted == []
+
+
+def test_mt1_an_untracked_exits_only_bot_pauses_once_two_replies_confirm_flat():
+    """MT-1: flat is confirmed the F449 way, by two replies in a row that
+    list other positions but none of this bot's; an empty reply in between
+    counts neither way."""
+    cfg = code_bot(wrangle_bot_data(BAD))
+    state = _untracked_state()
+    runner = BotRunner(cfg, state, _Manager())
+    broker = _ReplyBroker(CLOSE, replies=[[MSFT], [], [MSFT]])
+
+    with pytest.raises(bot_runner.PositionCheckError, match="next check confirms"):
+        _tick(runner, broker)
+    assert state.code_exits_only is True and state.pause_reason is None
+    with pytest.raises(bot_runner.PositionCheckError, match="no positions at all"):
+        _tick(runner, broker)
+    assert state.code_exits_only is True and state.pause_reason is None
+    _tick(runner, broker)
+    assert state.code_exits_only is False
+    assert state.pause_reason == "code_syntax: signal_code line 3"
+    assert broker.closed == [] and broker.submitted == []
+
+
+def test_mt1_a_bot_that_was_flat_when_its_code_failed_still_pauses_at_once():
+    """A bot with no position when its code fails pauses on the first good
+    reply, even an empty account: it never held anything to protect."""
+    cfg = code_bot(wrangle_bot_data(FAILS))
+    state = BotState(status="running")
+    runner = BotRunner(cfg, state, _Manager())
+    broker = _ReplyBroker(CLOSE, replies=[[]])
+    _tick(runner, broker)
+    assert state.status == "error" and state.pause_reason.startswith("code_runtime")
+    assert state.code_exits_only is False and broker.submitted == []
+
+
+def _run_until(runner, broker, *, sleeps: int, on_sleep=None, df=OWN, notify_error=None):
+    """Run BotRunner.run() with a fake fetch and broker.  Every
+    asyncio.sleep call is passed to on_sleep(n, secs); the run is cancelled
+    at sleep number *sleeps*."""
+    calls = {"n": 0}
+
+    async def fake_sleep(secs, *a, **k):
+        calls["n"] += 1
+        if on_sleep is not None:
+            on_sleep(calls["n"], secs)
+        if calls["n"] >= sleeps:
+            raise asyncio.CancelledError
+
+    async def go():
+        with patch("bot_runner.fetch_ohlcv_async", AsyncMock(return_value=df)), \
+                patch("bot_runner.get_trading_provider", return_value=broker), \
+                patch("bot_runner.notify_entry", AsyncMock()), \
+                patch("bot_runner.notify_exit", AsyncMock()), \
+                patch("bot_runner.notify_error", notify_error or AsyncMock()), \
+                patch("bot_runner._log_trade", MagicMock()), \
+                patch("bot_runner.compute_realized_pnl", return_value=0.0), \
+                patch("asyncio.sleep", fake_sleep):
+            try:
+                await runner.run()
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(go())
+    return calls["n"]
+
+
+class _SavingManager:
+    """Records error_message at every save."""
+
+    def __init__(self, state):
+        self.state = state
+        self.saved: list = []
+
+    def save(self):
+        self.saved.append(self.state.error_message)
+
+
+def test_mt2_the_recovery_backoff_writes_no_error_message_for_a_bot_in_a_position():
+    """MT-2: five failed broker checks put an exits-only bot that holds a
+    position into the backoff.  error_message stays empty there (and in
+    every save), so a restart during the outage still auto-resumes it."""
+    entry = CLOSE * 0.999  # the 2% stop is far
+    cfg = code_bot(wrangle_bot_data(BAD))
+    state = BotState(status="running", entry_price=entry, trail_peak=entry,
+                     position_direction="long", code_exits_only=True,
+                     code_exits_reason="code_syntax: signal_code line 3",
+                     graph_exit_fields={"stop_loss_pct": 2.0})
+    mgr = _SavingManager(state)
+    runner = BotRunner(cfg, state, mgr)
+    broker = _DownBroker(CLOSE, down=True)
+    broker.position = {"symbol": "AAPL", "side": "long", "qty": 10, "avg_entry": entry}
+    seen: list = []
+    alerts = AsyncMock()
+    _run_until(runner, broker, sleeps=5, notify_error=alerts,
+               on_sleep=lambda n, secs: seen.append(state.error_message))
+    assert any("Backing off" in e["msg"] for e in state.activity_log)
+    assert seen == [None] * 5 and all(m is None for m in mgr.saved)
+    assert any("consecutive tick failures" in c.kwargs["error_msg"]
+               for c in alerts.call_args_list)
+
+
+def test_mt2_a_pause_set_during_the_backoff_stops_the_loop():
+    """A pause set while the backoff waits (an IBKR reject from its own
+    thread) is kept: the backoff does not set the bot running again."""
+    cfg = code_bot(wrangle_bot_data(BAD))
+    state = BotState(status="running", entry_price=CLOSE * 0.999, trail_peak=CLOSE,
+                     position_direction="long", code_exits_only=True,
+                     code_exits_reason="code_syntax", graph_exit_fields={"stop_loss_pct": 2.0})
+    runner = BotRunner(cfg, state, _Manager())
+    broker = _DownBroker(CLOSE, down=True)
+
+    def reject(n, secs):
+        if n == 5:  # the backoff wait
+            state.pause_reason = "IBKR reject: test (code 201)"
+            state.status = "error"
+
+    n = _run_until(runner, broker, sleeps=50, on_sleep=reject)
+    assert n == 5  # the loop stopped on the pause, no further tick
+    assert state.pause_reason == "IBKR reject: test (code 201)"
+
+
+def test_mt2_auto_resume_is_not_blocked_by_the_recovery_note(disk):
+    """A bots.json saved during a backoff (before the MT-2 change) carries
+    "Recovering: ..."; that is not a stop reason, so the bot resumes."""
+    from bot_runner import RECOVERY_NOTE
+
+    mgr = BotManager()
+    for bot_id, extra in (("rec", {"error_message": f"{RECOVERY_NOTE}broker down"}),
+                          ("err", {"error_message": "boom"})):
+        mgr.bots[bot_id] = (code_bot(wrangle_bot_data(SIGNAL), bot_id=bot_id),
+                            BotState(was_running=True, **extra))
+    started: list = []
+    with patch.object(mgr, "start_bot", lambda bot_id: started.append(bot_id)):
+        r = mgr.resume_was_running()
+    assert started == ["rec"] and r["skipped"] == ["err"]
+    assert mgr.bots["rec"][1].error_message is None
+
+
+def test_mt3_a_restart_on_the_same_bar_does_not_count_it_again():
+    """MT-3: a bar whose exits already ran (main path or an earlier
+    exits-only run) is not counted again toward the time stop by a runner
+    that starts in the exits-only state on that same bar."""
+    entry = CLOSE * 0.999
+    cfg = code_bot(wrangle_bot_data(BAD, max_bars=3))
+    state = BotState(status="running", entry_price=entry, trail_peak=entry,
+                     position_direction="long", code_exits_only=True,
+                     code_exits_reason="code_syntax", entry_bar_count=2,
+                     graph_exit_fields={"stop_loss_pct": 2.0, "max_bars_held": 3})
+    state.last_bar_time = str(OWN.index[-1])
+    broker = _ReplyBroker(CLOSE, replies=[])
+    broker.position = {"symbol": "AAPL", "side": "long", "qty": 10, "avg_entry": entry}
+    _tick(BotRunner(cfg, state, _Manager()), broker)
+    assert state.entry_bar_count == 2 and broker.closed == []
+    assert broker.position_calls == 1  # the broker is still asked on that bar
+
+
+def test_mt3_an_exits_only_bar_is_saved_so_a_later_restart_skips_it():
+    """MT-3: the exits-only path saves the bar it ran (last_bar_time), so a
+    second restart on the same bar does not count it again either; a new
+    bar counts once."""
+    entry = CLOSE * 0.999
+    cfg = code_bot(wrangle_bot_data(BAD, max_bars=50))
+    state = BotState(status="running", entry_price=entry, trail_peak=entry,
+                     position_direction="long", code_exits_only=True,
+                     code_exits_reason="code_syntax",
+                     graph_exit_fields={"stop_loss_pct": 2.0, "max_bars_held": 50})
+    broker = _broker("long", entry)
+    earlier = OWN.iloc[:-1]
+    _tick(BotRunner(cfg, state, _Manager()), broker, df=earlier)
+    assert state.entry_bar_count == 1 and state.last_bar_time == str(earlier.index[-1])
+    _tick(BotRunner(cfg, state, _Manager()), broker, df=earlier)  # restart, same bar
+    assert state.entry_bar_count == 1
+    runner = BotRunner(cfg, state, _Manager())
+    _tick(runner, broker)  # restart on a new bar: counts once
+    _tick(runner, broker)
+    assert state.entry_bar_count == 2 and state.last_bar_time == str(OWN.index[-1])
+
+
+@pytest.mark.parametrize("fetch", [AsyncMock(side_effect=ConnectionError("down")),
+                                   AsyncMock(return_value=OWN.iloc[:1])])
+def test_mt4_an_exits_only_fetch_failure_counts(fetch):
+    """MT-4: when the bot's own bars cannot be fetched in the exits-only
+    state, the stops could not run: the tick raises so it counts.  No stop
+    runs on the last known price."""
+    entry = CLOSE * THROUGH_STOP["long"]  # the stop would be due
+    cfg = code_bot(wrangle_bot_data(BAD))
+    state = BotState(status="running", entry_price=entry, trail_peak=entry,
+                     position_direction="long", code_exits_only=True,
+                     code_exits_reason="code_syntax", last_price=CLOSE,
+                     graph_exit_fields={"stop_loss_pct": 2.0})
+    runner = BotRunner(cfg, state, _Manager())
+    broker = _broker("long", entry)
+
+    async def go():
+        with patch("bot_runner.fetch_ohlcv_async", fetch), \
+                patch("bot_runner.get_trading_provider", return_value=broker), \
+                patch("bot_runner.notify_error", AsyncMock()), \
+                patch("asyncio.sleep", AsyncMock()):
+            await runner._tick()
+
+    with pytest.raises(bot_runner.ExitsFetchError, match="could not run"):
+        asyncio.run(go())
+    assert broker.closed == [] and state.entry_bar_count == 0
+
+
+def test_mt4_exits_only_fetch_failures_alert_at_the_limit():
+    """MT-4: five failed fetches in a row in the exits-only state reach
+    MAX_CONSEC_ERRORS and send the one outage alert."""
+    entry = CLOSE * 0.999
+    cfg = code_bot(wrangle_bot_data(BAD))
+    state = BotState(status="running", entry_price=entry, trail_peak=entry,
+                     position_direction="long", code_exits_only=True,
+                     code_exits_reason="code_syntax", graph_exit_fields={"stop_loss_pct": 2.0})
+    runner = BotRunner(cfg, state, _Manager())
+    alerts = AsyncMock()
+
+    async def go():
+        calls = {"n": 0}
+
+        async def fake_sleep(secs, *a, **k):
+            calls["n"] += 1
+            if calls["n"] >= 5:
+                raise asyncio.CancelledError
+
+        with patch("bot_runner.fetch_ohlcv_async", AsyncMock(side_effect=ConnectionError("down"))), \
+                patch("bot_runner.get_trading_provider", return_value=_broker("long", entry)), \
+                patch("bot_runner.notify_error", alerts), \
+                patch("asyncio.sleep", fake_sleep):
+            try:
+                await runner.run()
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(go())
+    msgs = [c.kwargs["error_msg"] for c in alerts.call_args_list]
+    assert len(msgs) == 1 and "5 consecutive tick failures" in msgs[0]
+
+
+def test_mt5_the_exits_only_check_runs_with_signal_exits_off():
+    """MT-5: the exit check after a code failure asks for price exits only
+    (signal_exits=False), so sell rules left in a regime bot's config can
+    never place a signal exit."""
+    entry = CLOSE * 0.999
+    cfg = code_bot(wrangle_bot_data(BAD))
+    state = BotState(status="running", entry_price=entry, trail_peak=entry,
+                     position_direction="long", code_exits_only=True,
+                     code_exits_reason="code_syntax", graph_exit_fields={"stop_loss_pct": 2.0})
+    runner = BotRunner(cfg, state, _Manager())
+    real = runner._evaluate_exit_reason
+    seen: list = []
+
+    async def spy(*args, **kwargs):
+        seen.append(kwargs.get("signal_exits", True))
+        return await real(*args, **kwargs)
+
+    runner._evaluate_exit_reason = spy
+    _tick(runner, _broker("long", entry))
+    assert seen == [False]

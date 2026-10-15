@@ -139,6 +139,20 @@ class PositionCheckError(RuntimeError):
     not be sent because the broker did not confirm the position (LM-3)."""
 
 
+# The card note of run()'s recovery backoff (error_message).  A bot that
+# holds a position never gets it (review MT-2), and BotManager's auto-resume
+# does not treat it as a reason to stay stopped.
+RECOVERY_NOTE = "Recovering: "
+
+
+class ExitsFetchError(RuntimeError):
+    """A bot in the exits-only state (its code failed, W7) could not fetch
+    its own bars, so the stops of its position could not run on this tick
+    (review MT-4).  Raised so run() counts it toward MAX_CONSEC_ERRORS and
+    alerts at the limit, like every other tick where the stops could not
+    run."""
+
+
 # ---------------------------------------------------------------------------
 # Graph bots: the bot's own Output Group (F435 W5, plan D7 and D8)
 # ---------------------------------------------------------------------------
@@ -550,6 +564,13 @@ class CodeFailure:
     live: Optional[GraphLive]
     plan_tried: bool = True
     warned_no_plan: bool = False  # _warn_no_plan said it once
+    # The bot may hold a position it does not track (no entry_price): a run
+    # that started in the exits-only state (a Stop that kept the position
+    # clears entry_price), or a failure while the state said it held one.
+    # Such a bot is called flat only once the broker confirms it, the same
+    # way as a tracked position (F449 LM-3, review MT-1).  False for a bot
+    # that was flat when its code failed: it pauses at once.
+    may_hold: bool = False
 
 
 def exit_fields_json(fields) -> dict:
@@ -636,7 +657,15 @@ class BotRunner(RegimeMixin, ExitsMixin):
         if config.kind == "graph" and state.code_exits_only:
             self._code_failure = CodeFailure(
                 reason=state.code_exits_reason or "code_runtime: the bot's code failed earlier",
-                live=None, plan_tried=False)
+                live=None, plan_tried=False, may_hold=True)
+            # The bar the bot last worked on (its exits ran on it, by the
+            # main path or an earlier exits-only run) is not counted again
+            # toward the time stop after a restart (review MT-3).  Marking
+            # it as a problem bar too makes the first tick still ask the
+            # broker in full; only the exits are not run again.
+            if state.last_bar_time:
+                self._exits_bar = state.last_bar_time
+                self._position_problem_bar = state.last_bar_time
 
     def _log(self, level: str, msg: str):
         entry = {"time": datetime.now(timezone.utc).isoformat(), "msg": msg, "level": level}
@@ -1200,6 +1229,20 @@ class BotRunner(RegimeMixin, ExitsMixin):
                 state.pending_close_reason = None
                 state.position_direction = None
                 self._last_broker_qty = None
+            elif self._code_failure is not None and self._code_failure.may_hold:
+                # The bot may hold a position it does not track (review
+                # MT-1).  One empty or odd reply is not proof that it is
+                # flat (F449 LM-3): pausing on it would leave that position
+                # with no bot at all.  Flat is confirmed by two replies in a
+                # row that list other positions but none of this bot's.
+                # Until then the bot keeps checking (a position that shows
+                # up is resumed or adopted above) and the tick counts.
+                problem = self._untracked_flat_problem(cfg)
+                if problem is not None:
+                    self._broker_ok_this_tick = False
+                    self._position_problem = problem
+                    self._position_problem_bar = bar
+                    return False
             # Flat: nothing ran for this bar, so the next tick looks again
             # (a position that shows up meanwhile gets its exits).
             return True
@@ -1214,8 +1257,12 @@ class BotRunner(RegimeMixin, ExitsMixin):
             # sent is tried again (F449).
             exit_reason = self._exits_bar_reason
         else:
+            # Price exits only: no signal can be worked out here, and a
+            # bot whose code failed places no signal exit (OPEN POSITION
+            # RULE, review MT-5), even with sell rules left in its config.
             exit_reason = await self._evaluate_exit_reason(
-                cfg, state, price, df, i, pos_is_short, attrs, [], is_regime)
+                cfg, state, price, df, i, pos_is_short, attrs, [], is_regime,
+                signal_exits=False)
             self._exits_bar = bar
             self._exits_bar_reason = exit_reason
             self._exits_bar_note = None
@@ -1236,6 +1283,38 @@ class BotRunner(RegimeMixin, ExitsMixin):
                 self._position_problem_bar = bar
             return state.entry_price is None
         return False
+
+    def _untracked_flat_problem(self, cfg) -> Optional[str]:
+        """The broker lists no position for a bot in the exits-only state
+        that may hold one it does not track (review MT-1).  None once flat
+        is confirmed: two replies in a row that list other positions but
+        none of this bot's, the same rule as a tracked position (F449
+        LM-3).  An empty account reply does not count either way (a
+        Gateway reconnect or an odd reply can list nothing).  Otherwise the
+        problem, in plain words, for the counted error."""
+        if self._last_account_empty:
+            return (f"The broker listed no positions at all. That is not proof the bot is "
+                    f"flat: it may still hold a {cfg.symbol} position it does not track, so "
+                    f"it keeps checking and does not pause. Check the account by hand.")
+        self._missing_checks += 1
+        if self._missing_checks >= 2:
+            self._missing_checks = 0
+            return None
+        return (f"The broker lists no {cfg.symbol} position for this bot; it pauses once the "
+                f"next check confirms it is flat")
+
+    async def _mark_exits_ran(self, state, bar: str) -> None:
+        """A bot in the exits-only state ran the price exits of bar and has
+        no exit waiting to be sent: save the bar as done
+        (state.last_bar_time), so a restart on the same bar does not count
+        it again toward the time stop (review MT-3).  Saved once per bar,
+        with the bar count it goes with."""
+        if self._exits_bar != bar or self._exits_bar_reason:
+            return
+        if state.last_bar_time == bar:
+            return
+        state.last_bar_time = bar
+        await asyncio.to_thread(self.manager.save)
 
     def _raise_position_problem(self, cfg, state) -> None:
         """After the price exits of a bot whose code failed: a broker
@@ -1399,7 +1478,12 @@ class BotRunner(RegimeMixin, ExitsMixin):
         if isinstance(err, CodeError) and err.line is not None:
             detail = f" (line {err.line}, column {err.col})"
         self._log("ERROR", f"Code failed: {reason}{detail}")
-        self._code_failure = CodeFailure(reason=reason, live=live)
+        # Read before code_exits_only is set below: True when the state says
+        # the bot holds a position (it may no longer track its entry), so it
+        # pauses only once the broker confirms it is flat (review MT-1).
+        may_hold = (state.entry_price is not None or state.position_direction is not None
+                    or state.code_exits_only)
+        self._code_failure = CodeFailure(reason=reason, live=live, may_hold=may_hold)
         # Set before any exit runs, so a save from here on (an exit saves)
         # keeps the state; a flat bot clears it as it pauses.
         state.code_exits_only = True
@@ -1411,13 +1495,19 @@ class BotRunner(RegimeMixin, ExitsMixin):
             error_msg=(f"{reason}.  No entries or signal exits from now on; the stop, trailing "
                        f"stop and time stop of an open position keep running until it closes, "
                        f"then the bot pauses.")))
+        fetch_error: Optional[ExitsFetchError] = None
         if live is None or df is None or bar is None:
-            await self._tick_code_failure(state)  # fetches the bot's own bars first
+            try:
+                await self._tick_code_failure(state)  # fetches the bot's own bars first
+            except ExitsFetchError as e:
+                fetch_error = e  # raised below, once the state is saved
         else:
             flat = await self._manage_without_signals(
                 cfg, state, df, live, is_regime, in_hours, bar, why="after the code failed")
             if flat:
                 await self._pause_for_code(state, reason)
+            else:
+                await self._mark_exits_ran(state, bar)
         if not state.code_exits_only:
             return  # paused: the bot is flat
         # Said in the bot's log and in code_exits_only, never in
@@ -1427,6 +1517,8 @@ class BotRunner(RegimeMixin, ExitsMixin):
         self._log("WARN", f"{reason}: no entries or signal exits; the price exits of the open "
                           f"position run until it closes, then the bot pauses")
         await asyncio.to_thread(self.manager.save)
+        if fetch_error is not None:
+            raise fetch_error  # counts toward MAX_CONSEC_ERRORS (review MT-4)
         # A failed or unconfirmed position check on this tick counts toward
         # MAX_CONSEC_ERRORS (F449), raised only once the state is saved.
         self._raise_position_problem(cfg, state)
@@ -1442,7 +1534,16 @@ class BotRunner(RegimeMixin, ExitsMixin):
         (never cooked).  With no plan at all (a snippet that no longer
         prepares) they come from the saved exit settings
         (_saved_exits_config), and the fetch window is the 30 days a rule
-        bot uses."""
+        bot uses.
+
+        A fetch of the bot's own bars that fails or returns too few bars
+        raises ExitsFetchError, so it counts toward MAX_CONSEC_ERRORS and
+        alerts at the limit (review MT-4).  The stops are NOT checked
+        against the last known price (state.last_price) then: that price is
+        the close of a bar whose exits already ran, so checking it again
+        adds nothing, and it can be hours old; with no new bar there is
+        also no bar to count toward the time stop.  The next tick whose
+        fetch works runs them on fresh bars."""
         from datetime import date, timedelta
 
         fail = self._code_failure
@@ -1474,16 +1575,23 @@ class BotRunner(RegimeMixin, ExitsMixin):
                                          cfg.interval, cfg.data_source)
         except Exception as e:
             self._log("WARN", f"Fetch failed: {e}")
-            return
+            raise ExitsFetchError(
+                f"Fetch failed: {e} (code failed earlier: the price exits of a position "
+                f"could not run on this tick)") from e
         if df is None or len(df) < 2:
             self._log("WARN", "Not enough bars returned")
-            return
+            raise ExitsFetchError(
+                "Not enough bars returned (code failed earlier: the price exits of a "
+                "position could not run on this tick)")
         is_regime = (live.plan.regime is not None) if live is not None else cfg.is_bidirectional
+        bar = str(df.index[-1])
         flat = await self._manage_without_signals(
             cfg, state, df, live, is_regime, self._in_trading_hours(),
-            str(df.index[-1]), why="after the code failed")
+            bar, why="after the code failed")
         if flat:
             await self._pause_for_code(state, fail.reason)
+        else:
+            await self._mark_exits_ran(state, bar)
 
     async def _tick(self):
         cfg = self.config
@@ -2163,7 +2271,17 @@ class BotRunner(RegimeMixin, ExitsMixin):
                     if consec_errors >= MAX_CONSEC_ERRORS:
                         # Transient failures: backoff and retry instead of dying
                         self._log("WARN", f"Backing off {RECOVERY_WAIT}s after {MAX_CONSEC_ERRORS} consecutive failures")
-                        self.state.error_message = f"Recovering: {e}"
+                        # The card note goes in error_message only for a bot
+                        # that is flat.  A restart skips the auto-resume of a
+                        # bot carrying an error_message (F430), and a restart
+                        # during a broker outage is likely: a bot in a
+                        # position, or in the exits-only state, would then be
+                        # left with no stops (review MT-2).  Its log says it.
+                        from bot_manager import holds_position  # bot_manager imports this module
+
+                        recovering = f"{RECOVERY_NOTE}{e}"
+                        if not holds_position(self.state):
+                            self.state.error_message = recovering
                         await asyncio.to_thread(self.manager.save)
                         # One urgent alert per outage, for every bot, flat or
                         # not (F449 LM-5): a short broker blip must not page
@@ -2177,8 +2295,12 @@ class BotRunner(RegimeMixin, ExitsMixin):
                         await asyncio.sleep(interval_secs if unsent else RECOVERY_WAIT)
                         consec_errors = 0
                         self._log("INFO", "Resuming after recovery backoff")
-                        self.state.error_message = None
-                        self.state.status = "running"
+                        if self.state.error_message == recovering:
+                            self.state.error_message = None
+                        # A pause set during the wait (an IBKR reject from
+                        # its callback thread) stays, so the loop stops.
+                        if not self.state.pause_reason:
+                            self.state.status = "running"
                         await asyncio.to_thread(self.manager.save)
                         continue
                 await asyncio.sleep(interval_secs)
