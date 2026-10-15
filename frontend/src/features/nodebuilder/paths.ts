@@ -4,6 +4,8 @@
 //
 // A node's path is its parent's path + "/" + its name. Root is "/".
 // Wires point at ids, so a rename never breaks a wire.
+
+import { rewriteChPaths } from './code/chRewrite'
 //
 // Relative paths follow Houdini: they start at the node given as
 // relativeTo. ".." goes up one level (so "../rsi" is a sibling called rsi),
@@ -174,9 +176,10 @@ export function renameNode<G extends PathGraph>(graph: G, nodeId: string, newNam
 }
 
 // Points stored path strings at a renamed (or moved) node's new path,
-// including paths under oldPath. Today one param stores a path: an Output
-// Group's `ticker` (W5) and each network's promoted-param targets (W6, see
-// rewritePromoted); W7 adds ch() strings. `onlyNodes` limits the rewrite to
+// including paths under oldPath. Three kinds of ref store a path: an Output
+// Group's `ticker` (W5), each network's promoted-param targets (W6, see
+// rewritePromoted) and the ch() strings in a node's code and expression
+// params (W7, see rewriteCodeRefs). `onlyNodes` limits the rewrite to
 // refs stored on those nodes: a paste renames the pasted copies, and only
 // refs inside the pasted set follow (FC-9); refs elsewhere still mean the
 // originals.
@@ -198,11 +201,17 @@ export function rewritePathRefs<G extends PathGraph>(
   let nodes: Record<string, PathNode> | null = null
   for (const [id, raw] of Object.entries(graph.nodes)) {
     if (onlyNodes && !onlyNodes.has(id)) continue
-    let node = raw as PathNode & { type?: string; params?: Record<string, unknown>; promoted?: unknown }
+    let node = raw as PathNode & { type?: string; params?: Record<string, unknown>; promoted?: unknown; code?: unknown }
     const promoted = rewritePromoted(graph, id, node, under, toNew, toOld)
     if (promoted !== null) {
       nodes ??= { ...graph.nodes }
       node = { ...node, promoted }
+      nodes[id] = node as PathNode
+    }
+    const codeUpdate = rewriteCodeRefs(graph, id, node, under, toNew, toOld)
+    if (codeUpdate !== null) {
+      nodes ??= { ...graph.nodes }
+      node = { ...node, ...codeUpdate }
       nodes[id] = node as PathNode
     }
     if (node.type !== 'output_group') continue
@@ -272,6 +281,68 @@ function rewritePromoted(
     return { ...(p as object), target: `${relativePath(newBase, want)}/${target.slice(i + 1)}` }
   })
   return changed ? next : null
+}
+
+// The ch() paths in node `id`'s code and expression params after a rename
+// (twin of migrate._rewrite_code_refs), as the fields that change, or null
+// when none do. A ch() path starts at the node that holds the code
+// (`../vol/p` is the sibling vol). A path is rewritten when the node it
+// named lies on the renamed path and the same string no longer reaches it:
+// an absolute path stays absolute, a relative one stays relative to the
+// node. Only the string inside the quotes changes (code/chRewrite.ts).
+function rewriteCodeRefs(
+  graph: PathGraph,
+  id: string,
+  node: { code?: unknown; params?: Record<string, unknown> },
+  under: (p: string) => boolean,
+  toNew: (p: string) => string,
+  toOld: (p: string) => string,
+): { code?: string; params?: Record<string, unknown> } | null {
+  const code = typeof node.code === 'string' ? node.code : null
+  const params = node.params ?? {}
+  const exprOf = (v: unknown): string | null =>
+    v && typeof v === 'object' && !Array.isArray(v) && typeof (v as { expr?: unknown }).expr === 'string'
+      ? (v as { expr: string }).expr
+      : null
+  if (!(code !== null && code.includes('/')) && !Object.values(params).some(v => (exprOf(v) ?? '').includes('/'))) {
+    return null
+  }
+  let newBase: string
+  try {
+    newBase = nodePath(graph, id)
+  } catch {
+    return null
+  }
+  const oldBase = toOld(newBase)
+  const fix = (path: string): string | null => {
+    const i = path.lastIndexOf('/')
+    const nodePart = path.slice(0, i)
+    const target = path.slice(i + 1)
+    if (i < 0 || !target || !nodePart) return null // a bare name, or "/x" (the root has no params)
+    const oldAbs = joinPath(oldBase, nodePart)
+    if (oldAbs === null || !under(oldAbs)) return null
+    const want = toNew(oldAbs)
+    if (path.startsWith('/')) return `${want}/${target}`
+    if (joinPath(newBase, nodePart) === want) return null
+    return `${relativePath(newBase, want)}/${target}`
+  }
+  const update: { code?: string; params?: Record<string, unknown> } = {}
+  if (code !== null) {
+    const next = rewriteChPaths(code, fix)
+    if (next !== code) update.code = next
+  }
+  let nextParams: Record<string, unknown> | null = null
+  for (const [name, value] of Object.entries(params)) {
+    const text = exprOf(value)
+    if (text === null) continue
+    const next = rewriteChPaths(text, fix)
+    if (next === text) continue
+    nextParams ??= { ...params }
+    // The backend stores {expr} only; keep any other keys the editor holds (meta).
+    nextParams[name] = { ...(value as object), expr: next }
+  }
+  if (nextParams !== null) update.params = nextParams
+  return update.code !== undefined || update.params !== undefined ? update : null
 }
 
 // The path from the node at absolute `base` to the node at `target`, using

@@ -74,6 +74,13 @@
   --nb-code-keyword: #c084fc;
   --nb-code-number: #7dd3fc;
   --nb-code-comment: #6b7386;
+  /* W7 code editor tokens (FA5). Monaco needs literal hex, so code/theme.ts
+     repeats these values and a test compares them by name. */
+  --nb-code-func: #34d399;
+  --nb-code-string: #fcd34d;
+  --nb-code-pykw: #c3c9d6;
+  --nb-code-local: #eef1f6;
+  --nb-code-bg-active-line: rgba(255,255,255,0.03);
   --nb-bool-true: rgba(52, 211, 153, 0.35);
   --nb-bool-false: transparent;
   --nb-note-bg: #301d12;

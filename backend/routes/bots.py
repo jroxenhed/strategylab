@@ -28,7 +28,7 @@ FastAPI treating "fund" as a bot_id.
 
 import logging
 from typing import Any, Optional
-from fastapi import APIRouter, Body, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Body, HTTPException, BackgroundTasks, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -501,11 +501,16 @@ def _graph_update_candidate(mgr: BotManager, bot_id: str, graph_id: str, rev: in
     raises SnapshotRefused with the contract's codes."""
     from bot_runner import compile_bot_graph
     from nodebuilder.trading import nodes_groups
-    from routes.graphs import (SnapshotRefused, graph_invalid_detail, group_bot_fields,
-                               load_graph_snapshot, snapshot_detail)
+    from routes.graphs import (SnapshotRefused, code_disabled_detail, graph_invalid_detail,
+                               group_bot_fields, load_graph_snapshot, snapshot_detail)
 
     config, _state = mgr.get_bot(bot_id)
     env, graph = load_graph_snapshot(graph_id, rev)
+    # With SL_CODE_NODES=0 a revision that holds code is refused first,
+    # with its own code (F435 W7, design note 4.9).
+    refusal = code_disabled_detail(graph)
+    if refusal is not None:
+        raise SnapshotRefused(400, refusal)
     try:
         program = compile_bot_graph(graph)
     except GraphValidationError as exc:
@@ -599,20 +604,22 @@ def _refuse_broker_position(config: BotConfig) -> None:
 
 @router.post("/{bot_id}/graph_update", responses={
     400: {"description": "group_missing | symbol_changed | direction_changed | interval_changed "
-                         "| graph_invalid | graph_mismatch"},
+                         "| graph_invalid | graph_mismatch | code_disabled"},
     409: {"description": "in_position | rev_conflict"},
     503: {"description": "broker_unavailable (the broker could not be asked for a position)"},
 })
-async def graph_update(bot_id: str, payload: dict[str, Any] = Body(...)):
+async def graph_update(bot_id: str, request: Request, payload: dict[str, Any] = Body(...)):
     """Move a graph bot to saved revision ``rev`` of its graph (plan D7).
 
     Sets graph and graph_rev together, never through the generic PATCH
     (UpdateBotRequest would drop the graph fields).  Refused while the bot
     holds a position, and when the bot's group is gone or now trades another
     symbol or direction (spawn a new bot for that).  A running bot without
-    a position takes the new graph on its next tick.
+    a position takes the new graph on its next tick.  W7: refused with
+    code_disabled while SL_CODE_NODES=0 and the revision holds code; a
+    revision with code logs one code_audit line per snippet.
     """
-    from routes.graphs import SnapshotRefused, snapshot_detail
+    from routes.graphs import SnapshotRefused, audit_graph, forwarded_email, snapshot_detail
 
     body = _parse_body(GraphUpdateRequest, payload)
     if isinstance(body, JSONResponse):
@@ -650,6 +657,8 @@ async def graph_update(bot_id: str, payload: dict[str, Any] = Body(...)):
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     await run_in_threadpool(mgr.save)
+    await run_in_threadpool(audit_graph, "graph_update", graph, forwarded_email(request),
+                            bot_id=bot_id, graph_id=body.graph_id, rev=body.rev)
     return {"bot_id": bot_id, "graph_rev": body.rev}
 
 
@@ -680,6 +689,11 @@ async def start_bot(bot_id: str):
         return _graph_error(e)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # W7: a bot refused for its code while it holds a position starts in the
+    # exits-only state (it runs only the price exits, then pauses once flat).
+    row = mgr.bots.get(bot_id)
+    if row is not None and getattr(row[1], "code_exits_only", False) is True:
+        return {"ok": True, "status": "running", "code_exits_only": True}
     return {"ok": True, "status": "running"}
 
 

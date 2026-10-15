@@ -97,6 +97,25 @@ SIDE_FIELD_OF: dict[str, str] = {
 DIRECTION_FIELDS: tuple[str, ...] = tuple(
     f"{side}_{name}" for name in SIDE_FIELD_OF.values() for side in SIDES)
 
+# Every param plan_group reads from a step's params before any cook, by node
+# type: the simulator settings and terminal values, and so the bot's config
+# (apply_to_bot_config).  None of them can hold an expression (W7): the
+# cook would evaluate it after the plan was made, so the plan would run the
+# compile-time stand-in.  nodes_code marks them code_able False in the
+# catalog and compile refuses an expression on one with param_not_codeable.
+# test_code_levels checks that every value param of a terminal or settings
+# type is listed here.
+PLAN_READ_PARAMS: dict[str, tuple[str, ...]] = {
+    **{t: tuple(param for param, _f in pairs) for t, pairs in SETTING_FIELDS.items()},
+    "entry": ("side",),
+    "exit": ("side",),
+    "size": ("constant", "side"),
+    "stop": ("constant", "side"),
+    "trailing_stop": ("type", "value", "source", "activate_on_profit", "activate_pct", "side"),
+    "time_stop": ("max_bars", "side"),
+    "regime": ("on_flip",),
+}
+
 
 def terminal_side(step) -> Optional[str]:
     """A sided terminal's side ("long" / "short"), or None (both sides)."""

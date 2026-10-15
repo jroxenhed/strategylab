@@ -232,6 +232,15 @@ async def create_asset(request: Request):
         return JSONResponse(status_code=400, content=error_body(exc, []))
     except OSError as exc:
         return _io_error(f"save asset {body.name}", exc)
+    # The code audit trail (F435 W7, design note 4.10): one code_audit line
+    # per code snippet in the asset's network.  Never refuses the save.
+    from nodebuilder.code import has_code
+    from routes.graphs import audit_graph, forwarded_email
+
+    if has_code(data.get("network") or {}):
+        await run_in_threadpool(audit_graph, "asset_save", data.get("network"),
+                                forwarded_email(request), asset=data.get("name"),
+                                version=data.get("version"))
     return JSONResponse(status_code=201, content=data)
 
 

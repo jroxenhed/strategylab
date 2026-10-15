@@ -22,18 +22,38 @@ program:
 network and a Regime terminal in the graph, plan D8.  The numbers stay so
 the steps keep their names.)
 
+Code (W7, design note docs/plans/2026-09-29-node-builder-code-nodes-design.md):
+a param read before any cook never holds code (param_not_codeable: a
+Ticker's symbol, interval and prefix, every param the simulator plan or the
+bot reads, a code node's lookback_bars); what each code block or Wrangle
+writes enters
+the stream schema (nodes_code.extra_io); every snippet is prepared, never
+run (code_syntax, code_limit, ch_dynamic...); ch() references are checked
+(ref_broken, ch_cycle) and order the cook (kernel/params.py); a code block
+where none can run is param_invalid.  One exception to "never run": an
+expression on a param of a node with a lookback that reads only params (no
+@attr, no stream data) has the same value at every cook, so compile
+evaluates it with the cook's own code and sizes the node's window from that
+value (kernel.params.static_windows); one that fails gives the error the
+cook would give.  With SL_CODE_NODES=0 (or code_switch False) nothing runs,
+and every node that
+holds code is code_disabled, listed first so compile() raises it.  The
+steps of nodes with code get impls that run it (nodes_code.wrap_code_steps).
+
 After the program is built, each group is planned (sim_bridge.plan_group),
 which gives CompiledProgram.groups (nodes_groups.build_group_programs).
 
 compile() raises the first problem; compile_with_diagnostics() lists every
-problem; check_graph() also returns each node's stream schema for
-/validate.  Pure functions, no I/O.
+problem; check_graph() also returns each node's stream schema and the ch()
+reference edges (param_deps) for /validate.  Pure functions, no I/O.
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import logging
-from dataclasses import dataclass, replace
-from typing import Any, Optional
+from dataclasses import dataclass, field, replace
+from typing import Any, Iterator, Optional
 
 from nodebuilder import trading as _trading  # noqa: F401  (registers every node type)
 from nodebuilder.diagnostics import Diagnostic, from_error
@@ -51,9 +71,11 @@ from nodebuilder.evaluator import (
 from nodebuilder.kernel import assets as _assets
 from nodebuilder.kernel import schema as kschema
 from nodebuilder.kernel.evaluate import analyze_graph, build_steps
+from nodebuilder.kernel.params import plan_params, static_windows
 from nodebuilder.kernel.schema import RUN, coded
 from nodebuilder.kernel.stream import STREAM_SCHEMA_VERSION
 from nodebuilder.models import Graph, GraphValidationError
+from nodebuilder.trading import nodes_code as _code
 from nodebuilder.trading import nodes_groups as _groups
 
 logger = logging.getLogger(__name__)
@@ -181,27 +203,84 @@ class GraphCheck:
     streams     : each checked node's OUTPUT StreamSchema, by node id (a node
                   missing here could not be checked).  ``streams_json()``
                   gives the /validate form (plan 3.3).
+    param_deps  : the ch() reference edges for /validate (W7 contract), one
+                  per literal reference that points somewhere.
+    analysis, flat, plan : the kernel check, the flat graph and the
+                  kernel.params.ParamPlan this pass built (parse_code reads
+                  a node's input stream and resolves paths with them).
     """
     program: Optional[CompiledProgram]
     diagnostics: list[Diagnostic]
     streams: dict[str, Any]
     errors: list[GraphValidationError]
+    param_deps: list[dict] = field(default_factory=list)
+    analysis: Any = None
+    flat: Any = None
+    plan: Any = None
 
     def streams_json(self) -> dict[str, dict]:
         return {nid: s.to_json() for nid, s in self.streams.items()}
 
 
-def compile(graph: Graph, *, resolve: Optional[_assets.Resolver] = None) -> CompiledProgram:  # noqa: A001 (shadows builtin "compile" intentionally)
+# Every check_graph pass inside a ``capture_checks()`` block is collected,
+# so a caller of a helper that compiles (diagnostics.validate_graph_full)
+# can read what that pass found without compiling a second time.
+_CAPTURED: contextvars.ContextVar[Optional[list]] = contextvars.ContextVar(
+    "nodebuilder_compile_checks", default=None)
+
+
+@contextlib.contextmanager
+def capture_checks() -> Iterator[list]:
+    """Collect the GraphCheck of every check_graph call made inside the
+    block (this thread and context only)."""
+    bucket: list = []
+    token = _CAPTURED.set(bucket)
+    try:
+        yield bucket
+    finally:
+        _CAPTURED.reset(token)
+
+
+def _published(check: "GraphCheck") -> "GraphCheck":
+    bucket = _CAPTURED.get()
+    if bucket is not None:
+        bucket.append(check)
+    return check
+
+
+def _as_graph_error(exc: Any) -> GraphValidationError:
+    """A code diagnostic's error (a nodebuilder.code.CodeError) as a coded
+    GraphValidationError with the same code, node, param and place in the
+    code, so every caller that refuses a bad graph (compile, the bot routes,
+    bot ticks) catches it the usual way."""
+    if isinstance(exc, GraphValidationError):
+        return exc
+    err = coded(GraphValidationError(str(exc), node_id=getattr(exc, "node_id", None)),
+                getattr(exc, "code", None) or "code_syntax", param=getattr(exc, "param", None))
+    for key in ("line", "col", "end_line", "end_col"):
+        setattr(err, key, getattr(exc, key, None))
+    return err
+
+
+def compile(graph: Graph, *, resolve: Optional[_assets.Resolver] = None,  # noqa: A001 (shadows builtin "compile" intentionally)
+            code_switch: bool = True) -> CompiledProgram:
     """Compile a Graph into a CompiledProgram.
 
-    Raises the first error compile finds, in this order: an asset instance
-    that cannot be expanded, a second wire on one input port, then nodes in
+    Raises the first error compile finds, in this order: code_disabled
+    (SL_CODE_NODES=0 and the graph holds code), an asset instance that
+    cannot be expanded, a second wire on one input port, then nodes in
     topological order, then the Entry and Exit checks, then the indicator
     family cap, then the group plans.  Every raised error carries ``.code``
     (plan 4.2).  Use compile_with_diagnostics to get every problem at once.
     *resolve* looks up library assets (default: the registered library).
+    *code_switch* False skips the kill switch: only for a caller that never
+    cooks the program (a bot that runs only the price exits of an open
+    position); such a compile runs no code at all.  Otherwise compile runs
+    one kind of code: a param-only expression on a param of a node with a
+    lookback (kernel.params.static_windows), to size its window; an error
+    there carries ``code_failure`` True, a code failure like the cook's.
     """
-    result = check_graph(graph, resolve=resolve)
+    result = check_graph(graph, resolve=resolve, code_switch=code_switch)
     if result.errors:
         raise result.errors[0]
     assert result.program is not None
@@ -237,12 +316,19 @@ def _remembering(resolve: _assets.Resolver) -> _assets.Resolver:
     return lookup
 
 
-def check_graph(graph: Graph, *, resolve: Optional[_assets.Resolver] = None) -> GraphCheck:
+def check_graph(graph: Graph, *, resolve: Optional[_assets.Resolver] = None,
+                code_switch: bool = True) -> GraphCheck:
     """One compile pass: program (or None), diagnostics and node streams.
 
     *resolve* looks up library assets for locked instances; by default the
     one the library registered (kernel.assets.default_resolver).
+    *code_switch* False skips the SL_CODE_NODES check (see compile()).
     """
+    return _published(_check_graph(graph, resolve=resolve, code_switch=code_switch))
+
+
+def _check_graph(graph: Graph, *, resolve: Optional[_assets.Resolver],
+                 code_switch: bool) -> GraphCheck:
     found: list[tuple[Diagnostic, Optional[GraphValidationError]]] = []
 
     def _record(exc: GraphValidationError) -> None:
@@ -285,11 +371,51 @@ def check_graph(graph: Graph, *, resolve: Optional[_assets.Resolver] = None) -> 
     # 3. The kernel walk, over the flat graph (networks taken out).  Node
     # ids in the flat graph are the ids the user sees (W5; W6 adds
     # composite ids for library assets, so read node types from
-    # analysis.graph, never from the source graph).
-    analysis, flat = analyze_graph(graph, unknown_error=_unknown_error)
+    # analysis.graph, never from the source graph).  W7: each node's code
+    # adds its writes and lookback to the schema (nodes_code.extra_io), and
+    # a node with an expression on a param read before any cook (a Ticker's
+    # symbol, a time stop's max_bars, a code node's lookback_bars...) is
+    # reported here (param_not_codeable) and left out of the kernel walk.
+    # A node whose code does not prepare (a syntax error...) is reported
+    # by the plan below; the kernel skips the nodes under it, which would
+    # only report what is missing because that code is broken.
+    ticker_found, ticker_ids = _code.not_codeable_problems(graph)
+    preset = list(ticker_ids) + [n for n in _code.broken_code_nodes(graph) if n not in ticker_ids]
+    analysis, flat = analyze_graph(graph, unknown_error=_unknown_error,
+                                   extra_io=_code.extra_io, preset_broken=preset)
+
+    # 3b. Code (W7): every snippet prepared (never run), the ch()
+    # references checked (kernel/params.py), and code blocks where none can
+    # run.  With SL_CODE_NODES=0 every node holding code is code_disabled,
+    # first in the list so compile() raises that before anything else.
+    plan = plan_params(flat, analysis)
+    # 3c. Windows of param-only expressions (W7): evaluated now, with the
+    # cook's code, so the node's lookback counts the exact value, not the
+    # param's max.  Not for code_switch False: that program never cooks.
+    window_errors = static_windows(plan) if code_switch else []
+    if ticker_found:
+        found.extend(flat.remap(ticker_found))
+    found.extend((d, _as_graph_error(exc)) for d, exc in plan.code_diagnostics())
     found.extend(analysis.found)
     nodes = analysis.nodes
     _check_interfaces(flat, analysis, lookup, _record)
+    found.extend(plan.found)
+    for exc in window_errors:
+        err = _as_graph_error(exc)
+        err.code_failure = True  # type: ignore[attr-defined]  (the cook fails the same way)
+        err.code_error = exc     # type: ignore[attr-defined]  (the bot words it as the cook's)
+        found.append((from_error(exc), err))
+    misplaced = _code.misplaced_code(flat)
+    if misplaced:
+        found.extend(flat.remap(misplaced))
+    silent = _code.silent_code(flat)
+    if silent:
+        found.extend(flat.remap(silent))
+    if code_switch:
+        from nodebuilder.code import code_enabled
+
+        if not code_enabled():
+            found[:0] = _code.disabled_found(graph, flat)
 
     # 4. Terminals, sorted into Output Groups (plan D7).  A graph with no
     # group is one implicit group, "main", with the rules and messages
@@ -323,12 +449,13 @@ def check_graph(graph: Graph, *, resolve: Optional[_assets.Resolver] = None) -> 
     errors = [exc for _d, exc in found if exc is not None]
     diagnostics = [d for d, _exc in found]
     streams = analysis.schemas()
+    extra = dict(param_deps=plan.param_deps(), analysis=analysis, flat=flat, plan=plan)
     if errors:
-        return GraphCheck(None, diagnostics, streams, errors)
+        return GraphCheck(None, diagnostics, streams, errors, **extra)
 
     assert entry_attr is not None
     program = CompiledProgram(
-        steps=build_steps(analysis),
+        steps=_code.wrap_code_steps(build_steps(analysis, plan), plan, analysis),
         entry_attr=entry_attr,
         exit_attr=exit_attr if exit_attr is not None else NO_EXIT_ATTR,
         entry_node=entry_node,
@@ -343,9 +470,14 @@ def check_graph(graph: Graph, *, resolve: Optional[_assets.Resolver] = None) -> 
     # regime_switch group with no regime terminal), so the graph does not
     # compile.  A size or stop terminal over a settings node only warns.
     groups = _groups.build_group_programs(program, layout, _record, _warn)
+    # 7. A ch() of an expression param across Ticker domains (W7): each
+    # domain cooks on its own bars, so the value never reaches the reader.
+    crossed = _code.cross_domain_refs(replace(program, groups=groups), plan)
+    if crossed:
+        found.extend(flat.remap(crossed))
     errors = [exc for _d, exc in found if exc is not None]
     diagnostics = [d for d, _exc in found]
     if errors:
-        return GraphCheck(None, diagnostics, streams, errors)
+        return GraphCheck(None, diagnostics, streams, errors, **extra)
     program = replace(program, groups=groups)
-    return GraphCheck(program, diagnostics, streams, errors)
+    return GraphCheck(program, diagnostics, streams, errors, **extra)

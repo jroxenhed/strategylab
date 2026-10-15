@@ -37,6 +37,8 @@ export interface Notice {
   timeoutMs?: number
   /** Bumped on each push, so a replaced banner restarts its timer. */
   seq?: number
+  /** Override the ARIA role (default: alert for warn and error, else status). */
+  role?: 'alert' | 'status'
 }
 
 interface NoticeState {

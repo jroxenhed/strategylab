@@ -61,8 +61,17 @@ describe("NODE_CATALOG integrity", () => {
     }
     // W5 networks and their boundary nodes pass streams through as well
     // (backend kernel/flatten.py splices them out before compile).
+    // W7 wrangle: its reads and writes come from its code (parse_code), so
+    // the static catalog entry has none.
+    const dynamicIo = new Set(["wrangle"]);
+    expect(getNode("wrangle").cat).toBe("code");
     const bothEmpty = NODE_CATALOG.filter(
-      (e) => e.reads.length === 0 && e.writes.length === 0 && !passThrough.has(e.name) && e.cat !== "network"
+      (e) =>
+        e.reads.length === 0 &&
+        e.writes.length === 0 &&
+        !passThrough.has(e.name) &&
+        !dynamicIo.has(e.name) &&
+        e.cat !== "network"
     );
     expect(bothEmpty).toEqual([]);
   });

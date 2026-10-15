@@ -1491,7 +1491,8 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "default": 1.0,
         "min": 0.0,
         "max": 1.0,
-        "unit": "frac"
+        "unit": "frac",
+        "code_able": false
       },
       { "name": "out", "type": "write", "label": "out", "default": "@size_frac", "dtype": "float" }
     ],
@@ -1521,7 +1522,8 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "default": 5.0,
         "min": 0.0,
         "unit": "%",
-        "optional": true
+        "optional": true,
+        "code_able": false
       },
       { "name": "out", "type": "write", "label": "out", "default": "@stop_pct", "dtype": "float" }
     ],
@@ -1544,7 +1546,15 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
       "max": 0
     },
     "params": [
-      { "name": "bps", "type": "number", "label": "bps", "default": 2.0, "min": 0.0, "unit": "bps" },
+      {
+        "name": "bps",
+        "type": "number",
+        "label": "bps",
+        "default": 2.0,
+        "min": 0.0,
+        "unit": "bps",
+        "code_able": false
+      },
       {
         "name": "out",
         "type": "write",
@@ -1578,7 +1588,8 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "label": "per share",
         "default": 0.0,
         "min": 0.0,
-        "unit": "$/share"
+        "unit": "$/share",
+        "code_able": false
       },
       {
         "name": "min_per_order",
@@ -1586,7 +1597,8 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "label": "min per order",
         "default": 0.0,
         "min": 0.0,
-        "unit": "$"
+        "unit": "$",
+        "code_able": false
       },
       {
         "name": "out_rate",
@@ -1628,7 +1640,8 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "label": "annual rate",
         "default": 0.5,
         "min": 0.0,
-        "unit": "%"
+        "unit": "%",
+        "code_able": false
       },
       {
         "name": "out",
@@ -1644,6 +1657,28 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
     "setting_key": "borrow_rate_annual",
     "ins": 0,
     "outs": 1
+  },
+  {
+    "name": "wrangle",
+    "cat": "code",
+    "desc": "Code that reads the merged input stream and writes new attributes.",
+    "compile_active": true,
+    "inputs": {
+      "ports": [
+        { "label": "in0" },
+        { "label": "in1", "optional": true }
+      ],
+      "dynamic": true,
+      "min": 1,
+      "max": 4
+    },
+    "params": [],
+    "reads": [],
+    "writes": [],
+    "subtitle": "wrangle",
+    "setting_key": null,
+    "ins": 2,
+    "outs": 0
   },
   {
     "name": "entry",
@@ -1665,7 +1700,8 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "type": "select",
         "label": "side",
         "default": "long",
-        "options": ["long", "short"]
+        "options": ["long", "short"],
+        "code_able": false
       }
     ],
     "reads": ["@bool"],
@@ -1702,7 +1738,8 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "type": "select",
         "label": "side",
         "default": "long",
-        "options": ["long", "short"]
+        "options": ["long", "short"],
+        "code_able": false
       }
     ],
     "reads": ["@bool"],
@@ -1742,14 +1779,16 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "min": 0.0,
         "max": 1.0,
         "unit": "frac",
-        "optional": true
+        "optional": true,
+        "code_able": false
       },
       {
         "name": "side",
         "type": "select",
         "label": "side",
         "default": "both",
-        "options": ["both", "long", "short"]
+        "options": ["both", "long", "short"],
+        "code_able": false
       }
     ],
     "reads": ["@float"],
@@ -1788,14 +1827,16 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "default": null,
         "min": 0.0,
         "unit": "%",
-        "optional": true
+        "optional": true,
+        "code_able": false
       },
       {
         "name": "side",
         "type": "select",
         "label": "side",
         "default": "both",
-        "options": ["both", "long", "short"]
+        "options": ["both", "long", "short"],
+        "code_able": false
       }
     ],
     "reads": ["@float"],
@@ -1824,7 +1865,8 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "type": "select",
         "label": "type",
         "default": "pct",
-        "options": ["pct", "atr"]
+        "options": ["pct", "atr"],
+        "code_able": false
       },
       {
         "name": "value",
@@ -1832,20 +1874,23 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "label": "value",
         "default": 5.0,
         "min": 0.0,
-        "unit": "% or x ATR"
+        "unit": "% or x ATR",
+        "code_able": false
       },
       {
         "name": "source",
         "type": "select",
         "label": "source",
         "default": "high",
-        "options": ["high", "close"]
+        "options": ["high", "close"],
+        "code_able": false
       },
       {
         "name": "activate_on_profit",
         "type": "bool",
         "label": "activate on profit",
-        "default": false
+        "default": false,
+        "code_able": false
       },
       {
         "name": "activate_pct",
@@ -1853,14 +1898,16 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "label": "activate pct",
         "default": 0.0,
         "min": 0.0,
-        "unit": "%"
+        "unit": "%",
+        "code_able": false
       },
       {
         "name": "side",
         "type": "select",
         "label": "side",
         "default": "both",
-        "options": ["both", "long", "short"]
+        "options": ["both", "long", "short"],
+        "code_able": false
       },
       {
         "name": "out",
@@ -1898,14 +1945,16 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "default": null,
         "min": 1,
         "unit": "bars",
-        "optional": true
+        "optional": true,
+        "code_able": false
       },
       {
         "name": "side",
         "type": "select",
         "label": "side",
         "default": "both",
-        "options": ["both", "long", "short"]
+        "options": ["both", "long", "short"],
+        "code_able": false
       },
       { "name": "out", "type": "write", "label": "out", "default": "@max_bars", "dtype": "float" }
     ],
@@ -1936,7 +1985,8 @@ export const GENERATED_CATALOG: readonly GeneratedCatalogEntry[] = [
         "type": "select",
         "label": "on flip",
         "default": "hold",
-        "options": ["hold", "close_only", "close_and_reverse"]
+        "options": ["hold", "close_only", "close_and_reverse"],
+        "code_able": false
       }
     ],
     "reads": ["@bool"],

@@ -144,6 +144,18 @@ class ReferenceFetch:
         return (self.symbol, self.interval)
 
 
+EARLIEST_FETCH = date(1900, 1, 1)
+"""No fetch window starts before this day: a graph whose lookback is huge
+(lookback_bars up to 100,000 on several code nodes in a row) asks for all
+the history there is instead of a date Python cannot hold."""
+
+
+def _days_before(day: date, days: int) -> date:
+    """*day* minus *days* calendar days, never before EARLIEST_FETCH."""
+    room = (day - EARLIEST_FETCH).days
+    return day - timedelta(days=max(0, min(int(days), room)))
+
+
 def reference_padding_days(lookback_bars: int, interval: str) -> int:
     """Calendar days of history to fetch before the backtest's first bar
     for a reference frame whose nodes need *lookback_bars* bars.
@@ -172,7 +184,7 @@ def reference_fetches(program: Any, start: str, end: str) -> list[ReferenceFetch
     for key in roles.keys():
         pad = reference_padding_days(needs.get(key, 1), key[1])
         out.append(ReferenceFetch(symbol=key[0], interval=key[1],
-                                  start=(first - timedelta(days=pad)).strftime("%Y-%m-%d"),
+                                  start=_days_before(first.date(), pad).strftime("%Y-%m-%d"),
                                   end=end))
     return out
 
@@ -240,7 +252,7 @@ def live_fetch_start(
     days = live_window_days(graph_lookback_bars(program, trailing_stop), interval)
     if max_days is not None and max_days > 0:
         days = min(days, int(max_days))
-    return (today - timedelta(days=days)).isoformat()
+    return _days_before(today, days).isoformat()
 
 
 def window_cut_by_provider(program: Any, interval: str, trailing_stop: Any,

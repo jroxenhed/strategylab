@@ -20,9 +20,34 @@ export type { GroupResult, CombinedResult, GraphGroupDirection } from '../shared
 /**
  * A node parameter value. A list of names is used by `attr_list` params
  * (logic `terms`) and by multi-pick params such as the weekday picker
- * (`['mon', 'tue']`). W7 adds `{ expr: string }` for code expressions.
+ * (`['mon', 'tue']`). W7 adds `{ expr: string }`: the param is a Python
+ * expression (spec S44), and a spare `vector` param stores a number list.
  */
-export type ParamValue = number | string | boolean | null | string[]
+export type ParamValue = number | string | boolean | null | string[] | number[] | ParamExpr
+
+/** A param whose value is one Python expression (W7, Level 1). */
+export interface ParamExpr {
+  expr: string
+}
+
+/** True when a param value is an expression (`{ expr: "..." }`). */
+export function isExprValue(v: unknown): v is ParamExpr {
+  return !!v && typeof v === 'object' && !Array.isArray(v) && typeof (v as { expr?: unknown }).expr === 'string'
+}
+
+/**
+ * A spare param, auto-promoted from a `ch*()` call in the node's code
+ * (W7, spec S48). Its value lives in `GraphNode.params[name]`.
+ */
+export interface SpareParamSpec {
+  name: string
+  type: 'float' | 'int' | 'string' | 'bool' | 'vector'
+  default: unknown
+  min?: number | null
+  max?: number | null
+  options?: string[] | null
+  label: string
+}
 
 /** A single node in the graph. */
 export interface GraphNode {
@@ -45,6 +70,10 @@ export interface GraphNode {
   asset_ref?: { name: string; version: number } | null
   /** A locked asset instance stores no children; they come from the library. */
   locked?: boolean
+  /** W7 Level 2/3: the node's Python code block (a Wrangle's whole body). */
+  code?: string | null
+  /** W7: params declared by the code's `ch*()` calls, from the last parse (S48). */
+  spare_params?: SpareParamSpec[]
 }
 
 export interface GraphNodeMeta {

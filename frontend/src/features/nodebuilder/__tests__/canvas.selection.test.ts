@@ -172,6 +172,20 @@ describe('key gating', () => {
     expect(isTypingTarget(div)).toBe(true)
   })
 
+  it('isTypingTarget: a div inside a code editor (Monaco EditContext) is a typing target', () => {
+    const host = document.createElement('div')
+    host.className = 'nb-code-editor'
+    const edit = document.createElement('div')
+    edit.className = 'native-edit-context'
+    host.appendChild(edit)
+    expect(isTypingTarget(edit)).toBe(true)
+    const wrap = document.createElement('div')
+    wrap.className = 'nb-code-editor'
+    const inner = document.createElement('div')
+    wrap.appendChild(inner)
+    expect(isTypingTarget(inner)).toBe(true)
+  })
+
   it('handles keys from inside the node builder or the page body only', () => {
     const outer = document.createElement('div')
     outer.className = 'nodebuilder-root'

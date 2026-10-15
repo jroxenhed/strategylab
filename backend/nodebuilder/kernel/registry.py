@@ -444,6 +444,35 @@ def register_node(
     ))
 
 
+def mark_not_codeable(type_name: str, names: Iterable[str]) -> NodeType:
+    """Set ``code_able=False`` on params of the registered type *type_name*
+    and return the updated type.
+
+    For the domain layer: params it reads before any cook (a simulator
+    setting, a bot field) can never hold an expression, and the catalog then
+    says so, so the editor offers no expression there.  A name the type
+    does not have raises ValueError: a renamed param cannot slip out of the
+    rule.  Repeating a call changes nothing.
+    """
+    from dataclasses import replace
+
+    nt = _TYPES.get(type_name)
+    if nt is None:
+        raise KeyError(f"node type {type_name!r} is not registered")
+    wanted = set(names)
+    unknown = wanted - {p.name for p in nt.params}
+    if unknown:
+        raise ValueError(f"node type {type_name!r} has no param {sorted(unknown)}")
+    if all(not p.code_able for p in nt.params if p.name in wanted):
+        return nt
+    entry = nt.entry
+    defaults = {k: v for k, v in entry.defaults.items() if k not in ("params", "param_options")}
+    params = tuple(replace(p, code_able=False) if p.name in wanted else p for p in entry.params)
+    new = replace(nt, entry=replace(entry, defaults=defaults, params=params))
+    _TYPES[type_name] = new
+    return new
+
+
 def get(name: str) -> Optional[NodeType]:
     """The registered type called *name*, or None."""
     return _TYPES.get(name)

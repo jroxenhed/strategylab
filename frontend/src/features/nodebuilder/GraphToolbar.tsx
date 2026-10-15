@@ -18,6 +18,7 @@ import { Popover } from './ui/Popover'
 import { onMenuKeyDown } from './ui/menuKeys'
 import { nameError } from './persistence'
 import { diagnosticsLabel, modKeyCap, runDisabledReason } from './graphText'
+import { CODE_OFF_TOOLTIP, useCodeBlocksRun } from './code/CodeBanner'
 import { Slot } from './slots'
 import HintBar from './HintBar'
 import { prefetchLayout } from './layout'
@@ -243,7 +244,9 @@ export default function GraphToolbar(props: GraphToolbarProps) {
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null)
   const editMode = mode === 'edit'
   const saved = rev != null
-  const runReason = runDisabledReason(errorCount, hasNodes)
+  // W7 (S49): with code off on the server, a graph with code cannot run.
+  const codeBlocksRun = useCodeBlocksRun()
+  const runReason = codeBlocksRun ? CODE_OFF_TOOLTIP : runDisabledReason(errorCount, hasNodes)
 
   // Arrow keys move between the toolbar's buttons.
   const onToolbarKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {

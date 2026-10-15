@@ -29,7 +29,8 @@ function formatParams(
   const stream = new Set(specs.filter(s => STREAM_PARAM_TYPES.has(s.type)).map(s => s.name))
   const vals = Object.entries(params)
     .filter(([k, v]) => !stream.has(k) && v !== null && v !== undefined && v !== '')
-    .map(([, v]) => (Array.isArray(v) ? v.join('/') : v))
+    // W7: an expression shows as `=…` in the read-only title.
+    .map(([, v]) => (Array.isArray(v) ? v.join('/') : v && typeof v === 'object' ? '=…' : v))
   if (vals.length === 0) return ''
   return `(${vals.join(',')})`
 }

@@ -160,6 +160,25 @@ ASSET_NAME_PATTERN = r"^[a-z_][a-z0-9_]{0,63}$"
 _NODE_META_MAX_KEYS = 32
 _NODE_VIEWS = ("frame", "card")
 
+EXPR_KEY = "expr"
+"""A param value ``{"expr": "<python expression>"}`` is code (W7, Level 1)."""
+
+SPARE_PARAM_TYPES = ("float", "int", "string", "bool", "vector")
+"""The types of a spare param a ch*() call declares (W7): chf float, chi
+int, chs string, chb bool, chv vector."""
+
+
+def is_expr_value(value: Any) -> bool:
+    """True for a param value that holds code: a dict with an ``expr`` key."""
+    return isinstance(value, dict) and EXPR_KEY in value
+
+
+def expr_text(value: Any) -> Optional[str]:
+    """The source of an expression param value, else None."""
+    if is_expr_value(value) and isinstance(value[EXPR_KEY], str):
+        return value[EXPR_KEY]
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -183,6 +202,25 @@ class PromotedParam(BaseModel):
     target: str
     type: str
     default: Any = None
+
+
+class SpareParamSpec(BaseModel):
+    """A param a node's code declares with a ch*() call (W7, design note
+    4.3), such as ``chf("threshold", default=2.0)``.
+
+    The code is the source of truth: parse_code returns these specs and
+    the editor stores them here so the param rows can be drawn without a
+    round trip.  The value lives in the node's ``params[name]``; when it is
+    missing, ``default`` is used.
+    """
+
+    name: str
+    type: Literal["float", "int", "string", "bool", "vector"]
+    default: Any = None
+    min: Optional[float] = None
+    max: Optional[float] = None
+    options: Optional[list[str]] = None
+    label: str = ""
 
 
 class AssetRef(BaseModel):
@@ -236,6 +274,25 @@ class Node(BaseModel):
     library (kernel/assets.py).  An unlocked instance stores its children as
     a local copy and keeps asset_ref to say where they came from."""
 
+    code: Optional[str] = None
+    """The node's code block (W7, Level 2), or the whole body of a Wrangle
+    node (Level 3).  Python source; None or empty means no code."""
+
+    spare_params: list[SpareParamSpec] = Field(default_factory=list)
+    """The params the node's code declares with ch*() calls (W7), in the
+    order the code declares them.  Values live in ``params[name]``."""
+
+    @field_validator("params")
+    @classmethod
+    def _expr_values(cls, v: dict) -> dict:
+        """A param value that holds code is exactly ``{"expr": "<text>"}``."""
+        for name, value in v.items():
+            if is_expr_value(value) and (
+                    set(value) != {EXPR_KEY} or not isinstance(value[EXPR_KEY], str)):
+                raise ValueError(
+                    f"param {name!r}: an expression is {{\"expr\": \"<python>\"}}, got {value!r}")
+        return v
+
     @field_validator("meta")
     @classmethod
     def _meta_shape(cls, v: dict) -> dict:
@@ -260,14 +317,16 @@ class Node(BaseModel):
 
     @model_serializer(mode="wrap")
     def _leave_out_empty_w6_fields(self, handler):
-        """Leave the W6 fields out while they hold their defaults, so a graph
-        that does not use them saves exactly as it did before W6."""
+        """Leave the W6 and W7 fields out while they hold their defaults, so a
+        graph that does not use them saves exactly as it did before."""
         data = handler(self)
         if isinstance(data, dict):
             for key, empty in (("meta", {}), ("promoted", []), ("asset_ref", None),
-                               ("locked", False)):
+                               ("locked", False), ("spare_params", [])):
                 if key in data and data[key] == empty:
                     del data[key]
+            if "code" in data and data["code"] in (None, ""):
+                del data["code"]
         return data
 
 

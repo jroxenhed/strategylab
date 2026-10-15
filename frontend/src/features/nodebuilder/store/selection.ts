@@ -119,16 +119,31 @@ function pickPrimary(nodeIds: readonly string[], current: string | null, wanted?
   return nodeIds[0] ?? null
 }
 
-/** The fields to write for `sel`, reusing current lists that did not change. */
-function selectionFields(s: SelectionSlice, sel: SelectionInput) {
-  const nodeIds = [...(sel.nodeIds ?? [])]
-  const wireIds = [...(sel.wireIds ?? [])]
-  const annotationIds = [...(sel.annotationIds ?? [])]
+/** True when two id lists hold the same ids, in any order. */
+function sameIdSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  const set = new Set(a)
+  return set.size === a.length && b.every(id => set.has(id))
+}
+
+/**
+ * The fields to write for `sel`, reusing current lists that did not change.
+ * `unordered` (the canvas mirror): a list with the same ids in another
+ * order, or with an id twice, counts as unchanged. React Flow reports its
+ * selection in its own node order, which can differ from the store's; a
+ * write for that alone would re-render every panel and could feed a
+ * listener loop.
+ */
+function selectionFields(s: SelectionSlice, sel: SelectionInput, unordered = false) {
+  const nodeIds = unordered ? [...new Set(sel.nodeIds ?? [])] : [...(sel.nodeIds ?? [])]
+  const wireIds = unordered ? [...new Set(sel.wireIds ?? [])] : [...(sel.wireIds ?? [])]
+  const annotationIds = unordered ? [...new Set(sel.annotationIds ?? [])] : [...(sel.annotationIds ?? [])]
+  const same = unordered ? sameIdSet : sameIds
   return {
     selectedNodeId: pickPrimary(nodeIds, s.selectedNodeId, sel.primary),
-    selectedNodeIds: sameIds(nodeIds, s.selectedNodeIds) ? s.selectedNodeIds : nodeIds,
-    selectedWireIds: sameIds(wireIds, s.selectedWireIds) ? s.selectedWireIds : wireIds,
-    selectedAnnotationIds: sameIds(annotationIds, s.selectedAnnotationIds) ? s.selectedAnnotationIds : annotationIds,
+    selectedNodeIds: same(nodeIds, s.selectedNodeIds) ? s.selectedNodeIds : nodeIds,
+    selectedWireIds: same(wireIds, s.selectedWireIds) ? s.selectedWireIds : wireIds,
+    selectedAnnotationIds: same(annotationIds, s.selectedAnnotationIds) ? s.selectedAnnotationIds : annotationIds,
   }
 }
 
@@ -179,8 +194,9 @@ export const createSelectionSlice: StateCreator<NodeBuilderState, [], [], Select
   },
 
   mirrorSelection(sel) {
+    // Never a write when the selection is unchanged (see selectionFields).
     const s = get()
-    const next = selectionFields(s, sel)
+    const next = selectionFields(s, sel, true)
     if (
       next.selectedNodeId === s.selectedNodeId
       && next.selectedNodeIds === s.selectedNodeIds

@@ -168,7 +168,7 @@ def test_unconnected_entry_is_missing_input_with_entry_node_id(client):
     r = client.post(VALIDATE, json={"graph": graph})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert set(body) == {"ok", "diagnostics", "streams", "stream_schema"}
+    assert set(body) == {"ok", "diagnostics", "streams", "stream_schema", "param_deps"}
     assert body["ok"] is False
     assert body["stream_schema"] == 1
     # The nodes above the unwired Entry are still described (plan 3.3 shape).
@@ -186,7 +186,7 @@ def test_valid_graph_is_ok_with_no_diagnostics(client):
     r = client.post(VALIDATE, json={"graph": _rsi_graph()})
     assert r.status_code == 200
     body = r.json()
-    assert set(body) == {"ok", "diagnostics", "streams", "stream_schema"}
+    assert set(body) == {"ok", "diagnostics", "streams", "stream_schema", "param_deps"}
     assert body["ok"] is True and body["diagnostics"] == [] and body["stream_schema"] == 1
     graph = _rsi_graph()
     assert set(body["streams"]) == set(graph["nodes"])
@@ -538,6 +538,69 @@ def test_code_size_unit_suspect():
     assert d.node_id == "/size" and d.param == "size" and d.severity == "warning"
 
 
+def _with_wrangle(code):
+    graph = _rsi_graph()
+    node = _n("/wr", "wrangle")
+    if code is not None:
+        node["code"] = code
+    graph["nodes"]["/wr"] = node
+    graph["wires"].append(_w("w9", "/ticker", "/wr", port="in0"))
+    return graph
+
+
+@pytest.mark.parametrize("code", [None, "", "x = @close * 2", "# nothing yet"])
+def test_code_writes_nothing_on_a_wrangle(code):
+    """S46: a Wrangle whose code sets no attribute is a warning, not an
+    error; the graph still compiles."""
+    diags = validate_graph_data(_with_wrangle(code))
+    d = _find(diags, "code_writes_nothing")
+    assert d.node_id == "/wr" and d.severity == "warning"
+    assert "writes nothing" in d.message
+    assert [x for x in diags if x.severity == "error"] == []
+
+
+def test_code_writes_nothing_on_a_node_code_block():
+    graph = _rsi_graph()
+    graph["nodes"]["/rsi"]["code"] = "x = @rsi * 2"
+    diags = validate_graph_data(graph)
+    d = _find(diags, "code_writes_nothing")
+    assert d.node_id == "/rsi" and d.severity == "warning"
+    assert [x for x in diags if x.severity == "error"] == []
+
+
+@pytest.mark.parametrize("where, code", [
+    ("/wr", "@out = @close"),
+    ("/rsi", "@rsi_smooth = @rsi * 1.0"),
+])
+def test_code_that_writes_has_no_writes_nothing_warning(where, code):
+    graph = _with_wrangle("@out = @close")
+    graph["nodes"][where]["code"] = code
+    assert "code_writes_nothing" not in _codes(validate_graph_data(graph))
+
+
+@pytest.mark.parametrize("where, code, error", [
+    ("/wr", "x = (", "code_syntax"),
+    ("/rsi", "x = (", "code_syntax"),
+    ("/entry", "x = 1", "param_invalid"),
+])
+def test_code_writes_nothing_leaves_errors_alone(where, code, error):
+    """Code that does not prepare, or sits where no code runs, keeps its
+    own error and gets no extra warning."""
+    graph = _with_wrangle("@out = @close")
+    graph["nodes"][where]["code"] = code
+    codes = _codes(validate_graph_data(graph))
+    assert error in codes and "code_writes_nothing" not in codes
+
+
+def test_code_writes_nothing_compiles():
+    from nodebuilder.compile import compile_with_diagnostics
+    from nodebuilder.models import Graph
+
+    program, diags = compile_with_diagnostics(Graph.model_validate(_with_wrangle("x = 1")))
+    assert program is not None
+    assert [d.code for d in diags] == ["code_writes_nothing"]
+
+
 def test_code_request_invalid_on_backtest(backtest_client):
     body = {"graph": _rsi_graph(), "ticker": "SYN", "start": "2023-01-01",
             "end": "2023-07-01", "source": "not-a-provider"}
@@ -739,7 +802,9 @@ def test_graphs_route_400_lists_every_structural_problem(graphs_client):
     (14.5, "param_invalid"),
     (None, "param_invalid"),
     ([14], "param_invalid"),
-    ({"expr": "ch('x')"}, "param_invalid"),
+    # W7: an expression on period is valid; a bare ch("x") with no
+    # built-in or declared spare is a broken reference.
+    ({"expr": "ch('x')"}, "ref_broken"),
 ])
 def test_indicator_period_is_checked_before_run(client, value, code):
     """BC-03 / BC-02: a bad period is a diagnostic on the param, not a

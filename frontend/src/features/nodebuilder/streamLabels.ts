@@ -153,16 +153,44 @@ export function writesOf(node: Pick<GraphNode, 'type' | 'params'>): WriteSlot[] 
 }
 
 /**
+ * What a node's code writes (`['@sig']`), or null when that is not known
+ * yet. The code store sets it (code/codeStore.ts: the last parse of the
+ * node's code, else the last validate's stream); this module stays free of
+ * stores.
+ */
+export type CodeWritesLookup = (node: Pick<GraphNode, 'id' | 'code'>) => readonly string[] | null
+
+let codeWritesLookup: CodeWritesLookup = () => null
+
+/** Set (or with null, clear) where `primaryWriteOf` finds a node's code writes. */
+export function setCodeWritesLookup(fn: CodeWritesLookup | null): void {
+  codeWritesLookup = fn ?? (() => null)
+}
+
+type PrimaryWriteNode = Pick<GraphNode, 'type' | 'params'> & Partial<Pick<GraphNode, 'id' | 'code'>>
+
+/**
  * The attribute a fresh wire out of this node is read as by default (plan
  * D4 "default reads"): the node's first `write` param. A node without
  * `write` params falls back to the catalog rule (`@close` for a Ticker,
- * `@msft_close` for one with the prefix `msft`).
+ * `@msft_close` for one with the prefix `msft`). A type that writes
+ * nothing of its own (a Wrangle) whose code writes exactly one attribute
+ * hands that one on; with several writes the reader must name one (null),
+ * as the backend's `schema.primary_write`. `codeWrites` gives the code's
+ * writes directly; without it they come from the lookup the code store set.
  */
-export function primaryWriteOf(node: Pick<GraphNode, 'type' | 'params'> | undefined): string | null {
+export function primaryWriteOf(
+  node: PrimaryWriteNode | undefined,
+  codeWrites?: readonly string[] | null,
+): string | null {
   if (!node) return null
   if (writeParamsOf(node.type).length > 0) return writesOf(node)[0]?.name ?? null
   const name = primaryAttrFor(node.type)
-  return name ? prefixedName(name, tickerPrefixOf(node)) : null
+  if (name) return prefixedName(name, tickerPrefixOf(node))
+  const code = typeof node.code === 'string' && node.code.trim() !== '' ? node.code : null
+  if (!code) return null
+  const writes = codeWrites ?? (node.id ? codeWritesLookup({ id: node.id, code }) : null)
+  return writes && writes.length === 1 ? writes[0] : null
 }
 
 // ---------------------------------------------------------------------------

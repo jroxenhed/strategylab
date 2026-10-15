@@ -29,6 +29,7 @@ No trading words in this module.
 """
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping, NoReturn, Optional
@@ -42,7 +43,14 @@ from nodebuilder.kernel.stream import (
     is_attr_name,
     prim_kind_of,
 )
-from nodebuilder.models import Graph, GraphValidationError, Node, port_index, topological_sort
+from nodebuilder.models import (
+    Graph,
+    GraphValidationError,
+    Node,
+    is_expr_value,
+    port_index,
+    topological_sort,
+)
 
 LIVE = "live"
 DISABLED = "disabled"
@@ -418,6 +426,15 @@ class NodeResult:
     lookback: int = 0                     # this node's own lookback
     need: int = 0                         # lookback along its longest input path
     node_type: Optional[NodeType] = None
+    # W7 (code).  The params that hold an expression (their value in
+    # ``params`` is a stand-in until the cook evaluates them), the wires and
+    # reads as they were before the type's check ran (so the check can run
+    # again on the evaluated values, see ``recheck``), and what the node's
+    # code adds (ExtraIO).
+    expr_params: tuple[str, ...] = ()
+    wired: tuple = ()
+    check_reads: dict[str, Any] = field(default_factory=dict)
+    extra: Optional["ExtraIO"] = None
 
     @property
     def read_names(self) -> tuple[str, ...]:
@@ -434,7 +451,32 @@ class NodeResult:
         names = tuple(self.write_names.values())
         if self.node_type is not None:
             names += tuple(n for n, _d in self.node_type.fixed_writes_for(self.params))
+        if self.extra is not None:
+            names += tuple(n for n, _d in self.extra.writes if n not in names)
         return names
+
+
+@dataclass(frozen=True)
+class ExtraIO:
+    """What a node's code adds to the node (W7).  The domain layer returns
+    one from the ``extra_io`` hook it gives ``analyze``; None means the
+    node has no code.
+
+    writes   : (name, dtype) point attributes the code writes, after the
+               node's own writes.  dtype is bool, float or any (no
+               annotation: known after the first cook).
+    reads_any: True when the code may read any attribute on the stream it
+               sees.  Every column on the node's input stream then stays
+               alive until the node has cooked.
+    lookback : extra rows of history the code needs (its lookback_bars).
+    shadow_ok: True lets a write replace an attribute an upstream node
+               wrote (an attr_shadowed warning, as for a normal write);
+               False makes that an attr_clash error.
+    """
+    writes: tuple[tuple[str, str], ...] = ()
+    reads_any: bool = False
+    lookback: int = 0
+    shadow_ok: bool = False
 
 
 @dataclass
@@ -483,8 +525,13 @@ def wires_into_index(graph: Graph) -> dict[str, list]:
 
 
 def primary_write(node: Node, node_type: Optional[NodeType],
-                  write_names: Mapping[str, Mapping[str, str]]) -> Optional[str]:
-    """The node's primary write: its first write param, else its fixed primary."""
+                  write_names: Mapping[str, Mapping[str, str]],
+                  extra: Optional["ExtraIO"] = None) -> Optional[str]:
+    """The node's primary write: its first write param, else its fixed
+    primary, else (W7) the one attribute its code writes.  A type that
+    writes nothing of its own (a Wrangle) and whose code writes exactly one
+    attribute hands that one to a reader below that names none; with
+    several, the reader must name one."""
     if node_type is None:
         return None
     wps = node_type.write_params()
@@ -496,6 +543,8 @@ def primary_write(node: Node, node_type: Optional[NodeType],
     fixed = node_type.fixed_writes_for(node.params)
     if fixed:
         return fixed[0][0]
+    if extra is not None and len(extra.writes) == 1:
+        return extra.writes[0][0]
     return None
 
 
@@ -557,7 +606,9 @@ def _is_scalar(value: Any) -> bool:
 
 
 def _type_ok(want: Optional[str], info: AttrInfo) -> bool:
-    if want in (None, "any"):
+    # A write of dtype "any" (an unannotated code write, W7 design 4.3) is
+    # accepted here; the cook checks the real value (nodes_code).
+    if want in (None, "any") or info.dtype == "any":
         return True
     if want == "bool":
         return info.dtype == "bool"
@@ -576,6 +627,7 @@ def analyze(
     *,
     unknown_error: Optional[Callable[[Node], GraphValidationError]] = None,
     preset_broken: Iterable[str] = (),
+    extra_io: Optional[Callable[[Node, NodeType], Optional[ExtraIO]]] = None,
 ) -> Analysis:
     """Check *graph* and describe every node's streams (no data needed).
 
@@ -589,6 +641,7 @@ def analyze(
     unknown_error builds the error for a node type nobody registered.
     preset_broken lists nodes the caller already reported: they count as
     broken and are not checked again.
+    extra_io (W7) gives what a node's code adds to it (ExtraIO), or None.
     """
     from nodebuilder.diagnostics import from_error
     from nodebuilder.diagnostics import make as make_diagnostic
@@ -631,7 +684,7 @@ def analyze(
             try:
                 res, warnings = _analyze_node(
                     graph, node, nt, wires, results, write_names, strict_labels,
-                    unknown_error, pending_clashes, read_clashes,
+                    unknown_error, pending_clashes, read_clashes, extra_io,
                 )
             except GraphValidationError:
                 raise  # GraphTypeError is a TypeError too; keep its own code
@@ -676,6 +729,7 @@ def _analyze_node(
     unknown_error: Optional[Callable[[Node], GraphValidationError]],
     pending_clashes: dict[tuple, tuple],
     read_clashes: set[tuple],
+    extra_io: Optional[Callable[[Node, NodeType], Optional[ExtraIO]]] = None,
 ) -> tuple[NodeResult, list]:
     """Check one node.  Raises GraphValidationError on its first problem."""
     if nt is None:
@@ -711,6 +765,10 @@ def _analyze_node(
 
     used = _ports_in_use(node, nt, wires)
     _check_param_values(node, nt)
+    exprs = expr_params(node)
+    extra = extra_io(node, nt) if extra_io is not None else None
+    if extra is not None:
+        _check_extra(node, extra)
 
     names = write_names.get(node.id, {})
     params = Params(_param_values(node, nt, names), node.id)
@@ -721,7 +779,7 @@ def _analyze_node(
     def _passed_on(reason: str) -> NodeResult:
         base = results[in0].out_schema if in0 is not None else StreamSchema()
         out = base.copy()
-        for name, kind, dtype in _write_list(nt, names, params):
+        for name, kind, dtype in _write_list(nt, names, params) + _extra_list(extra):
             if name not in out and name not in out.hidden:
                 out.disabled[name] = AttrInfo(name, dtype, node.id, kind)
             elif name in out:
@@ -741,7 +799,7 @@ def _analyze_node(
         need = results[in0].need if in0 is not None else 0
         return NodeResult(node.id, node.type, PASS, params=params, pass_from=in0,
                           off_reason=reason, out_schema=out, write_names=dict(names),
-                          need=need, node_type=nt)
+                          need=need, node_type=nt, expr_params=exprs, extra=extra)
 
     if node.bypass and nt.bypassable:
         return _passed_on("bypassed"), pass_warnings
@@ -754,6 +812,7 @@ def _analyze_node(
     ctx = NodeCheck(node, nt, params, used, merged)
     _resolve_reads(graph, node, nt, ctx, used, merged, results, write_names, strict_labels,
                    read_clashes)
+    check_reads = {k: (list(v) if isinstance(v, list) else v) for k, v in ctx.reads.items()}
     if nt.check is not None:
         nt.check(ctx)
     _finish_reads(ctx)
@@ -786,13 +845,18 @@ def _analyze_node(
             out.detail[name] = info
         else:
             out.points[name] = info
+    if extra is not None:
+        _add_extra_writes(node, nt, extra, out, warnings)
 
-    own = int(nt.lookback(params)) if nt.lookback is not None else 0
+    own = own_lookback(nt, params, exprs)
+    if extra is not None:
+        own += max(int(extra.lookback), 0)
     need = own + max((results[u].need for u in upstream), default=0)
     return NodeResult(
         node.id, node.type, RUN, params=params, reads=ctx.reads, inputs=tuple(upstream),
         in_schema=merged, out_schema=out, write_names=dict(names),
         annotations=ctx.annotations, lookback=own, need=need, node_type=nt,
+        expr_params=exprs, wired=tuple(used), check_reads=check_reads, extra=extra,
     ), warnings
 
 
@@ -856,6 +920,9 @@ def _check_param_values(node: Node, nt: NodeType) -> None:
     """Every stored param must be a value its kind can hold."""
     for name, value in (node.params or {}).items():
         spec = nt.param(name)
+        if is_expr_value(value):
+            _check_expr_param(node, nt, spec, name, value)
+            continue
         kind = spec.type if spec is not None else None
         bad = False
         if kind == "attr":
@@ -900,16 +967,219 @@ def _check_param_values(node: Node, nt: NodeType) -> None:
 
 
 def _param_values(node: Node, nt: NodeType, names: Mapping[str, str]) -> dict[str, Any]:
-    """Defaults, overlaid with the stored params, writes set to final names."""
+    """Defaults, overlaid with the stored params, writes set to final names.
+
+    A param that holds an expression (W7) gets a stand-in of its type until
+    the cook evaluates it (``expr_stand_in``).  A name the type does not
+    know (a spare param of the node's code) keeps its stored value, the
+    expression included: only the code reads it.
+    """
     values: dict[str, Any] = {p.name: p.default for p in nt.params}
     for k, v in (node.params or {}).items():
-        values[k] = v
+        spec = nt.param(k) if is_expr_value(v) else None
+        values[k] = expr_stand_in(spec) if spec is not None else v
     for spec in nt.params:
         if spec.type == "write":
             values[spec.name] = names.get(spec.name, spec.default)
         elif spec.type == "attr" and values.get(spec.name) == "":
             values[spec.name] = None
     return values
+
+
+# ---------------------------------------------------------------------------
+# W7: params that hold code, and what a node's code adds
+# ---------------------------------------------------------------------------
+
+# Param kinds that name attributes or are read before the cook: the schema
+# of the graph depends on them, so they can never hold an expression.
+NOT_CODEABLE_KINDS = frozenset({"attr", "attr_list", "write", "path", "time_range"})
+
+PARAM_NOT_CODEABLE = "param_not_codeable"
+"""The diagnostic code for an expression on a param that is read before any
+cook (a spec with ``code_able=False``, or any param of a type with no cook
+step).  The domain layer marks its own such params with
+registry.mark_not_codeable."""
+
+READ_BEFORE_COOK = "this value is read before the cook, so it cannot be an expression"
+
+
+def not_codeable_error(node: Node, name: str, why: str = "") -> GraphValidationError:
+    """param_not_codeable on param *name* of *node* (the shared rule)."""
+    label = getattr(node, "name", None) or node.id
+    message = f"{node.type} {label!r} param {name!r}: {READ_BEFORE_COOK}."
+    if why:
+        message += "  " + why
+    return coded(GraphValidationError(message, node_id=node.id), PARAM_NOT_CODEABLE, param=name)
+
+
+def expr_params(node: Node) -> tuple[str, ...]:
+    """The names of *node*'s params that hold an expression, in stored order."""
+    return tuple(k for k, v in (node.params or {}).items() if is_expr_value(v))
+
+
+LOOKBACK_TRIALS = 256
+"""Most param combinations own_lookback tries for a node's expressions."""
+
+
+def _widest_values(spec: ParamSpec) -> list[Any]:
+    """The values an expression param is tried at for the node's lookback:
+    a number at its max (the stand-in when it has none), every option of a
+    select, both values of a bool."""
+    if spec.type in ("int", "number"):
+        if spec.max is not None:
+            return [int(spec.max) if spec.type == "int" else spec.max]
+        return [expr_stand_in(spec)]
+    if spec.type == "select" and spec.options:
+        return list(spec.options)
+    if spec.type == "bool":
+        return [False, True]
+    return [expr_stand_in(spec)]
+
+
+def own_lookback(nt: NodeType, params: Mapping[str, Any], exprs: Iterable[str] = ()) -> int:
+    """The rows of history node type *nt* needs with *params*.
+
+    A param that holds an expression (W7) may have its value only at cook
+    time, so the node counts at the widest value that param can take
+    (``_widest_values``): the live fetch window is sized before any cook.
+    Compile then narrows it for expressions that read only params: it
+    evaluates them and calls this again with their values and only the
+    other expressions in *exprs* (kernel.params.static_windows).  The cook
+    checks the real value against it (kernel.params raises code_type when
+    it needs more).  A combination the lookback cannot read is skipped."""
+    if nt.lookback is None:
+        return 0
+    base = int(nt.lookback(params))
+    specs = [nt.param(name) for name in exprs]
+    specs = [s for s in specs if s is not None]
+    if not specs:
+        return base
+    best = base
+    trials = itertools.product(*[_widest_values(s) for s in specs])
+    for combo in itertools.islice(trials, LOOKBACK_TRIALS):
+        trial = dict(params)
+        trial.update({s.name: v for s, v in zip(specs, combo)})
+        try:
+            best = max(best, int(nt.lookback(trial)))
+        except (TypeError, ValueError, KeyError, OverflowError):
+            continue
+    return best
+
+
+def expr_stand_in(spec: ParamSpec) -> Any:
+    """The value compile uses for an expression param until the cook
+    evaluates it: the param's default, or a plain value of its type."""
+    if spec.default is not None:
+        return spec.default
+    if spec.type in ("int", "number"):
+        return spec.min if spec.min is not None else 0
+    if spec.type == "bool":
+        return False
+    if spec.type == "select" and spec.options:
+        return spec.options[0]
+    return "" if spec.type == "string" else None
+
+
+def _check_expr_param(node: Node, nt: NodeType, spec: Optional[ParamSpec], name: str,
+                      value: Any) -> None:
+    """Refuse an expression on a param that cannot hold code: param_not_codeable
+    for a param read before the cook (code_able False, or a type with no cook
+    step), param_invalid for the other reasons."""
+    why = None
+    if not isinstance(value.get("expr"), str):
+        why = "an expression must be text"
+    elif spec is None:
+        return  # a spare param of the node's code, or a name the node ignores
+    elif not spec.code_able:
+        raise not_codeable_error(node, name)
+    elif spec.type in NOT_CODEABLE_KINDS:
+        why = ("it names attributes or is read before the cook, so it cannot hold code"
+               if spec.type != "time_range" else "a time range cannot hold code")
+    elif nt.impl is None:
+        raise not_codeable_error(node, name, f"A {nt.name} node has no cook step.")
+    elif spec.name in (nt.meta.get("detail_if", {}) or {}).values():
+        why = "it decides what the node writes, so it cannot hold code"
+    if why is not None:
+        raise coded(GraphValidationError(
+            f"{node.type} {node.id!r} param {name!r}: {why}.", node_id=node.id,
+        ), "param_invalid", param=name)
+
+
+def _check_extra(node: Node, extra: ExtraIO) -> None:
+    for name, dtype in extra.writes:
+        if not is_attr_name(name) or prim_kind_of(name):
+            raise coded(GraphValidationError(
+                f"{node.type} {node.id!r}: the code writes {name!r}, which is not an "
+                "attribute name like @name.", node_id=node.id), "attr_dynamic")
+        if dtype not in ("bool", "float", "any"):
+            raise coded(GraphValidationError(
+                f"{node.type} {node.id!r}: the code writes {name} as {dtype!r}; a written "
+                "attribute is bool, float or any.", node_id=node.id), "code_type")
+
+
+def _extra_list(extra: Optional[ExtraIO]) -> list[tuple[str, str, str]]:
+    return [(n, POINT, d) for n, d in extra.writes] if extra is not None else []
+
+
+def _add_extra_writes(node: Node, nt: NodeType, extra: ExtraIO, out: StreamSchema,
+                      warnings: list) -> None:
+    """Put the code's writes on the node's output schema (W7)."""
+    for name, dtype in extra.writes:
+        prev = out.lookup(name)
+        if prev is not None and prev.written_by != node.id:
+            if not extra.shadow_ok:
+                raise coded(GraphValidationError(
+                    f"{nt.name} {node.id!r}: the code writes {name}, which {prev.written_by!r} "
+                    f"upstream already writes.  Pick another name.", node_id=node.id,
+                ), "attr_clash")
+            warnings.append((
+                "attr_shadowed",
+                f"{nt.name} {node.id!r} code writes {name}, which replaces the {name} written "
+                f"by {prev.written_by!r} upstream.",
+                None,
+            ))
+        if prev is not None:
+            out.points.pop(name, None)
+            out.detail.pop(name, None)
+        out.hidden.pop(name, None)
+        out.disabled.pop(name, None)
+        out.points[name] = AttrInfo(name, dtype, node.id, POINT)
+
+
+def recheck(res: NodeResult, node: Node, values: Mapping[str, Any]) -> Params:
+    """The node's params with *values* set at cook time (W7 expressions).
+
+    Runs the same checks compile ran (the kind of each value, the type's own
+    check hook: ranges, parsing), starting from the reads as they were
+    before compile's check.  Raises a coded GraphValidationError for a bad
+    value (param_invalid, param_out_of_range...), and code_type when a value
+    would change what the node writes or turn the node off: the stream
+    schema was fixed at compile time.
+    """
+    nt = res.node_type
+    if nt is None:
+        raise ValueError(f"recheck: node {node.id!r} has no type")
+    stored = {**(node.params or {}), **values}
+    node2 = node.model_copy(update={"params": stored})
+    _check_param_values(node2, nt)
+    params = Params(_param_values(node2, nt, res.write_names), node.id)
+    ctx = NodeCheck(node2, nt, params, list(res.wired), res.in_schema or StreamSchema())
+    ctx.reads = {k: (list(v) if isinstance(v, list) else v) for k, v in res.check_reads.items()}
+    if nt.check is not None:
+        nt.check(ctx)
+    _finish_reads(ctx)
+    changed = None
+    if ctx.off_reason is not None and res.status == RUN:
+        changed = f"turns the node off ({ctx.off_reason})"
+    elif _write_list(nt, res.write_names, ctx.params) != _write_list(nt, res.write_names, res.params):
+        changed = "changes what the node writes"
+    if changed is not None:
+        which = ", ".join(sorted(values)) or "an expression"
+        raise coded(GraphValidationError(
+            f"{nt.name} {node.id!r}: the value of {which} {changed}, which is fixed before the "
+            "cook.  Use a plain value here.", node_id=node.id,
+        ), "code_type", param=next(iter(sorted(values)), None))
+    return ctx.params
 
 
 def _resolve_reads(graph, node, nt, ctx, used, merged, results, write_names,
@@ -939,7 +1209,9 @@ def _resolve_reads(graph, node, nt, ctx, used, merged, results, write_names,
                     f"node does not produce {label!r}.",
                     node_id=node.id,
                 ), "attr_type", port=wire.to_port)
-        return primary_write(src, st, write_names)
+        upstream = results.get(src.id)
+        return primary_write(src, st, write_names,
+                             upstream.extra if upstream is not None else None)
 
     def _through_off_node(spec: ParamSpec, wire, name: str) -> Optional[ReadInfo]:
         """A wire-decided read of a name the wired node writes itself, when
@@ -950,7 +1222,8 @@ def _resolve_reads(graph, node, nt, ctx, used, merged, results, write_names,
         src = results.get(wire.from_path)
         if src is None or src.status != PASS or src.node_type is None:
             return None
-        for wname, kind, dtype in _write_list(src.node_type, src.write_names, src.params):
+        for wname, kind, dtype in (_write_list(src.node_type, src.write_names, src.params)
+                                   + _extra_list(src.extra)):
             if wname == name:
                 return ReadInfo(spec.name, name, DISABLED, False, wire.to_port, src.node_id,
                                 dtype, kind)

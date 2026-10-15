@@ -48,6 +48,12 @@
  * node, open the Data Sheet) and a text summary for screen readers. No slot
  * on a bypassed node or below zoom 0.5.
  *
+ * Code (W7, specs S45, S46, S48): a node with a code block shows the
+ * `code · 3 lines` drawer under its rows (static text, never Monaco), its
+ * spare params after the built-in rows (at most 4 rows in all, then
+ * `+N more in Inspector`), and the code's writes as purple chips after its
+ * own writes. Reads and writes come from `parse_code`, never from the text.
+ *
  * All color references use CSS custom properties from tokens.css
  * scoped to .nodebuilder-root.
  */
@@ -85,7 +91,12 @@ import { flagProblemForType } from '../operations'
 import { DiagnosticBadge } from './DiagnosticBadge'
 import { endHoverTip, startHoverTip } from './hoverTip'
 import { requestRename } from '../inspector/state'
-import { ParamRows } from './ParamRow'
+import { ParamRows, rowsFor } from './ParamRow'
+import { NodeCodeDrawer } from '../code/CodeDrawer'
+import { SpareParamRows } from '../code/SpareParams'
+import { CODE_SLOT, useCodeEnabled, useCodeStore, useLastOkParse } from '../code/codeStore'
+import { visibleParams, WRANGLE_TYPE } from '../code/codeOps'
+import { paramSpecsOf } from '../streamLabels'
 import { UnsupportedNode } from './UnsupportedNode'
 import { isUnsupportedNode } from './unsupported'
 import { WriteChip } from './WriteChip'
@@ -188,6 +199,12 @@ interface BaseNodeProps {
   hasOutput?: boolean
   /** Node id for diagnostics. Defaults to the React Flow node this renders in. */
   nodeId?: string
+  /** Read chips drawn in the error color (a Wrangle's missing reads, S46). */
+  missingReads?: ReadonlySet<string>
+  /** Text shown in the chip row when there are no chips (a Wrangle's `writes nothing`). */
+  emptyChipsText?: string
+  /** The card's accessible name (a Wrangle names its writes, S46). */
+  ariaLabel?: string
 }
 
 /** Card border when the node has an error (ui-ux-spec 4.8). */
@@ -198,7 +215,10 @@ const MAX_CHIPS = 6
 
 const NO_PARAMS: Record<string, unknown> = {}
 
-type Chip = { kind: 'read'; name: string } | { kind: 'write'; slot: WriteSlot }
+type Chip = { kind: 'read'; name: string } | { kind: 'write'; slot: WriteSlot } | { kind: 'code'; name: string }
+
+/** Most rows a node card shows, built-in plus spare (S48). */
+const MAX_NODE_ROWS = 4
 
 /** True while the canvas is zoomed in enough to show sparklines (a boolean, so zooming re-renders only at the threshold). */
 const selectSparkZoom = (s: ReactFlowState) => s.transform[2] >= SPARKLINE_MIN_ZOOM
@@ -231,6 +251,9 @@ export function BaseNode({
   hasInput = true,
   hasOutput = true,
   nodeId: nodeIdProp,
+  missingReads,
+  emptyChipsText,
+  ariaLabel,
 }: BaseNodeProps) {
   const flowNodeId = useNodeId()
   const nodeId = nodeIdProp ?? flowNodeId
@@ -319,9 +342,31 @@ export function BaseNode({
   const ownPickers = editable && !children && readParams.length > 0 && !!nodeId
   const pickersShown = editable && readParams.length > 0 && (!!children || ownPickers)
   const readChips = pickersShown ? [] : readParams.length > 0 ? readsOf(node) : [...reads]
+  // ── Code (W7) ────────────────────────────────────────────────────────────
+  const graphNode = nodeData?.node
+  const nodeCode = graphNode?.code ?? null
+  const isWrangle = nodeType === WRANGLE_TYPE
+  const codeOn = useCodeEnabled()
+  const codeParse = useLastOkParse(nodeCode && !isWrangle ? nodeId : null, CODE_SLOT)
+  const codeWrites = codeParse && nodeCode
+    ? codeParse.res.writes.map(w => w.name).filter(n => !writeSlots.some(s => s.name === n))
+    : []
+  const spareCount = editable ? graphNode?.spare_params?.length ?? 0 : 0
+  const builtInRows = !editable ? 0
+    : children ? rowsFor(
+      visibleParams(params, new Set(paramSpecsOf(nodeType).map(s => s.name)), graphNode),
+      paramSpecsOf(nodeType),
+      false,
+    ).length
+      : readParams.length
+  // The drawer row shows when the node has code, or the user added a block this session (S45).
+  const codeAdded = useCodeStore(st => (nodeId ? !!st.addedCode[nodeId] : false))
+  const showDrawer = !isWrangle && !!nodeId && (!!nodeCode || (editable && codeAdded))
+
   const chips: Chip[] = [
     ...readChips.map(name => ({ kind: 'read' as const, name })),
     ...writeSlots.map(slot => ({ kind: 'write' as const, slot })),
+    ...codeWrites.map(name => ({ kind: 'code' as const, name })),
   ]
   const folded = chips.length > MAX_CHIPS
   const shownChips = folded ? chips.slice(0, MAX_CHIPS - 1) : chips
@@ -330,7 +375,9 @@ export function BaseNode({
   const moreOpen = moreAnchor != null
 
   const renderChip = (c: Chip, i: number) => c.kind === 'read'
-    ? <span key={`r-${i}-${c.name}`} className="nb-chip">{c.name}</span>
+    ? <span key={`r-${i}-${c.name}`} className={`nb-chip${missingReads?.has(c.name) ? ' nb-chip--missing' : ''}`}>{c.name}</span>
+    : c.kind === 'code'
+      ? <span key={`c-${i}-${c.name}`} className="nb-chip nb-chip--write nb-chip--readonly nb-chip--code" data-testid={nodeId ? `nb-code-write-${nodeId}-${c.name}` : undefined}>+{c.name}</span>
     : nodeId
       ? <WriteChip key={`w-${i}-${c.slot.param ?? c.slot.name}`} nodeId={nodeId} param={c.slot.param} name={c.slot.name} editable={editable} />
       : <AttrPill key={`w-${i}`} label={`+${c.slot.name}`} write />
@@ -432,7 +479,8 @@ export function BaseNode({
         </span>
       ))}
 
-      <div className="nb-node-card" style={containerStyle}>
+      {/* A named card is a group, so its aria-label is exposed (UX-10). */}
+      <div className="nb-node-card" style={containerStyle} aria-label={ariaLabel} role={ariaLabel ? 'group' : undefined}>
         {/* 3px left stripe */}
         <div style={{
           position: 'absolute',
@@ -526,7 +574,7 @@ export function BaseNode({
         </div>
 
         {/* Body — param rows, then chips */}
-        {(hasChips || children || readParamValues || showSpark) && (
+        {(hasChips || children || readParamValues || showSpark || showDrawer || spareCount > 0 || emptyChipsText) && (
           <div
             className="nb-node-body"
             data-testid={nodeId ? `nb-node-body-${nodeId}` : undefined}
@@ -544,6 +592,10 @@ export function BaseNode({
             {readParamValues && nodeId && (
               <ParamRows nodeId={nodeId} params={readParamValues} specs={readParams} />
             )}
+            {spareCount > 0 && nodeId && (
+              <SpareParamRows nodeId={nodeId} max={Math.max(0, MAX_NODE_ROWS - builtInRows)} editable={editable} />
+            )}
+            {showDrawer && nodeId && <NodeCodeDrawer nodeId={nodeId} code={nodeCode} codeOff={!codeOn} />}
             {showSpark && preview && nodeId && (
               <div
                 ref={sparkRef}
@@ -558,6 +610,9 @@ export function BaseNode({
               >
                 <span className="nb-sr-only">{sparklineSummary(preview)}</span>
               </div>
+            )}
+            {!hasChips && emptyChipsText && (
+              <span className="nb-chips-none" data-testid={nodeId ? `nb-chips-none-${nodeId}` : undefined}>{emptyChipsText}</span>
             )}
             {hasChips && (
               <div
@@ -577,6 +632,10 @@ export function BaseNode({
                   >
                     +{chips.length - shownChips.length}
                   </button>
+                )}
+                {/* A Wrangle with read chips and no writes still says so (S46, UX-5). */}
+                {emptyChipsText && (
+                  <span className="nb-chips-none" data-testid={nodeId ? `nb-chips-none-${nodeId}` : undefined}>{emptyChipsText}</span>
                 )}
               </div>
             )}

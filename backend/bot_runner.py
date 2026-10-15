@@ -27,6 +27,8 @@ from journal import _log_trade, compute_realized_pnl, compute_bidirectional_pnl
 from post_loss import is_post_loss_trigger
 from notifications import notify_entry, notify_exit, notify_error
 from pydantic import ValidationError
+from nodebuilder.code import CodeError
+from nodebuilder.code import runtime as _code_runtime
 from nodebuilder.models import GraphValidationError
 from nodebuilder.prepare import build_graph_attrs, live_fetch_start, window_cut_by_provider
 from regime import RegimeMixin
@@ -48,7 +50,7 @@ def set_poll_ms(ms: int):
     _POLL_MS = ms
 
 
-def compile_bot_graph(graph, bot_id: str = ""):
+def compile_bot_graph(graph, bot_id: str = "", *, code_switch: bool = True):
     """Compile a graph bot's graph into a CompiledProgram.
 
     Used by the runner on each graph change and by BotManager when a graph
@@ -73,6 +75,12 @@ def compile_bot_graph(graph, bot_id: str = ""):
     One exception: a switched-off instance (bypassed, or inside a bypassed
     network) whose asset could not be baked stays locked; it computes
     nothing, so it is allowed and compiles with only a warning.
+
+    Code (W7): compile prepares every snippet (never runs it), so a syntax
+    error is refused here; with SL_CODE_NODES=0 a graph that holds code is
+    refused with code_disabled.  *code_switch* False skips that check, for
+    a bot that only runs the price exits of an open position and never
+    cooks (BotRunner._exits_only_live).
     """
     from nodebuilder.compile import compile as nb_compile
     from nodebuilder.kernel.flatten import is_locked_instance, switched_off
@@ -87,7 +95,7 @@ def compile_bot_graph(graph, bot_id: str = ""):
                 node_id=node.id)
             err.code = "asset_unbaked"
             raise err
-    return nb_compile(graph, resolve=_no_library)
+    return nb_compile(graph, resolve=_no_library, code_switch=code_switch)
 
 
 def _no_library(name: str, version: int):
@@ -129,6 +137,20 @@ class PositionCheckError(RuntimeError):
     per outage).  Also raised when the broker lists no position that the
     bot tracks and nothing confirms the close yet, or when an exit could
     not be sent because the broker did not confirm the position (LM-3)."""
+
+
+# The card note of run()'s recovery backoff (error_message).  A bot that
+# holds a position never gets it (review MT-2), and BotManager's auto-resume
+# does not treat it as a reason to stay stopped.
+RECOVERY_NOTE = "Recovering: "
+
+
+class ExitsFetchError(RuntimeError):
+    """A bot in the exits-only state (its code failed, W7) could not fetch
+    its own bars, so the stops of its position could not run on this tick
+    (review MT-4).  Raised so run() counts it toward MAX_CONSEC_ERRORS and
+    alerts at the limit, like every other tick where the stops could not
+    run."""
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +518,75 @@ def cook_graph_bar(program, df, trailing_stop, plan=None, frames=None, interval=
     return attrs, group_bar_signals(plan, result, i)
 
 
+def cook_graph_bar_tagged(tick_id: int, *args):
+    """cook_graph_bar(*args), with the tick it was cooked for:
+    ``(tick_id, attrs, signals)``.  A graph with code cooks through this
+    under the wall-clock guard, and the runner drops a result whose tick is
+    over (design note 4.7)."""
+    attrs, sigs = cook_graph_bar(*args)
+    return tick_id, attrs, sigs
+
+
+# Compile codes that are about the bot's code, not its graph's shape (W7):
+# SL_CODE_NODES=0, a snippet that does not prepare (syntax, size, a
+# dynamic ch() or attribute name), a ch() loop or type clash, and an
+# expression on a param that is read before the cook.  A bot that holds a
+# position and is refused for one of these keeps the price exits of that
+# position (OPEN POSITION RULE); BotManager uses the same set for its
+# load, start and refusal paths.
+CODE_COMPILE_CODES = frozenset({
+    "code_disabled", "code_syntax", "code_limit", "ch_dynamic", "attr_dynamic", "ch_cycle",
+    "ch_unresolved", "code_type", "param_not_codeable", "ticker_param_not_codeable",
+})
+_CODE_COMPILE_CODES = CODE_COMPILE_CODES
+
+
+def is_code_refusal(exc: BaseException) -> bool:
+    """True when a compile refused the graph because of its code: a code in
+    CODE_COMPILE_CODES, or an error compile found by running a param-only
+    expression to size its window (``code_failure``: code_runtime,
+    param_out_of_range... the cook would fail the same way)."""
+    return (getattr(exc, "code", None) in CODE_COMPILE_CODES
+            or bool(getattr(exc, "code_failure", False)))
+
+
+@dataclass
+class CodeFailure:
+    """A graph bot whose code failed or timed out (W7, decisions-pre "Bot
+    safety rules").  reason is the pause_reason; live is the last good plan
+    (the group, its plan and program) whose price exits keep running while
+    a position is open.  plan_tried False: live is still to be built (a
+    bot resumed in this state after a restart, BotState.code_exits_only),
+    from a compile without the kill switch on its first tick.  With no
+    plan at all the exits come from the group's exit settings as last
+    applied (BotState.graph_exit_fields) on top of the bot config."""
+    reason: str
+    live: Optional[GraphLive]
+    plan_tried: bool = True
+    warned_no_plan: bool = False  # _warn_no_plan said it once
+    # The bot may hold a position it does not track (no entry_price): a run
+    # that started in the exits-only state (a Stop that kept the position
+    # clears entry_price), or a failure while the state said it held one.
+    # Such a bot is called flat only once the broker confirms it, the same
+    # way as a tracked position (F449 LM-3, review MT-1).  False for a bot
+    # that was flat when its code failed: it pauses at once.
+    may_hold: bool = False
+
+
+def exit_fields_json(fields) -> dict:
+    """A group plan's settings fields (GroupPlan.fields: stop, trailing
+    stop, time stop, size, ...) as plain JSON values, for
+    BotState.graph_exit_fields.  A value that is not plain data is left
+    out."""
+    out: dict = {}
+    for name, value in dict(fields or {}).items():
+        if hasattr(value, "model_dump"):
+            value = value.model_dump(mode="json")
+        if value is None or isinstance(value, (bool, int, float, str, dict, list)):
+            out[name] = value
+    return out
+
+
 class BotRunner(RegimeMixin, ExitsMixin):
     def __init__(self, config: BotConfig, state: BotState, manager: BotManager):
         self.config = config
@@ -539,11 +630,42 @@ class BotRunner(RegimeMixin, ExitsMixin):
         # cleared by a tick that got a good broker position check.
         self._outage_alerted = False
         self._broker_ok_this_tick = False
+        # What went wrong with the broker position check in the last full
+        # run of _manage_without_signals, and on which bar (F449 meets W7):
+        # the code-failure callers raise it so it counts, and a bar with a
+        # problem is checked again in full on its retries.
+        self._position_problem: str | None = None
+        self._position_problem_bar: str | None = None
         # (graph hash, reference key, kind) already warned about (LM-9).
         self._ref_warned: set = set()
         # A resumed position under a wired Stop whose bar had no stop value:
         # its stop is taken from the next bar that has one (LM-6).
         self._stop_pending = False
+        # W7 code: each guarded cook carries the tick it was made for, and a
+        # result for an older tick is dropped.  _code_failure is set once the
+        # bot's code failed or timed out: from then on the bot places no
+        # entry and no signal exit, runs only the price exits of an open
+        # position (from the last good plan), and pauses once it is flat.
+        # _last_live is the last good plan, for a failure at compile time.
+        self._tick_seq = 0
+        self._code_failure: Optional[CodeFailure] = None
+        self._last_live: Optional[GraphLive] = None
+        # The exits-only state is persisted (BotState.code_exits_only,
+        # BS-05): a bot restarted or started again in it runs only the price
+        # exits of its position, even when its code would now run, until it
+        # is flat and pauses.
+        if config.kind == "graph" and state.code_exits_only:
+            self._code_failure = CodeFailure(
+                reason=state.code_exits_reason or "code_runtime: the bot's code failed earlier",
+                live=None, plan_tried=False, may_hold=True)
+            # The bar the bot last worked on (its exits ran on it, by the
+            # main path or an earlier exits-only run) is not counted again
+            # toward the time stop after a restart (review MT-3).  Marking
+            # it as a problem bar too makes the first tick still ask the
+            # broker in full; only the exits are not run again.
+            if state.last_bar_time:
+                self._exits_bar = state.last_bar_time
+                self._position_problem_bar = state.last_bar_time
 
     def _log(self, level: str, msg: str):
         entry = {"time": datetime.now(timezone.utc).isoformat(), "msg": msg, "level": level}
@@ -1013,51 +1135,91 @@ class BotRunner(RegimeMixin, ExitsMixin):
         self._outage_alerted = True
         asyncio.create_task(notify_error(symbol=cfg.symbol, error_msg=msg, bot_id=cfg.bot_id))
 
-    async def _manage_without_signals(self, cfg, state, df, live: GraphLive, is_regime: bool,
-                                      in_hours: bool, bar: str) -> None:
-        """A reference frame is missing on a new bar (LM-1, LM-4): no
-        signal, regime or entry can be worked out, but an open position
-        keeps its price exits.  Find the position (resume or adopt it), book
-        an external close, and run the stop, trailing stop and time stop on
-        the bot's own bars, once per bar (_exits_bar).  An exit marks the
-        bar done (nothing else happens on an exit bar); otherwise the bar
-        stays open for the signal work.  Rule bots never get here."""
-        if self._exits_bar == bar and not self._exits_bar_reason:
-            return
+    async def _manage_without_signals(self, cfg, state, df, live: Optional[GraphLive],
+                                      is_regime: bool, in_hours: bool, bar: str, *,
+                                      why: str = "while a reference is down") -> bool:
+        """A reference frame is missing on a new bar (LM-1, LM-4), or the
+        bot's code failed (W7): no signal, regime or entry can be worked out,
+        but an open position keeps its price exits.  Find the position
+        (resume or adopt it), book an external close, and run the stop,
+        trailing stop and time stop on the bot's own bars, once per bar
+        (_exits_bar).  An exit marks the bar done (nothing else happens on
+        an exit bar); otherwise the bar stays open for the signal work.  Rule
+        bots never get here.
+
+        Returns True when the broker confirmed that the bot holds no
+        position after this call (it had none, or an exit closed it), so a
+        bot whose code failed can pause.  False when it still holds one, the
+        broker could not be asked, or this bar's exits already ran.
+
+        *live* None (W7: a bot whose code failed with no plan to read): the
+        exits come from *cfg* alone, and a stop the trade read from a wired
+        Stop at its entry (entry_stop_pct) is still its stop.
+
+        The broker position check follows F449: when it fails, a tracked
+        position still gets its price exits (_exits_without_position_check);
+        a position missing from the broker's list is booked only once
+        confirmed (_position_gone_confirmed); an exit whose close was not
+        sent (the broker did not confirm the position) is tried again on the
+        bar's retries.  Each of these returns False (never flat, so a bot
+        whose code failed never pauses on an unconfirmed broker answer) and
+        leaves _position_problem set: the reference-outage caller raises
+        anyway, and the code-failure callers raise it
+        (_raise_position_problem), so it counts toward MAX_CONSEC_ERRORS.
+        A bar with such a problem is checked again in full on its retries;
+        its exits still run once (_exits_bar)."""
+        if (self._exits_bar == bar and not self._exits_bar_reason
+                and self._position_problem_bar != bar):
+            self._position_problem = None
+            return False
+        self._position_problem = None
+        self._position_problem_bar = None
         price = float(df["Close"].iloc[-1])
         i = len(df) - 1
         state.last_price = price
-        wired_stop = live.plan.stop is not None
+        wired_stop = (live.plan.stop is not None if live is not None
+                      else state.entry_stop_pct is not None)
         try:
             has_position, broker_qty = await self._broker_position(
                 cfg, state, price, is_regime, wired_stop)
         except Exception as e:
-            # The caller raises ReferenceUnavailableError, so this counts.
+            # The caller raises (ReferenceUnavailableError, or
+            # _raise_position_problem after a code failure), so this counts.
             # A tracked position still gets its price exits (F449).
             self._log("WARN", f"Position check failed: {e}")
+            self._position_problem = f"Position check failed: {e}"
+            self._position_problem_bar = bar
             if state.entry_price is not None:
                 attrs = await self._run_in_executor(build_graph_attrs, None, df,
                                                     atr_trailing_stop(cfg))
                 if await self._exits_without_position_check(
                         cfg, state, df, price, attrs, in_hours, bar, wired_stop):
                     state.last_bar_time = bar
-            return
+            return False
+        # A good broker check: a code-failure tick that raises nothing ends
+        # the outage (one alert per outage, F449 LM-5).
+        self._broker_ok_this_tick = True
         self._take_pending_stop(state, has_position)
         pos_is_short = (state.position_direction == "short" if state.position_direction
                         else cfg.direction == "short")
         if not has_position:
             if state.entry_price is not None:
                 # One reply without the position is not proof (F449 LM-3):
-                # keep it until the close is confirmed.  The caller raises,
-                # so this counts.
+                # keep it until the close is confirmed, and never pause a
+                # bot whose code failed on it.  The caller raises, so this
+                # counts.
                 confirmed, fill = await self._position_gone_confirmed(cfg, state, pos_is_short)
                 if not confirmed:
-                    return
+                    self._broker_ok_this_tick = False
+                    self._position_problem = ("Position not found at the broker, not "
+                                              "confirmed yet")
+                    self._position_problem_bar = bar
+                    return False
                 attrs = await self._run_in_executor(build_graph_attrs, None, df, atr_trailing_stop(cfg))
                 if await self._detect_external_close(cfg, state, has_position, pos_is_short,
                                                      broker_qty, price, df, i, in_hours, attrs,
                                                      fill=fill):
-                    return
+                    return True
                 state.entry_price = None
                 state.entry_bar_count = 0
                 state.trail_peak = None
@@ -1067,9 +1229,23 @@ class BotRunner(RegimeMixin, ExitsMixin):
                 state.pending_close_reason = None
                 state.position_direction = None
                 self._last_broker_qty = None
+            elif self._code_failure is not None and self._code_failure.may_hold:
+                # The bot may hold a position it does not track (review
+                # MT-1).  One empty or odd reply is not proof that it is
+                # flat (F449 LM-3): pausing on it would leave that position
+                # with no bot at all.  Flat is confirmed by two replies in a
+                # row that list other positions but none of this bot's.
+                # Until then the bot keeps checking (a position that shows
+                # up is resumed or adopted above) and the tick counts.
+                problem = self._untracked_flat_problem(cfg)
+                if problem is not None:
+                    self._broker_ok_this_tick = False
+                    self._position_problem = problem
+                    self._position_problem_bar = bar
+                    return False
             # Flat: nothing ran for this bar, so the next tick looks again
             # (a position that shows up meanwhile gets its exits).
-            return
+            return True
         self._last_broker_qty = broker_qty
         # ATR for an ATR trailing stop, from the bot's own bars only (no
         # reference frame is read).
@@ -1081,21 +1257,341 @@ class BotRunner(RegimeMixin, ExitsMixin):
             # sent is tried again (F449).
             exit_reason = self._exits_bar_reason
         else:
+            # Price exits only: no signal can be worked out here, and a
+            # bot whose code failed places no signal exit (OPEN POSITION
+            # RULE, review MT-5), even with sell rules left in its config.
             exit_reason = await self._evaluate_exit_reason(
-                cfg, state, price, df, i, pos_is_short, attrs, [], is_regime)
+                cfg, state, price, df, i, pos_is_short, attrs, [], is_regime,
+                signal_exits=False)
             self._exits_bar = bar
             self._exits_bar_reason = exit_reason
             self._exits_bar_note = None
         if exit_reason:
-            self._log("INFO", f"Exit {exit_reason} while a reference is down")
+            self._log("INFO", f"Exit {exit_reason} {why}")
             self._exit_outcome = None
             await self._execute_exit(cfg, state, exit_reason, price, broker_qty, pos_is_short,
                                      df, i, in_hours, attrs)
             # The bar is done once the position is closed or its close went
-            # out (never resent on this bar, LM-1).  When no order went out
-            # (the broker did not confirm the position) the exit is retried.
+            # out (never resent on this bar, F449 LM-1).  When no order went
+            # out (the broker did not confirm the position) the exit is
+            # retried and the tick counts as a failure.
             if self._after_exit_attempt(state, exit_reason):
                 state.last_bar_time = bar
+            else:
+                self._broker_ok_this_tick = False
+                self._position_problem = "Exit not sent: the broker did not confirm the position"
+                self._position_problem_bar = bar
+            return state.entry_price is None
+        return False
+
+    def _untracked_flat_problem(self, cfg) -> Optional[str]:
+        """The broker lists no position for a bot in the exits-only state
+        that may hold one it does not track (review MT-1).  None once flat
+        is confirmed: two replies in a row that list other positions but
+        none of this bot's, the same rule as a tracked position (F449
+        LM-3).  An empty account reply does not count either way (a
+        Gateway reconnect or an odd reply can list nothing).  Otherwise the
+        problem, in plain words, for the counted error."""
+        if self._last_account_empty:
+            return (f"The broker listed no positions at all. That is not proof the bot is "
+                    f"flat: it may still hold a {cfg.symbol} position it does not track, so "
+                    f"it keeps checking and does not pause. Check the account by hand.")
+        self._missing_checks += 1
+        if self._missing_checks >= 2:
+            self._missing_checks = 0
+            return None
+        return (f"The broker lists no {cfg.symbol} position for this bot; it pauses once the "
+                f"next check confirms it is flat")
+
+    async def _mark_exits_ran(self, state, bar: str) -> None:
+        """A bot in the exits-only state ran the price exits of bar and has
+        no exit waiting to be sent: save the bar as done
+        (state.last_bar_time), so a restart on the same bar does not count
+        it again toward the time stop (review MT-3).  Saved once per bar,
+        with the bar count it goes with."""
+        if self._exits_bar != bar or self._exits_bar_reason:
+            return
+        if state.last_bar_time == bar:
+            return
+        state.last_bar_time = bar
+        await asyncio.to_thread(self.manager.save)
+
+    def _raise_position_problem(self, cfg, state) -> None:
+        """After the price exits of a bot whose code failed: a broker
+        position check that failed this tick, a missing position not
+        confirmed gone, or an exit not sent (F449) raises PositionCheckError,
+        so run() counts it toward MAX_CONSEC_ERRORS and alerts once per
+        outage.  A due exit whose close was not sent alerts at once (LM-2),
+        through _alert_once (create_task).  The code failure's own alert is
+        separate (_on_code_failure)."""
+        problem, bar = self._position_problem, self._position_problem_bar
+        if problem is None:
+            return
+        self._position_problem = None
+        held = self._held_note(cfg, state, bar,
+                               "entries and signal exits stay off after the code failure")
+        msg = f"{problem}{held}"
+        if self._unsent_exit(bar):
+            self._alert_once(cfg, msg)
+        raise PositionCheckError(msg)
+
+    # -- W7: code that failed or timed out ------------------------------------
+
+    def _code_reason(self, err: Any) -> str:
+        """The pause_reason for a code failure (design note 4.7, 4.9):
+        ``code_runtime: <node name> line 3: ZeroDivisionError: ...``,
+        ``code_timeout: <node name> ran longer than 10 s``, ``code_disabled``.
+        A compile refusal found by running a param-only window expression
+        carries the cook's own CodeError (``code_error``), worded the same."""
+        err = getattr(err, "code_error", None) or err
+        if getattr(err, "code", None) == "code_disabled":
+            return "code_disabled"
+        name = None
+        graph = self.config.graph
+        node_id = getattr(err, "node_id", None)
+        if graph is not None and node_id is not None:
+            node = graph.nodes.get(node_id)
+            name = (node.name or node_id) if node is not None else None
+        try:
+            return _code_runtime.pause_reason(err, name)
+        except Exception:  # never let the message hide the failure
+            return f"{getattr(err, 'code', 'code_runtime')}: {err}"
+
+    async def _guarded_cook(self, cfg, live: GraphLive, df, frames):
+        """cook_graph_bar for a graph with code: on the code runtime's own
+        bounded pool (await_guarded's default executor, never the loop's
+        default executor that every bot's broker calls, fetches and saves
+        use: BS-02, CR-5), waited for at most
+        nodebuilder.code.BOT_COOK_TIMEOUT_S (read at call time) from the
+        moment the cook starts running, so the event loop never waits on
+        user code.  A timeout raises CodeTimeout naming the code node that
+        was running (or a code_timeout saying the code pool is full); its
+        thread runs on by itself (leaked_cooks) and its late result is
+        dropped: each result carries its tick id, and one for an older tick
+        is never used."""
+        self._tick_seq += 1
+        tick_id = self._tick_seq
+        got_tick, attrs, sigs = await _code_runtime.await_guarded(
+            cook_graph_bar_tagged, tick_id, live.program, df, atr_trailing_stop(cfg), live.plan,
+            frames, cfg.interval,
+            timeout_s=_code_runtime.BOT_COOK_TIMEOUT_S,
+            label=f"bot {cfg.bot_id} ({cfg.symbol})", tick_id=tick_id)
+        if got_tick != self._tick_seq:
+            raise GraphCookError(f"dropped a cook result for tick {got_tick}; this is tick "
+                                 f"{self._tick_seq}")
+        return attrs, sigs
+
+    async def _exits_only_live(self, cfg) -> Optional[GraphLive]:
+        """The bot's group compiled without the kill switch, for running the
+        price exits of an open position after the bot's code failed or was
+        refused (SL_CODE_NODES=0, a run started in the exits-only state).
+        Compile never runs code, and this program is never cooked.  None
+        when it cannot be built (a snippet that no longer prepares): the
+        exits then run from the saved exit settings (_saved_exits_config).
+        In the executor: compiling is CPU work."""
+        try:
+            program = await self._run_in_executor(
+                lambda: compile_bot_graph(cfg.graph, cfg.bot_id, code_switch=False))
+            return graph_bot_live(program, cfg)
+        except Exception as e:  # nothing to run the exits from
+            self._log("WARN", f"Could not plan the price exits without code: {e}")
+            return None
+
+    def _saved_exits_config(self, state):
+        """The bot config with its group's settings as the last good tick
+        applied them (BotState.graph_exit_fields: stop, trailing stop, time
+        stop, ...), for the price exits of a bot whose code failed with no
+        plan to read.  A graph bot's own config holds none of the graph's
+        stops.  The bot config alone when nothing was saved or the saved
+        values no longer fit it."""
+        saved = state.graph_exit_fields
+        if not saved:
+            return self.config
+        from types import SimpleNamespace
+        from nodebuilder.trading.sim_bridge import apply_to_bot_config
+
+        try:
+            return apply_to_bot_config(self.config, SimpleNamespace(fields=dict(saved)))
+        except Exception as e:  # the bot config alone, said in the log
+            self._log("WARN", f"Could not apply the saved exit settings: {e}")
+            return self.config
+
+    def _warn_no_plan(self, cfg, state, fail: "CodeFailure") -> None:
+        """Once per failure: the exits run with no plan, from the saved exit
+        settings.  When those hold no stop, trailing stop or time stop at
+        all, the open position has no price exit: alert (create_task)."""
+        if fail.warned_no_plan:
+            return
+        fail.warned_no_plan = True
+        stop = state.entry_stop_pct if state.entry_stop_pct is not None else cfg.stop_loss_pct
+        has_exit = any(v is not None for v in (
+            stop, cfg.trailing_stop, cfg.max_bars_held,
+            getattr(cfg, "long_stop_loss_pct", None), getattr(cfg, "short_stop_loss_pct", None),
+            getattr(cfg, "long_trailing_stop", None), getattr(cfg, "short_trailing_stop", None),
+            getattr(cfg, "long_max_bars_held", None), getattr(cfg, "short_max_bars_held", None)))
+        self._log("WARN", f"No plan to read; the price exits run from the exit settings of the "
+                          f"last good tick (stop {stop}, trailing stop "
+                          f"{'on' if cfg.trailing_stop else 'off'}, time stop "
+                          f"{cfg.max_bars_held})")
+        if not has_exit and state.entry_price is not None:
+            msg = (f"{fail.reason}: the open position has no stop, trailing stop or time stop "
+                   f"the bot can run; close it by hand")
+            self._log("ERROR", msg)
+            asyncio.create_task(notify_error(symbol=cfg.symbol, error_msg=msg,
+                                             bot_id=cfg.bot_id))
+
+    async def _pause_for_code(self, state, reason: str) -> None:
+        """Pause the bot for a code failure: status error with its
+        pause_reason, so run() stops and the card says why.  A pause that is
+        already set (a drawdown pause on the closing exit) is kept.  Called
+        once the bot is flat, so the exits-only state ends here."""
+        state.code_exits_only = False
+        state.code_exits_reason = None
+        if state.status == "error" and state.pause_reason:
+            self._log("WARN", f"Code failure ({reason}); the bot is already paused: "
+                              f"{state.pause_reason}")
+        else:
+            state.status = "error"
+            state.pause_reason = reason
+            state.error_message = reason
+            self._log("ERROR", f"Bot paused: {reason}")
+        await asyncio.to_thread(self.manager.save)
+
+    async def _on_code_failure(self, cfg, state, err: Any, live: Optional[GraphLive], *,
+                               df=None, is_regime: bool = False, in_hours: bool = True,
+                               bar: Optional[str] = None) -> None:
+        """The bot's code failed or timed out on this tick, or its compile
+        refused the code (decisions-pre "Bot safety rules", OPEN POSITION
+        RULE).
+
+        No entry and no signal exit is placed, now or later.  One alert goes
+        out (create_task, never await).  A flat bot pauses at once with its
+        pause_reason.  A bot that holds a position (or whose broker cannot
+        be asked) keeps running the price exits (stop, trailing stop, time
+        stop) of the position on every tick, until it is closed, and then
+        pauses (_tick_code_failure): from *live*, the last good plan, or
+        with no plan from the saved exit settings.  That state is saved on
+        the bot (code_exits_only), so a restart keeps it and the bot card
+        shows it."""
+        reason = self._code_reason(err)
+        detail = ""
+        if isinstance(err, CodeError) and err.line is not None:
+            detail = f" (line {err.line}, column {err.col})"
+        self._log("ERROR", f"Code failed: {reason}{detail}")
+        # Read before code_exits_only is set below: True when the state says
+        # the bot holds a position (it may no longer track its entry), so it
+        # pauses only once the broker confirms it is flat (review MT-1).
+        may_hold = (state.entry_price is not None or state.position_direction is not None
+                    or state.code_exits_only)
+        self._code_failure = CodeFailure(reason=reason, live=live, may_hold=may_hold)
+        # Set before any exit runs, so a save from here on (an exit saves)
+        # keeps the state; a flat bot clears it as it pauses.
+        state.code_exits_only = True
+        state.code_exits_reason = reason
+        # The one alert.  Worded for both cases: a flat bot pauses right
+        # below; one in a position pauses once the position closes.
+        asyncio.create_task(notify_error(
+            symbol=cfg.symbol, bot_id=cfg.bot_id,
+            error_msg=(f"{reason}.  No entries or signal exits from now on; the stop, trailing "
+                       f"stop and time stop of an open position keep running until it closes, "
+                       f"then the bot pauses.")))
+        fetch_error: Optional[ExitsFetchError] = None
+        if live is None or df is None or bar is None:
+            try:
+                await self._tick_code_failure(state)  # fetches the bot's own bars first
+            except ExitsFetchError as e:
+                fetch_error = e  # raised below, once the state is saved
+        else:
+            flat = await self._manage_without_signals(
+                cfg, state, df, live, is_regime, in_hours, bar, why="after the code failed")
+            if flat:
+                await self._pause_for_code(state, reason)
+            else:
+                await self._mark_exits_ran(state, bar)
+        if not state.code_exits_only:
+            return  # paused: the bot is flat
+        # Said in the bot's log and in code_exits_only, never in
+        # error_message: a restart skips the auto-resume of a bot carrying an
+        # error_message, which would leave this open position with no stops.
+        # A restart resumes the bot in this same state (BS-05).
+        self._log("WARN", f"{reason}: no entries or signal exits; the price exits of the open "
+                          f"position run until it closes, then the bot pauses")
+        await asyncio.to_thread(self.manager.save)
+        if fetch_error is not None:
+            raise fetch_error  # counts toward MAX_CONSEC_ERRORS (review MT-4)
+        # A failed or unconfirmed position check on this tick counts toward
+        # MAX_CONSEC_ERRORS (F449), raised only once the state is saved.
+        self._raise_position_problem(cfg, state)
+
+    async def _tick_code_failure(self, state) -> None:
+        """A tick after the bot's code failed, or of a run that started in
+        the exits-only state: fetch the bot's own bars, run the price exits
+        of an open position once per bar, and pause once the bot is flat.
+        Never cooks, never enters, never places a signal exit.
+
+        The exits come from the last good plan.  A run that started in this
+        state builds that plan first, from a compile without the kill switch
+        (never cooked).  With no plan at all (a snippet that no longer
+        prepares) they come from the saved exit settings
+        (_saved_exits_config), and the fetch window is the 30 days a rule
+        bot uses.
+
+        A fetch of the bot's own bars that fails or returns too few bars
+        raises ExitsFetchError, so it counts toward MAX_CONSEC_ERRORS and
+        alerts at the limit (review MT-4).  The stops are NOT checked
+        against the last known price (state.last_price) then: that price is
+        the close of a bar whose exits already ran, so checking it again
+        adds nothing, and it can be hours old; with no new bar there is
+        also no bar to count toward the time stop.  The next tick whose
+        fetch works runs them on fresh bars."""
+        from datetime import date, timedelta
+
+        fail = self._code_failure
+        self._position_problem = None
+        if not fail.plan_tried:
+            fail.plan_tried = True
+            fail.live = await self._exits_only_live(self.config)
+        live = fail.live
+        cfg = None
+        if live is not None:
+            try:
+                cfg = graph_tick_config(self.config, live.plan)
+            except Exception as e:  # the plan no longer fits the config
+                self._log("WARN", f"Could not apply the last good plan: {e}")
+                live = fail.live = None
+        if live is None:
+            cfg = self._saved_exits_config(state)
+            self._warn_no_plan(cfg, state, fail)
+        state.last_tick = datetime.now(timezone.utc).isoformat()
+        try:
+            max_days = provider_max_days(cfg.data_source, cfg.interval)
+            if live is not None:
+                start = live_fetch_start(live.program, cfg.interval, atr_trailing_stop(cfg),
+                                         max_days=max_days)
+            else:
+                days = min(30, int(max_days)) if max_days and max_days > 0 else 30
+                start = (date.today() - timedelta(days=days)).isoformat()
+            df = await fetch_ohlcv_async(cfg.symbol, start, date.today().isoformat(),
+                                         cfg.interval, cfg.data_source)
+        except Exception as e:
+            self._log("WARN", f"Fetch failed: {e}")
+            raise ExitsFetchError(
+                f"Fetch failed: {e} (code failed earlier: the price exits of a position "
+                f"could not run on this tick)") from e
+        if df is None or len(df) < 2:
+            self._log("WARN", "Not enough bars returned")
+            raise ExitsFetchError(
+                "Not enough bars returned (code failed earlier: the price exits of a "
+                "position could not run on this tick)")
+        is_regime = (live.plan.regime is not None) if live is not None else cfg.is_bidirectional
+        bar = str(df.index[-1])
+        flat = await self._manage_without_signals(
+            cfg, state, df, live, is_regime, self._in_trading_hours(),
+            bar, why="after the code failed")
+        if flat:
+            await self._pause_for_code(state, fail.reason)
+        else:
+            await self._mark_exits_ran(state, bar)
 
     async def _tick(self):
         cfg = self.config
@@ -1103,11 +1599,21 @@ class BotRunner(RegimeMixin, ExitsMixin):
         # Set once this tick gets a good broker position check; run() then
         # ends the outage (one alert per outage, F449 LM-5).
         self._broker_ok_this_tick = False
+        self._position_problem = None
         # Rule bots: the regime gate is the rule regime (is_bidirectional).
         # Graph bots: the gate is the group's Regime terminal, set below
         # once the graph is compiled.
         is_regime = cfg.is_bidirectional
         self._graph_sample = None
+
+        # W7: the bot's code failed or timed out on an earlier tick.  No cook,
+        # no entry, no signal exit: only the price exits of an open position,
+        # then a pause once it is flat (decisions-pre "Bot safety rules").
+        if cfg.kind == "graph" and self._code_failure is not None:
+            await self._tick_code_failure(state)
+            # A failed or unconfirmed position check counts (F449).
+            self._raise_position_problem(cfg, state)
+            return
 
         # Graph-mode: compute buy_rules/sell_rules lists only for rule-mode bots
         if cfg.kind != "graph":
@@ -1170,6 +1676,7 @@ class BotRunner(RegimeMixin, ExitsMixin):
                 )
                 state.compiled_program = program
                 state.graph_hash = current_hash
+                self._last_live = live
 
                 # The graph wins: the group's terminals and Settings nodes
                 # (size, stop, trailing stop, time stop, slippage, borrow
@@ -1177,9 +1684,23 @@ class BotRunner(RegimeMixin, ExitsMixin):
                 # tick, the same way the graph backtest applies them.  Rebuilt
                 # every tick so it always follows the compiled program.
                 cfg = graph_tick_config(cfg, live.plan)
+                # The group's settings as this good tick applied them, saved
+                # with the bot: a later code failure with no plan to read
+                # (a snippet that no longer prepares) runs the position's
+                # price exits from them (_saved_exits_config).
+                state.graph_exit_fields = exit_fields_json(live.plan.fields)
             except (GraphValidationError, ValidationError) as e:
                 state.compiled_program = None
                 state.graph_hash = None
+                if is_code_refusal(e):
+                    # SL_CODE_NODES=0 or code the compile refuses (W7): a
+                    # code failure, not a broken graph.  The price exits of
+                    # an open position keep running from the last good plan
+                    # (or one compiled without the switch: compile never
+                    # runs code; or, with neither, the saved exit settings).
+                    exits_live = self._last_live or await self._exits_only_live(cfg)
+                    await self._on_code_failure(cfg, state, e, exits_live)
+                    return
                 self.state.status = "error"
                 self.state.pause_reason = f"Graph does not compile: {e}"
                 self.state.error_message = self.state.pause_reason
@@ -1319,12 +1840,26 @@ class BotRunner(RegimeMixin, ExitsMixin):
                     f"@volume will be False.",
                 )
             # Key Bugs Fixed: never block the polling loop.  The whole cook
-            # (indicator work and evaluation) runs in the executor.
+            # (indicator work and evaluation) runs in the executor.  A graph
+            # with code (W7) is also waited for at most BOT_COOK_TIMEOUT_S.
             try:
-                indicators, sigs = await self._run_in_executor(
+                # cooked: the guarded cook's (attrs, signals), or None for a
+                # graph without code, which cooks in the executor as before.
+                cooked = (await self._guarded_cook(cfg, live, df, frames)
+                          if live.program.has_code else None)
+                indicators, sigs = cooked or await self._run_in_executor(
                     cook_graph_bar, live.program, df, atr_trailing_stop(cfg), live.plan, frames,
                     cfg.interval,
                 )
+            except CodeError as e:
+                # The code failed or ran past the guard (CodeTimeout): no
+                # entry and no signal exit on this bar or later; the price
+                # exits of an open position run (from this plan) until it
+                # closes, then the bot pauses.  A flat bot pauses at once.
+                state.last_bar_time = prev_bar_time
+                await self._on_code_failure(cfg, state, e, live, df=df, is_regime=is_regime,
+                                            in_hours=in_hours, bar=last_bar)
+                return
             except Exception as e:
                 # Retry this bar on the next tick instead of skipping it (and
                 # its exit checks) as "same bar".
@@ -1697,6 +2232,10 @@ class BotRunner(RegimeMixin, ExitsMixin):
         self.state.error_message = None
         self.state.started_at = datetime.now(timezone.utc).isoformat()
         self._log("INFO", f"Bot started: {self.config.symbol} {self.config.interval}")
+        if self._code_failure is not None:
+            self._log("WARN", f"{self._code_failure.reason}: this run manages only the price "
+                              f"exits of the open position (no entries, no signal exits), "
+                              f"then pauses once the bot is flat")
 
         if _POLL_MS > 0:
             interval_secs = _POLL_MS / 1000.0
@@ -1732,7 +2271,17 @@ class BotRunner(RegimeMixin, ExitsMixin):
                     if consec_errors >= MAX_CONSEC_ERRORS:
                         # Transient failures: backoff and retry instead of dying
                         self._log("WARN", f"Backing off {RECOVERY_WAIT}s after {MAX_CONSEC_ERRORS} consecutive failures")
-                        self.state.error_message = f"Recovering: {e}"
+                        # The card note goes in error_message only for a bot
+                        # that is flat.  A restart skips the auto-resume of a
+                        # bot carrying an error_message (F430), and a restart
+                        # during a broker outage is likely: a bot in a
+                        # position, or in the exits-only state, would then be
+                        # left with no stops (review MT-2).  Its log says it.
+                        from bot_manager import holds_position  # bot_manager imports this module
+
+                        recovering = f"{RECOVERY_NOTE}{e}"
+                        if not holds_position(self.state):
+                            self.state.error_message = recovering
                         await asyncio.to_thread(self.manager.save)
                         # One urgent alert per outage, for every bot, flat or
                         # not (F449 LM-5): a short broker blip must not page
@@ -1746,8 +2295,12 @@ class BotRunner(RegimeMixin, ExitsMixin):
                         await asyncio.sleep(interval_secs if unsent else RECOVERY_WAIT)
                         consec_errors = 0
                         self._log("INFO", "Resuming after recovery backoff")
-                        self.state.error_message = None
-                        self.state.status = "running"
+                        if self.state.error_message == recovering:
+                            self.state.error_message = None
+                        # A pause set during the wait (an IBKR reject from
+                        # its callback thread) stays, so the loop stops.
+                        if not self.state.pause_reason:
+                            self.state.status = "running"
                         await asyncio.to_thread(self.manager.save)
                         continue
                 await asyncio.sleep(interval_secs)

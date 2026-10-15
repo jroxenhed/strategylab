@@ -84,6 +84,8 @@ import { DiagnosticsPopover } from './DiagnosticsPopover'
 import GraphToolbar, { type ToolbarMode } from './GraphToolbar'
 import { runDisabledReason, VALIDATE_OFFLINE_KEY, validateOfflineText } from './graphText'
 import NoticeStack from './NoticeStack'
+import { useCodeModeController } from './code/CodeBanner'
+import { loadCodeCapabilities, noteCodeDisabled } from './code/codeStore'
 import { pushNotice, resolveNotice, type Notice } from './notices'
 import { runLegacySeed, seedBannerText } from './persistence'
 import { useGraphSession } from './useGraphSession'
@@ -144,6 +146,8 @@ function NodeBuilder({ request, graphViewActive, graphWindow = null, onRunGraph,
   // Diagnostics: one controller for the whole builder; the counts drive
   // the toolbar chip and the Run button.
   useDiagnosticsController()
+  // W7 (S49): code capabilities once per mount, and the code-off banner.
+  useCodeModeController()
   const diagnostics = useDiagnostics()
   const [diagAnchor, setDiagAnchor] = useState<HTMLElement | null>(null)
 
@@ -400,6 +404,8 @@ function NodeBuilder({ request, graphViewActive, graphWindow = null, onRunGraph,
       const diags = errorDiagnostics(e)
       if (diags && diags.length > 0 && useNodeBuilderStore.getState().commitSeq === seqAtStart) {
         setServerDiagnostics(diags as Diagnostic[])
+        // S49: a run refused with code_disabled flips the editor to code-off mode.
+        noteCodeDisabled(diags as Diagnostic[])
       }
       const badNode = errorNodeId(e)
       setRunError({ text: describeBacktestError(e, runGraph), nodeId: badNode })
@@ -481,7 +487,8 @@ function NodeBuilder({ request, graphViewActive, graphWindow = null, onRunGraph,
         </>
       ),
       onDismiss: () => setRunError(null),
-      actions: [{ label: 'Retry', run: () => handleRunBacktest() }],
+      // S49: a Retry also re-reads the code capabilities (code may be back on).
+      actions: [{ label: 'Retry', run: () => { void loadCodeCapabilities(true); return handleRunBacktest() } }],
     })
   }
   if (unsupported.length > 0) {

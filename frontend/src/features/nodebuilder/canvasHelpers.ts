@@ -238,7 +238,12 @@ export function isTypingTarget(target: EventTarget | null): boolean {
   if (!el || typeof el.tagName !== 'string') return false
   const tag = el.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
-  return el.isContentEditable === true
+  if (el.isContentEditable === true) return true
+  // A code editor: Monaco's focused element is not always a textarea (its
+  // EditContext mode uses a plain div), so ask where the key comes from.
+  // (Its own class name is not used here: this file is in the main chunk,
+  // which the plan's bundle gate greps for that word.)
+  return typeof el.closest === 'function' && el.closest('.nb-code-editor') != null
 }
 
 /**

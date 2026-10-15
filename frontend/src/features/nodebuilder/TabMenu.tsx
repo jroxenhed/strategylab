@@ -29,6 +29,11 @@
  * - Inside a network, `Networks` adds `Subnet input` and `Subnet output`
  *   (the output row is disabled when one exists). Inside a locked asset
  *   every row is disabled under a note.
+ *
+ * W7 (specs S46, S49): the Code category holds the Wrangle. A new Wrangle
+ * gets the default code `@out = @close` with its write name made unique,
+ * in the same undo step. With code off on the server its row is disabled
+ * with the tag `disabled`, and choosing it shows the code-off banner.
  */
 
 import { useEffect, useId, useMemo, useRef, useState, useCallback } from 'react'
@@ -47,6 +52,9 @@ import { uniqueName } from './operations'
 import { boundaryPortOf } from './rfMapping'
 import { primaryWriteOf } from './streamLabels'
 import { useNodeBuilderStore } from './store'
+import { defaultWrangleCode, WRANGLE_TYPE } from './code/codeOps'
+import { requestCodeBanner, useCodeEnabled } from './code/codeStore'
+import { attrNamesInGraph } from './code/codeGraph'
 import './assets.css'
 
 // ---------------------------------------------------------------------------
@@ -144,7 +152,7 @@ const MENU_BY_CATEGORY: Record<string, NodeCatalogEntry[]> = groupByCategory(MEN
 
 // Category order. Rules and Library may be filled by assets at runtime, so
 // they are kept even when the catalog has nothing for them.
-const BASE_ORDER: string[] = ['ticker', 'indicator', 'comparison', 'logic', 'rules', 'settings', 'output', 'network', LIBRARY_CAT]
+const BASE_ORDER: string[] = ['ticker', 'indicator', 'comparison', 'logic', 'rules', 'code', 'settings', 'output', 'network', LIBRARY_CAT]
 
 const MENU_HEIGHT = 420
 const NO_ENTRIES: NodeCatalogEntry[] = []
@@ -230,11 +238,14 @@ function TabMenuPanel({
   )
 
   /** Why a row cannot be placed, or null. */
+  const codeOn = useCodeEnabled()
   const rowDisabled = useCallback((e: NodeCatalogEntry): string | null => {
     if (locked) return TAB_MENU_TEXT.lockedNote
     if (e.name === 'subnet_output' && hasOutput) return 'already present'
+    // S49: code off on the server.
+    if (e.name === WRANGLE_TYPE && !codeOn) return 'disabled'
     return null
-  }, [locked, hasOutput])
+  }, [locked, hasOutput, codeOn])
 
   // Two-column state
   const [focusedCat, setFocusedCat] = useState<string>(BASE_ORDER[0])
@@ -290,11 +301,18 @@ function TabMenuPanel({
 
   const confirm = useCallback(
     (entry: NodeCatalogEntry, withWire: boolean) => {
+      if (entry.name === WRANGLE_TYPE && !codeOn) requestCodeBanner()
       if (rowDisabled(entry)) return
       if (isAssetRow(entry)) {
         placeAsset(entry, withWire, onCreate, graphPosition)
       } else if (entry.name === 'subnet_input') {
         placeBoundaryInput(entry, withWire, onCreate)
+      } else if (entry.name === WRANGLE_TYPE) {
+        // S46: a new Wrangle starts with `@out = @close` (the name made unique).
+        createThenPatch(entry, withWire, onCreate, (g, node) => ({
+          ...node,
+          code: defaultWrangleCode(attrNamesInGraph(g)),
+        }))
       } else if (entry.name === 'subnet') {
         // S43: an empty Subnet from the menu is a card (FA1), one undo step (UX-03).
         createThenPatch(entry, withWire, onCreate, (_g, node) => ({ ...node, meta: { ...(node.meta ?? {}), view: 'card' } }))
@@ -303,7 +321,7 @@ function TabMenuPanel({
       }
       onClose()
     },
-    [onCreate, onClose, rowDisabled, graphPosition]
+    [onCreate, onClose, rowDisabled, graphPosition, codeOn]
   )
 
   // Fetch the file of the highlighted asset row early, so choosing it can
