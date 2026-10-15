@@ -10,6 +10,7 @@
  * to prevent re-attempts. localStorage data is intentionally kept as a backup.
  */
 
+import { apiFetch } from '../../api/apiFetch'
 import { WATCHLIST_KEY, parseWatchlistPayload, migrateLegacy } from '../../features/watchlist/watchlistStorage'
 import { SAVED_STRATEGIES_KEY } from '../../features/strategy/savedStrategies'
 
@@ -66,7 +67,7 @@ export async function seedFromLocalStorageIfAny(): Promise<void> {
         // cause a 422. Mark attempted to stop the infinite-retry loop.
         watchlistAck = true
       } else {
-        const resp = await fetch(`${API_BASE}/api/trading/watchlist/seed`, {
+        const resp = await apiFetch(`${API_BASE}/api/trading/watchlist/seed`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(state),
@@ -85,7 +86,7 @@ export async function seedFromLocalStorageIfAny(): Promise<void> {
   if (strategiesRaw) {
     try {
       const list = JSON.parse(strategiesRaw)
-      const resp = await fetch(`${API_BASE}/api/strategies/seed`, {
+      const resp = await apiFetch(`${API_BASE}/api/strategies/seed`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(list),

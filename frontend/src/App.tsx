@@ -17,6 +17,8 @@ import PaperTrading from './features/trading/PaperTrading'
 import Discovery from './features/discovery/Discovery'
 import Desk from './features/desk/Desk'
 import WatchlistPanel from './features/watchlist/WatchlistPanel'
+import SignedOutBanner from './shared/auth/SignedOutBanner'
+import { useSignedOut } from './shared/auth/signedOut'
 import { useTimezone, tzLabel } from './shared/utils/time'
 import { seedFromLocalStorageIfAny } from './shared/utils/seedFromLocalStorage'
 import NodeBuilder from './features/nodebuilder/NodeBuilder'
@@ -315,6 +317,7 @@ export default function App() {
   const chartInterval = gv ? cBaseInterval : (chartEnabled ? viewInterval : interval)
   // Header Auto toggle follows the displayed chart's interval (CI-07).
   const chartIntervalOptions = gv ? getCoarserIntervals(cBaseInterval) : viewIntervalOptions
+  const signedOut = useSignedOut()
   const { data: ohlcv = EMPTY_OHLCV, isLoading: ohlcvLoading, isFetching: ohlcvFetching, isError: ohlcvError, refetch: refetchOhlcv } = useOHLCV(cTicker, cStart, cEnd, chartInterval, cSource, cExtended)
   const { data: spyData, refetch: refetchSpy } = useOHLCV('SPY', cStart, cEnd, chartInterval, cSource, cExtended, chartEnabled && showSpy)
   const { data: qqqData, refetch: refetchQqq } = useOHLCV('QQQ', cStart, cEnd, chartInterval, cSource, cExtended, chartEnabled && showQqq)
@@ -378,6 +381,8 @@ export default function App() {
     />
   ) : (ohlcvLoading || ohlcvFetching) ? (
     <ChartSkeleton ticker={cTicker} />
+  ) : signedOut ? (
+    <div style={styles.empty}>Signed out. Sign in again to load {cTicker}.</div>
   ) : ohlcvError ? (
     <div style={styles.empty}>Failed to load {cTicker}</div>
   ) : (
@@ -423,6 +428,7 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+      <SignedOutBanner />
       {/* Header */}
       <header style={styles.header}>
         <span style={styles.logo}>StrategyLab</span>

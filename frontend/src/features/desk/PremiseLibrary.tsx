@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import type { PremiseListItem, PremiseStatus, Disposition } from '../../api/premises'
 import { listPremises, createPremise } from '../../api/premises'
+import { isSignedOut } from '../../shared/auth/signedOut'
 import PremiseDetail from './PremiseDetail'
 
 function statusLabel(status: PremiseStatus): string {
@@ -103,7 +104,8 @@ export default function PremiseLibrary() {
 
   // F397: live refresh every 15s (F398: simplified to single-closure useEffect)
   useEffect(() => {
-    const id = setInterval(refreshList, 15_000)
+    // Skip the refresh while signed out (it would only collect 401s).
+    const id = setInterval(() => { if (!isSignedOut()) refreshList() }, 15_000)
     return () => clearInterval(id)
   }, [refreshList])
 

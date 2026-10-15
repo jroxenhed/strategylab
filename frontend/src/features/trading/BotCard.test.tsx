@@ -94,6 +94,7 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 // ---------------------------------------------------------------------------
 
 const { default: BotCard } = await import('./BotCard')
+const { markSignedOut, resetSignedOut } = await import('../../shared/auth/signedOut')
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -592,5 +593,38 @@ describe('BotCard state: undefined defensive path', () => {
 
     // Verify the component mounts and shows the symbol (basic smoke check)
     expect(screen.getByText('AAPL', { exact: false })).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Signed out (sign-in expired): never show the bot as down
+// ---------------------------------------------------------------------------
+
+describe('BotCard — signed out', () => {
+  afterEach(() => { cleanup(); resetSignedOut() })
+
+  const staleRunning = { status: 'running' as const, last_tick: '2020-01-01T00:00:00Z' }
+
+  it('control: a stale tick while signed in shows the red dot', () => {
+    renderCompactCard(staleRunning)
+    const dot = screen.getByTitle(/^\d|^No tick yet|AM|PM/)
+    expect(dot.getAttribute('style')).toContain('var(--gh-red)')
+  })
+
+  it('compact: signed out shows a grey dot and no down/error text', () => {
+    markSignedOut()
+    renderCompactCard(staleRunning)
+    const dot = screen.getByTitle(/^Signed out: live status not known/)
+    expect(dot.getAttribute('style')).toContain('var(--gh-text-dim)')
+    expect(dot.getAttribute('style')).not.toContain('var(--gh-red)')
+    expect(screen.queryByText(/\bdown\b|error/i)).toBeNull()
+  })
+
+  it('expanded: signed out shows a grey dot and no down/error text', () => {
+    markSignedOut()
+    renderCard(staleRunning)
+    const dot = screen.getByTitle(/^Signed out: live status not known/)
+    expect(dot.getAttribute('style')).toContain('var(--gh-text-dim)')
+    expect(screen.queryByText(/\bdown\b|error/i)).toBeNull()
   })
 })

@@ -8,6 +8,7 @@ import TradeJournal from './TradeJournal'
 import OrderHistory from './OrderHistory'
 import { useLocalStorage } from '../../shared/hooks/useLocalStorage'
 import { useBroker } from '../../shared/hooks/useOHLCV'
+import { isSignedOut } from '../../shared/auth/signedOut'
 
 export default function PaperTrading() {
   const { available, health, heartbeatWarmup } = useBroker()
@@ -26,14 +27,15 @@ export default function PaperTrading() {
   // we want all observers updated on each tick regardless of their filter.
   const qc = useQueryClient()
   useEffect(() => {
+    // Signed out: skip ticks, they would only collect 401s.
     const tick5s = () => {
-      if (document.hidden) return
+      if (document.hidden || isSignedOut()) return
       qc.invalidateQueries({ queryKey: ['journal'] })
       qc.invalidateQueries({ queryKey: ['bots'] })
       qc.invalidateQueries({ queryKey: ['positions'] })
     }
     const tick30s = () => {
-      if (document.hidden) return
+      if (document.hidden || isSignedOut()) return
       qc.invalidateQueries({ queryKey: ['orders'] })
       qc.invalidateQueries({ queryKey: ['account'] })
     }
