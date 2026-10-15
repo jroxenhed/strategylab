@@ -1,11 +1,16 @@
 import { useBroker } from '../../shared/hooks/useOHLCV'
 import { useAccountQuery } from '../../shared/hooks/useTradingQueries'
+import { useSignedOut } from '../../shared/auth/signedOut'
 
 export default function AccountBar() {
   const { broker, available, health, heartbeatWarmup, switchBroker, apiCallsPerMinute, dataCallsPerMinute, pollIntervalMs } = useBroker()
   const { data: account, isError, isLoading, error } = useAccountQuery()
+  const signedOut = useSignedOut()
 
-  if (isError) return <div style={styles.bar}><span style={{ color: '#f85149' }}>Account error: {(error as Error)?.message ?? 'unknown'}</span></div>
+  // Signed out is not an account error: show the last known numbers greyed
+  // out, or a calm "Signed out" when there are none yet.
+  if (signedOut && !account) return <div style={styles.bar}><span style={{ color: '#8b949e' }}>Signed out</span></div>
+  if (isError && !signedOut) return <div style={styles.bar}><span style={{ color: '#f85149' }}>Account error: {(error as Error)?.message ?? 'unknown'}</span></div>
   if (isLoading || !account) return <div style={styles.bar}><span style={{ color: '#8b949e' }}>Loading account...</span></div>
 
   const metrics = [
@@ -16,7 +21,8 @@ export default function AccountBar() {
   ]
 
   return (
-    <div style={styles.bar}>
+    <div style={signedOut ? { ...styles.bar, opacity: 0.55 } : styles.bar} title={signedOut ? 'Signed out: last known data, not live' : undefined}>
+      {signedOut && <span style={{ color: '#8b949e', fontSize: 11 }}>Stale (signed out)</span>}
       {available.length > 1 && (
         <div style={styles.brokerSelector}>
           <span style={styles.brokerLabel}>Broker</span>

@@ -21,6 +21,7 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { useSignedOut } from '../../shared/auth/signedOut'
 
 // ---------------------------------------------------------------------------
 // FundBar
@@ -182,6 +183,7 @@ export default function BotControlCenter() {
   const orderRef = useRef<string[]>([])
 
   const { data: botsData, isError: botsError } = useBotsQuery()
+  const signedOut = useSignedOut()
   const fund: BotFundStatus | null = botsData?.fund ?? null
   const bots: BotSummary[] = botsData?.bots ?? []
 
@@ -462,7 +464,14 @@ export default function BotControlCenter() {
         </div>
       </div>
 
-      {(error || (botsError && !botsErrorDismissed)) && (
+      {signedOut && (
+        <div data-testid="bots-signed-out" style={{ color: '#8b949e', fontSize: 12, padding: '4px 8px', background: '#161b22', borderRadius: 4 }}>
+          Signed out. The bot status below is from before your sign-in expired, not live. Being signed out does not stop the bots.
+        </div>
+      )}
+
+      {/* A 401 is a sign-in problem, not a bot API problem: no red banner then. */}
+      {(error || (botsError && !botsErrorDismissed && !signedOut)) && (
         <div style={{ color: '#ef5350', fontSize: 12, padding: '4px 8px', background: '#1a0d0d', borderRadius: 4 }}>
           {error || 'Could not reach bot API'}
           {error

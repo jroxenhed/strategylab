@@ -1,4 +1,8 @@
+import { SIGNED_OUT_TEXT, isAuthError } from '../auth/signedOut'
+
 export function apiErrorDetail(e: unknown, fallback: string): string {
+  // A sign-in failure is not a server error: always show the plain text.
+  if (isAuthError(e)) return SIGNED_OUT_TEXT
   if (e && typeof e === 'object') {
     const resp = (e as { response?: { data?: { detail?: unknown } } }).response
     const detail = resp?.data?.detail

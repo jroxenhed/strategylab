@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSearch } from '../../shared/hooks/useOHLCV'
 import { api } from '../../api/client'
+import { isSignedOut } from '../../shared/auth/signedOut'
 import {
   loadWatchlist,
   saveWatchlist,
@@ -201,7 +202,8 @@ export default function WatchlistPanel({
   // Fetch quotes for all watchlist symbols
   const fetchQuotes = useCallback(async () => {
     const tickers = allTickers(state)
-    if (tickers.length === 0) return
+    // Signed out: keep the last prices, do not poll for 401s.
+    if (tickers.length === 0 || isSignedOut()) return
     try {
       const { data } = await api.post('/api/quotes', tickers)
       const map = new Map<string, Quote>()

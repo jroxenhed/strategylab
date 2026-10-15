@@ -12,6 +12,7 @@
  * Invariant: every ticker symbol is unique across ALL groups + ungrouped
  * (case-insensitive). Enforced by dropDuplicate() on every mutation.
  */
+import { apiFetch } from '../../api/apiFetch'
 
 export interface WatchlistGroup {
   id: string
@@ -187,7 +188,7 @@ const API_BASE = (import.meta as any).env?.VITE_API_URL as string || 'http://loc
  */
 export async function loadWatchlist(): Promise<LoadResult> {
   try {
-    const resp = await fetch(`${API_BASE}/api/trading/watchlist`)
+    const resp = await apiFetch(`${API_BASE}/api/trading/watchlist`)
     if (resp.ok) {
       const data: unknown = await resp.json()
       const state = parseWatchlistPayload(data)
@@ -241,7 +242,7 @@ export async function saveWatchlist(state: WatchlistState): Promise<void> {
   // Always write local mirror so the fallback path has fresh data
   localStorage.setItem(WATCHLIST_KEY, JSON.stringify(state))
   try {
-    await fetch(`${API_BASE}/api/trading/watchlist`, {
+    await apiFetch(`${API_BASE}/api/trading/watchlist`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(state),

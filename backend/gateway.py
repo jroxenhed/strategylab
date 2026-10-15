@@ -439,6 +439,21 @@ async def check_and_alert(
     alert_state.last_state = state
 
 
+# The last read_state() result from alert_loop, so the Zabbix endpoint
+# (routes/bot_health.py) does not read the IBC log on every poll.
+_last_info: Optional[dict] = None
+_last_info_ts: float = 0.0
+CACHE_MAX_AGE_SECS = 180  # three alert_loop rounds
+
+
+async def cached_state(max_age: float = CACHE_MAX_AGE_SECS) -> dict:
+    """The alert loop's last read_state() result when it is at most `max_age`
+    seconds old, else a fresh read_state() (the loop is off or has died)."""
+    if _last_info is not None and time.time() - _last_info_ts <= max_age:
+        return _last_info
+    return await read_state()
+
+
 def _alerts_enabled() -> bool:
     return os.environ.get("GATEWAY_ALERTS", "1") not in ("0", "false", "False", "")
 
@@ -448,9 +463,11 @@ async def alert_loop() -> None:
     Started via asyncio.create_task() in main.py's lifespan; cancelled on shutdown."""
     if not _alerts_enabled():
         return
+    global _last_info, _last_info_ts
     while True:
         try:
             info = await read_state()
+            _last_info, _last_info_ts = info, time.time()
             await check_and_alert(info, _alert_state)
         except asyncio.CancelledError:
             raise

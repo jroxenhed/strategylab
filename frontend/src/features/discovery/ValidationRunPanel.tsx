@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { api } from '../../api/client'
+import { isSignedOut } from '../../shared/auth/signedOut'
 
 // --- Types ---
 
@@ -96,7 +97,8 @@ export default function ValidationRunPanel() {
   // Poll every 2s while running
   useEffect(() => {
     if (status?.status === 'running') {
-      intervalRef.current = setInterval(fetchStatus, 2000)
+      // Skip polls while signed out (they would only collect 401s).
+      intervalRef.current = setInterval(() => { if (!isSignedOut()) fetchStatus() }, 2000)
     } else {
       if (intervalRef.current) {
         clearInterval(intervalRef.current)
