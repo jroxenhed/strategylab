@@ -40,6 +40,7 @@ import { useGraphChartHost } from './features/nodebuilder/graphSplitState'
 import { GraphResultHint, type GraphResultInfo } from './features/nodebuilder/graphResultUi'
 import { useNodeBuilderStore } from './features/nodebuilder/store'
 import { graphHasGroups } from './features/nodebuilder/ownership'
+import { graphOwnTickerKey, parseOwnTickerKey, withGraphTicker } from './features/nodebuilder/graphTicker'
 import { COMBINED } from './features/nodebuilder/groupResults'
 import { OPEN_TRADING_EVENT, SHOW_GRAPH_VIEW_EVENT, type OpenTradingDetail } from './features/nodebuilder/graphLinks'
 import { runCommand } from './features/nodebuilder/commands'
@@ -227,7 +228,9 @@ export default function App() {
   }, [graphViewActive])
 
   // ---- Graph runs (D10, D11) -------------------------------------------------
-  // The sidebar window drives graph runs, auto cook and the Data Sheet.
+  // The sidebar window drives graph runs, auto cook and the Data Sheet. The
+  // graph's primary Ticker puts in its own symbol and interval (F453):
+  // buildGraphRequest does it for runs, NodeBuilder for cooks.
   const graphWindow = useMemo<GraphWindow>(
     () => ({ ticker, start, end, interval, source: dataSource }),
     [ticker, start, end, interval, dataSource],
@@ -252,6 +255,12 @@ export default function App() {
   // D7/D11: a loaded graph with Output Groups sets each group's direction,
   // so the settings panel greys the direction too.
   const loadedGraphHasGroups = useNodeBuilderStore(s => graphHasGroups(s.graph))
+  // F453: the symbol and interval the loaded graph owns, as one string.
+  const graphOwnKey = useNodeBuilderStore(s => (s.graph && !s.graph.readOnly ? graphOwnTickerKey(s.graph) : ''))
+  const graphOwnWindow = useMemo(
+    () => withGraphTicker(graphWindow, parseOwnTickerKey(graphOwnKey)),
+    [graphWindow, graphOwnKey],
+  )
 
   // ---- Links from the Trading view (S34, S35) ---------------------------------
   // The bot card and the spawn toast ask by a window event (graphLinks.ts).
@@ -288,7 +297,8 @@ export default function App() {
 
   // ---- The chart (one instance, D10) ------------------------------------------
   // In graph view the chart shows the graph result's ticker, interval, dates
-  // and source (or the sidebar's with no result). They are set here as the
+  // and source (or, with no result, the sidebar's with the graph's own symbol
+  // and interval, F453). They are set here as the
   // chart's own view, never through onTickerChange, which would clear the
   // rule result. With 2+ Output Groups (S33) the chart follows the group
   // tab: its primary ticker and interval; on Combined the last group chosen
@@ -304,7 +314,7 @@ export default function App() {
         interval: chartGroup.interval || windowOfRequest(graphResult.request).interval,
       }
       : windowOfRequest(graphResult.request))
-    : graphWindow
+    : graphOwnWindow
   const graphChartHint = gv ? combinedChartHint(graphResult, graphCandleGroup) : null
   const cTicker = gv ? graphChartWindow.ticker : ticker
   const cStart = gv ? graphChartWindow.start : start

@@ -224,14 +224,14 @@ describe('UX-15: key caps follow the platform', () => {
     load()
     setPlatform('Win32')
     renderInspector()
-    expect(screen.getByTestId('nb-keys-row-9')).toHaveTextContent('Ctrl+Z')
-    expect(screen.getByTestId('nb-keys-row-10')).toHaveTextContent('Backspace')
+    expect(screen.getByTestId('nb-keys-row-10')).toHaveTextContent('Ctrl+Z')
+    expect(screen.getByTestId('nb-keys-row-11')).toHaveTextContent('Backspace')
     expect(screen.getByTestId('nb-keys-row-4')).toHaveTextContent('Shift+click')
     cleanup()
     setPlatform('MacIntel')
     renderInspector()
-    expect(screen.getByTestId('nb-keys-row-9')).toHaveTextContent('⌘Z')
-    expect(screen.getByTestId('nb-keys-row-10')).toHaveTextContent('⌫')
+    expect(screen.getByTestId('nb-keys-row-10')).toHaveTextContent('⌘Z')
+    expect(screen.getByTestId('nb-keys-row-11')).toHaveTextContent('⌫')
   })
 
   it('bulk caps too', () => {

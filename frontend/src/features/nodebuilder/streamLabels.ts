@@ -352,6 +352,28 @@ export function readParamForPort(nodeType: string | undefined, portId: string): 
 }
 
 /**
+ * The name an empty `attr` param reads through its wire (F453): the
+ * compiler's fallback (kernel/schema.py `_resolve_reads`) takes the first
+ * wired port whose default read lands on this param, and reads the wired
+ * node's primary write. Null when no wire feeds the param, or the wired
+ * node has no single primary write (the user must pick).
+ */
+export function wiredDefaultRead(
+  graph: Pick<Graph, 'nodes' | 'wires'>,
+  nodeId: string,
+  paramName: string,
+): string | null {
+  const node = graph.nodes[nodeId]
+  if (!node) return null
+  let best: GraphWire | null = null
+  for (const w of graph.wires) {
+    if (w.to !== nodeId || readParamForPort(node.type, w.to_port)?.name !== paramName) continue
+    if (!best || portIndex(w.to_port) < portIndex(best.to_port)) best = w
+  }
+  return best ? primaryWriteOf(graph.nodes[best.from]) : null
+}
+
+/**
  * The param change a new wire makes on its consumer: an empty `attr`
  * param on that port takes the source's primary write; a list param gets
  * it added. Null when nothing changes.

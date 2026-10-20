@@ -495,7 +495,7 @@ describe('Inspector with several nodes or a wire', () => {
 // ---------------------------------------------------------------------------
 
 describe('Inspector with no selection (S15)', () => {
-  it('shows the hint, the graph, the legend, the flags and 12 keys', () => {
+  it('shows the hint, the graph, the legend, the flags and 13 keys', () => {
     load()
     renderInspector()
     expect(screen.getByTestId('nb-inspector-empty')).toBeInTheDocument()
@@ -505,9 +505,11 @@ describe('Inspector with no selection (S15)', () => {
     expect(screen.getByTestId('nb-legend-swatch-indicator').style.background).toBe('var(--nb-cat-indicator)')
     expect(screen.getByTestId('nb-legend-row-indicator')).toHaveAttribute('aria-label', 'Select all Indicators (2)')
     const keys = screen.getByTestId('nb-inspector-section-keys')
-    expect(keys.querySelectorAll('kbd')).toHaveLength(12)
+    expect(keys.querySelectorAll('kbd')).toHaveLength(13)
     expect(screen.getByTestId('nb-keys-row-0')).toHaveTextContent('Add node')
-    expect(screen.getByTestId('nb-keys-row-11')).toHaveTextContent('Data sheet')
+    // F453: Tidy layout (L) is listed after Frame all.
+    expect(screen.getByTestId('nb-keys-row-7')).toHaveTextContent('Tidy layout')
+    expect(screen.getByTestId('nb-keys-row-12')).toHaveTextContent('Data sheet')
   })
 
   it('a legend row selects every node of the category', () => {
@@ -533,7 +535,7 @@ describe('Inspector with no selection (S15)', () => {
     act(() => { useInspectorUi.setState({ sections: { keys: false } }) })
     renderInspector()
     expect(screen.getByText('Press Tab to add your first node.')).toBeInTheDocument()
-    expect(screen.getByTestId('nb-inspector-section-keys').querySelectorAll('kbd')).toHaveLength(12)
+    expect(screen.getByTestId('nb-inspector-section-keys').querySelectorAll('kbd')).toHaveLength(13)
   })
 
   it('the description is saved in the graph as one undo step', () => {

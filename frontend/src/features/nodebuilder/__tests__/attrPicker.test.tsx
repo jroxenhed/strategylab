@@ -115,15 +115,38 @@ describe('pure helpers', () => {
 })
 
 describe('AttrPicker (single attr)', () => {
-  it('unset and required shows "pick"; the popover lists the stream grouped by writer', () => {
+  it('unset but wired shows the wired read, muted; the popover lists the stream grouped by writer', () => {
     render(<Picker nodeId="ind" param="source" />)
     const chip = screen.getByTestId('nb-attr-chip-ind-source')
-    expect(chip.textContent).toContain('pick')
-    expect(chip.className).toContain('nb-attr-chip--required')
+    // F453: the compiler reads the wired Ticker's main output (@close), so
+    // the chip says so, muted, instead of the yellow "pick" warning.
+    expect(chip.textContent).toContain('@close (wired)')
+    expect(chip.className).toContain('nb-attr-chip--wired')
+    expect(chip.className).not.toContain('nb-attr-chip--required')
+    expect(chip.getAttribute('title')).toContain('Reads @close')
     act(() => { fireEvent.click(chip) })
     const pop = screen.getByTestId('nb-attr-popover')
     expect(within(pop).getByRole('group', { name: 'aapl' })).toBeInTheDocument()
     expect(within(pop).getAllByRole('option')).toHaveLength(5)
+  })
+
+  it('unset, required and not wired shows the yellow "pick" (F453)', () => {
+    load([node('aapl', 'ticker'), node('ind', 't2_ind', { period: 14, source: null, out: '@t2' })], [])
+    render(<Picker nodeId="ind" param="source" />)
+    const chip = screen.getByTestId('nb-attr-chip-ind-source')
+    expect(chip.textContent).toContain('pick')
+    expect(chip.className).toContain('nb-attr-chip--required')
+  })
+
+  it('a set value wins over the wire, and only the param on the wired port reads it (F453)', () => {
+    load(
+      [node('aapl', 'ticker'), node('ind', 't2_ind', { period: 14, source: '@open', out: '@t2' })],
+      [wire('w1', 'aapl', 'ind')],
+    )
+    render(<Picker nodeId="ind" param="source" />)
+    const chip = screen.getByTestId('nb-attr-chip-ind-source')
+    expect(chip.textContent).toContain('@open')
+    expect(chip.textContent).not.toContain('wired')
   })
 
   it('typing filters and Enter commits through the store, then closes', () => {

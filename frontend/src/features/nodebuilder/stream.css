@@ -173,6 +173,8 @@
 }
 .nodebuilder-root .nb-attr-chip__caret { color: var(--nb-text-dim); margin-left: 3px; }
 .nodebuilder-root .nb-attr-chip--unset { color: var(--nb-text-dim); }
+/* F453: empty, but the wire decides the read: muted, not a warning. */
+.nodebuilder-root .nb-attr-chip--wired { color: var(--nb-text-muted); font-style: italic; }
 .nodebuilder-root .nb-attr-chip--required {
   color: var(--nb-warn);
   border: 1px solid rgba(251, 191, 36, 0.5);

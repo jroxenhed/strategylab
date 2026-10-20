@@ -51,6 +51,7 @@ const LEGEND_KEYS: readonly { label: string; chord?: string; text?: (mac: boolea
   { label: 'Multi-select', text: mac => (mac ? '⇧click' : 'Shift+click') },
   { label: 'Frame selection', chord: 'f' },
   { label: 'Frame all', chord: 'h' },
+  { label: 'Tidy layout', chord: 'l' },
   { label: 'Bypass', chord: 'b' },
   { label: 'Display', chord: 'd' },
   { label: 'Undo', chord: 'mod+z' },

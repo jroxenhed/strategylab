@@ -8,6 +8,7 @@
  *   middle);
  *   hidden while the empty-graph state is on screen; `✕` hides it for this
  *   browser (`nb.hint = 'off'`). GraphToolbar renders it in its middle.
+ * - `TidyButton`: "Tidy" (key cap L) runs `layout.tidy` (F453).
  * - `ResetViewButton`: "Reset view" (key cap H) runs `view.frameAll`, the
  *   same command as H. Under 1440px it becomes the icon button `⌖`.
  *   Registered in `toolbarRight` at order 10 by plugins/pointerTracker.ts.
@@ -142,6 +143,40 @@ export function ResetViewButton() {
       }}
     >
       {wide ? 'Reset view' : '⌖'}
+    </Button>
+  )
+}
+
+// An editable graph with nodes: what Tidy can lay out (commands/layout.ts canTidy).
+const selectTidyState = (s: NodeBuilderState): 'none' | 'empty' | 'ready' =>
+  !s.graph || s.graph.readOnly ? 'none' : Object.keys(s.graph.nodes).length === 0 ? 'empty' : 'ready'
+
+/**
+ * "Tidy" (key cap L, F453): runs the Tidy layout command (layout.tidy), so
+ * overlapping cards can be spread out without knowing the key. One undo
+ * step, like L. Shown only while editing.
+ */
+export function TidyButton() {
+  const ref = useRef<HTMLButtonElement>(null)
+  const wide = useWideToolbar(ref, toolbarOf)
+  const state = useNodeBuilderStore(selectTidyState)
+  if (state === 'none') return null
+  return (
+    <Button
+      ref={ref}
+      kind={wide ? 'default' : 'icon'}
+      keyCap={wide ? 'L' : undefined}
+      aria-label="Tidy layout"
+      title="Tidy layout (L): lays out the selected nodes, or every node here when one or none is selected"
+      disabled={state === 'empty'}
+      disabledReason="Nothing to tidy"
+      data-testid="nb-btn-tidy"
+      onClick={() => {
+        runCommand('layout.tidy', { canvas: getActiveCanvas() })
+        getActiveCanvas()?.focus()
+      }}
+    >
+      {wide ? 'Tidy' : '▦'}
     </Button>
   )
 }

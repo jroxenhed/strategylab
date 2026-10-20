@@ -520,6 +520,19 @@
   font: var(--nb-fw-regular) 10px/14px var(--nb-font-mono);
   color: var(--nb-text-muted);
 }
+/* F453 UX-2: the symbol and interval a run uses ("SPY · 5m"). */
+.nodebuilder-root .nb-toolbar__window {
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--nb-border);
+  border-radius: 3px;
+  color: var(--nb-text-secondary);
+  font: var(--nb-fw-regular) 10px/16px var(--nb-font-mono);
+  white-space: nowrap;
+  cursor: default;
+}
+.nodebuilder-root .nb-toolbar__window:focus { outline: none; }
+.nodebuilder-root .nb-toolbar__window:focus-visible { outline: 2px solid var(--nb-border-focus); outline-offset: 1px; }
 .nodebuilder-root .nb-toolbar__view-pill {
   height: 16px;
   padding: 0 5px;

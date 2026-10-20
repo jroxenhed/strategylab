@@ -7,6 +7,7 @@ POST /api/nodebuilder/inspect      — W4 item 4.A (the wire inspector, plan D6)
 POST /api/nodebuilder/preview      — W4 item 4.A (node sparklines, plan D6)
 POST /api/nodebuilder/parse_code   — W7 item 7.C (checks code while the user types)
 GET  /api/nodebuilder/code_capabilities — W7 item 7.C (the kill switch, limits, sl helpers)
+POST /api/nodebuilder/describe     — F454 (the strategy as plain English text)
 
 Graph errors return HTTP 400 in the plan 4.4 shape:
 {"detail": <message>, "node_id": <id or null>, "code": <diagnostic code>,
@@ -33,6 +34,7 @@ from nodebuilder import cook_cache
 from nodebuilder.code import CodeError
 from nodebuilder.api_models import (
     AutoRenderResponse,
+    DescribeResponse,
     GraphBacktestRequest,
     GraphBacktestResponse,
     GraphBacktestRouteResponse,
@@ -42,6 +44,7 @@ from nodebuilder.api_models import (
     PreviewResponse,
 )
 from nodebuilder.diagnostics import error_body, has_errors, validate_graph_data, validate_graph_full
+from nodebuilder.describe import describe_graph
 from nodebuilder.from_rules import auto_render
 from nodebuilder.compile import compile as compile_graph
 from nodebuilder.models import STREAM_SCHEMA_VERSION, Graph, GraphValidationError
@@ -74,6 +77,71 @@ def post_auto_render(req: StrategyRequest) -> AutoRenderResponse:
     """Translate a StrategyRequest into a read-only Graph for the T1 viewer."""
     graph = auto_render(req)
     return AutoRenderResponse(graph=graph)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/nodebuilder/describe  — F454
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/describe",
+    response_model=DescribeResponse,
+    responses={400: {"description": "Graph error: {detail, node_id, code, diagnostics}"}},
+)
+def post_describe(payload: dict[str, Any] = Body(...)):
+    """The graph as plain English text (F454): {groups, lines, warnings}.
+
+    Body {"graph": <Graph JSON>, "ticker"?: str, "interval"?: str,
+    "direction"?: "long" | "short"}.  All three apply only to a graph with
+    no Output Group, as the editor's run uses the sidebar: ticker and
+    interval fill a primary Ticker that has no symbol (the Ticker's own
+    interval is then not used either), and direction is the trade direction.
+    The editor sends the values its run uses.
+    Reads the graph only: never fetches data, never cooks, never runs code,
+    not even on the error path.  A graph that does not parse is a 400 in
+    the plan 4.4 shape (with no diagnostics: /validate gives those); a body
+    without "graph", a ticker or interval that is not a string, or another
+    direction is a 422.
+    """
+    if "graph" not in payload:
+        raise RequestValidationError(
+            [{"type": "missing", "loc": ("body", "graph"), "msg": "Field required", "input": payload}]
+        )
+    for key in ("ticker", "interval"):
+        value = payload.get(key)
+        if value is not None and not isinstance(value, str):
+            raise RequestValidationError(
+                [{"type": "string_type", "loc": ("body", key), "msg": "Input should be a valid string",
+                  "input": value}]
+            )
+    direction = payload.get("direction")
+    if direction is not None and direction not in ("long", "short"):
+        raise RequestValidationError(
+            [{"type": "literal_error", "loc": ("body", "direction"),
+              "msg": "Input should be 'long' or 'short'", "input": direction}]
+        )
+    graph_data = payload["graph"]
+    try:
+        graph = Graph.model_validate(graph_data)
+    except (GraphValidationError, ValidationError) as exc:
+        return _describe_error(exc)
+    try:
+        return describe_graph(graph, ticker=(payload.get("ticker") or "").strip() or None,
+                              interval=(payload.get("interval") or "").strip() or None,
+                              direction=direction)
+    except GraphValidationError as exc:
+        return _describe_error(exc)
+    except Exception:
+        logger.exception("/api/nodebuilder/describe failed")
+        raise HTTPException(status_code=500, detail="Could not describe this strategy.")
+
+
+def _describe_error(exc: BaseException) -> JSONResponse:
+    """The describe 400 body, with no diagnostics list.  The full list would
+    come from validate_graph_data, which compiles the graph, and compile
+    runs a param's expression code; describe never runs code.  The editor
+    gets the diagnostics from /validate."""
+    return JSONResponse(status_code=400, content=error_body(exc, []))
 
 
 # ---------------------------------------------------------------------------

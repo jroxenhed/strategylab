@@ -357,7 +357,8 @@ describe('store: the network on screen is a node id', () => {
     act(() => { st().setViewport({ x: 1, y: 2, zoom: 2 }) })
     expect(st().viewports).toEqual({ [ROOT_NETWORK]: { x: 10, y: 20, zoom: 0.5 }, regime: { x: 1, y: 2, zoom: 2 } })
     const stored = JSON.parse(localStorage.getItem(viewportStorageKey('g_dive'))!)
-    expect(stored).toEqual({ '/': { x: 10, y: 20, zoom: 0.5 }, regime: { x: 1, y: 2, zoom: 2 } })
+    // F453: each stored view is marked as the user's.
+    expect(stored).toEqual({ '/': { x: 10, y: 20, zoom: 0.5, user: true }, regime: { x: 1, y: 2, zoom: 2, user: true } })
 
     // Reopen the graph: the views come back from storage.
     open(makeGraph(), 'g_dive')
@@ -371,6 +372,12 @@ describe('store: the network on screen is a node id', () => {
     const keys: string[] = []
     for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i)!)
     expect(keys.filter(k => k.startsWith('nb.viewports.'))).toEqual([viewportStorageKey('g_dive')])
+  })
+
+  it('a stored view not marked as the user\'s is ignored, so the graph is fitted (F453)', () => {
+    localStorage.setItem(viewportStorageKey('g_old'), JSON.stringify({ '/': { x: 228.5, y: 344.5, zoom: 1 } }))
+    open(makeGraph(), 'g_old')
+    expect(st().rememberedViewport()).toBeNull()
   })
 
   it('a broken stored entry is ignored', () => {

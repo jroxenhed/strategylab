@@ -187,13 +187,26 @@ describe('L command', () => {
     expect(s().past[0].label).toBe('tidy 2 nodes')
   })
 
-  it('with one node selected, does nothing and says why', async () => {
+  it('with one node selected, tidies the whole level (FL-8)', async () => {
     const before = s().graph!
     s().setSelection({ nodeIds: ['x'] })
     expect(runCommand('layout.tidy', { canvas: null })).toBe(true)
-    await new Promise(r => setTimeout(r, 0))
-    expect(s().graph).toBe(before)
-    expect(s().flash?.text).toMatch(/two or more/)
+    await expect.poll(() => s().graph !== before).toBe(true)
+    expect(s().past[0].label).toBe('tidy layout')
+    expect(s().graph).toEqual(await tidyGraph(before))
+  })
+
+  it('with none selected, leaves the nodes inside other networks alone (FL-8)', async () => {
+    const g = strategy()
+    g.nodes.sn = node('sn', 'subnet', [500, 500])
+    g.nodes.in1 = { ...node('in1', 'rsi', [7, 9], { period: 3 }), parent: 'sn' }
+    g.nodes.in2 = { ...node('in2', 'sma', [7, 9], { period: 5 }), parent: 'sn' }
+    s().openGraph(g, { id: null, rev: 0, name: 'test' })
+    const before = s().graph!
+    runCommand('layout.tidy', { canvas: null })
+    await expect.poll(() => s().graph !== before).toBe(true)
+    expect(s().graph!.nodes.in1.position).toEqual([7, 9])
+    expect(s().graph!.nodes.in2.position).toEqual([7, 9])
   })
 
   it('does not commit when the graph changed while elk ran', async () => {

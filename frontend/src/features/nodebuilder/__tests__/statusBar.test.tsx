@@ -11,7 +11,7 @@ import StatusBar from '../StatusBar'
 import { resetStatusChannels, selectionText, shortGraphId } from '../statusChannels'
 import ShortcutHelp from '../ShortcutHelp'
 import { formatChord, shortcutGroups } from '../shortcutList'
-import { HintBar, ResetViewButton, HINT_TEXT, HINT_STORAGE_KEY } from '../HintBar'
+import { HintBar, ResetViewButton, TidyButton, HINT_TEXT, HINT_STORAGE_KEY } from '../HintBar'
 import { minimapNodeColor } from '../minimapColors'
 import { plugin as pointerTracker, ZOOM_THROTTLE_MS } from '../plugins/pointerTracker'
 import { getCommand, listCommands } from '../commands'
@@ -93,6 +93,9 @@ describe('3.H registrations', () => {
     expect(listSlot('overlays').map(e => e.id)).toContain('shortcutHelp')
     const reset = listSlot('toolbarRight').find(e => e.id === 'resetView')
     expect(reset?.order).toBe(10)
+    // F453: Tidy sits right after Reset view.
+    const tidy = listSlot('toolbarRight').find(e => e.id === 'tidy')
+    expect(tidy?.order).toBe(11)
   })
 })
 
@@ -405,6 +408,43 @@ describe('HintBar and Reset view', () => {
     fireEvent.click(btn)
     expect(spy).toHaveBeenCalledTimes(1)
     vi.restoreAllMocks()
+  })
+
+  it('Tidy runs the Tidy layout command (L) and names the key (F453)', () => {
+    openTestGraph()
+    setWidth(1600)
+    const cmd = getCommand('layout.tidy')
+    expect(cmd?.keys).toContain('l')
+    const spy = vi.spyOn(cmd!, 'run').mockImplementation(() => undefined)
+    render(<TidyButton />)
+    const btn = screen.getByTestId('nb-btn-tidy')
+    expect(btn).toHaveTextContent('Tidy')
+    expect(btn.getAttribute('title')).toContain('Tidy layout (L)')
+    fireEvent.click(btn)
+    expect(spy).toHaveBeenCalledTimes(1)
+    vi.restoreAllMocks()
+  })
+
+  it('Tidy is one undo step that lays out overlapping nodes', async () => {
+    openTestGraph()
+    const before = useNodeBuilderStore.getState().graph!
+    const seq = useNodeBuilderStore.getState().commitSeq
+    render(<TidyButton />)
+    fireEvent.click(screen.getByTestId('nb-btn-tidy'))
+    await vi.waitFor(() => expect(useNodeBuilderStore.getState().commitSeq).toBe(seq + 1), { timeout: 5000 })
+    expect(useNodeBuilderStore.getState().graph).not.toBe(before)
+    act(() => useNodeBuilderStore.getState().undo())
+    expect(useNodeBuilderStore.getState().graph!.nodes).toEqual(before.nodes)
+  })
+
+  it('Tidy is disabled on an empty graph and absent from the read-only view', () => {
+    act(() => useNodeBuilderStore.getState().newGraph())
+    const { unmount } = render(<TidyButton />)
+    expect(screen.getByTestId('nb-btn-tidy')).toBeDisabled()
+    unmount()
+    act(() => useNodeBuilderStore.getState().discardEdits())
+    render(<TidyButton />)
+    expect(screen.queryByTestId('nb-btn-tidy')).toBeNull()
   })
 
   it('Reset view is disabled with no nodes and an icon under 1440px', () => {

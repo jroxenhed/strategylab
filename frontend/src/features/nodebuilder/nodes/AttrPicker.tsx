@@ -28,6 +28,7 @@ import {
   catalogEntry,
   inputStreamOf,
   staticInputNames,
+  wiredDefaultRead,
   withSigil,
   type InputAttr,
 } from '../streamLabels'
@@ -150,6 +151,10 @@ export function AttrPicker({ nodeId, spec, value, disabled = false }: AttrPicker
   const list = isList ? attrListValue(value) : []
   const single = isList ? null : attrValue(value)
   const testId = `nb-attr-chip-${nodeId}-${spec.name}`
+  // F453: an empty single param that a wire feeds reads the wired node's
+  // main output (the compiler's fallback), so it is not "unset".
+  const wiredName = useNodeBuilderStore(s =>
+    !isList && single === null && s.graph ? wiredDefaultRead(s.graph, nodeId, spec.name) : null)
 
   // A name is missing when the server says so for this param, or when every
   // upstream stream is known and the name is not on it. With stale streams a
@@ -249,13 +254,18 @@ export function AttrPicker({ nodeId, spec, value, disabled = false }: AttrPicker
   const missing = single !== null && isMissing(single)
   let cls = 'nb-chip nb-attr-chip'
   let title: string | undefined
-  if (single === null) cls += required ? ' nb-attr-chip--required' : ' nb-attr-chip--unset'
+  // Yellow "pick" only when nothing decides the read: no value and no wire
+  // (or a wired node with no single main output).
+  if (single === null && wiredName !== null) {
+    cls += ' nb-attr-chip--wired'
+    title = `Reads ${wiredName}, the main output of the wired node. Pick to choose another.`
+  } else if (single === null) cls += required ? ' nb-attr-chip--required' : ' nb-attr-chip--unset'
   else if (missing) { cls += ' nb-chip--missing'; title = `${single} is not present on the input` }
   else if (clash) { cls += ' nb-attr-chip--clash'; title = clash }
   else if (typeProblem) { cls += ' nb-attr-chip--type'; title = typeProblem }
   if (open) cls += ' nb-attr-chip--open'
   if (disabled) cls += ' nb-attr-chip--disabled'
-  const text = single ?? (required ? 'pick' : 'none')
+  const text = single ?? (wiredName !== null ? `${wiredName} (wired)` : required ? 'pick' : 'none')
 
   return (
     <span className="nb-attr-cell" onPointerDown={e => e.stopPropagation()} onKeyDown={stopKeys}>
@@ -268,7 +278,7 @@ export function AttrPicker({ nodeId, spec, value, disabled = false }: AttrPicker
         aria-haspopup={disabled ? undefined : 'listbox'}
         aria-expanded={disabled ? undefined : open}
         aria-invalid={missing || clash ? true : undefined}
-        aria-label={`${spec.name}: ${single ?? text}`}
+        aria-label={`${spec.name}: ${text}`}
         title={title}
         onClick={() => setOpen(o => !o)}
       >

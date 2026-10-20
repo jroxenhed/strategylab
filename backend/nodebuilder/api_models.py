@@ -245,3 +245,34 @@ class PreviewResponse(BaseModel):
     nodes: dict[str, PreviewNode]
     kept: bool = True
     stale_data: bool = False
+
+
+class DescribeGroup(BaseModel):
+    """One group's plain-English text (F454).
+
+    name: the Output Group name, or "main" for a graph with none.  entry and
+    exit are None when nothing is wired.  stops lists the stop, the trailing
+    stop and the time stop, in that order.  other holds the regime, the cost
+    settings and the bot's trading hours.
+    """
+    name: str
+    symbol: Optional[str] = None
+    interval: Optional[str] = None
+    # "long_short" is a regime_switch group: it trades both sides.
+    direction: Optional[Literal["long", "short", "long_short"]] = None
+    entry: Optional[str] = None
+    exit: Optional[str] = None
+    stops: list[str] = Field(default_factory=list)
+    sizing: Optional[str] = None
+    other: list[str] = Field(default_factory=list)
+
+
+class DescribeResponse(BaseModel):
+    """Response of POST /api/nodebuilder/describe and GET
+    /api/bots/{id}/describe (F454): the groups, every line of text ready to
+    show (one sentence per line), and warnings (a code node, a missing
+    library asset...).  groups and lines are empty for a graph bot whose
+    group is not in its graph (it cannot trade); a warning says so."""
+    groups: list[DescribeGroup]
+    lines: list[str]
+    warnings: list[str] = Field(default_factory=list)
