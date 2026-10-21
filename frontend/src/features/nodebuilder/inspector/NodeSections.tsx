@@ -18,7 +18,11 @@ import { openParamMenu } from '../contextMenuModel'
 import { ParamRow, rowsFor } from '../nodes/ParamRow'
 import { unitLabel } from '../nodes/paramFormat'
 import { WriteChip } from '../nodes/WriteChip'
-import { newWireId } from '../operations'
+import { newWireId, updateNodeParams as opUpdateNodeParams } from '../operations'
+import { Button } from '../ui/Button'
+import { useSidebarWindow } from '../sidebarWindow'
+import { differsFromSidebar, implicitPrimaryTicker } from '../graphTicker'
+import { isGroupPrimary } from '../graphGroups'
 import { wireProblemText } from '../operations/wires'
 import { useNodeBuilderStore } from '../store'
 import {
@@ -92,6 +96,59 @@ export function ParamSlider({
         onKeyUp={commit}
         onBlur={commit}
       />
+    </div>
+  )
+}
+
+/**
+ * "Copy from sidebar (RIVN · 30m)" under a primary Ticker's params (F453):
+ * copies the sidebar's symbol and interval into the node once, as one undo
+ * step. It does not keep following the sidebar.
+ *
+ * Shown only in the app (a sidebar window exists), on an editable primary
+ * Ticker (the graph's own, or an Output Group's) with no prefix, whose
+ * values differ from the sidebar's (FL-7). A reference Ticker (prefix set)
+ * never gets it: copying would turn it into a second copy of the main symbol.
+ * A primary with an empty symbol already runs on the sidebar's values, so
+ * it gets a short note that says so instead of the button.
+ */
+export function UseSidebarAction({ nodeId, node, editable }: InspectorSectionProps) {
+  const win = useSidebarWindow()
+  // Which kind of primary this Ticker is, if any (a string, so the store
+  // selector re-renders only when it changes).
+  const primary = useNodeBuilderStore(s => (
+    implicitPrimaryTicker(s.graph)?.id === nodeId ? 'implicit' : isGroupPrimary(s.graph, nodeId) ? 'group' : null
+  ))
+  if (!editable || node.type !== 'ticker' || !win || primary == null) return null
+  const prefix = typeof node.params?.prefix === 'string' ? node.params.prefix.trim() : ''
+  if (prefix !== '') return null
+  const symbol = win.ticker.trim().toUpperCase()
+  const interval = win.interval
+  const ownSymbol = typeof node.params?.symbol === 'string' ? node.params.symbol.trim() : ''
+  if (ownSymbol === '' && primary === 'implicit') {
+    return (
+      <div className="nb-insp-actions nb-insp-dim" data-testid="nb-ticker-uses-sidebar">
+        The symbol is empty, so runs use the sidebar ({symbol} · {interval}). Type a symbol to set this Ticker&apos;s own.
+      </div>
+    )
+  }
+  if (!differsFromSidebar(node.params, win)) return null
+  const apply = () => {
+    useNodeBuilderStore.getState().commit(
+      'use sidebar symbol and interval',
+      g => opUpdateNodeParams(g, nodeId, { symbol, interval }),
+    )
+  }
+  return (
+    <div className="nb-insp-actions">
+      <Button
+        kind="text"
+        onClick={apply}
+        title="Copy the sidebar's symbol and interval into this Ticker, once. It does not follow later sidebar changes."
+        data-testid="nb-ticker-use-sidebar"
+      >
+        Copy from sidebar ({symbol} · {interval})
+      </Button>
     </div>
   )
 }
@@ -187,6 +244,7 @@ export function ParametersSection({ nodeId, node, editable }: InspectorSectionPr
           </div>
         )
       })}
+      <UseSidebarAction nodeId={nodeId} node={node} editable={editable} />
       {spares}
     </div>
   )

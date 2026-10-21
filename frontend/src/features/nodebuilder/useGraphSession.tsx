@@ -42,6 +42,7 @@ import {
   nameTakenText,
   parseImport,
   readDraft,
+  RESTORE_DRAFT_LABEL,
   saveDraft,
   setLastGraphId,
   useDraftAutosave,
@@ -192,7 +193,7 @@ export function useGraphSession(): GraphSession {
     clearKeptTimer()
     // Clear first: the restore is itself a commit and must not look like an edit.
     draftRef.current = null
-    s.commit('restore draft', () => editable(p.draft.graph))
+    s.commit(RESTORE_DRAFT_LABEL, () => editable(p.draft.graph))
     if (p.variant === 'moved' && p.graphId) {
       // The server moved on: the next Save goes straight to the conflict dialog.
       conflictRef.current = { graphId: p.graphId, currentRev: p.serverRev, myRev: p.draft.rev }
@@ -326,7 +327,9 @@ export function useGraphSession(): GraphSession {
   const openLastGraph = useCallback(() => {
     if (lastTried.current) return
     lastTried.current = true
-    if (st().graph != null) return
+    // F453: a graph already on screen or on its way (a bot-card link, the
+    // Asset Manager) wins; reopening the last graph on top would replace it.
+    if (st().graph != null || busyRef.current === 'loading') return
     const id = getLastGraphId()
     if (!id) return
     openGraphById(id).catch(e => {
@@ -737,6 +740,10 @@ export function useGraphSession(): GraphSession {
   }
 
   const openGraphLink = async (graphId: string, group?: string | null, spawn = false): Promise<void> => {
+    // F453: an explicit open replaces "reopen the last graph". Showing the
+    // graph view for the first time runs openLastGraph; without this it would
+    // start a second load that wins over this one and opens the wrong graph.
+    lastTried.current = true
     if (st().graphMeta?.id !== graphId) {
       // A "Spawn…" link that does not end with this graph open must not
       // leave its request behind: the dialog would pop up much later (FE-08).

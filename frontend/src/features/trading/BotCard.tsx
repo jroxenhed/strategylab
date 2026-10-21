@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { MoreHorizontal } from 'lucide-react'
 import type { BotSummary, BotDetail, BotActivityEntry, SavedStrategy } from '../../shared/types'
 import { fetchBotDetail } from '../../api/bots'
@@ -11,6 +11,7 @@ import { INFO_COLUMN_FLEX, StatCell, btnStyle } from './ui'
 import { graphActionError, plainErrorText, updateBotGraph } from '../../api/graphSpawn'
 import { requestOpenGraph } from '../nodebuilder/graphLinks'
 import { CodeExitsOnlyRow, PauseReasonRow } from './BotPauseRows'
+import BotRulesPanel from './BotRulesPanel'
 import { isSignedOut, useSignedOut } from '../../shared/auth/signedOut'
 
 const SAVED_KEY = 'strategylab-saved-strategies'
@@ -333,6 +334,51 @@ function GraphLine({ summary }: { summary: BotSummary }) {
 // BotCard
 // ---------------------------------------------------------------------------
 
+const graphTagStyle: React.CSSProperties = {
+  marginLeft: 6,
+  background: 'var(--gh-green-bg)',
+  color: 'var(--gh-green-bright)',
+  border: '1px solid var(--gh-green-dim)',
+  borderRadius: 3,
+  padding: '1px 5px',
+  fontSize: 10,
+  fontWeight: 600,
+  letterSpacing: 0.3,
+}
+
+/**
+ * The green tag of a graph bot (F453 item 6). When the bot's graph can be
+ * opened it is a button "Graph ↗" that opens it in the node builder, the
+ * same as the graph name link. A bot with no source graph, or whose graph
+ * was deleted, keeps the plain "via Graph" tag.
+ *
+ * The button's look, hover and keyboard focus ring live in index.css
+ * (`.botcard-graph-open`, UX-6), so it does not read as a static tag. The
+ * compact card shows the button too (`compact`), but never the plain tag.
+ */
+function GraphTag({ summary, compact = false }: { summary: BotSummary; compact?: boolean }) {
+  const graphId = summary.graph_id ?? null
+  const deleted = summary.graph_latest_rev == null
+  if (!graphId || deleted) return compact ? null : <span style={graphTagStyle}>via Graph</span>
+  const name = summary.graph_name ?? graphId
+  return (
+    <button
+      type="button"
+      className="botcard-graph-open"
+      data-testid={compact ? 'botcard-compact-graph-open' : 'botcard-graph-open'}
+      aria-label={`Open graph ${name}`}
+      title="Open this bot's graph in the node builder"
+      onClick={e => {
+        e.stopPropagation()
+        requestOpenGraph({ graphId, group: summary.graph_group ?? null, spawn: false })
+      }}
+      style={compact ? { flexShrink: 0 } : { marginLeft: 6 }}
+    >
+      Graph ↗
+    </button>
+  )
+}
+
 export default function BotCard({
   summary,
   onStart, onStop, onBacktest, onDelete, onManualBuy, onUpdate, onResetPnl,
@@ -366,6 +412,10 @@ export default function BotCard({
   const [editingStrategy, setEditingStrategy] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [confirmingResetPnl, setConfirmingResetPnl] = useState(false)
+  // F454: the strategy as plain text, loaded when opened.
+  const [rulesOpen, setRulesOpen] = useState(false)
+  // Links the Rules button to its panel for screen readers (aria-controls).
+  const rulesPanelId = useId()
   const menuRef = useRef<HTMLDivElement>(null)
   // F297: restore focus when Reset P&L confirm is cancelled.
   // Compact layout: the confirm panel is additive ({confirmingResetPnl && ...}) — the kebab
@@ -496,6 +546,8 @@ export default function BotCard({
               {/* Code failed with a position open: exits only until flat (F435 W7). */}
               {summary.code_exits_only && <CodeExitsOnlyRow inline />}
             </span>
+            {/* UX-6: the compact card opens the graph too, outside the clipped name. */}
+            {summary.kind === 'graph' && <GraphTag summary={summary} compact />}
 
             {/* P&L: dollar + percentage */}
             <span style={{ fontSize: 12, color: pnlColor, flexShrink: 0 }}>
@@ -565,6 +617,11 @@ export default function BotCard({
                       action: () => { setExpanded(e => !e); setMenuOpen(false) },
                     },
                     {
+                      label: rulesOpen ? 'Hide Rules' : 'Rules',
+                      disabled: false,
+                      action: () => { setRulesOpen(o => !o); setMenuOpen(false) },
+                    },
+                    {
                       label: 'Reset P&L',
                       disabled: false,
                       action: () => {
@@ -610,6 +667,11 @@ export default function BotCard({
           <div style={{ padding: '0 8px 8px' }}>
             {summary.kind === 'graph' && <GraphLine summary={summary} />}
             <ActivityLog entries={detail?.state?.activity_log ?? []} status={summary.status} />
+          </div>
+        )}
+        {rulesOpen && (
+          <div style={{ padding: '0 8px 8px' }}>
+            <BotRulesPanel botId={summary.bot_id} onClose={() => setRulesOpen(false)} />
           </div>
         )}
         {/* Inline reset-P&L confirm (triggered from menu) */}
@@ -711,21 +773,7 @@ export default function BotCard({
               <span style={{ color: (summary.broker ?? 'alpaca') === 'ibkr' ? 'var(--gh-yellow-warm)' : 'var(--gh-blue-alt)' }}>
                 via {(summary.broker ?? 'alpaca') === 'ibkr' ? 'IBKR' : 'Alpaca'}
               </span>
-              {summary.kind === 'graph' && (
-                <span style={{
-                  marginLeft: 6,
-                  background: 'var(--gh-green-bg)',
-                  color: 'var(--gh-green-bright)',
-                  border: '1px solid var(--gh-green-dim)',
-                  borderRadius: 3,
-                  padding: '1px 5px',
-                  fontSize: 10,
-                  fontWeight: 600,
-                  letterSpacing: 0.3,
-                }}>
-                  via Graph
-                </span>
-              )}
+              {summary.kind === 'graph' && <GraphTag summary={summary} />}
             </span>
           </div>
 
@@ -913,6 +961,17 @@ export default function BotCard({
             >
               {expanded ? 'Hide Log' : 'Show Log'}
             </button>
+            <button
+              onClick={() => setRulesOpen(o => !o)}
+              style={btnStyle('var(--gh-bg-alt)')}
+              aria-expanded={rulesOpen}
+              aria-controls={rulesOpen ? rulesPanelId : undefined}
+              title={rulesOpen ? "Hide this bot's rules" : "Show this bot's strategy as plain text"}
+              data-testid="botcard-rules-btn"
+            >
+              {/* UX-7: says what a click does, like Show Log / Hide Log. */}
+              {rulesOpen ? 'Hide Rules' : 'Rules'}
+            </button>
             {confirmingResetPnl ? (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                 <span style={{ fontSize: 11, color: 'var(--gh-text-light)' }}>Reset P&L for this bot? Journal rows are kept; the display starts fresh from now.</span>
@@ -931,6 +990,9 @@ export default function BotCard({
               <button onClick={onDelete} style={btnStyle('var(--gh-red-bg)')}>Delete</button>
             )}
           </div>
+
+          {/* The strategy as plain text (F454) */}
+          {rulesOpen && <BotRulesPanel id={rulesPanelId} botId={summary.bot_id} onClose={() => setRulesOpen(false)} />}
         </div>
 
         {/* Right column: mini chart */}

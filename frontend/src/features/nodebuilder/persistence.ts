@@ -193,10 +193,15 @@ export function writeDraftNow(): boolean {
   })
 }
 
+/** The undo label of "Restore draft" (useGraphSession), so autosave can spot it. */
+export const RESTORE_DRAFT_LABEL = 'restore draft'
+
 /**
  * Autosave drafts while the graph is dirty: the first dirty commit starts a
  * 5 s timer, the timer writes the draft, the next dirty commit starts a new
- * one. Clean graphs stop the timer. Also writes on tab hide and on unload,
+ * one. Clean graphs stop the timer, and a graph that turns clean again
+ * without a load (undo to the saved state) loses its draft (F453). Also
+ * writes on tab hide and on unload,
  * and asks before leaving the page with unsaved edits.
  */
 export function useDraftAutosave(onWrite?: () => void): void {
@@ -221,6 +226,20 @@ export function useDraftAutosave(onWrite?: () => void): void {
       }
     }
     const unsub = useNodeBuilderStore.subscribe((s, prev) => {
+      // F453: the same graph went back to clean without a load (an undo to
+      // the saved state, or a save): its draft no longer holds anything new,
+      // so drop it. Otherwise the next open shows a stale "newer draft" banner.
+      // FL-2: but not when the step just undone is a "Restore draft". Then the
+      // draft's edits live only in the redo list, and the stored draft is
+      // their only copy that survives a reload or opening another graph.
+      if (
+        prev.dirty && !s.dirty && s.graph != null && !s.graph.readOnly
+        && s.layoutEpoch === prev.layoutEpoch
+        && (s.graphMeta?.id ?? null) === (prev.graphMeta?.id ?? null)
+        && !s.future.some(e => e.label === RESTORE_DRAFT_LABEL)
+      ) {
+        clearDraft(s.graphMeta?.id ?? null)
+      }
       if (s.commitSeq !== prev.commitSeq || s.dirty !== prev.dirty || s.graph !== prev.graph) check()
     })
     const onHide = () => {

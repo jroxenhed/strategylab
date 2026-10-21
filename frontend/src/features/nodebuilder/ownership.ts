@@ -43,21 +43,6 @@ export function graphHasGroups(graph: { nodes: Record<string, { type: string }> 
   return false
 }
 
-/**
- * True when the sidebar owns this Ticker's symbol and interval (W5, D7):
- * only the implicit group's primary, so a Ticker with no `prefix` in a
- * graph with no Output Group. A reference Ticker (with a prefix) and the
- * Tickers of a graph with groups fetch their own symbol and interval (S32c).
- */
-export function sidebarOwnsTicker(
-  params: Record<string, unknown> | undefined,
-  graph: { nodes: Record<string, { type: string }> } | null | undefined,
-): boolean {
-  const p = params?.prefix
-  if (typeof p === 'string' && p.trim() !== '') return false
-  return !graphHasGroups(graph)
-}
-
 /** Every field the graph owns, given whether it has Output Groups. */
 export function ownedFields(hasGroups: boolean): readonly GraphOwnedField[] {
   return hasGroups ? [...GRAPH_OWNED_FIELDS, ...GROUP_OWNED_FIELDS] : GRAPH_OWNED_FIELDS

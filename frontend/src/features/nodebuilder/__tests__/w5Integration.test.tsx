@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import { ReactFlow, type Node, type NodeTypes } from '@xyflow/react'
 import { emptyGraph, type Graph, type GraphNode } from '../../../api/nodebuilder'
 import {
@@ -29,7 +29,7 @@ import { prefixedName, primaryWriteOf, tickerPrefixOf, writesOf, writtenNames } 
 import { NETWORK_TYPES, rfTypeFor, TERMINAL_TYPES } from '../rfMapping'
 import { terminalRowParams } from '../nodes/networkFormat'
 import { SidebarWindowContext } from '../sidebarWindow'
-import { sidebarOwnsTicker } from '../ownership'
+import { graphOwnTicker } from '../graphTicker'
 import { menuCatalog } from '../canvasHelpers'
 import { NODE_CATALOG } from '../catalog'
 import { useNodeBuilderStore } from '../store'
@@ -226,18 +226,22 @@ describe('the Ticker card (S32c, FA4)', () => {
     expect(screen.getByTestId('nb-param-s-symbol').dataset.fromSidebar).toBeUndefined()
   })
 
-  it('the implicit primary (no prefix, no group) still shows the sidebar values (UX-01)', () => {
+  it('the implicit primary (no prefix, no group) shows and edits its own values (F453)', () => {
     renderCard(card('a', { symbol: 'AAPL', interval: '1d' }), WINDOW)
     const row = screen.getByTestId('nb-param-a-symbol')
-    expect(row.dataset.fromSidebar).toBe('true')
-    expect(within(row).getByText('MSFT')).toBeInTheDocument()
+    expect(row.tagName).toBe('INPUT')
+    expect(row.dataset.fromSidebar).toBeUndefined()
+    expect(screen.queryByText('MSFT')).toBeNull()
   })
 
-  it('the sidebar owns no Ticker of a graph with Output Groups (D7)', () => {
-    expect(sidebarOwnsTicker({ symbol: 'AAPL' }, emptyGraph())).toBe(true)
-    expect(sidebarOwnsTicker({ symbol: 'SPY', prefix: 'spy' }, emptyGraph())).toBe(false)
-    const withGroup = { ...emptyGraph(), nodes: { g: gnode('g', 'output_group') } }
-    expect(sidebarOwnsTicker({ symbol: 'AAPL' }, withGroup)).toBe(false)
+  it('only the implicit group\'s primary sets the run symbol; never with Output Groups (D7)', () => {
+    const plain = { ...emptyGraph(), nodes: { a: gnode('a', 'ticker', { symbol: 'AAPL', interval: '1d' }) } }
+    expect(graphOwnTicker(plain)).toEqual({ ticker: 'AAPL', interval: '1d' })
+    const refOnly = { ...emptyGraph(), nodes: { s: gnode('s', 'ticker', { symbol: 'SPY', prefix: 'spy' }) } }
+    // FL-6: with only prefixed root Tickers the first one counts, as spawn picks it.
+    expect(graphOwnTicker(refOnly)).toEqual({ ticker: 'SPY', interval: '1d' })
+    const withGroup = { ...emptyGraph(), nodes: { ...plain.nodes, g: gnode('g', 'output_group') } }
+    expect(graphOwnTicker(withGroup)).toBeNull()
   })
 })
 

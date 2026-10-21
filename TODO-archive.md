@@ -404,3 +404,7 @@ grouped by close month. Never reorder or rewrite previously archived sections.
 
 - [x] <a id="f449"></a> **F449** Two live exit-safety gaps in the bot tick. IBKR sends an entry with a stop as a bare BUY STOP below market, so the broker holds no protective stop; send a parent order plus a child stop with SMART routing. When the broker position check fails, the tick returns after marking the bar done, so that bar's stop checks never run and nothing counts toward the alert. [medium] [hardening] (added 2026-10-02)
 
+- [x] <a id="f453"></a> **F453** Opening a bot's graph from the bot card loaded it twice, showed the sidebar symbol, and framed only one node. Now it loads once, the graph's own Ticker sets the symbol and interval of every editor run, the first view fits the whole graph, and a Tidy button and a Graph button help. [features]
+- [x] <a id="f454"></a> **F454** The strategy shows as plain sentences: a Rules strip in the node builder and a Rules button on every bot card. The server writes the text from the graph or the rules and never runs user code. [features]
+- [x] <a id="f440"></a> **F440** Prove the Gateway restart fix on the VM. The Gateway writes AutoRestart=1 back into jts.ini about 10 s after the unit sets it to 0, so its own 05:00 restart is probably still on. After the next weekday, check the IBC log for Restart in progress lines, one clean login per day and no Existing session lines, then note the result in deploy/README.md. [next] [easy] [hardening] (added 2026-09-20)
+

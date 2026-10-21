@@ -55,6 +55,7 @@ import { SidebarWindowContext } from './sidebarWindow'
 import {
   requestSettingsKey,
   runGraphBacktest,
+  useGraphRunDirection,
   useGraphRunSettingsKey,
   windowKey,
   windowOfRequest,
@@ -64,6 +65,7 @@ import {
   type GraphWindow,
 } from './graphRun'
 import { GraphChartSplit, GraphSheet, type ChartBarModel } from './GraphChartSplit'
+import { RulesStrip } from './RulesStrip'
 import { useAutoCook } from './useAutoCook'
 import {
   findUnsupportedNodes,
@@ -90,6 +92,7 @@ import { pushNotice, resolveNotice, type Notice } from './notices'
 import { runLegacySeed, seedBannerText } from './persistence'
 import { useGraphSession } from './useGraphSession'
 import { graphHasGroups } from './ownership'
+import { graphOwnTickerKey, newNodeParams, parseOwnTickerKey, withGraphTicker } from './graphTicker'
 import { BuilderContext, Slot, registerSlot, type BuilderApi } from './slots'
 import Breadcrumb from './Breadcrumb'
 import { openAssetManager } from './assetUi'
@@ -104,7 +107,8 @@ interface NodeBuilderProps {
   graphViewActive: boolean
   /**
    * The sidebar window (D11): ticker, dates, interval and source. Runs,
-   * auto cook and the Data Sheet use it. Null: fall back to `request`.
+   * auto cook and the Data Sheet use it, with the graph's own symbol and
+   * interval put in (graphTicker.ts, F453). Null: fall back to `request`.
    */
   graphWindow?: GraphWindow | null
   /** App's run handler (D10): builds the request and runs it. */
@@ -236,19 +240,36 @@ function NodeBuilder({ request, graphViewActive, graphWindow = null, onRunGraph,
     interval: request?.interval ?? '1d',
     source: request?.source ?? 'yahoo',
   }), [request])
-  const runWindow = graphWindow ?? fallbackWindow
+  // F453: the graph's primary Ticker owns the symbol and interval of every
+  // editor run (backtest, auto cook, Data Sheet, chart), as spawn does; the
+  // sidebar still gives the dates and the data source. The key is a string,
+  // so this only changes when the symbol or interval does.
+  const ownTickerKey = useNodeBuilderStore(s => (s.graph && !s.graph.readOnly ? graphOwnTickerKey(s.graph) : ''))
+  const effectiveWindow = useMemo<GraphWindow | null>(
+    () => (graphWindow ? withGraphTicker(graphWindow, parseOwnTickerKey(ownTickerKey)) : null),
+    [graphWindow, ownTickerKey],
+  )
+  const runWindow = effectiveWindow ?? fallbackWindow
+  // The Rules strip names what a run runs: this symbol and interval, and the
+  // settings-panel direction (F453 contract).
+  const rulesWindow = useMemo(
+    () => effectiveWindow ?? withGraphTicker(fallbackWindow, parseOwnTickerKey(ownTickerKey)),
+    [effectiveWindow, fallbackWindow, ownTickerKey],
+  )
+  const runDirection = useGraphRunDirection(request?.direction ?? null)
 
-  // Auto cook (S27): a debounced /preview after each edit, on the sidebar
+  // Auto cook (S27): a debounced /preview after each edit, on the run
   // window. It never runs the backtest; it stops while the view is hidden.
-  useAutoCook({ window: graphWindow, active: graphViewActive })
+  useAutoCook({ window: effectiveWindow, active: graphViewActive })
 
   // A result goes stale when the graph changes what it computes, or when the
-  // sidebar window changes. Moving a node does not: the graph key leaves out
+  // run window changes (the sidebar's dates or source, or the graph's own
+  // symbol or interval). Moving a node does not: the graph key leaves out
   // positions.
   const graphKey = useMemo(() => graphEvalKey(storeGraph), [storeGraph])
   const graphStale = result != null && result.graphKey !== graphKey
-  const windowStale = result != null && graphWindow != null
-    && windowKey(windowOfRequest(result.request)) !== windowKey(graphWindow)
+  const windowStale = result != null && effectiveWindow != null
+    && windowKey(windowOfRequest(result.request)) !== windowKey(effectiveWindow)
   // ...or when capital, direction or an APPLIES TO GRAPH setting changed in
   // the settings panel since the run (CI-09). App-driven runs only: on its
   // own (tests) the builder runs from the loaded request.
@@ -331,7 +352,8 @@ function NodeBuilder({ request, graphViewActive, graphWindow = null, onRunGraph,
     if (!entry) return
     useNodeBuilderStore.getState().addNode({
       id: newNodeId(), type: 'ticker', name: 'ticker', parent: null,
-      params: { ...entry.defaults.params } as GraphNode['params'],
+      // F453: a new Ticker starts on the sidebar's symbol and interval.
+      params: newNodeParams('ticker', entry.defaults.params, graphWindow) as GraphNode['params'],
       position: [0, 0], display: false, bypass: false,
     })
   }
@@ -349,7 +371,8 @@ function NodeBuilder({ request, graphViewActive, graphWindow = null, onRunGraph,
   }
 
   // Without App's handler (tests), run the request here. The ticker and
-  // interval then come from the graph's Ticker node first, as before W4.
+  // interval come from the graph's Ticker node first (buildGraphRequest does
+  // that for the primary Ticker too, F453).
   function runStandalone(args: GraphRunArgs): Promise<GraphResultState> {
     const tickerNode = Object.values(args.graph.nodes).find(n => n.type === 'ticker')
     const base = graphWindow ?? {
@@ -624,13 +647,17 @@ function NodeBuilder({ request, graphViewActive, graphWindow = null, onRunGraph,
           <GraphChartSplit
             bar={chartBar}
             sheet={
-              <GraphSheet
-                window={graphWindow}
-                result={result}
-                readOnlyGraph={editMode ? undefined : activeGraph}
-                onRunBacktest={builderApi.runBacktest}
-                onEditGraph={editMode ? undefined : handleEditThisGraph}
-              />
+              <>
+                {/* F454: the strategy as plain text, under the chart bar. */}
+                <RulesStrip graph={activeGraph} window={rulesWindow} direction={runDirection} />
+                <GraphSheet
+                  window={effectiveWindow}
+                  result={result}
+                  readOnlyGraph={editMode ? undefined : activeGraph}
+                  onRunBacktest={builderApi.runBacktest}
+                  onEditGraph={editMode ? undefined : handleEditThisGraph}
+                />
+              </>
             }
             canvas={
               <div style={styles.canvasWrapper}>
@@ -664,7 +691,8 @@ function NodeBuilder({ request, graphViewActive, graphWindow = null, onRunGraph,
   // runs the full width under both.
   return (
     <BuilderContext.Provider value={builderApi}>
-    {/* D11 before W5: Ticker nodes show the sidebar symbol and interval (UX-01). */}
+    {/* The sidebar window: spawn's fallback symbol, new Tickers and the
+         Inspector's "Copy from sidebar" action read it (F453). */}
     <SidebarWindowContext.Provider value={graphWindow ?? null}>
       <div
         ref={rootRef}

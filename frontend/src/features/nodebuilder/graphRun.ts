@@ -7,8 +7,9 @@
  * auto-render, and a graph run would corrupt all of them (D10).
  *
  * `buildGraphRequest` builds the request from the sidebar window (date range,
- * capital, data source, plus the sidebar ticker and interval for the
- * implicit group) and never includes a field the graph owns (`ownedFields`,
+ * capital, data source) and the graph's own symbol and interval (the primary
+ * Ticker's, F453; the sidebar's only when its symbol is empty), and never
+ * includes a field the graph owns (`ownedFields`,
  * D11): the direction goes only with a graph that has no Output Group (D7).
  * It copies an allowlist of fields, so a field nobody listed can never leak
  * in either.
@@ -16,10 +17,11 @@
 
 import { fetchGraphBacktest, type Graph, type GraphBacktestRequest, type GraphBacktestResult } from '../../api/nodebuilder'
 import type { BacktestResult, GroupResult, Trade } from '../../shared/types'
-import { useSyncExternalStore } from 'react'
+import { useMemo, useSyncExternalStore } from 'react'
 import { GRAPH_RUN_SETTINGS_EVENT, graphHasGroups, ownedFields } from './ownership'
 import { EXIT_NOT_CONNECTED, graphEvalKey } from './resultsStrip'
 import { COMBINED, displayedGroupResult, effectiveGroupKey, stripGroups } from './groupResults'
+import { graphRunWindow } from './graphTicker'
 
 /** The sidebar values a graph run uses (D11). */
 export interface GraphSidebar {
@@ -31,7 +33,10 @@ export interface GraphSidebar {
   interval: string
 }
 
-/** The data window: what to fetch and cook (the sidebar's, D11). */
+/**
+ * The data window: what to fetch and cook. The sidebar's (D11), with the
+ * graph's own symbol and interval put in for runs (graphTicker.ts, F453).
+ */
 export interface GraphWindow {
   ticker: string
   start: string
@@ -117,12 +122,15 @@ export function buildGraphRequest(
   sidebar: GraphSidebar,
   extras: GraphRunExtras = {},
 ): GraphBacktestRequest {
+  // F453: the primary Ticker of a graph with no Output Group owns the symbol
+  // and interval, so the run tests what spawn would trade (graphTicker.ts).
+  const win = graphRunWindow(graph, sidebar)
   const req: GraphBacktestRequest = {
     graph,
-    ticker: sidebar.ticker,
+    ticker: win.ticker,
     start: sidebar.start,
     end: sidebar.end,
-    interval: sidebar.interval,
+    interval: win.interval,
     source: sidebar.source,
     initial_capital: sidebar.initial_capital,
   }
@@ -241,6 +249,22 @@ function runSettingsSnapshotGroups(): string {
 export function useGraphRunSettingsKey(hasGroups = false): string {
   const snap = hasGroups ? runSettingsSnapshotGroups : runSettingsSnapshot
   return useSyncExternalStore(subscribeRunSettings, snap, snap)
+}
+
+/**
+ * The direction a run of a graph with no Output Group sends: the settings
+ * panel's, else `fallback` (App passes the last chart request's). Null
+ * when neither says (the server then reads it as long). Re-renders when
+ * the settings panel saves.
+ */
+export function useGraphRunDirection(fallback?: string | null): 'long' | 'short' | null {
+  const key = useGraphRunSettingsKey(false)
+  return useMemo(
+    () => readGraphRunSettings({ direction: fallback ?? null }).extras.direction ?? null,
+    // `key` changes whenever the saved settings do.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [key, fallback],
+  )
 }
 
 // ---- running ------------------------------------------------------------------

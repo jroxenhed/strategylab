@@ -72,7 +72,6 @@ import { AttrPicker } from './AttrPicker'
 import { TimeRangeInput } from './TimeRangeInput'
 import { DayOfWeekInput } from './DayOfWeekInput'
 import { WriteChip } from './WriteChip'
-import { FromSidebarRow, useSidebarParamValue } from '../sidebarWindow'
 import type { GraphPromotedParam } from '../../../api/nodebuilder'
 import {
   paramSpecOfNode,
@@ -267,8 +266,6 @@ function paramTestId(nodeId: string, paramKey: string, variant: ParamRowProps['v
 }
 
 export function ParamRow(props: ParamRowProps) {
-  // D11 before W5: a Ticker's symbol and interval come from the sidebar (UX-01).
-  const fromSidebar = useSidebarParamValue(props.nodeId, props.paramKey)
   // W6 (S40): a param promoted to the parent network is edited there.
   const promotion = usePromotion(props.nodeId, props.paramKey)
   // W7 (S44): code mode. `entering` holds the starting text while the row
@@ -281,15 +278,6 @@ export function ParamRow(props: ParamRowProps) {
   const [entering, setEntering] = useState<string | null>(null)
   if (promotion) {
     return <PromotedChildRow {...props} networkId={promotion.networkId} name={promotion.name} valueText={promotion.valueText} />
-  }
-  if (fromSidebar != null) {
-    return (
-      <FromSidebarRow
-        label={props.spec?.label || props.paramKey}
-        value={fromSidebar}
-        testId={paramTestId(props.nodeId, props.paramKey, props.variant)}
-      />
-    )
   }
   const widget = streamWidgetFor(props.spec, props.value)
   const codeable = graphEditable && !widget && isCodeableParam(nodeType, props.spec, props.paramKey)

@@ -1,0 +1,50 @@
+/* Rules strip (F454): the graph as plain text, under the chart bar.
+   The bar itself reuses .nb-chart-bar (graphChartSplit.css). */
+
+.nodebuilder-root .nb-rules {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--nb-bg);
+}
+
+/* The chart bar above already draws the line between the two bars. */
+.nodebuilder-root .nb-rules-bar {
+  border-top: none;
+}
+
+/* The text reads as plain English, from the left, after the title and the
+   warning count (UX-4). It is the part that gets cut with "…". */
+.nodebuilder-root .nb-rules-summary {
+  flex: 1 1 auto;
+  margin-left: 0;
+  font-family: var(--nb-font-sans);
+}
+
+/* The warning count never shrinks, so a long text cannot hide it. */
+.nodebuilder-root .nb-rules-count {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.nodebuilder-root .nb-rules-summary--busy {
+  opacity: 0.6;
+}
+
+.nodebuilder-root .nb-rules-body {
+  max-height: 140px;
+  overflow-y: auto;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--nb-border);
+  font: 12px/18px var(--nb-font-sans);
+  color: var(--nb-text-secondary);
+}
+
+.nodebuilder-root .nb-rules-line {
+  white-space: pre-wrap;
+}
+
+.nodebuilder-root .nb-rules-dim { color: var(--nb-text-dim); }
+.nodebuilder-root .nb-rules-warn { color: var(--nb-warn); }
+.nodebuilder-root .nb-rules-body .nb-rules-warn { font-size: 11px; }

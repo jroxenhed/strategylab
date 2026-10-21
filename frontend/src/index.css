@@ -97,6 +97,29 @@ body {
 .results-tab-dim { opacity: 0.6; }
 .results-tab-dim:focus-visible, .results-tab-dim:hover { opacity: 1; }
 
+/* F453 UX-6: the bot card's "Graph ↗" button. Looks like the green graph
+   tag, but shows it can be clicked: a brighter hover and a focus ring. */
+.botcard-graph-open {
+  background: var(--gh-green-bg);
+  color: var(--gh-green-bright);
+  border: 1px solid var(--gh-green-dim);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  line-height: normal;
+  white-space: nowrap;
+}
+.botcard-graph-open:hover {
+  border-color: var(--gh-green-bright);
+  filter: brightness(1.35);
+}
+.botcard-graph-open:focus-visible {
+  outline: 2px solid var(--gh-green-bright);
+  outline-offset: 1px;
+}
+
 /* Globals */
 button { 
   cursor: pointer; 

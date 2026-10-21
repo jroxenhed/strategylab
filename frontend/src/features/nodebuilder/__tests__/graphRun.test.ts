@@ -189,10 +189,17 @@ function smallGraph(): Graph {
   return {
     ...emptyGraph(),
     nodes: {
-      n_t: node('n_t', 'ticker', 'aapl', { symbol: 'NVDA', interval: '1h' }),
+      n_t: node('n_t', 'ticker', 'aapl', { symbol: 'AAPL', interval: '1d' }),
       n_e: node('n_e', 'entry', 'entry'),
     },
   }
+}
+
+/** smallGraph whose Ticker says something else than the sidebar. */
+function nvdaGraph(): Graph {
+  const g = smallGraph()
+  g.nodes.n_t = { ...g.nodes.n_t, params: { symbol: 'NVDA', interval: '1h' } as GraphNode['params'] }
+  return g
 }
 
 /** smallGraph with one Output Group: the group sets its own direction (D11). */
@@ -308,8 +315,17 @@ describe('buildGraphRequest (D11)', () => {
     )
   })
 
-  it('the sidebar ticker and interval win over the Ticker node until W5 (D11)', () => {
-    const req = buildGraphRequest(smallGraph(), SIDEBAR)
+  it('the primary Ticker\'s symbol and interval win over the sidebar (F453)', () => {
+    const req = buildGraphRequest(nvdaGraph(), SIDEBAR)
+    expect(req.ticker).toBe('NVDA')
+    expect(req.interval).toBe('1h')
+    // The dates and source stay the sidebar's.
+    expect(req.start).toBe(SIDEBAR.start)
+    expect(req.source).toBe(SIDEBAR.source)
+  })
+
+  it('a graph with Output Groups keeps the sidebar window in the request (each group fetches its own)', () => {
+    const req = buildGraphRequest(groupGraph(), SIDEBAR)
     expect(req.ticker).toBe('AAPL')
     expect(req.interval).toBe('1d')
   })
@@ -459,7 +475,7 @@ describe('App: a graph run through the run handler (D10)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'View as Graph' }))
     expect(seen.sbGraphView.at(-1)).toBe(true)
     await act(async () => {
-      useNodeBuilderStore.getState().openGraph(smallGraph(), { id: 'g_1', rev: 3, name: 'alpha' })
+      useNodeBuilderStore.getState().openGraph(nvdaGraph(), { id: 'g_1', rev: 3, name: 'alpha' })
     })
     // One chart, moved: in graph view it sits in the split's chart panel
     // (jsdom has no layout, so the panel counts as open here), never in
@@ -472,11 +488,12 @@ describe('App: a graph run through the run handler (D10)', () => {
     await act(async () => { fireEvent.click(screen.getByTestId('nb-btn-run')) })
     await waitFor(() => expect(screen.getByTestId('results-stub-graph')).toBeInTheDocument())
 
-    // The request: the sidebar window and the settings capital, no owned field.
+    // The request: the graph Ticker's symbol and interval (F453), the
+    // sidebar's dates and source, the settings capital, no owned field.
     expect(fetchGraphBacktest).toHaveBeenCalledTimes(1)
     const sent = vi.mocked(fetchGraphBacktest).mock.calls[0][0] as unknown as Record<string, unknown>
     expect(sent).toMatchObject({
-      ticker: 'MSFT', start: '2024-01-02', end: '2024-06-28', interval: '1d', source: 'yahoo',
+      ticker: 'NVDA', start: '2024-01-02', end: '2024-06-28', interval: '1h', source: 'yahoo',
       initial_capital: 25000, direction: 'long',
     })
     for (const f of GRAPH_OWNED_FIELDS) expect(f in sent, f).toBe(false)
@@ -489,13 +506,13 @@ describe('App: a graph run through the run handler (D10)', () => {
     // The graph result: origin graph, no rule request, the S30 header.
     const g = lastResults('graph')!
     expect(g.lastRequest).toBeNull()
-    expect(g.header).toMatch(/^alpha @ rev 3 · MSFT 1d · 2024-01-02 → 2024-06-28 · cooked \d{2}:\d{2}:\d{2}$/)
+    expect(g.header).toMatch(/^alpha @ rev 3 · NVDA 1h · 2024-01-02 → 2024-06-28 · cooked \d{2}:\d{2}:\d{2}$/)
     expect((g.result as BacktestResult).trades).toHaveLength(12)
     // The backtest cook carries the cook id (auto cook refreshes sparklines from it).
     expect(useNodeBuilderStore.getState().cooks.backtest.cookId).toBe('ck_1')
     // The chart bar shows the summary, and the one chart gets the graph's trades.
-    expect(screen.getByTestId('nb-chart-bar-summary').textContent).toBe('MSFT 1d · 6 trades · +25.8% · Sharpe 1.40')
-    expect(screen.getByTestId('chart-stub').dataset).toMatchObject({ ticker: 'MSFT', trades: '12' })
+    expect(screen.getByTestId('nb-chart-bar-summary').textContent).toBe('NVDA 1h · 6 trades · +25.8% · Sharpe 1.40')
+    expect(screen.getByTestId('chart-stub').dataset).toMatchObject({ ticker: 'NVDA', trades: '12' })
 
     // Back to the chart view: the rule result and its request are as before.
     fireEvent.click(screen.getByRole('button', { name: 'Back to Chart' }))
@@ -520,10 +537,10 @@ describe('App: a graph run through the run handler (D10)', () => {
     render(createElement(App), { wrapper })
     fireEvent.click(screen.getByRole('button', { name: 'View as Graph' }))
     await act(async () => {
-      useNodeBuilderStore.getState().openGraph(smallGraph(), { id: 'g_1', rev: 3, name: 'alpha' })
+      useNodeBuilderStore.getState().openGraph(nvdaGraph(), { id: 'g_1', rev: 3, name: 'alpha' })
     })
     await act(async () => { fireEvent.click(screen.getByTestId('nb-btn-run')) })
-    await waitFor(() => expect(screen.getByTestId('nb-chart-bar-summary').textContent).toBe('MSFT 1d · 6 trades · +25.8% · Sharpe 1.40'))
+    await waitFor(() => expect(screen.getByTestId('nb-chart-bar-summary').textContent).toBe('NVDA 1h · 6 trades · +25.8% · Sharpe 1.40'))
     expect(useNodeBuilderStore.getState().cooks.backtest.stale).toBe(false)
 
     // The settings panel saves a new capital: the shown result no longer
@@ -548,7 +565,7 @@ describe('App: a graph run through the run handler (D10)', () => {
       localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify(saved))
       notifyGraphRunSettingsChanged()
     })
-    expect(screen.getByTestId('nb-chart-bar-summary').textContent).toBe('MSFT 1d · 6 trades · +25.8% · Sharpe 1.40')
+    expect(screen.getByTestId('nb-chart-bar-summary').textContent).toBe('NVDA 1h · 6 trades · +25.8% · Sharpe 1.40')
     expect(useNodeBuilderStore.getState().cooks.backtest.stale).toBe(false)
   })
 })

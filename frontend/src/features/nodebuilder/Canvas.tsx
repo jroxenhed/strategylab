@@ -37,6 +37,7 @@ import {
   ReactFlowProvider,
   useReactFlow,
   useStore,
+  useNodesInitialized,
   applyNodeChanges,
   applyEdgeChanges,
   type Node as RFNode,
@@ -53,6 +54,8 @@ import {
 import type { Graph, GraphNode } from '../../api/nodebuilder'
 import { canWire, hasOutputPort, type NodeCatalogEntry } from './catalog'
 import { useNodeBuilderStore } from './store'
+import { useSidebarWindow } from './sidebarWindow'
+import { newNodeParams } from './graphTicker'
 import {
   newNodeId,
   newWireId,
@@ -212,10 +215,12 @@ function LockedBar({ node, canUnlock }: { node: GraphNode; canUnlock: boolean })
 
 function CanvasInner({ graph: inputGraph, editable: graphEditable }: CanvasInnerProps) {
   const rf = useReactFlow()
-  const { screenToFlowPosition, fitView, setViewport: rfSetViewport } = rf
+  const { screenToFlowPosition, fitView, setViewport: rfSetViewport, getViewport: rfGetViewport } = rf
   const storeMoveNodes = useNodeBuilderStore(s => s.moveNodes)
   const storeSetViewport = useNodeBuilderStore(s => s.setViewport)
   const storeAddNode = useNodeBuilderStore(s => s.addNode)
+  // F453: a new Ticker starts on the sidebar's symbol and interval.
+  const sidebarWindow = useSidebarWindow()
   const storeRemoveNodesWithRewire = useNodeBuilderStore(s => s.removeNodesWithRewire)
   const storeRemoveNodes = useNodeBuilderStore(s => s.removeNodes)
   const storeCommit = useNodeBuilderStore(s => s.commit)
@@ -510,15 +515,39 @@ function CanvasInner({ graph: inputGraph, editable: graphEditable }: CanvasInner
   // fit, of the tidied graph, instead of a fit, a jump and a second fit.
   // Each network has its own view (S37): diving or going up restores the
   // saved one, a first visit frames all (H), with no animation.
+  //
+  // F453: the fit waits until React Flow has measured every node
+  // (useNodesInitialized). React Flow's own queued fit runs after the first
+  // measure, so it framed only the Ticker. An automatic move is never saved
+  // as the user's view (`autoMove`, handleMoveEnd).
+  const nodesInitialized = useNodesInitialized()
+  // A fit is owed once the nodes are measured; `fitRequest` re-runs the effect below.
+  const fitOwedRef = useRef(false)
+  const [fitRequest, setFitRequest] = useState(0)
+  // The viewport of the last automatic move, and whether one is in flight.
+  const autoViewRef = useRef<Viewport | null>(null)
+  const autoMovingRef = useRef(false)
+  const autoMove = useCallback((run: () => Promise<unknown>) => {
+    autoMovingRef.current = true
+    const done = () => {
+      try { autoViewRef.current = rfGetViewport() } catch { autoViewRef.current = null }
+      autoMovingRef.current = false
+    }
+    void run().then(done, done)
+  }, [rfGetViewport])
   useEffect(() => {
     if (!graphEditable) return
     let frame = 0
     const place = () => {
       frame = requestAnimationFrame(() => {
+        fitOwedRef.current = false
         const remembered = useNodeBuilderStore.getState().rememberedViewport()
-        if (remembered) void rfSetViewport(remembered)
-        else if (Object.keys(graphRef.current.nodes).length === 0) void rfSetViewport(HOME_VIEWPORT)
-        else void fitView(FIT_VIEW_OPTIONS)
+        if (remembered) autoMove(() => rfSetViewport(remembered))
+        else if (Object.keys(graphRef.current.nodes).length === 0) autoMove(() => rfSetViewport(HOME_VIEWPORT))
+        else {
+          fitOwedRef.current = true
+          setFitRequest(n => n + 1)
+        }
       })
     }
     const wait = layoutPending ? setTimeout(place, LAYOUT_WAIT_MS) : null
@@ -527,7 +556,20 @@ function CanvasInner({ graph: inputGraph, editable: graphEditable }: CanvasInner
       if (wait) clearTimeout(wait)
       cancelAnimationFrame(frame)
     }
-  }, [graphEditable, layoutEpoch, layoutPending, networkId, fitView, rfSetViewport])
+  }, [graphEditable, layoutEpoch, layoutPending, networkId, rfSetViewport, autoMove])
+
+  // The owed fit, once every node has its size (one more frame for the
+  // sizes to reach the store). A node added later does not fit again: the
+  // debt is paid once per placement above.
+  useEffect(() => {
+    if (!graphEditable || !fitOwedRef.current || !nodesInitialized) return
+    const frame = requestAnimationFrame(() => {
+      if (!fitOwedRef.current) return
+      fitOwedRef.current = false
+      autoMove(() => fitView(FIT_VIEW_OPTIONS))
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [graphEditable, fitRequest, nodesInitialized, fitView, autoMove])
 
   // Re-fit when a new read-only graph arrives (another chart request, or back
   // from editing): the fitView prop only fits the first graph React Flow
@@ -878,9 +920,20 @@ function CanvasInner({ graph: inputGraph, editable: graphEditable }: CanvasInner
   // view must not overwrite it. Checked here through the ref, because React
   // Flow reports a move end from a timer and does not drop a handler that
   // the props set to undefined.
+  // F453: an automatic move (the first fit, a restored view) is not the
+  // user's view, so it is not saved: skipped while it runs, and when the
+  // move ends where it put the view (React Flow may report the end later).
+  // A pan, a zoom, the wheel or a frame key moves elsewhere and is saved.
   const handleMoveEnd = useCallback(
     (_event: MouseEvent | TouchEvent | null, viewport: Viewport) => {
       if (!graphEditableRef.current) return
+      if (autoMovingRef.current) return
+      const auto = autoViewRef.current
+      if (auto && auto.x === viewport.x && auto.y === viewport.y && auto.zoom === viewport.zoom) return
+      // FL-4: after the user's first move, the auto view guard is done (it
+      // only catches the late move end of the automatic move). Without this,
+      // Reset view (H) back to exactly the auto-fit view would not be saved.
+      autoViewRef.current = null
       storeSetViewport({ x: viewport.x, y: viewport.y, zoom: viewport.zoom })
     },
     [storeSetViewport],
@@ -1170,7 +1223,7 @@ function CanvasInner({ graph: inputGraph, editable: graphEditable }: CanvasInner
         params: withUniqueWrites(
           graphRef.current,
           catalogEntry.name,
-          { ...catalogEntry.defaults.params } as GraphNode['params'],
+          newNodeParams(catalogEntry.name, catalogEntry.defaults.params, sidebarWindow) as GraphNode['params'],
         ),
         position: [pos.x, pos.y],
         display: false,
@@ -1238,7 +1291,7 @@ function CanvasInner({ graph: inputGraph, editable: graphEditable }: CanvasInner
 
       storeSelect(id)
     },
-    [tabMenuGraph, storeAddNode, storeCommit, storeBeginBatch, storeEndBatch, storeSelect, selectedNodeId, ctx],
+    [tabMenuGraph, storeAddNode, storeCommit, storeBeginBatch, storeEndBatch, storeSelect, selectedNodeId, ctx, sidebarWindow],
   )
 
   const handleTabMenuClose = useCallback(() => {

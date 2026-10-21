@@ -7,6 +7,7 @@ Endpoints:
   POST /api/bots               — add a new bot (stopped)
   GET  /api/bots               — list all bots + fund status
   GET  /api/bots/{id}          — full bot detail
+  GET  /api/bots/{id}/describe — the bot's strategy as plain English text (F454)
   POST /api/bots/{id}/start    — start live polling
   POST /api/bots/{id}/stop     — stop polling (?close=true to also close position)
   POST /api/bots/{id}/backtest — run backtest with bot's config
@@ -37,6 +38,7 @@ from starlette.concurrency import run_in_threadpool
 from bot_manager import (BotConfig, BotManager, InPositionError, ReferenceUnavailableError,
                          probe_references)
 from models import RegimeConfig, LogicField, DirectionField, OptionalBoundedRuleList
+from nodebuilder.api_models import DescribeResponse
 from nodebuilder.models import Graph, GraphValidationError
 
 router = APIRouter(prefix="/api/bots")
@@ -417,6 +419,38 @@ def get_bot(bot_id: str):
         "config": config.model_dump(),
         "state": state.to_dict(),
     }
+
+
+@router.get("/{bot_id}/describe", response_model=DescribeResponse, responses={
+    400: {"description": "A graph bot whose graph cannot be read: {detail, node_id}"},
+    404: {"description": "No such bot"},
+})
+def describe_bot(bot_id: str):
+    """The bot's strategy as plain English text (F454), the same shape as
+    POST /api/nodebuilder/describe: {groups, lines, warnings}.
+
+    A graph bot: its own graph snapshot, on the bot's symbol and interval,
+    only the group it runs; its own stop, trailing stop, time stop and size
+    show where the graph sets none.  A rule bot: its rules drawn as a graph
+    (from_rules), or phrased directly when they cannot be drawn.  Both add
+    the bot's trading hours.  Reads only: no data is fetched, nothing runs.
+    """
+    from nodebuilder.describe import describe_graph_bot, describe_rule_bot
+
+    mgr = _get_manager()
+    try:
+        config, _state = mgr.get_bot(bot_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    try:
+        if config.kind == "graph":
+            return describe_graph_bot(config)
+        return describe_rule_bot(config)
+    except GraphValidationError as exc:
+        return _graph_error(exc)
+    except Exception:
+        logger.exception("describe of bot %s failed", bot_id)
+        raise HTTPException(status_code=500, detail="Could not describe this strategy.")
 
 
 @router.patch("/{bot_id}", responses={400: {"description": "Bad update, or bad graph: {detail, node_id}"}})

@@ -1,7 +1,8 @@
 /**
  * Tidy layout command (W3 item 3.F, ui-ux-spec 6.2): L lays out the selected
- * nodes, or every node when none is selected, top-down with elkjs
- * (layout.ts). The move is one commit, so one undo step.
+ * nodes, or every node of the network on screen when none or only one is
+ * selected (FL-8: clicking a card selects it, and Tidy should still tidy),
+ * top-down with elkjs (layout.ts). The move is one commit, so one undo step.
  *
  * The layout is async (elk loads on first use), so the command commits when
  * it is done, and only if the graph did not change in the meantime.
@@ -15,6 +16,7 @@ import type { CanvasCtx } from '../canvasPlugins'
 import { tidyPositions, applyPositions, type SizeOf } from '../layout'
 import type { NodeBuilderState } from '../store'
 import { opRefitBoxesOf } from '../store/annotations'
+import { currentParentId } from '../store/view'
 import { rfSizeOf } from '../geometry'
 import { runCommand, type Command } from './index'
 
@@ -45,12 +47,18 @@ export const commands: Command[] = [
       const s = store.getState()
       const graph = s.graph
       if (!graph || graph.readOnly) return false
-      const ids = s.selectedNodeIds.filter(id => id in graph.nodes)
-      if (ids.length === 1) {
-        s.showFlash('Select two or more nodes to tidy, or none to tidy all')
+      const selected = s.selectedNodeIds.filter(id => id in graph.nodes)
+      // None or one selected: tidy the whole network on screen (its level),
+      // not the nodes inside other networks.
+      const all = selected.length <= 1
+      const here = currentParentId(s, graph)
+      const ids = all
+        ? Object.values(graph.nodes).filter(n => (n.parent ?? null) === here).map(n => n.id)
+        : selected
+      if (ids.length === 0) {
+        s.showFlash('Nothing to tidy here')
         return true
       }
-      const all = ids.length === 0
       tidyPositions(graph, ids, measuredSizes(canvas))
         .then(positions => {
           const now = store.getState()

@@ -74,7 +74,10 @@ export interface ViewSlice {
   revealAlways: boolean
   /** Nodes snap to the 24px grid while dragged (G key, pane menu). Not saved. */
   snapToGrid: boolean
-  /** Record the current network's viewport. */
+  /**
+   * Record the current network's viewport. Only for a pan or zoom by the
+   * user (the canvas skips its automatic moves, F453): it is stored as theirs.
+   */
   setViewport(v: Viewport): void
   /**
    * The saved viewport of a network for the graph on screen, or null.
@@ -152,7 +155,12 @@ function isViewport(v: unknown): v is Viewport {
   return [o.x, o.y, o.zoom].every(n => typeof n === 'number' && Number.isFinite(n)) && (o.zoom as number) > 0
 }
 
-/** The viewports stored for a saved graph (bad entries are skipped). */
+/**
+ * The viewports stored for a saved graph (bad entries are skipped). Only an
+ * entry marked `user: true` counts (F453): a pan or zoom by the user writes
+ * it. An older entry without the mark may be a wrong automatic fit that was
+ * saved by mistake, so it is ignored and the graph is fitted on open.
+ */
 export function readStoredViewports(graphId: string): Record<string, Viewport> {
   try {
     const raw = localStorage.getItem(viewportStorageKey(graphId))
@@ -161,7 +169,7 @@ export function readStoredViewports(graphId: string): Record<string, Viewport> {
     if (!parsed || typeof parsed !== 'object') return {}
     const out: Record<string, Viewport> = {}
     for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-      if (isViewport(v)) out[k] = { x: v.x, y: v.y, zoom: v.zoom }
+      if (isViewport(v) && (v as { user?: unknown }).user === true) out[k] = { x: v.x, y: v.y, zoom: v.zoom }
     }
     return out
   } catch {
@@ -171,8 +179,9 @@ export function readStoredViewports(graphId: string): Record<string, Viewport> {
 
 function writeStoredViewport(graphId: string, key: string, v: Viewport): void {
   try {
-    const all = readStoredViewports(graphId)
-    all[key] = v
+    const all: Record<string, Viewport & { user: true }> = {}
+    for (const [k, old] of Object.entries(readStoredViewports(graphId))) all[k] = { ...old, user: true }
+    all[key] = { x: v.x, y: v.y, zoom: v.zoom, user: true }
     localStorage.setItem(viewportStorageKey(graphId), JSON.stringify(all))
   } catch {
     // Storage is full or blocked: the in-memory copy still works.
