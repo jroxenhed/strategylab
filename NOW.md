@@ -11,4 +11,4 @@ This is the four-item this-week view of TODO.md, two lines each, pointing back i
 
 ## Waiting on John
 
-Nothing. Node builder Waves 0 to 7 run on strategylab01 since 2026-10-16, and the live paper gate G1 passed from 16 to 20 Oct. Wave 8 (bar mode) and the Fable UI/UX pass start when John says go.
+Nothing. Node builder Waves 0 to 7 run on strategylab01 since 2026-10-16, the live paper gate G1 passed from 16 to 20 Oct, and the Rules text and the clean graph open run there since 2026-10-22. Wave 8 (bar mode) and the Fable UI/UX pass start when John says go.

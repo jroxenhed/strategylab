@@ -408,3 +408,5 @@ grouped by close month. Never reorder or rewrite previously archived sections.
 - [x] <a id="f454"></a> **F454** The strategy shows as plain sentences: a Rules strip in the node builder and a Rules button on every bot card. The server writes the text from the graph or the rules and never runs user code. [features]
 - [x] <a id="f440"></a> **F440** Prove the Gateway restart fix on the VM. The Gateway writes AutoRestart=1 back into jts.ini about 10 s after the unit sets it to 0, so its own 05:00 restart is probably still on. After the next weekday, check the IBC log for Restart in progress lines, one clean login per day and no Existing session lines, then note the result in deploy/README.md. [next] [easy] [hardening] (added 2026-09-20)
 
+- [x] <a id="f456"></a> **F456** Bot health reports Alpaca. The heartbeat monitor pings Alpaca every 30 s on its own thread, and /internal/bot-health now gives alpaca_healthy and alpaca_bots to Zabbix. The mfIT supervisor built it in PR #50; it runs on strategylab01. [infra]
+
