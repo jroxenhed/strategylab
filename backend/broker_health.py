@@ -1,9 +1,15 @@
 """Broker heartbeat monitor.
 
 Pings providers that implement `async def ping()` on a fixed interval and
-caches per-broker health. Only brokers that need liveness signal beyond a
-per-request retry (IBKR: stateful TCP socket into Gateway) implement `ping`.
-Alpaca/Yahoo are stateless HTTPS; their absence here is intentional.
+caches per-broker health. IBKR pings its Gateway socket (and reconnects on
+failure). Yahoo has no ping.
+
+Alpaca pings GET /v2/clock (two calls a minute against Alpaca's 200) only so
+that /internal/bot-health can report alpaca_healthy to Zabbix. Its provider
+sets `heartbeat_observe_only`, so its result is kept apart, in
+observed_health(): is_healthy() and all_health() (the trading page, its stale
+banner and polling speed) see no change from it. Observe-only pings run after
+the others, so a slow Alpaca never delays the IBKR check.
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ class HeartbeatMonitor:
         self._timeout = timeout
         self._warmup = warmup
         self._health: dict[str, dict] = {}
+        self._observed: dict[str, dict] = {}  # observe-only providers (Alpaca)
         self._task: asyncio.Task | None = None
         self._started_ts: float | None = None
 
@@ -33,8 +40,12 @@ class HeartbeatMonitor:
     def all_health(self) -> dict[str, dict]:
         return dict(self._health)
 
+    def observed_health(self) -> dict[str, dict]:
+        """Results of observe-only providers, read by /internal/bot-health only."""
+        return dict(self._observed)
+
     def is_healthy(self, name: str) -> bool:
-        """Unknown brokers (no ping) are treated as healthy — Alpaca path."""
+        """A broker with no result yet (no ping, or before its first ping) counts as healthy."""
         h = self._health.get(name)
         if h is None:
             return True
@@ -46,7 +57,9 @@ class HeartbeatMonitor:
         return (time.time() - self._started_ts) < self._warmup
 
     async def _tick(self) -> None:
-        for name, provider in list(self._registry.items()):
+        providers = sorted(self._registry.items(),
+                           key=lambda kv: bool(getattr(kv[1], "heartbeat_observe_only", False)))
+        for name, provider in providers:
             ping = getattr(provider, "ping", None)
             if ping is None:
                 continue
@@ -65,15 +78,16 @@ class HeartbeatMonitor:
                         err = None
                     except Exception as e2:
                         err = e2
+            store = self._observed if getattr(provider, "heartbeat_observe_only", False) else self._health
             if err is None:
-                self._health[name] = {
+                store[name] = {
                     "healthy": True,
                     "last_ok_ts": int(time.time()),
                     "last_error": None,
                 }
             else:
-                prev = self._health.get(name, {})
-                self._health[name] = {
+                prev = store.get(name, {})
+                store[name] = {
                     "healthy": False,
                     "last_ok_ts": prev.get("last_ok_ts"),
                     "last_error": f"{type(err).__name__}: {err}",

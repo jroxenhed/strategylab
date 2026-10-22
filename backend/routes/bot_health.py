@@ -15,8 +15,9 @@ request has no X-Forwarded-For / X-Real-IP header (nginx sets both).
 Cheap on purpose: it reads in-memory state only. Bot classification reuses
 bot_watch (should_be_working, HUNG_AFTER, the ET window) so the endpoint and
 the watcher never disagree. Gateway state comes from gateway.alert_loop's last
-result (a fresh read only if that is older than 3 minutes). IBKR health comes
-from the HeartbeatMonitor cache; no broker call is made here.
+result (a fresh read only if that is older than 3 minutes). IBKR and Alpaca
+health come from the HeartbeatMonitor cache (its 30 s pings; Alpaca's from
+observed_health()); no broker call is made here.
 
 There is no NYSE holiday calendar in the repo, so market_open is weekday
 09:30 to 16:00 ET only; on a holiday it reads 1 and bots simply do not tick.
@@ -66,6 +67,7 @@ def bot_counts(manager, now: datetime) -> dict:
     expected = 0
     paused = 0
     ibkr_bots = 0
+    alpaca_bots = 0
     oldest = -1
     for bid, (config, state) in bots:
         if state.status == "running" and bid in alive:
@@ -77,6 +79,8 @@ def bot_counts(manager, now: datetime) -> dict:
             expected += 1
             if config.broker == "ibkr":
                 ibkr_bots += 1
+            elif config.broker == "alpaca":
+                alpaca_bots += 1
         if state.pause_reason or state.status == "error":
             paused += 1
 
@@ -94,19 +98,19 @@ def bot_counts(manager, now: datetime) -> dict:
         "stalled_symbols": text,
         "oldest_tick_age_s": oldest,
         "ibkr_bots": ibkr_bots,
+        "alpaca_bots": alpaca_bots,
     }
 
 
 def broker_flags(available: list[str], health: dict[str, dict]) -> dict:
-    """ibkr_healthy: IBKR is registered and its last heartbeat passed (no
-    heartbeat yet counts as healthy, the same as HeartbeatMonitor.is_healthy).
-    alpaca_healthy only when the monitor holds a value for it (Alpaca has no
-    ping today, so it is normally left out)."""
-    ibkr = health.get("ibkr")
-    out = {"ibkr_healthy": int("ibkr" in available and (ibkr is None or bool(ibkr.get("healthy"))))}
-    if "alpaca" in health:
-        out["alpaca_healthy"] = int(bool(health["alpaca"].get("healthy")))
-    return out
+    """<broker>_healthy for IBKR and Alpaca: the broker is registered and its
+    last heartbeat passed (no heartbeat yet counts as healthy, the same as
+    HeartbeatMonitor.is_healthy). Alpaca's heartbeat is GET /v2/clock, which
+    answers around the clock, so the flag means the same outside market hours."""
+    def flag(name: str) -> int:
+        h = health.get(name)
+        return int(name in available and (h is None or bool(h.get("healthy"))))
+    return {"ibkr_healthy": flag("ibkr"), "alpaca_healthy": flag("alpaca")}
 
 
 def build_report(manager, now: datetime, gateway_info: dict,
@@ -124,6 +128,7 @@ def build_report(manager, now: datetime, gateway_info: dict,
         (window and (bots["bots_stalled"] > 0 or bots["bots_running"] < bots["bots_expected"]))
         or bots["bots_paused"] > 0
         or (bots["ibkr_bots"] > 0 and (not gw_logged_in or not brokers["ibkr_healthy"]))
+        or (bots["alpaca_bots"] > 0 and not brokers["alpaca_healthy"])
     )
     ts = now.timestamp()
     return {
@@ -153,7 +158,7 @@ async def bot_health(request: Request):
     if manager is None:
         raise HTTPException(status_code=503, detail="bot manager not ready")
     monitor = get_monitor()
-    health = monitor.all_health() if monitor else {}
+    health = {**monitor.all_health(), **monitor.observed_health()} if monitor else {}
     try:
         info = await gateway.cached_state()
     except Exception:

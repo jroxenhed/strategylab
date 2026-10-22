@@ -150,3 +150,133 @@ async def test_run_loop_survives_tick_exception(monkeypatch):
         await asyncio.sleep(0.01)
     await mon.stop()
     assert calls["n"] >= 2
+
+
+# --- Alpaca ping (GET /v2/clock on its own thread, observe-only) ---------------
+
+import threading
+
+from broker import AlpacaTradingProvider
+
+
+class FakeClock:
+    """Stands in for AlpacaTradingProvider._clock_request."""
+    def __init__(self, fail=None, gate=None):
+        self.calls = 0
+        self.threads = []
+        self._fail = fail
+        self._gate = gate
+
+    def __call__(self):
+        self.calls += 1
+        self.threads.append(threading.current_thread())
+        if self._gate is not None:
+            self._gate.wait(5)
+        if self._fail is not None:
+            raise self._fail
+
+
+class NoTradingClient:
+    """Any call on the trading client from ping() fails the test."""
+    def __getattr__(self, name):
+        raise AssertionError(f"ping must not call the trading client ({name})")
+
+
+def _alpaca(clock):
+    p = AlpacaTradingProvider(NoTradingClient())
+    p._clock_request = clock
+    return p
+
+
+@pytest.mark.asyncio
+async def test_alpaca_ping_marks_healthy_in_observed_only():
+    clock = FakeClock()
+    mon = HeartbeatMonitor(registry={"alpaca": _alpaca(clock)}, interval=0.01, timeout=1.0)
+    await mon._tick()
+    assert mon.observed_health()["alpaca"]["healthy"] is True
+    assert mon.all_health() == {}                      # the trading page sees nothing new
+    assert clock.calls == 1
+    t = clock.threads[0]
+    assert t.name == "alpaca-ping" and t.daemon       # not the bots' default executor
+
+
+@pytest.mark.asyncio
+async def test_alpaca_ping_failure_never_marks_alpaca_unhealthy_for_trading():
+    p = _alpaca(FakeClock(fail=RuntimeError("401 unauthorized")))
+    assert not hasattr(p, "reconnect")
+    mon = HeartbeatMonitor(registry={"alpaca": p}, interval=0.01, timeout=1.0)
+    await mon._tick()
+    h = mon.observed_health()["alpaca"]
+    assert h["healthy"] is False and "401 unauthorized" in h["last_error"]
+    assert mon.is_healthy("alpaca") is True            # unchanged: no entry in _health
+    assert "alpaca" not in mon.all_health()
+
+
+@pytest.mark.asyncio
+async def test_failed_alpaca_ping_still_returns_alpaca_positions(monkeypatch):
+    import broker_aggregate
+    import broker_health_singleton
+    p = _alpaca(FakeClock(fail=RuntimeError("503")))
+    p.get_positions = lambda: [{"symbol": "AAPL"}]
+    mon = HeartbeatMonitor(registry={"alpaca": p}, interval=0.01, timeout=1.0)
+    await mon._tick()
+    monkeypatch.setattr(broker_health_singleton, "_monitor", mon)
+    out = await broker_aggregate.aggregate_from_brokers({"alpaca": p}, "get_positions", "all")
+    assert out == {"rows": [{"symbol": "AAPL", "broker": "alpaca"}], "stale_brokers": []}
+
+
+@pytest.mark.asyncio
+async def test_alpaca_hung_ping_holds_one_thread_and_recovers():
+    gate = threading.Event()
+    clock = FakeClock(gate=gate)
+    p = _alpaca(clock)
+    mon = HeartbeatMonitor(registry={"alpaca": p}, interval=0.01, timeout=0.05)
+    await mon._tick()                                   # hangs past the timeout
+    assert "TimeoutError" in mon.observed_health()["alpaca"]["last_error"]
+    await mon._tick()                                   # still stuck: no second thread
+    assert "still running" in mon.observed_health()["alpaca"]["last_error"]
+    assert clock.calls == 1
+    gate.set()
+    p._ping_thread.join(2)
+    await mon._tick()
+    assert mon.observed_health()["alpaca"]["healthy"] is True
+    assert clock.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_observe_only_ping_runs_after_ibkr():
+    order = []
+
+    class Ibkr:
+        async def ping(self):
+            order.append("ibkr")
+
+    p = _alpaca(lambda: order.append("alpaca"))
+    # Alpaca registers first in production (shared.py at import, IBKR in lifespan)
+    mon = HeartbeatMonitor(registry={"alpaca": p, "ibkr": Ibkr()}, interval=0.01, timeout=1.0)
+    await mon._tick()
+    assert order == ["ibkr", "alpaca"]
+
+
+def test_alpaca_clock_request_uses_client_auth_and_a_timeout(monkeypatch):
+    """Pins the alpaca-py internals _clock_request relies on."""
+    import requests
+    from alpaca.trading.client import TradingClient
+    seen = {}
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+    def fake_get(url, **kw):
+        seen["url"] = url
+        seen.update(kw)
+        return Resp()
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    AlpacaTradingProvider(TradingClient("KEY", "SECRET", paper=True))._clock_request()
+    assert seen["url"] == "https://paper-api.alpaca.markets/v2/clock"
+    assert seen["headers"]["APCA-API-KEY-ID"] == "KEY"
+    assert seen["headers"]["APCA-API-SECRET-KEY"] == "SECRET"
+    assert seen["timeout"] == AlpacaTradingProvider.PING_TIMEOUT
+    assert sum(seen["timeout"]) < 8
