@@ -4,6 +4,12 @@ What we've actually shipped. Reverse-chronological, one section per working day.
 
 > **Maintenance rule (Claude):** append an entry at the end of any session that produces durable work — TODO closures, features, bug fixes, discoveries. Skip routine commits (typo fixes, reformatting). Keep bullets short; link to the commit or doc if more context is worth a click. Don't re-read every TODO to write an entry — just log what happened in the session.
 
+## 2026-10-22
+
+- **Bot health reports Alpaca ([F456](TODO-archive.md#f456)).** Every live bot trades through Alpaca, but /internal/bot-health reported only IBKR, so the Zabbix item strategylab.alpaca_healthy never had data. The mfIT supervisor added an Alpaca ping (/v2/clock every 30 s, its own thread, a 3+4 s timeout) whose result only bot-health reads, plus the field alpaca_bots (PR #50). Zabbix has two new Alpaca triggers.
+- **Deployed b9f1c7b to strategylab01** at 22:06 CEST, with F453/F454 (PR #49) and F456 (PR #50). The checks after the deploy: 12 of 13 bots run (the ENPH bot 5078f463 was already stopped on 16 Oct), alpaca_healthy=1, and the Gateway logged in again. The describe API gives correct text for the G1 graph bot and three rule bots, and the site serves the new bundle. The supervisor backed up bots.json.pre-alpaca-health-20261022.
+- **Found:** the frontend has the public URL built in (VITE_API_URL from SL_PUBLIC_URL), so a browser on the allowed Mac address still sends its API calls to the Google sign-in. A live browser check on production needs John's signed-in browser. A same-origin API path would remove this and the SL_PUBLIC_URL trap of 2026-09-27; it is not filed because TODO.md is at its ceiling.
+
 ## 2026-10-20
 
 - **G1 paper gate passed.** From 16 to 20 Oct the graph bot "G1 paper gate SPY" made 4 trades with no evaluator errors. Each broker stop sat at entry x 0.995, and two stops filled (769.85 to 765.95, 766.07 to 762.12). P&L is -$5.36, and one position of 2 SPY is open. The stop of that position expired at the close, which found F455.
