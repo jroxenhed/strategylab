@@ -65,7 +65,7 @@ import {
 } from './operations'
 import { useDiagnostics, useStreams, useStreamsFresh, useWireFocus } from './useDiagnostics'
 import { reconnectingWireId } from './plugins/wireOps'
-import { connectInNetworks, dropCrossesNetwork, fullPortNotice, networkConnectionProblem, WIRE_CROSSES_NETWORK_TEXT } from './operations/wires'
+import { connectInNetworks, connectReplacing, dropCrossesNetwork, fullPortNotice, networkOccupant, replacedText, replaceNetworkProblem, WIRE_CROSSES_NETWORK_TEXT } from './operations/wires'
 import {
   connectedPortsByNode,
   connectWire,
@@ -993,12 +993,19 @@ function CanvasInner({ graph: inputGraph, editable: graphEditable }: CanvasInner
 
   // W5 (FA2): a wire from outside a network to a node inside it goes
   // through a frame port, in the same commit (connectInNetworks).
+  // F457: a drop on a port that has a wire replaces that wire, in the same
+  // commit (connectReplacing), as in Houdini.
   const handleConnect = useCallback(
     (params: Connection) => {
       const g = graphRef.current
-      if (networkConnectionProblem(g, params) !== null) return
+      if (replaceNetworkProblem(g, params) !== null) return
+      const occupant = networkOccupant(g, params)
       try {
-        storeCommit('add wire', graph => connectInNetworks(graph, params))
+        const before = useNodeBuilderStore.getState().graph
+        storeCommit(occupant ? 'replace wire' : 'add wire', graph => connectReplacing(graph, params))
+        // Say which wire went (the flash is a polite live region too).
+        const store = useNodeBuilderStore.getState()
+        if (occupant && store.graph !== before) store.showFlash(replacedText(g, occupant))
       } catch {
         // Refused (a cycle, or no port at one end). isValidConnection below
         // already showed the drag as invalid, so there is nothing to add.
@@ -1008,13 +1015,14 @@ function CanvasInner({ graph: inputGraph, editable: graphEditable }: CanvasInner
   )
 
   // Tells React Flow, during the drag, whether a wire may be dropped here:
-  // no self-loop, no cycle, no second wire into a port that has one, no
-  // port past the node's last one, no wire across a network edge (S31).
-  // While a wire end is being moved (reconnect, 3.G), that wire's own port
-  // does not count as full. A drop on a port across a network edge says why
-  // (handleConnectEnd reads the drop's own ends, FE-09).
+  // no self-loop, no cycle, no port past the node's last one, no wire
+  // across a network edge (S31). A port that has a wire takes the drop: the
+  // old wire is replaced (F457), and it does not count in the cycle check.
+  // While a wire end is being moved (reconnect, 3.G), that wire is ignored
+  // too. A drop on a port across a network edge says why (handleConnectEnd
+  // reads the drop's own ends, FE-09).
   const isValidConnection = useCallback(
-    (c: ConnectionLike) => networkConnectionProblem(graphRef.current, c, reconnectingWireId()) === null,
+    (c: ConnectionLike) => replaceNetworkProblem(graphRef.current, c, reconnectingWireId()) === null,
     [],
   )
 

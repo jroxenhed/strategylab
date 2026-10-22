@@ -20,6 +20,7 @@ import type { Graph } from '../../api/nodebuilder'
 import { minimapNodeColorWith, tokenColor } from './minimapColors'
 import { isUnsupportedNode } from './nodes/unsupported'
 import { SparklineLayer } from './nodes/Sparkline'
+import ReplacePreview from './ReplacePreview'
 import { useScreenGraph } from './screen'
 import { useDiagnostics, type Diagnostic } from './useDiagnostics'
 import './statusChrome.css'
@@ -79,6 +80,8 @@ export default function CanvasChrome() {
       {/* W4 (S26): one canvas for every node's sparkline. It needs the
           ReactFlow context (ViewportPortal, useStoreApi), hence lives here. */}
       <SparklineLayer />
+      {/* F457: marks the wire a drop on an occupied port would replace. */}
+      <ReplacePreview />
       {!hidden && (
         <MiniMap
           position="bottom-left"

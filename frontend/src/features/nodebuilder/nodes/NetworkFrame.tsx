@@ -20,8 +20,8 @@
  *   and missing required terminals show as ghost cards in a bottom row.
  */
 
-import { useCallback, type CSSProperties } from 'react'
-import { Handle, Position, type Node as RFNode, type NodeProps } from '@xyflow/react'
+import { useCallback, useEffect, useRef, type CSSProperties } from 'react'
+import { Handle, Position, useUpdateNodeInternals, type Node as RFNode, type NodeProps } from '@xyflow/react'
 import { registerNodeType, type NodeComponent } from '../nodeTypes'
 import { useNodeBuilderStore } from '../store'
 import { useNodeDiagnostics } from '../useDiagnostics'
@@ -78,6 +78,16 @@ export default function NetworkFrame({ id, data, selected }: NodeProps<FrameRFNo
     })
     if (added) s.select(added)
   }, [frame.x, frame.y, frame.h, id])
+
+  // React Flow measures handles once. A frame port added by a connect (or
+  // moved) needs a fresh measure, or the wire inside it is not drawn (RF 008).
+  const handlesKey = `${frame.inputs.map(p => `${p.handle}@${p.x}`).join(',')}|${frame.outputId ?? ''}`
+  const updateNodeInternals = useUpdateNodeInternals()
+  const firstHandles = useRef(true)
+  useEffect(() => {
+    if (firstHandles.current) { firstHandles.current = false; return }
+    updateNodeInternals(id)
+  }, [handlesKey, id, updateNodeInternals])
 
   const className = [
     'nb-frame',

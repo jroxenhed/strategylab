@@ -68,6 +68,10 @@ export interface AttrEdgeData extends Record<string, unknown> {
   spliceHot?: boolean
   /** Briefly red: a refused splice or a wire end dropped on empty canvas. */
   flash?: boolean
+  /** A Y-cut line crosses this wire now: it goes on release (WireCut.tsx, F457). */
+  cutting?: boolean
+  /** A wire drag hovers this wire's port: the drop replaces it (ReplacePreview.tsx, F457). */
+  replacing?: boolean
 }
 
 export type AttrFlowEdge = Edge<AttrEdgeData, 'attr'>
@@ -116,7 +120,7 @@ export default function AttrEdge({
 
   const hot = !!data?.hot || !!data?.spliceHot
   // The fade: long wires at rest only.
-  const fade = !selected && !hot && !data?.flash
+  const fade = !selected && !hot && !data?.flash && !data?.cutting && !data?.replacing
     && Math.hypot(targetX - sourceX, targetY - sourceY) > LONG_WIRE
   const fadeUrl = `url(#${fadeId(id)})`
   const fadeColor = data?.diag ? 'var(--nb-wire-invalid)' : 'var(--nb-wire)'
@@ -126,6 +130,8 @@ export default function AttrEdge({
   if (hot) cls += ' nb-edge--hot'
   if (data?.diag) cls += ' nb-edge--diag'
   if (data?.flash) cls += ' nb-edge--flash'
+  if (data?.cutting) cls += ' nb-edge--cutting'
+  if (data?.replacing) cls += ' nb-edge--replacing'
   if (fade) cls += ' nb-edge--fade'
 
   let labelCls = 'nb-edge__label'
