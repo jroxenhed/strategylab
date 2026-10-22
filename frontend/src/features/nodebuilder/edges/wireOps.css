@@ -34,3 +34,64 @@
 .nodebuilder-root .react-flow__edgeupdater {
   cursor: grab;
 }
+
+/*
+ * F457: a wire end is picked up only on the wire under the pointer. React
+ * Flow draws an anchor circle (radius 18) over the first and last 36 units
+ * of every wire, painted in wire order and always taking the pointer. On a
+ * fan-out a later wire's anchor sat on top of an earlier wire, so a click
+ * on that wire selected the other one, and Delete removed the other one.
+ * A short wire was covered almost end to end. Only the hovered wire's own
+ * anchors take the pointer now. Without hover (touch) they always do.
+ */
+@media (hover: hover) {
+  .nodebuilder-root .react-flow__edge:not(:hover) .react-flow__edgeupdater {
+    pointer-events: none;
+  }
+}
+
+/* Y + drag cuts wires (F457, WireCut.tsx): the cut line, in screen pixels. */
+.nodebuilder-root .nb-wire-cut {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 900;
+  overflow: visible;
+}
+/* Amber with a dark halo: it reads over dense wires and is not an error wire (red). */
+.nodebuilder-root .nb-wire-cut .nb-wire-cut__halo {
+  stroke: var(--nb-wire-label-halo);
+  stroke-width: 5px;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+.nodebuilder-root .nb-wire-cut .nb-wire-cut__line {
+  stroke: var(--nb-warn);
+  stroke-width: 2px;
+  stroke-dasharray: 7 4;
+  stroke-linecap: round;
+}
+
+/* A wire the cut line crosses now: it goes on release. */
+.nodebuilder-root .nb-edge.nb-edge--cutting .nb-edge__path {
+  stroke: var(--nb-warn);
+  stroke-width: var(--nb-wire-width-hot);
+  stroke-dasharray: 3 3;
+}
+
+/* The wire a drop on this port would replace (F457): dim and dashed. */
+.nodebuilder-root .nb-edge.nb-edge--replacing .nb-edge__path {
+  stroke: var(--nb-warn);
+  stroke-dasharray: 4 4;
+  opacity: 0.55;
+}
+/* While Y is held, the canvas shows the cut cursor everywhere. */
+.nodebuilder-root .nb-cutting .react-flow__pane,
+.nodebuilder-root .nb-cutting .react-flow__node,
+.nodebuilder-root .nb-cutting .react-flow__edge,
+.nodebuilder-root .nb-cutting .react-flow__handle,
+.nodebuilder-root .nb-cutting .react-flow__edgeupdater {
+  cursor: crosshair !important;
+}

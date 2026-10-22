@@ -410,3 +410,5 @@ grouped by close month. Never reorder or rewrite previously archived sections.
 
 - [x] <a id="f456"></a> **F456** Bot health reports Alpaca. The heartbeat monitor pings Alpaca every 30 s on its own thread, and /internal/bot-health now gives alpaca_healthy and alpaca_bots to Zabbix. The mfIT supervisor built it in PR #50; it runs on strategylab01. [infra]
 
+- [x] <a id="f457"></a> **F457** Wire editing in the node builder works the Houdini way. A wire dropped on a used input replaces the old one, Y + drag cuts every wire it crosses, and a click on a used input selects its wire. Wire end circles no longer take clicks from other wires, and a new frame port draws its wire at once. [polish]
+

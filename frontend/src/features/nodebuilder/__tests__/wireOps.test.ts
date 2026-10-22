@@ -31,6 +31,7 @@ import {
   rewiredCount,
   spliceIntoWire,
   spliceProblem,
+  WIRE_CROSSES_NETWORK_TEXT,
   WireOpError,
 } from '../operations/wires'
 import {
@@ -182,7 +183,7 @@ describe('reconnectWire', () => {
     expect(g.wires[0]).toMatchObject({ id: 'w1', from: 's', to: 'x', to_port: 'in0' })
   })
 
-  it('refuses a full port, a loop, a wire into a Ticker and a self-loop', () => {
+  it('refuses a loop, a wire into a Ticker and a self-loop', () => {
     const problem = (to: Parameters<typeof reconnectWire>[2], id = 'w1') => {
       try {
         reconnectWire(graph(), id, to)
@@ -191,7 +192,6 @@ describe('reconnectWire', () => {
         return err instanceof WireOpError ? err.problem : 'other'
       }
     }
-    expect(problem({ source: 't', target: 's', targetHandle: 'in0' })).toBe('full')
     expect(problem({ source: 'e', target: 'x', targetHandle: 'in0' })).toBe('no_port')
     expect(problem({ source: 'x', target: 't', targetHandle: 'in0' })).toBe('no_port')
     expect(problem({ source: 'x', target: 'x', targetHandle: 'in1' })).toBe('self')
@@ -199,6 +199,13 @@ describe('reconnectWire', () => {
     const looped = reconnectWire(graph(), 'w2', { source: 's', target: 'x', targetHandle: 'in1' })
     load(looped)
     expect(problem({ source: 'x', target: 's', targetHandle: 'in0' }, 'w3')).toBe('cycle')
+  })
+
+  it("moved onto a port that has a wire, takes that wire's place (F457)", () => {
+    // w1 (t → x in0) moves onto s in0, where w2 (t → s) is: w2 goes.
+    const g = reconnectWire(graph(), 'w1', { source: 't', target: 's', targetHandle: 'in0' })
+    expect(g.wires.map(w => w.id)).toEqual(['w1', 'w3'])
+    expect(g.wires[0]).toMatchObject({ id: 'w1', from: 't', to: 's', to_port: 'in0' })
   })
 })
 
@@ -274,9 +281,85 @@ describe('reconnect (plugin)', () => {
 
   it('refuses an invalid drop with a status flash and no history', () => {
     const { ctx } = fakeCtx()
-    act(() => { wireOps.onReconnect!(rfEdge('w1'), { source: 't', target: 's', sourceHandle: 'out', targetHandle: 'in0' }, ctx) })
+    act(() => { wireOps.onReconnect!(rfEdge('w1'), { source: 'x', target: 'x', sourceHandle: 'out', targetHandle: 'in1' }, ctx) })
     expect(st().past).toHaveLength(0)
-    expect(st().flash?.text).toBe('That input already has a wire')
+    expect(st().flash?.text).toBe('A node cannot wire into itself')
+  })
+
+  it('a drop on a port that has a wire replaces that wire, in one history step (F457)', () => {
+    const { ctx } = fakeCtx()
+    wireOps.onReconnectStart!(ev(), rfEdge('w3'), 'target', ctx)
+    // w3 (x → e) moves its input end onto s in0, where w2 is.
+    act(() => { wireOps.onReconnect!(rfEdge('w3'), { source: 'x', target: 's', sourceHandle: 'out', targetHandle: 'in0' }, ctx) })
+    expect(graph().wires.map(w => w.id)).toEqual(['w1', 'w3'])
+    expect(graph().wires.find(w => w.id === 'w3')).toMatchObject({ from: 'x', to: 's', to_port: 'in0' })
+    expect(st().past).toHaveLength(1)
+    act(() => st().undo())
+    expect(graph().wires.map(w => w.id)).toEqual(['w1', 'w2', 'w3'])
+  })
+
+  // F457 LG-2: a wire end dropped on a port inside a frame goes through a
+  // frame port like a new wire; never a direct wire across the frame edge.
+  function frameGraph(): Graph {
+    const g = makeGraph()
+    const inside = (n: GraphNode): GraphNode => ({ ...n, parent: 'grp' })
+    g.nodes = {
+      ...g.nodes,
+      ema: node('ema', 'ema', { period: 10, source: '@close', out: '@ema' }, 300, 0),
+      cmpo: node('cmpo', 'above', { a: '@sma', threshold: 1, out: '@ao' }, 300, 400),
+      grp: node('grp', 'subnet', {}, 800, 0),
+      b1: inside(node('b1', 'subnet_input', { port: 0 }, 800, 100)),
+      cmp: inside(node('cmp', 'above', { a: '@ema', threshold: 1, out: '@above' }, 800, 300)),
+      cmp2: inside(node('cmp2', 'below', { a: null, threshold: 1, out: '@below' }, 1000, 300)),
+    }
+    g.wires = [
+      ...g.wires,
+      { id: 'w_t_ema', from: 't', to: 'ema', from_port: 'out', to_port: 'in0' },
+      { id: 'w_s_cmpo', from: 's', to: 'cmpo', from_port: 'out', to_port: 'in0' },
+      { id: 'w_ema_grp', from: 'ema', to: 'grp', from_port: 'out', to_port: 'in0' },
+      { id: 'w_b1_cmp', from: 'b1', to: 'cmp', from_port: 'out', to_port: 'in0' },
+    ]
+    return g
+  }
+  const parentOf = (id: string) => graph().nodes[id]?.parent ?? null
+  const crossing = () => graph().wires.filter(w => parentOf(w.from) !== parentOf(w.to))
+
+  it('a wire end dropped on an occupied port inside a frame is routed through a frame port (F457)', () => {
+    load(frameGraph())
+    const { ctx } = fakeCtx()
+    wireOps.onReconnectStart!(ev(), rfEdge('w_s_cmpo'), 'target', ctx)
+    act(() => { wireOps.onReconnect!(rfEdge('w_s_cmpo'), { source: 's', target: 'cmp', sourceHandle: 'out', targetHandle: 'in0' }, ctx) })
+    expect(crossing()).toEqual([])
+    const feed = graph().wires.filter(w => w.to === 'cmp' && w.to_port === 'in0')
+    expect(feed).toHaveLength(1)
+    const b = graph().nodes[feed[0].from]
+    expect(b.type).toBe('subnet_input')
+    expect(graph().wires.filter(w => w.to === 'grp' && w.to_port === `in${b.params.port}`).map(w => w.from)).toEqual(['s'])
+    expect(graph().nodes.cmp.params.a).toBe('@sma')
+    expect(graph().wires.some(w => w.id === 'w_s_cmpo')).toBe(false)
+    expect(st().past).toHaveLength(1)
+    act(() => st().undo())
+    expect(graph().wires.map(w => w.id)).toEqual(frameGraph().wires.map(w => w.id))
+  })
+
+  it('a wire end dropped on a free port inside a frame is routed too (F457)', () => {
+    load(frameGraph())
+    const { ctx } = fakeCtx()
+    act(() => { wireOps.onReconnect!(rfEdge('w_s_cmpo'), { source: 's', target: 'cmp2', sourceHandle: 'out', targetHandle: 'in0' }, ctx) })
+    expect(crossing()).toEqual([])
+    const feed = graph().wires.filter(w => w.to === 'cmp2')
+    expect(feed).toHaveLength(1)
+    expect(graph().nodes[feed[0].from].type).toBe('subnet_input')
+    expect(st().past).toHaveLength(1)
+  })
+
+  it('a wire end that would cross a frame edge is refused with the S31 text (F457)', () => {
+    load(frameGraph())
+    const { ctx } = fakeCtx()
+    // The output end moved inside the frame, the input end still outside.
+    act(() => { wireOps.onReconnect!(rfEdge('w_s_cmpo'), { source: 'cmp', target: 'cmpo', sourceHandle: 'out', targetHandle: 'in0' }, ctx) })
+    expect(st().past).toHaveLength(0)
+    expect(st().flash?.text).toBe(WIRE_CROSSES_NETWORK_TEXT)
   })
 
   it('a drop on empty canvas flashes the wire, then deletes it in one step', () => {

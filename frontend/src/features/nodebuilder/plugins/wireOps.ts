@@ -3,7 +3,8 @@
  *
  * Reconnect: pick a wire's end up (React Flow's reconnect anchors, 18px)
  * and drop it on another port. A valid drop is one `commit('reconnect
- * wire')` that keeps the wire id. A drop on an invalid port snaps back. A
+ * wire')` that keeps the wire id; a port that has another wire takes this
+ * one in its place (F457). A drop on an invalid port snaps back. A
  * drop on empty canvas flashes the wire red for 150 ms and deletes it
  * (Houdini). Esc during the drag cancels it.
  *
@@ -30,11 +31,15 @@ import { isEmptyCanvasTarget } from '../canvasHelpers'
 import { DEFAULT_NODE_SIZE } from '../geometry'
 import { canWire } from '../catalog'
 import {
-  connectionProblemIgnoring,
   canSpliceNode,
-  reconnectWire,
+  networkOccupant,
+  reconnectInNetworks,
+  reconnectTarget,
+  replacedText,
+  replaceNetworkProblem,
   spliceIntoWire,
   spliceProblem,
+  WIRE_CROSSES_NETWORK_TEXT,
   wireProblemText,
   WireOpError,
 } from '../operations/wires'
@@ -467,13 +472,19 @@ export const plugin: CanvasPlugin = {
     const s = ctx.store.getState()
     const graph = s.graph
     if (!graph) return
-    const problem = connectionProblemIgnoring(graph, conn, oldEdge.id)
+    // Frame-aware (S31): a port inside a frame is reached through a frame
+    // port, as for a new wire; a drop across a frame edge is refused.
+    const old = graph.wires.find(w => w.id === oldEdge.id)
+    const target = old ? reconnectTarget(old, conn) : conn
+    const problem = replaceNetworkProblem(graph, target, oldEdge.id)
     if (problem) {
-      flash(ctx, wireProblemText(problem))
+      flash(ctx, problem === 'crosses' ? WIRE_CROSSES_NETWORK_TEXT : wireProblemText(problem))
       return
     }
+    const occupant = networkOccupant(graph, target, oldEdge.id)
     try {
-      s.commit('reconnect wire', g => reconnectWire(g, oldEdge.id, conn))
+      s.commit('reconnect wire', g => reconnectInNetworks(g, oldEdge.id, conn))
+      if (occupant) flash(ctx, replacedText(graph, occupant))
     } catch (err) {
       flash(ctx, err instanceof WireOpError ? wireProblemText(err.problem) : 'Could not move the wire')
     }

@@ -42,6 +42,9 @@ const MOUSE_ROWS: ReadonlyArray<[string, string]> = [
   ['Add to selection', '⇧click'],
   ['Duplicate', '⌥drag'],
   ['Splice', 'drop node on wire'],
+  ['Cut wires', 'Y+drag across them'],
+  ['Select wire', 'click its input port'],
+  ['Replace wire', 'drop on a wired input'],
   ['Rename', 'double-click header'],
 ]
 
