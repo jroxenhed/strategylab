@@ -16,8 +16,8 @@ Cheap on purpose: it reads in-memory state only. Bot classification reuses
 bot_watch (should_be_working, HUNG_AFTER, the ET window) so the endpoint and
 the watcher never disagree. Gateway state comes from gateway.alert_loop's last
 result (a fresh read only if that is older than 3 minutes). IBKR and Alpaca
-health come from the HeartbeatMonitor cache (its 30 s pings); no broker call is
-made here.
+health come from the HeartbeatMonitor cache (its 30 s pings; Alpaca's from
+observed_health()); no broker call is made here.
 
 There is no NYSE holiday calendar in the repo, so market_open is weekday
 09:30 to 16:00 ET only; on a holiday it reads 1 and bots simply do not tick.
@@ -158,7 +158,7 @@ async def bot_health(request: Request):
     if manager is None:
         raise HTTPException(status_code=503, detail="bot manager not ready")
     monitor = get_monitor()
-    health = monitor.all_health() if monitor else {}
+    health = {**monitor.all_health(), **monitor.observed_health()} if monitor else {}
     try:
         info = await gateway.cached_state()
     except Exception:

@@ -132,14 +132,20 @@ class AlpacaTradingProvider:
         self._data_client = data_client  # StockHistoricalDataClient for get_latest_price
         self._ping_thread = None  # see ping()
 
+    # The heartbeat result feeds /internal/bot-health only; the trading page
+    # keeps querying Alpaca whatever a ping says (see broker_health.py).
+    heartbeat_observe_only = True
+    PING_TIMEOUT = (3.0, 4.0)  # connect, read: ends inside the monitor's 5 s
+
     async def ping(self) -> None:
         """Liveness probe for HeartbeatMonitor (every 30 s): one GET /v2/clock,
         the cheapest Alpaca trading call. Read-only; never touches orders or
-        positions. alpaca-py sets no HTTP timeout, so the call runs on its own
-        daemon thread, not the loop's default executor the bots use: a hung
-        call can neither hold a bot's thread nor block process exit. While an
-        earlier ping is still stuck, this one fails at once instead of
-        starting another thread."""
+        positions. It does its own single request with a timeout, because
+        alpaca-py sets none and retries 429s for about 9 s; it shares no
+        connection pool with the bots. It runs on its own daemon thread, not
+        the loop's default executor the bots use, so it can neither hold a
+        bot's thread nor block process exit. While an earlier ping is still
+        running, this one fails at once instead of starting another thread."""
         import threading
         if self._ping_thread is not None and self._ping_thread.is_alive():
             raise TimeoutError("previous Alpaca ping still running")
@@ -156,7 +162,7 @@ class AlpacaTradingProvider:
         def _work():
             err = None
             try:
-                self._retry(self._client.get_clock)
+                self._clock_request()
             except Exception as e:
                 err = e
             try:
@@ -167,6 +173,17 @@ class AlpacaTradingProvider:
         self._ping_thread = threading.Thread(target=_work, name="alpaca-ping", daemon=True)
         self._ping_thread.start()
         await fut
+
+    def _clock_request(self) -> None:
+        """GET <trading base url>/v2/clock with the client's own auth headers.
+        Uses alpaca-py internals (_base_url, _api_version, _get_default_headers), pinned
+        by tests/test_broker_health.py against the installed alpaca-py."""
+        import requests
+        c = self._client
+        url = c._base_url + "/" + c._api_version + "/clock"  # as alpaca-py builds it
+        r = requests.get(url, headers=c._get_default_headers(),
+                         timeout=self.PING_TIMEOUT, allow_redirects=False)
+        r.raise_for_status()
 
     def _retry(self, fn, *args, **kwargs):
         """Retry once on stale connection errors."""

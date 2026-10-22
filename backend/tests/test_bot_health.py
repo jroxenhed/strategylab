@@ -269,11 +269,15 @@ def test_gateway_cached_state_uses_fresh_cache_and_rereads_stale(monkeypatch):
 # --- HTTP: loopback guard and response shape --------------------------------------
 
 class _Monitor:
-    def __init__(self, health):
+    def __init__(self, health, observed=None):
         self._h = health
+        self._o = observed or {}
 
     def all_health(self):
         return dict(self._h)
+
+    def observed_health(self):
+        return dict(self._o)
 
 
 @pytest.fixture
@@ -309,6 +313,13 @@ def test_loopback_gets_full_report(wired, host):
         assert isinstance(body[k], int), k
     assert body["gateway_logged_in"] == 1 and body["ibkr_healthy"] == 1
     assert body["bots_total"] == 10
+
+
+def test_alpaca_flag_comes_from_observed_health(wired, monkeypatch):
+    monkeypatch.setattr(broker_health_singleton, "_monitor",
+                        _Monitor({"ibkr": {"healthy": True}}, {"alpaca": {"healthy": False}}))
+    body = _get(wired, "127.0.0.1").json()
+    assert (body["alpaca_healthy"], body["ibkr_healthy"]) == (0, 1)
 
 
 @pytest.mark.parametrize("host", ["10.0.0.5", "192.168.1.20", "testclient", "8.8.8.8"])
