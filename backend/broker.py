@@ -130,6 +130,43 @@ class AlpacaTradingProvider:
     def __init__(self, trading_client, data_client=None):
         self._client = trading_client
         self._data_client = data_client  # StockHistoricalDataClient for get_latest_price
+        self._ping_thread = None  # see ping()
+
+    async def ping(self) -> None:
+        """Liveness probe for HeartbeatMonitor (every 30 s): one GET /v2/clock,
+        the cheapest Alpaca trading call. Read-only; never touches orders or
+        positions. alpaca-py sets no HTTP timeout, so the call runs on its own
+        daemon thread, not the loop's default executor the bots use: a hung
+        call can neither hold a bot's thread nor block process exit. While an
+        earlier ping is still stuck, this one fails at once instead of
+        starting another thread."""
+        import threading
+        if self._ping_thread is not None and self._ping_thread.is_alive():
+            raise TimeoutError("previous Alpaca ping still running")
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+
+        def _settle(err):
+            if not fut.done():  # the monitor's wait_for may have given up already
+                if err is None:
+                    fut.set_result(None)
+                else:
+                    fut.set_exception(err)
+
+        def _work():
+            err = None
+            try:
+                self._retry(self._client.get_clock)
+            except Exception as e:
+                err = e
+            try:
+                loop.call_soon_threadsafe(_settle, err)
+            except RuntimeError:  # loop closed (shutdown): nobody is waiting
+                pass
+
+        self._ping_thread = threading.Thread(target=_work, name="alpaca-ping", daemon=True)
+        self._ping_thread.start()
+        await fut
 
     def _retry(self, fn, *args, **kwargs):
         """Retry once on stale connection errors."""

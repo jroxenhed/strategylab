@@ -32,6 +32,7 @@ FIELDS = {
     "bots_running", "bots_expected", "bots_stalled", "bots_paused",
     "stalled_symbols", "oldest_tick_age_s", "gateway_logged_in",
     "gateway_state", "ibkr_healthy", "ibkr_bots", "backend_uptime_s",
+    "alpaca_healthy", "alpaca_bots",
 }
 
 
@@ -151,8 +152,8 @@ def test_stalled_outside_window_does_not_clear_ok_alone():
     quiet too); ok only drops for it inside the check window."""
     m = _manager(LOST=(_state(), None))
     evening = datetime(2026, 9, 28, 22, 0, tzinfo=timezone.utc)  # 18:00 ET
-    assert bot_health.build_report(m, evening, {}, [], {})["ok"] == 1
-    assert bot_health.build_report(m, NOW, {}, [], {})["ok"] == 0
+    assert bot_health.build_report(m, evening, {}, ["alpaca"], {})["ok"] == 1
+    assert bot_health.build_report(m, NOW, {}, ["alpaca"], {})["ok"] == 0
 
 
 # --- market clock -------------------------------------------------------------
@@ -189,17 +190,55 @@ def test_gateway_logged_out_with_ibkr_bots_is_not_ok():
 
 def test_gateway_logged_out_without_ibkr_bots_is_ok():
     m = _manager(RUN=(_state("running", last_tick=NOW - timedelta(seconds=30)), True, "alpaca"))
-    r = bot_health.build_report(m, NOW, {"state": "down"}, [], {})
+    r = bot_health.build_report(m, NOW, {"state": "down"}, ["alpaca"], {})
     assert (r["gateway_logged_in"], r["ibkr_bots"], r["ok"]) == (0, 0, 1)
 
 
 def test_ibkr_healthy_flag():
-    f = bot_health.broker_flags
-    assert f(["ibkr"], {"ibkr": {"healthy": True}}) == {"ibkr_healthy": 1}
-    assert f(["ibkr"], {"ibkr": {"healthy": False}}) == {"ibkr_healthy": 0}
-    assert f(["ibkr"], {}) == {"ibkr_healthy": 1}            # no heartbeat yet
-    assert f(["alpaca"], {"ibkr": {"healthy": True}}) == {"ibkr_healthy": 0}  # not registered
-    assert f([], {"alpaca": {"healthy": False}}) == {"ibkr_healthy": 0, "alpaca_healthy": 0}
+    f = lambda *a: bot_health.broker_flags(*a)["ibkr_healthy"]
+    assert f(["ibkr"], {"ibkr": {"healthy": True}}) == 1
+    assert f(["ibkr"], {"ibkr": {"healthy": False}}) == 0
+    assert f(["ibkr"], {}) == 1                               # no heartbeat yet
+    assert f(["alpaca"], {"ibkr": {"healthy": True}}) == 0    # not registered
+
+
+def test_alpaca_healthy_flag():
+    f = lambda *a: bot_health.broker_flags(*a)["alpaca_healthy"]
+    assert f(["alpaca", "ibkr"], {"alpaca": {"healthy": True}}) == 1
+    assert f(["alpaca"], {"alpaca": {"healthy": False}}) == 0
+    assert f(["alpaca"], {}) == 1                             # no heartbeat yet (warm-up)
+    assert f([], {"alpaca": {"healthy": True}}) == 0          # not registered (no keys)
+    # one broker's result never leaks into the other's flag
+    assert bot_health.broker_flags(["alpaca", "ibkr"], {"alpaca": {"healthy": False}}) == \
+        {"ibkr_healthy": 1, "alpaca_healthy": 0}
+
+
+def test_alpaca_bots_counts_expected_alpaca_bots_only():
+    m = _manager(A1=(_state("running", last_tick=NOW - timedelta(seconds=30)), True, "alpaca"),
+                 A2=(_state("running", last_tick=NOW - timedelta(seconds=30)), True, "alpaca"),
+                 IB=(_state("running", last_tick=NOW - timedelta(seconds=30)), True, "ibkr"),
+                 OFF=(_state(user_stopped=True), None, "alpaca"))
+    r = bot_health.build_report(m, NOW, LOGGED_IN, ["alpaca", "ibkr"], {})
+    assert (r["alpaca_bots"], r["ibkr_bots"]) == (2, 1)
+    # Like ibkr_bots it is not gated on market hours ("expected" means ticked
+    # within bot_watch.LOOKBACK): the Zabbix trigger adds market_open itself.
+    sat = NOW + timedelta(days=5)
+    r = bot_health.build_report(m, sat, LOGGED_IN, ["alpaca", "ibkr"], {"alpaca": {"healthy": False}})
+    assert (r["market_open"], r["alpaca_bots"], r["alpaca_healthy"]) == (0, 2, 0)
+
+
+def test_unhealthy_alpaca_with_alpaca_bots_is_not_ok():
+    m = _manager(RUN=(_state("running", last_tick=NOW - timedelta(seconds=30)), True, "alpaca"))
+    r = bot_health.build_report(m, NOW, LOGGED_IN, ["alpaca"], {"alpaca": {"healthy": False}})
+    assert (r["alpaca_healthy"], r["alpaca_bots"], r["ok"]) == (0, 1, 0)
+    r = bot_health.build_report(m, NOW, LOGGED_IN, ["alpaca"], {"alpaca": {"healthy": True}})
+    assert (r["alpaca_healthy"], r["ok"]) == (1, 1)
+
+
+def test_unhealthy_alpaca_without_alpaca_bots_is_ok():
+    m = _manager(RUN=(_state("running", last_tick=NOW - timedelta(seconds=30)), True, "ibkr"))
+    r = bot_health.build_report(m, NOW, LOGGED_IN, ["alpaca", "ibkr"], {"alpaca": {"healthy": False}})
+    assert (r["alpaca_healthy"], r["alpaca_bots"], r["ok"]) == (0, 0, 1)
 
 
 def test_unhealthy_ibkr_with_ibkr_bots_is_not_ok():
@@ -265,7 +304,7 @@ def test_loopback_gets_full_report(wired, host):
     assert r.status_code == 200
     body = r.json()
     assert FIELDS <= set(body)
-    assert "alpaca_healthy" not in body        # no heartbeat value for Alpaca
+    assert body["alpaca_healthy"] == 1          # no heartbeat value yet counts as healthy
     for k in FIELDS - {"stalled_symbols", "gateway_state"}:
         assert isinstance(body[k], int), k
     assert body["gateway_logged_in"] == 1 and body["ibkr_healthy"] == 1

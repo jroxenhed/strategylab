@@ -150,3 +150,73 @@ async def test_run_loop_survives_tick_exception(monkeypatch):
         await asyncio.sleep(0.01)
     await mon.stop()
     assert calls["n"] >= 2
+
+
+# --- Alpaca ping (GET /v2/clock on its own thread) -----------------------------
+
+import threading
+
+from broker import AlpacaTradingProvider
+
+
+class FakeAlpacaClient:
+    """Only get_clock is allowed: any order or position call fails the test."""
+    def __init__(self, fail=None, gate=None):
+        self.clock_calls = 0
+        self.threads = []
+        self._fail = fail
+        self._gate = gate
+
+    def get_clock(self):
+        self.clock_calls += 1
+        self.threads.append(threading.current_thread())
+        if self._gate is not None:
+            self._gate.wait(5)
+        if self._fail is not None:
+            raise self._fail
+        return {"is_open": True}
+
+    def __getattr__(self, name):
+        raise AssertionError(f"ping must not call {name}")
+
+
+@pytest.mark.asyncio
+async def test_alpaca_ping_marks_healthy():
+    client = FakeAlpacaClient()
+    p = AlpacaTradingProvider(client)
+    mon = HeartbeatMonitor(registry={"alpaca": p}, interval=0.01, timeout=1.0)
+    await mon._tick()
+    assert mon.get_health("alpaca")["healthy"] is True
+    assert client.clock_calls == 1
+    t = client.threads[0]
+    assert t.name == "alpaca-ping" and t.daemon      # not the bots' default executor
+
+
+@pytest.mark.asyncio
+async def test_alpaca_ping_failure_marks_unhealthy_without_reconnect():
+    client = FakeAlpacaClient(fail=RuntimeError("401 unauthorized"))
+    p = AlpacaTradingProvider(client)
+    assert not hasattr(p, "reconnect")
+    mon = HeartbeatMonitor(registry={"alpaca": p}, interval=0.01, timeout=1.0)
+    await mon._tick()
+    h = mon.get_health("alpaca")
+    assert h["healthy"] is False and "401 unauthorized" in h["last_error"]
+    assert mon.is_healthy("alpaca") is False
+
+
+@pytest.mark.asyncio
+async def test_alpaca_hung_ping_holds_one_thread_and_recovers():
+    gate = threading.Event()
+    client = FakeAlpacaClient(gate=gate)
+    p = AlpacaTradingProvider(client)
+    mon = HeartbeatMonitor(registry={"alpaca": p}, interval=0.01, timeout=0.05)
+    await mon._tick()                                   # hangs past the timeout
+    assert "TimeoutError" in mon.get_health("alpaca")["last_error"]
+    await mon._tick()                                   # still stuck: no second thread
+    assert "still running" in mon.get_health("alpaca")["last_error"]
+    assert client.clock_calls == 1
+    gate.set()
+    p._ping_thread.join(2)
+    await mon._tick()
+    assert mon.get_health("alpaca")["healthy"] is True
+    assert client.clock_calls == 2

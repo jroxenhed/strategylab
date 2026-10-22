@@ -1,9 +1,10 @@
 """Broker heartbeat monitor.
 
 Pings providers that implement `async def ping()` on a fixed interval and
-caches per-broker health. Only brokers that need liveness signal beyond a
-per-request retry (IBKR: stateful TCP socket into Gateway) implement `ping`.
-Alpaca/Yahoo are stateless HTTPS; their absence here is intentional.
+caches per-broker health. IBKR pings its Gateway socket (and reconnects on
+failure). Alpaca pings GET /v2/clock with no reconnect, so that
+/internal/bot-health can report alpaca_healthy to Zabbix; it adds two calls a
+minute against Alpaca's 200 a minute. Yahoo has no ping.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ class HeartbeatMonitor:
         return dict(self._health)
 
     def is_healthy(self, name: str) -> bool:
-        """Unknown brokers (no ping) are treated as healthy — Alpaca path."""
+        """A broker with no result yet (no ping, or before its first ping) counts as healthy."""
         h = self._health.get(name)
         if h is None:
             return True
